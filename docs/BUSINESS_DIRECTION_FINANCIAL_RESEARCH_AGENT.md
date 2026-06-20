@@ -204,10 +204,10 @@ PDF 不是直接让 LLM 生成。LLM 负责生成结构化内容，程序负责�
 
 ## 8. Web 产品页面
 
-推荐直接放在 `projects/04-production-agent/app`：
+推荐放在当前 monorepo 的 `apps/web`：
 
 ```text
-projects/04-production-agent/
+apps/web/
 ├── app/
 │   ├── page.tsx
 │   ├── research-chat/
@@ -216,17 +216,30 @@ projects/04-production-agent/
 │   ├── citation-checker/
 │   ├── eval-report/
 │   └── architecture/
-├── src/
-│   ├── agent/
-│   ├── financial-data/
-│   ├── filings/
-│   ├── report/
-│   ├── tools/
-│   ├── mcp/
-│   ├── eval/
-│   └── trace/
-└── README.md
+└── components/
+
+packages/
+├── agent/
+├── rag/
+├── tools/
+├── workflow/
+├── report/
+├── eval/
+├── trace/
+├── financial-data/
+├── filings/
+└── mcp/
 ```
+
+核心 package 职责：
+
+- `agent`：Intent Router、Agent Loop、模型调用编排。
+- `rag`：检索、重排、context packing、引用生成。
+- `tools`：工具 schema、tool registry、参数校验、工具执行。
+- `workflow`：Report Mode 的显式节点编排。
+- `report`：结构化研报、Markdown/HTML/PDF 渲染。
+- `eval`：评估集、指标计算、eval 报告。
+- `trace`：request、model call、tool call、workflow node、成本和延迟记录。
 
 页面说明：
 

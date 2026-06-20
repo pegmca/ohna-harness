@@ -8,10 +8,13 @@
 .
 ├── docs/
 │   ├── ROADMAP_1_MONTH.md
-│   ├── WEEK_1_AGENT_FOUNDATION.md
-│   ├── WEEK_2_RAG_KNOWLEDGE_BASE.md
-│   ├── WEEK_3_AGENTIC_RAG_WORKFLOW_MCP.md
-│   └── WEEK_4_PRODUCTION_AND_INTERVIEW.md
+│   ├── BUSINESS_DIRECTION_FINANCIAL_RESEARCH_AGENT.md
+│   └── weeks/
+│       ├── WEEK_1_AGENT_FOUNDATION.md
+│       ├── WEEK_1_IMPLEMENTATION.md
+│       ├── WEEK_2_RAG_KNOWLEDGE_BASE.md
+│       ├── WEEK_3_AGENTIC_RAG_WORKFLOW_MCP.md
+│       └── WEEK_4_PRODUCTION_AND_INTERVIEW.md
 ├── apps/
 │   └── web/
 │       ├── app/

@@ -1,4 +1,4 @@
-# 业务方向：金融研究 Chatbot + 研报 Workflow
+# 业务方向：Immersive + 研报 Workflow
 
 更新时间：2026-06-20
 
@@ -6,14 +6,12 @@
 
 产品名建议：
 
-- `Research Chatbot`
-- `ResearchGen Chat`
+- `Immersive`
 - `Equity Research Copilot`
-- `AI 金融研究助手`
 
 一句话：
 
-> 一个面向股票研究和行业研究的金融研究 Chatbot。用户可以围绕公开公告、财务数据、行情数据、新闻事件和行业资料进行多轮问答；当用户开启 Report Mode、点击生成研报，或通过自然语言表达“帮我生成一份研报”时，系统切换到显式研报 Workflow，完成资料收集、分析建模、引用校验，并导出 PDF 研报。
+> Immersive 是一个面向股票研究和行业研究的金融研究 Chatbot。用户可以围绕公开公告、财务数据、行情数据、新闻事件和行业资料进行多轮问答；当用户开启 Report Mode、点击生成研报，或通过自然语言表达“帮我生成一份研报”时，系统切换到显式研报 Workflow，完成资料收集、分析建模、引用校验，并导出 PDF 研报。
 
 重点：默认产品形态是 Chatbot，不是所有请求都走完整研报生成流程。研报 Workflow 是一个可显式开启、也可由自然语言意图激活的高级 skill，用于长链路、可追溯、可导出的正式报告任务。
 
@@ -210,7 +208,7 @@ PDF 不是直接让 LLM 生成。LLM 负责生成结构化内容，程序负责�
 apps/web/
 ├── app/
 │   ├── page.tsx
-│   ├── research-chat/
+│   ├── immersive/
 │   ├── data-sources/
 │   ├── report-workflow/
 │   ├── citation-checker/
@@ -243,7 +241,7 @@ packages/
 
 页面说明：
 
-- `research-chat`：默认首页，支持金融研究多轮问答、工具调用和引用展示。
+- `immersive`：默认首页，支持金融研究多轮问答、工具调用和引用展示。
 - `data-sources`：展示公告、财报、行情、新闻等数据来源。
 - `report-workflow`：展示 Report Mode 的 Planner、Data Collector、Analyzer、Risk Checker、Citation Verifier、Report Writer、PDF Exporter 执行链路。
 - `citation-checker`：展示每个关键结论对应的数据来源。
@@ -252,7 +250,7 @@ packages/
 
 ## 9. 评估指标
 
-金融研究 Chatbot 不能只看“答得像不像”，研报生成也不能只看“写得像不像”，都要评估事实和引用。
+Immersive 的问答能力不能只看“答得像不像”，研报生成也不能只看“写得像不像”，都要评估事实和引用。
 
 建议指标：
 

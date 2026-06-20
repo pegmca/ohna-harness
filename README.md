@@ -39,6 +39,41 @@
 └── README.md
 ```
 
+## 当前工程底座
+
+本仓库已经初始化为 pnpm workspace monorepo：
+
+- `apps/web`：Vite + React + TypeScript Web 应用入口，负责承载 Immersive 产品界面。
+- `packages/agent`：Agent 能力边界，后续承载意图识别、循环调度和模型交互。
+- `packages/tools`：工具注册与工具调用边界，后续承载外部数据和函数工具。
+- `packages/trace`：运行轨迹边界，后续承载事件记录、时间线和调试视图。
+
+`apps/web` 通过 workspace 依赖引用内部包：
+
+```json
+{
+  "@aiagent/agent": "workspace:*",
+  "@aiagent/tools": "workspace:*",
+  "@aiagent/trace": "workspace:*"
+}
+```
+
+## 安装和启动
+
+```bash
+pnpm install
+pnpm dev
+```
+
+常用验证命令：
+
+```bash
+pnpm typecheck
+pnpm build
+```
+
+根目录脚本会通过 workspace 执行各应用和 package 的对应命令。`pnpm dev` 默认启动 `apps/web`。
+
 ## 学习路线
 
 你当前是全栈工程师，前端和 TypeScript 能力强，且已经熟练使用 AI Coding，因此主路线采用压缩版：

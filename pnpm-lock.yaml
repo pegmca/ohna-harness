@@ -42,6 +42,12 @@ importers:
 
   packages/agent:
     dependencies:
+      '@aiagent/tools':
+        specifier: workspace:*
+        version: link:../tools
+      '@aiagent/trace':
+        specifier: workspace:*
+        version: link:../trace
       '@aiagent/types':
         specifier: workspace:*
         version: link:../types

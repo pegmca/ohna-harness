@@ -3,26 +3,88 @@ export interface TraceSummary {
   eventCount: number;
 }
 
-export type TraceEventType = "tool_call";
+export type TraceEventType =
+  | "request_received"
+  | "intent_routed"
+  | "agent_step"
+  | "model_call"
+  | "tool_call"
+  | "final_response";
 
-export interface TraceToolCallEvent {
-  type: "tool_call";
+export interface TraceError {
+  code: string;
+  message: string;
+  details?: Record<string, unknown>;
+}
+
+interface TraceEventBase {
+  type: TraceEventType;
   id: string;
   traceId: string;
+  createdAt: string;
+}
+
+export interface TraceRequestReceivedEvent extends TraceEventBase {
+  type: "request_received";
+  inputPreview: string;
+}
+
+export interface TraceIntentRoutedEvent extends TraceEventBase {
+  type: "intent_routed";
+  intent: string;
+  confidence: number;
+  reason: string;
+  toolName?: string;
+}
+
+export interface TraceAgentStepEvent extends TraceEventBase {
+  type: "agent_step";
+  stepIndex: number;
+  stepType: string;
+  status: "started" | "succeeded" | "failed";
+  durationMs: number;
+  error?: TraceError;
+  data?: Record<string, unknown>;
+}
+
+export interface TraceModelCallEvent extends TraceEventBase {
+  type: "model_call";
+  model: string;
+  purpose: string;
+  durationMs: number;
+  ok: boolean;
+  usage?: {
+    promptTokens?: number;
+    completionTokens?: number;
+    totalTokens?: number;
+  };
+  error?: TraceError;
+}
+
+export interface TraceToolCallEvent extends TraceEventBase {
+  type: "tool_call";
   toolName: string;
   args: Record<string, unknown>;
   result?: unknown;
   durationMs: number;
   ok: boolean;
-  error?: {
-    code: string;
-    message: string;
-    details?: Record<string, unknown>;
-  };
-  createdAt: string;
+  error?: TraceError;
 }
 
-export type TraceEvent = TraceToolCallEvent;
+export interface TraceFinalResponseEvent extends TraceEventBase {
+  type: "final_response";
+  answerPreview: string;
+  ok: boolean;
+  error?: TraceError;
+}
+
+export type TraceEvent =
+  | TraceRequestReceivedEvent
+  | TraceIntentRoutedEvent
+  | TraceAgentStepEvent
+  | TraceModelCallEvent
+  | TraceToolCallEvent
+  | TraceFinalResponseEvent;
 
 export interface TraceRecorder {
   readonly traceId: string;

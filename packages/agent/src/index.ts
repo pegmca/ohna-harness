@@ -4,15 +4,38 @@ export interface AgentStatus {
   ready: boolean;
 }
 
+/**
+ * 返回 agent package 当前能力摘要，便于 smoke test 和前端调试台展示。
+ *
+ * @returns package 状态摘要。
+ */
 export function createAgentStatus(): AgentStatus {
   return {
     name: "@aiagent/agent",
-    description: "Agent package provides the LLM client boundary for future loop work.",
+    description: "Agent package provides LLM client, intent router and minimal agent loop.",
     ready: true
   };
 }
 
+export { createAgent, runAgent } from "./agent-loop.js";
+export { createIntentRouter, routeIntent } from "./intent-router.js";
 export { createLlmClient, createLlmClientFromEnv } from "./llm-client.js";
+
+export type {
+  Agent,
+  AgentConfig,
+  AgentError,
+  AgentErrorCode,
+  AgentIntent,
+  AgentRequest,
+  AgentResponse,
+  AgentRoute,
+  AgentRouter,
+  AgentStep,
+  AgentStepStatus,
+  AgentStepType,
+  AgentToolSelection
+} from "./types.js";
 
 export type {
   LlmChatOptions,

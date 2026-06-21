@@ -79,10 +79,10 @@ AIAGENT_LLM_TIMEOUT_MS=30000
 可调用验证入口：
 
 ```bash
-pnpm --filter @aiagent/agent verify:llm
+pnpm --filter @aiagent/agent test
 ```
 
-默认使用 mock provider 覆盖普通 chat、JSON 输出和 tool call。配置真实环境变量后可追加 `-- --real` 调用真实 OpenAI-compatible provider。
+测试使用 mock provider 覆盖普通 chat、JSON 输出和 tool call，不需要真实 API key。
 
 ## Tools Infrastructure
 
@@ -105,6 +105,31 @@ pnpm --filter @aiagent/tools test
 
 该测试覆盖四个 mock tools、缺失 `ticker` 的 zod 参数错误、非法 calculator 表达式和 trace 写入。
 
+## Agent Loop
+
+`packages/agent` 现在导出 Week 1 最小 Agent API：`createAgent(config)`、`runAgent(request, config)`、`createIntentRouter()` 和 `routeIntent()`。核心公开类型包括 `AgentRequest`、`AgentResponse`、`AgentIntent`、`AgentStep`、`AgentError` 和 `AgentRoute`。
+
+Intent Router 第一版采用可审查规则优先：
+
+- 报告、研报、研究报告、PDF、导出、生成一份等正式交付诉求路由到 `report_skill`。
+- 年报、公告、披露、检索、资产质量等公告文本诉求路由到 `filing_search_mock`。
+- 营收、净利润、ROE、毛利率、现金流、最近一期、同比等财务指标查询路由到 `financial_metric_mock`。
+- “解释 ROE 是什么”这类概念问题保留在 `chat` 路径，不调用工具。
+- report 和 tool 同时命中时，Week 1 优先返回 report skill 占位结果，并说明完整 Report Workflow 在 Week 3 接入。
+
+Agent Loop 每一步都会返回结构化 `AgentStep`：`route_intent`、`model_answer`、`select_tool`、`call_tool`、`report_skill_placeholder`、`final_response` 或 `max_steps_exceeded`。`maxSteps` 在每个步骤前检查，达到上限时返回用户可理解的 `max_steps_exceeded`，不会无限等待或抛出原始异常。
+
+工具路径只通过 `ToolRegistry.execute()` 调用工具，不直接依赖工具实现。工具参数错误、工具不存在、工具执行错误会以 `validation_error`、`tool_not_found`、`execution_error` 等结构化 `AgentError` 返回，同时保留底层 `toolError` details。
+
+`@aiagent/trace` 的事件类型扩展为 `request_received`、`intent_routed`、`agent_step`、`model_call`、`tool_call` 和 `final_response`。事件只记录输入/输出摘要、工具参数、结构化错误、耗时和 token usage，不记录 API key 或完整环境变量。
+
+可调用验证入口：
+
+```bash
+pnpm --filter @aiagent/agent test
+pnpm --filter @aiagent/tools test
+```
+
 ## 技术栈约束
 
 前端固定采用 Vite + React + TypeScript + Tailwind CSS + shadcn/ui + Radix UI，图标统一使用 lucide-react。基础 UI 组件放在 `apps/web/src/components/ui`，业务组件组合基础组件实现，避免同时引入 Ant Design、MUI、Chakra 等第二套组件体系。
@@ -126,7 +151,8 @@ pnpm dev
 pnpm typecheck
 pnpm build
 pnpm test
-pnpm --filter @aiagent/agent verify:llm
+pnpm --filter @aiagent/agent test
+pnpm --filter @aiagent/tools test
 ```
 
 根目录脚本会通过 workspace 执行各应用和 package 的对应命令。`pnpm dev` 默认启动 `apps/web`。

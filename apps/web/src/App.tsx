@@ -1,11 +1,3 @@
-import { createAgentStatus } from "@aiagent/agent";
-import { getToolRegistrySummary } from "@aiagent/tools";
-import { createTraceSummary } from "@aiagent/trace";
-
-const agentStatus = createAgentStatus();
-const toolRegistry = getToolRegistrySummary();
-const traceSummary = createTraceSummary();
-
 export function App() {
   return (
     <main className="app-shell">
@@ -17,21 +9,21 @@ export function App() {
         </p>
       </section>
 
-      <section className="status-grid" aria-label="Package status">
+      <section className="status-grid" aria-label="Workspace boundaries">
         <article>
           <span>Agent</span>
-          <strong>{agentStatus.name}</strong>
-          <p>{agentStatus.description}</p>
+          <strong>packages/agent</strong>
+          <p>Core agent orchestration boundary for future loop work.</p>
         </article>
         <article>
           <span>Tools</span>
-          <strong>{toolRegistry.packageName}</strong>
-          <p>{toolRegistry.availableTools} tools registered</p>
+          <strong>packages/tools</strong>
+          <p>Tool contracts and integrations stay outside the web shell.</p>
         </article>
         <article>
           <span>Trace</span>
-          <strong>{traceSummary.packageName}</strong>
-          <p>{traceSummary.eventCount} events recorded</p>
+          <strong>packages/trace</strong>
+          <p>Runtime observability data will be exposed through app APIs.</p>
         </article>
       </section>
     </main>

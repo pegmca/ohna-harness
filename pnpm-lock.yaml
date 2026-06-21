@@ -17,15 +17,6 @@ importers:
 
   apps/web:
     dependencies:
-      '@aiagent/agent':
-        specifier: workspace:*
-        version: link:../../packages/agent
-      '@aiagent/tools':
-        specifier: workspace:*
-        version: link:../../packages/tools
-      '@aiagent/trace':
-        specifier: workspace:*
-        version: link:../../packages/trace
       react:
         specifier: ^19.0.0
         version: 19.2.7

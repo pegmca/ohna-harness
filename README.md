@@ -49,15 +49,7 @@
 - `packages/tools`：工具注册与工具调用边界，后续承载外部数据和函数工具。
 - `packages/trace`：运行轨迹边界，后续承载事件记录、时间线和调试视图。
 
-`apps/web` 通过 workspace 依赖引用内部包：
-
-```json
-{
-  "@aiagent/agent": "workspace:*",
-  "@aiagent/tools": "workspace:*",
-  "@aiagent/trace": "workspace:*"
-}
-```
+`packages/*` 作为独立 workspace package 构建和类型检查。`apps/web` 保持前端应用边界，不直接依赖 `agent`、`tools`、`trace` 这些核心运行时包；后续通过 API、server action 或专门的 client package 接入。
 
 ## 安装和启动
 

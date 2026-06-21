@@ -2,88 +2,6 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "Debug LLM verify: chat",
-      "type": "node",
-      "request": "launch",
-      "runtimeExecutable": "node",
-      "program": "${workspaceFolder}/test/verify-llm-client.mjs",
-      "args": [
-        "--case",
-        "chat"
-      ],
-      "cwd": "${workspaceFolder}",
-      "console": "integratedTerminal",
-      "skipFiles": [
-        "<node_internals>/**"
-      ]
-    },
-    {
-      "name": "Debug LLM verify: stream",
-      "type": "node",
-      "request": "launch",
-      "runtimeExecutable": "node",
-      "program": "${workspaceFolder}/test/verify-llm-client.mjs",
-      "args": [
-        "--case",
-        "stream"
-      ],
-      "cwd": "${workspaceFolder}",
-      "console": "integratedTerminal",
-      "skipFiles": [
-        "<node_internals>/**"
-      ]
-    },
-    {
-      "name": "Debug LLM verify: json",
-      "type": "node",
-      "request": "launch",
-      "runtimeExecutable": "node",
-      "program": "${workspaceFolder}/test/verify-llm-client.mjs",
-      "args": [
-        "--case",
-        "json"
-      ],
-      "cwd": "${workspaceFolder}",
-      "console": "integratedTerminal",
-      "skipFiles": [
-        "<node_internals>/**"
-      ]
-    },
-    {
-      "name": "Debug LLM verify: tool",
-      "type": "node",
-      "request": "launch",
-      "runtimeExecutable": "node",
-      "program": "${workspaceFolder}/test/verify-llm-client.mjs",
-      "args": [
-        "--case",
-        "tool"
-      ],
-      "cwd": "${workspaceFolder}",
-      "console": "integratedTerminal",
-      "skipFiles": [
-        "<node_internals>/**"
-      ]
-    },
-    {
-      "name": "Debug LLM verify OpenRouter: chat",
-      "type": "node",
-      "request": "launch",
-      "runtimeExecutable": "node",
-      "program": "${workspaceFolder}/test/verify-llm-client.mjs",
-      "args": [
-        "--case",
-        "chat",
-        "--provider",
-        "openrouter"
-      ],
-      "cwd": "${workspaceFolder}",
-      "console": "integratedTerminal",
-      "skipFiles": [
-        "<node_internals>/**"
-      ]
-    },
-    {
       "name": "Debug LLM verify OpenRouter: stream",
       "type": "node",
       "request": "launch",
@@ -102,37 +20,18 @@
       ]
     },
     {
-      "name": "Debug LLM verify OpenRouter: json",
+      "name": "Debug LLM Tool Trace OpenRouter",
       "type": "node",
       "request": "launch",
       "runtimeExecutable": "node",
-      "program": "${workspaceFolder}/test/verify-llm-client.mjs",
-      "args": [
-        "--case",
-        "json",
-        "--provider",
-        "openrouter"
-      ],
+      "program": "${workspaceFolder}/test/debug-llm-tool-trace.mjs",
+      "args": [],
       "cwd": "${workspaceFolder}",
       "console": "integratedTerminal",
-      "skipFiles": [
-        "<node_internals>/**"
-      ]
-    },
-    {
-      "name": "Debug LLM verify OpenRouter: tool",
-      "type": "node",
-      "request": "launch",
-      "runtimeExecutable": "node",
-      "program": "${workspaceFolder}/test/verify-llm-client.mjs",
-      "args": [
-        "--case",
-        "tool",
-        "--provider",
-        "openrouter"
-      ],
-      "cwd": "${workspaceFolder}",
-      "console": "integratedTerminal",
+      "preLaunchTask": "Build Workspace",
+      "env": {
+        "AIAGENT_LLM_PROVIDER": "openrouter"
+      },
       "skipFiles": [
         "<node_internals>/**"
       ]

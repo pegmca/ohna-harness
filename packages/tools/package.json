@@ -13,6 +13,11 @@
   },
   "scripts": {
     "build": "tsc -b",
-    "typecheck": "tsc -b --pretty false --noEmit"
+    "test": "pnpm build && node --test test/tools.test.mjs",
+    "typecheck": "pnpm --filter @aiagent/trace build && tsc -p tsconfig.json --pretty false --noEmit"
+  },
+  "dependencies": {
+    "@aiagent/trace": "workspace:^",
+    "zod": "^4.4.3"
   }
 }

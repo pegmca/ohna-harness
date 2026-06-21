@@ -15,12 +15,11 @@
     "isolatedModules": true,
     "noEmit": true,
     "jsx": "react-jsx",
-    "baseUrl": ".",
     "paths": {
-      "@aiagent/agent": ["packages/agent/src/index.ts"],
-      "@aiagent/types": ["packages/types/src/index.ts"],
-      "@aiagent/tools": ["packages/tools/src/index.ts"],
-      "@aiagent/trace": ["packages/trace/src/index.ts"]
+      "@aiagent/agent": ["./packages/agent/src/index.ts"],
+      "@aiagent/types": ["./packages/types/src/index.ts"],
+      "@aiagent/tools": ["./packages/tools/src/index.ts"],
+      "@aiagent/trace": ["./packages/trace/src/index.ts"]
     }
   }
 }

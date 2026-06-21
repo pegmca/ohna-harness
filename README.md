@@ -84,6 +84,27 @@ pnpm --filter @aiagent/agent verify:llm
 
 默认使用 mock provider 覆盖普通 chat、JSON 输出和 tool call。配置真实环境变量后可追加 `-- --real` 调用真实 OpenAI-compatible provider。
 
+## Tools Infrastructure
+
+`packages/tools` 导出统一工具基础设施，当前实现 Week 1 的稳定 mock tools：`calculator`、`market_data_mock`、`filing_search_mock`、`financial_metric_mock`。
+
+- `Tool<TInput, TOutput>`：每个工具必须声明 `inputSchema`、`outputSchema` 和 `execute()`。
+- `ToolRegistry`：支持按名称注册、查找、列出和执行工具。
+- `createDefaultToolRegistry()`：返回已注册首批四个 mock tools 的 registry。
+- `executeTool()` / `registry.execute()`：执行前用 zod 校验参数，执行后校验输出，并把异常转换为 `ToolExecutionResult` 结构化失败。
+
+源码按职责拆分在 `packages/tools/src`：`types.ts` 保存公共 contract，`registry.ts` 保存注册表，`executor.ts` 保存执行与 trace 写入，`default-registry.ts` 组合默认 mock tools，`tools/*.ts` 按工具名分别保存 schema 和实现。`index.ts` 只作为 package 入口导出公共 API。
+
+工具执行可注入 `@aiagent/trace` 的 `TraceRecorder`。每次调用会写入 `tool_call` 事件，包含工具名、参数、结果、耗时和结构化错误；trace 写入失败不会打断工具主流程。
+
+可调用验证入口：
+
+```bash
+pnpm --filter @aiagent/tools test
+```
+
+该测试覆盖四个 mock tools、缺失 `ticker` 的 zod 参数错误、非法 calculator 表达式和 trace 写入。
+
 ## 技术栈约束
 
 前端固定采用 Vite + React + TypeScript + Tailwind CSS + shadcn/ui + Radix UI，图标统一使用 lucide-react。基础 UI 组件放在 `apps/web/src/components/ui`，业务组件组合基础组件实现，避免同时引入 Ant Design、MUI、Chakra 等第二套组件体系。

@@ -31,7 +31,7 @@ Keep package boundaries explicit. Do not move runtime behavior into `apps/web` w
 - Do not add production dependencies unless they are necessary for the task.
 - Return structured errors from agent, tool, model, and trace boundaries instead of leaking raw exceptions to UI callers.
 - Keep public interfaces small and stable. If an interface changes, update callers and related docs in the same task.
-- This repository is for learning. Add concise explanatory comments for important abstractions, package boundaries, agent/model/tool control flow, structured error handling, timeout/retry behavior, and any non-obvious implementation tradeoff. Prefer comments that explain why the code exists or how the learning concept works; do not comment trivial assignments or repeat what the code already says.
+- This repository is for learning. Add concise explanatory comments in Chinese for important abstractions, package boundaries, agent/model/tool control flow, structured error handling, timeout/retry behavior, and any non-obvious implementation tradeoff. Every function and method should have standard Chinese JSDoc, including `@param`, `@returns`, and `@template` when they add useful context. Prefer comments that explain why the code exists or how the learning concept works; do not comment trivial assignments or repeat what the code already says.
 
 ## Validation
 
@@ -45,6 +45,8 @@ pnpm dev
 ```
 
 If a command cannot be run, explain why in the final response.
+
+Put future manual debugging and verification scripts under the repository root `test/` directory. Do not add ad hoc debug scripts under package-specific `scripts/` directories unless they are package build/test infrastructure rather than human debugging entrypoints.
 
 ## Documentation Sync
 

@@ -17,7 +17,6 @@
   "scripts": {
     "build": "tsc -b",
     "test": "pnpm build && node --test test/llm-client.test.mjs",
-    "typecheck": "pnpm --filter @aiagent/types build && tsc -p tsconfig.json --pretty false --noEmit",
-    "verify:llm": "pnpm build && node scripts/verify-llm-client.mjs"
+    "typecheck": "pnpm --filter @aiagent/types build && tsc -p tsconfig.json --pretty false --noEmit"
   }
 }

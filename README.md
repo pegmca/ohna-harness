@@ -17,11 +17,12 @@
 │       ├── WEEK_3_AGENTIC_RAG_WORKFLOW_MCP.md
 │       └── WEEK_4_PRODUCTION_AND_INTERVIEW.md
 ├── apps/
-│   └── web/
-│       ├── app/
-│       └── components/
+│   ├── web/
+│   │   └── src/
+│   └── api/                 # 需要 HTTP 服务时再引入
 ├── packages/
 │   ├── agent/
+│   ├── types/
 │   ├── rag/
 │   ├── tools/
 │   ├── workflow/
@@ -45,11 +46,21 @@
 本仓库已经初始化为 pnpm workspace monorepo：
 
 - `apps/web`：Vite + React + TypeScript Web 应用入口，负责承载 Immersive 产品界面。
+- `apps/api`：后续需要前后端 HTTP 联调时引入，使用 Fastify 作为 HTTP adapter。
 - `packages/agent`：Agent 能力边界，后续承载意图识别、循环调度和模型交互。
+- `packages/types`：前后端共享类型边界，承载 API contract、DTO、结构化错误和稳定枚举。
 - `packages/tools`：工具注册与工具调用边界，后续承载外部数据和函数工具。
 - `packages/trace`：运行轨迹边界，后续承载事件记录、时间线和调试视图。
 
-`packages/*` 作为独立 workspace package 构建和类型检查。`apps/web` 保持前端应用边界，不直接依赖 `agent`、`tools`、`trace` 这些核心运行时包；后续通过 API、server action 或专门的 client package 接入。
+`packages/*` 作为独立 workspace package 构建和类型检查。`apps/web` 保持前端应用边界，不直接依赖 `agent`、`tools`、`trace` 这些核心运行时包；后续通过 `apps/api` 或专门的 client package 接入。
+
+## 技术栈约束
+
+前端固定采用 Vite + React + TypeScript + Tailwind CSS + shadcn/ui + Radix UI，图标统一使用 lucide-react。基础 UI 组件放在 `apps/web/src/components/ui`，业务组件组合基础组件实现，避免同时引入 Ant Design、MUI、Chakra 等第二套组件体系。
+
+后端在需要 HTTP 服务时使用 `apps/api` + Fastify。Fastify route handler 只作为 HTTP adapter：完成请求校验、调用 `packages/agent` / `packages/tools` / `packages/trace`、返回结构化响应。Agent 编排、工具执行、trace 构造等运行时逻辑不得放进 `apps/api` 或 `apps/web`。
+
+前后端共享的请求、响应、DTO、错误码和稳定枚举统一放在 `packages/types`，由 `apps/web`、`apps/api` 和 runtime packages 通过 `@aiagent/types` 引用。不要在前端或 API route 中重复声明协议类型；包内也不要放 UI-only props、数据库私有模型或只属于单个 runtime package 的内部状态。
 
 ## 安装和启动
 

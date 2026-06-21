@@ -218,6 +218,7 @@ apps/web/
 
 packages/
 ├── agent/
+├── types/
 ├── rag/
 ├── tools/
 ├── workflow/
@@ -232,6 +233,7 @@ packages/
 核心 package 职责：
 
 - `agent`：Intent Router、Agent Loop、模型调用编排。
+- `types`：前后端共享 API contract、DTO、结构化错误和稳定枚举。
 - `rag`：检索、重排、context packing、引用生成。
 - `tools`：工具 schema、tool registry、参数校验、工具执行。
 - `workflow`：Report Mode 的显式节点编排。

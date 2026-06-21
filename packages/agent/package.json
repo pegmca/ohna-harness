@@ -11,8 +11,13 @@
       "import": "./dist/index.js"
     }
   },
+  "dependencies": {
+    "@aiagent/types": "workspace:*"
+  },
   "scripts": {
     "build": "tsc -b",
-    "typecheck": "tsc -b --pretty false --noEmit"
+    "test": "pnpm build && node --test test/llm-client.test.mjs",
+    "typecheck": "pnpm --filter @aiagent/types build && tsc -p tsconfig.json --pretty false --noEmit",
+    "verify:llm": "pnpm build && node scripts/verify-llm-client.mjs"
   }
 }

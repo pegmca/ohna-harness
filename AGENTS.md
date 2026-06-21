@@ -31,6 +31,7 @@ Keep package boundaries explicit. Do not move runtime behavior into `apps/web` w
 - Do not add production dependencies unless they are necessary for the task.
 - Return structured errors from agent, tool, model, and trace boundaries instead of leaking raw exceptions to UI callers.
 - Keep public interfaces small and stable. If an interface changes, update callers and related docs in the same task.
+- This repository is for learning. Add concise explanatory comments for important abstractions, package boundaries, agent/model/tool control flow, structured error handling, timeout/retry behavior, and any non-obvious implementation tradeoff. Prefer comments that explain why the code exists or how the learning concept works; do not comment trivial assignments or repeat what the code already says.
 
 ## Validation
 

@@ -40,11 +40,17 @@ importers:
         specifier: ^6.0.7
         version: 6.4.3(@types/node@22.20.0)
 
-  packages/agent: {}
+  packages/agent:
+    dependencies:
+      '@aiagent/types':
+        specifier: workspace:*
+        version: link:../types
 
   packages/tools: {}
 
   packages/trace: {}
+
+  packages/types: {}
 
 packages:
 

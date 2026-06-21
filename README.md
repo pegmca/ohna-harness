@@ -54,6 +54,36 @@
 
 `packages/*` 作为独立 workspace package 构建和类型检查。`apps/web` 保持前端应用边界，不直接依赖 `agent`、`tools`、`trace` 这些核心运行时包；后续通过 `apps/api` 或专门的 client package 接入。
 
+## LLM Client
+
+`packages/agent` 导出统一 LLM Client，当前支持 OpenAI compatible `/chat/completions`。公开 contract 放在 `packages/types/src/llm.ts`，实现放在 `packages/agent/src/llm-client.ts`，`packages/agent/src/index.ts` 只保留 package 入口导出。
+
+- `createLlmClient(config)`：通过显式配置创建 client。
+- `createLlmClientFromEnv(env)`：从环境变量创建 client。
+- `chat()`：普通聊天调用。
+- `streamChat()`：SSE streaming chat 初版，返回 `AsyncIterable` 事件。
+- `jsonChat()`：解析模型 JSON 输出，解析失败返回结构化 `json_parse_error`。
+- `toolChat()`：发送 function tool schema，并返回规范化后的工具名和参数。
+
+环境变量：
+
+```bash
+AIAGENT_LLM_API_KEY=...
+AIAGENT_LLM_BASE_URL=https://api.openai.com/v1
+AIAGENT_LLM_MODEL=...
+AIAGENT_LLM_TIMEOUT_MS=30000
+```
+
+兼容 fallback：`OPENAI_API_KEY`、`OPENAI_BASE_URL`、`OPENAI_MODEL`。调用方只依赖 `LlmResult<T>` 结构化结果，不需要处理底层 HTTP 异常。
+
+可调用验证入口：
+
+```bash
+pnpm --filter @aiagent/agent verify:llm
+```
+
+默认使用 mock provider 覆盖普通 chat、JSON 输出和 tool call。配置真实环境变量后可追加 `-- --real` 调用真实 OpenAI-compatible provider。
+
 ## 技术栈约束
 
 前端固定采用 Vite + React + TypeScript + Tailwind CSS + shadcn/ui + Radix UI，图标统一使用 lucide-react。基础 UI 组件放在 `apps/web/src/components/ui`，业务组件组合基础组件实现，避免同时引入 Ant Design、MUI、Chakra 等第二套组件体系。
@@ -74,6 +104,8 @@ pnpm dev
 ```bash
 pnpm typecheck
 pnpm build
+pnpm test
+pnpm --filter @aiagent/agent verify:llm
 ```
 
 根目录脚本会通过 workspace 执行各应用和 package 的对应命令。`pnpm dev` 默认启动 `apps/web`。

@@ -129,6 +129,7 @@ async function routeWithModel(
       type: "model_call",
       id: createTraceEventId(traceRecorder.traceId, "router_model"),
       traceId: traceRecorder.traceId,
+      requestId: traceRecorder.requestId,
       model: result.ok ? result.data.model : "unknown",
       purpose: "intent_router",
       durationMs,

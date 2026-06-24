@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { createInMemoryTraceRecorder } from "@aiagent/trace";
 import { createLlmClient } from "../dist/index.js";
 
 test("chat sends an OpenAI compatible request and returns normalized content", async () => {
@@ -41,10 +42,12 @@ test("chat sends an OpenAI compatible request and returns normalized content", a
 });
 
 test("jsonChat returns structured parse errors instead of throwing", async () => {
+  const trace = createInMemoryTraceRecorder("trace_llm_json_test", "req_llm_json_test");
   const client = createLlmClient({
     apiKey: "test-key",
     baseUrl: "https://llm.example/v1",
     model: "test-model",
+    traceRecorder: trace,
     fetch: async () =>
       jsonResponse({
         choices: [{ message: { content: "not json" }, finish_reason: "stop" }]
@@ -60,6 +63,13 @@ test("jsonChat returns structured parse errors instead of throwing", async () =>
   assert.equal(result.error.code, "json_parse_error");
   assert.match(result.error.message, /financial metric/);
   assert.equal(result.error.details.contentPreview, "not json");
+
+  const [event] = trace.getEvents();
+  assert.equal(event.type, "model_call");
+  assert.equal(event.requestId, "req_llm_json_test");
+  assert.equal(event.purpose, "json_chat");
+  assert.equal(event.ok, false);
+  assert.equal(event.error.code, "json_parse_error");
 });
 
 test("toolChat returns a normalized tool name and parsed arguments", async () => {

@@ -19,9 +19,9 @@ body {
 }
 
 .app-shell {
-  width: min(1040px, calc(100% - 32px));
+  width: min(1120px, calc(100% - 32px));
   margin: 0 auto;
-  padding: 72px 0;
+  padding: 56px 0;
 }
 
 .overview {
@@ -38,7 +38,7 @@ body {
 
 h1 {
   margin: 0;
-  font-size: clamp(2.4rem, 6vw, 4.5rem);
+  font-size: 3.5rem;
   line-height: 1;
 }
 
@@ -49,36 +49,97 @@ h1 {
   line-height: 1.65;
 }
 
-.status-grid {
+.trace-meta {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 16px;
-  margin-top: 48px;
+  margin-top: 40px;
 }
 
-.status-grid article {
-  min-height: 150px;
+.trace-meta div {
   padding: 20px;
   border: 1px solid #d8dddf;
   border-radius: 8px;
   background: #ffffff;
 }
 
-.status-grid span {
+.trace-meta span {
   color: #667078;
   font-size: 0.85rem;
 }
 
-.status-grid strong {
+.trace-meta strong {
   display: block;
-  margin-top: 12px;
-  font-size: 1.3rem;
+  margin-top: 10px;
+  overflow-wrap: anywhere;
+  font-size: 1.1rem;
 }
 
-.status-grid p {
+.timeline {
+  display: grid;
+  gap: 14px;
+  margin-top: 24px;
+}
+
+.timeline-event {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
+}
+
+.event-index {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border-radius: 999px;
+  background: #1f3f37;
+  color: #ffffff;
+  font-weight: 700;
+}
+
+.event-body {
+  min-width: 0;
+  padding: 18px;
+  border: 1px solid #d8dddf;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.event-heading {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.event-heading strong {
+  font-size: 1rem;
+}
+
+.event-heading span {
+  color: #667078;
+  font-size: 0.85rem;
+  white-space: nowrap;
+}
+
+.event-body p {
   margin: 10px 0 0;
-  color: #5e646b;
-  line-height: 1.5;
+  color: #4f575f;
+  line-height: 1.55;
+}
+
+.event-body pre {
+  max-height: 260px;
+  margin: 14px 0 0;
+  overflow: auto;
+  padding: 14px;
+  border-radius: 8px;
+  background: #f1f4f5;
+  color: #25302d;
+  font-size: 0.84rem;
+  line-height: 1.45;
 }
 
 @media (max-width: 720px) {
@@ -86,7 +147,20 @@ h1 {
     padding: 40px 0;
   }
 
-  .status-grid {
+  h1 {
+    font-size: 2.5rem;
+  }
+
+  .trace-meta {
     grid-template-columns: 1fr;
+  }
+
+  .timeline-event {
+    grid-template-columns: 1fr;
+  }
+
+  .event-heading {
+    align-items: flex-start;
+    flex-direction: column;
   }
 }

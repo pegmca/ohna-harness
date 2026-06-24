@@ -1,6 +1,6 @@
 import type { LlmClient } from "@aiagent/types";
 import type { ToolRegistry } from "@aiagent/tools";
-import type { TraceRecorder } from "@aiagent/trace";
+import type { Trace, TraceRecorder } from "@aiagent/trace";
 
 export type AgentIntent = "chat" | "tool" | "report_skill";
 
@@ -52,6 +52,8 @@ export interface AgentResponse {
   intent: AgentIntent;
   answer: string;
   traceId: string;
+  requestId: string;
+  trace: Trace;
   steps: AgentStep[];
   error?: AgentError;
 }

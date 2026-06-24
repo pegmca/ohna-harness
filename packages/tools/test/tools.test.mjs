@@ -74,3 +74,18 @@ test("successful tool calls are written to trace with args, result and latency",
   assert.equal(event.result.lastPrice, 10.85);
   assert.equal(typeof event.durationMs, "number");
 });
+
+test("trace recorder redacts sensitive fields from tool args", async () => {
+  const registry = createDefaultToolRegistry();
+  const trace = createInMemoryTraceRecorder("trace_redaction_test", "req_redaction_test");
+  await registry.execute(
+    "financial_metric_mock",
+    { ticker: "000001.SZ", apiKey: "should-not-be-stored", nested: { token: "secret-token" } },
+    { trace }
+  );
+  const [event] = trace.getEvents();
+
+  assert.equal(event.requestId, "req_redaction_test");
+  assert.equal(event.args.apiKey, "[redacted]");
+  assert.equal(event.args.nested.token, "[redacted]");
+});

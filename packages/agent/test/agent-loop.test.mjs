@@ -15,6 +15,9 @@ test("chat questions use the lightweight answer path without tools", async () =>
     ["route_intent", "model_answer", "final_response"]
   );
   assert.equal(response.traceId, "trace_chat_test");
+  assert.equal(response.requestId.startsWith("req_"), true);
+  assert.equal(response.trace.traceId, "trace_chat_test");
+  assert.equal(response.trace.events.some((event) => event.type === "request_received" && event.userMessage.includes("ROE")), true);
   assert.equal(trace.getEvents().some((event) => event.type === "tool_call"), false);
   assert.equal(trace.getEvents().some((event) => event.type === "final_response" && event.ok), true);
 });

@@ -123,7 +123,7 @@ function finishToolExecution<TOutput>(
 
   if (context.trace) {
     try {
-      context.trace.record(toTraceToolCallEvent(context.trace.traceId, toolName, args, completedResult));
+      context.trace.record(toTraceToolCallEvent(context.trace.traceId, context.trace.requestId, toolName, args, completedResult));
     } catch {
       // trace 是旁路观测能力，记录失败不能影响工具主流程。
     }
@@ -136,6 +136,7 @@ function finishToolExecution<TOutput>(
  * 将工具执行结果转换成 trace event，保证前端 timeline 有稳定字段可展示。
  *
  * @param traceId 当前请求链路标识。
+ * @param requestId 当前请求标识。
  * @param toolName 工具名称。
  * @param args 工具参数快照。
  * @param result 工具执行结果。
@@ -143,6 +144,7 @@ function finishToolExecution<TOutput>(
  */
 function toTraceToolCallEvent(
   traceId: string,
+  requestId: string,
   toolName: string,
   args: Record<string, unknown>,
   result: ToolExecutionResult
@@ -151,6 +153,7 @@ function toTraceToolCallEvent(
     type: "tool_call",
     id: `${traceId}_${toolName}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
     traceId,
+    requestId,
     toolName,
     args,
     result: result.ok ? result.result : undefined,

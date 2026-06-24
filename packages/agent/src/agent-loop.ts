@@ -61,6 +61,8 @@ export async function runAgent(request: AgentRequest, config: AgentConfig = {}):
     type: "request_received",
     id: createTraceEventId(trace.traceId, "request"),
     traceId: trace.traceId,
+    requestId: trace.requestId,
+    userMessage: message,
     inputPreview: preview(message),
     createdAt: new Date().toISOString()
   });
@@ -87,6 +89,7 @@ export async function runAgent(request: AgentRequest, config: AgentConfig = {}):
         type: "intent_routed",
         id: createTraceEventId(trace.traceId, "intent"),
         traceId: trace.traceId,
+        requestId: trace.requestId,
         intent: routed.intent,
         confidence: routed.confidence,
         reason: routed.reason,
@@ -303,6 +306,7 @@ async function runChatPath(
         type: "model_call",
         id: createTraceEventId(trace.traceId, "model"),
         traceId: trace.traceId,
+        requestId: trace.requestId,
         model: result.ok ? result.data.model : "unknown",
         purpose: "chat_answer",
         durationMs,
@@ -432,6 +436,7 @@ function pushStep(steps: AgentStep[], trace: TraceRecorder, step: AgentStep): Ag
     type: "agent_step",
     id: createTraceEventId(trace.traceId, `step_${step.index}`),
     traceId: trace.traceId,
+    requestId: trace.requestId,
     stepIndex: step.index,
     stepType: step.type,
     status: step.status === "succeeded" ? "succeeded" : "failed",
@@ -480,6 +485,7 @@ function finish(
     type: "final_response",
     id: createTraceEventId(trace.traceId, "final"),
     traceId: trace.traceId,
+    requestId: trace.requestId,
     answerPreview: preview(answer),
     ok,
     error,
@@ -491,6 +497,8 @@ function finish(
     intent,
     answer,
     traceId: trace.traceId,
+    requestId: trace.requestId,
+    trace: trace.getTrace(),
     steps,
     error
   };

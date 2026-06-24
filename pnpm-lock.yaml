@@ -20,6 +20,9 @@ importers:
 
   apps/web:
     dependencies:
+      '@aiagent/trace':
+        specifier: workspace:*
+        version: link:../../packages/trace
       react:
         specifier: ^19.0.0
         version: 19.2.7

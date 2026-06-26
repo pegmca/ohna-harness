@@ -9,6 +9,7 @@
 ├── docs/
 │   ├── ROADMAP_1_MONTH.md
 │   ├── BUSINESS_DIRECTION_FINANCIAL_RESEARCH_AGENT.md
+│   ├── IMMERSIVE_PRODUCT_DESIGN.md
 │   ├── implementation/
 │   │   └── WEEK_1_IMPLEMENTATION.md
 │   └── weeks/
@@ -19,7 +20,7 @@
 ├── apps/
 │   ├── web/
 │   │   └── src/
-│   └── api/                 # 需要 HTTP 服务时再引入
+│   └── api/
 ├── packages/
 │   ├── agent/
 │   ├── types/
@@ -38,6 +39,8 @@
 │   └── interview-qa.md
 ├── package.json
 ├── pnpm-workspace.yaml
+├── DESIGN.md
+├── system.css
 └── README.md
 ```
 
@@ -45,14 +48,34 @@
 
 本仓库已经初始化为 pnpm workspace monorepo：
 
-- `apps/web`：Vite + React + TypeScript Web 应用入口，负责承载 Immersive 产品界面。
-- `apps/api`：后续需要前后端 HTTP 联调时引入，使用 Fastify 作为 HTTP adapter。
+- `apps/web`：Vite + React + TypeScript Web 应用入口，负责承载 Immersive 产品界面，只通过 HTTP API 调用 Agent。
+- `apps/api`：Fastify HTTP adapter，当前暴露 `POST /api/agent/run` 和 `/health`，负责请求校验、DTO 映射和结构化响应。
 - `packages/agent`：Agent 能力边界，后续承载意图识别、循环调度和模型交互。
 - `packages/types`：前后端共享类型边界，承载 API contract、DTO、结构化错误和稳定枚举。
 - `packages/tools`：工具注册与工具调用边界，后续承载外部数据和函数工具。
 - `packages/trace`：运行轨迹边界，后续承载事件记录、时间线和调试视图。
 
-`packages/*` 作为独立 workspace package 构建和类型检查。`apps/web` 保持前端应用边界，不直接依赖 `agent`、`tools`、`trace` 这些核心运行时包；后续通过 `apps/api` 或专门的 client package 接入。
+`packages/*` 作为独立 workspace package 构建和类型检查。`apps/web` 保持前端应用边界，不直接依赖 `agent`、`tools`、`trace` 这些核心运行时包；当前通过 `apps/api` 接入 Agent。
+
+设计文档拆分为两层：根目录 `DESIGN.md` 是通用 Meridian 视觉系统，定义设计 token、组件视觉语言和 AI 前端生成约束；`system.css` 是对应的 CSS token / utility 参考实现；`docs/IMMERSIVE_PRODUCT_DESIGN.md` 承载 Immersive 金融研究 Agent 的产品体验、信息架构和页面模块。
+
+## Immersive Playground
+
+Week 1 已实现最小可演示的 Immersive Playground：
+
+- 页面提供金融研究输入框、本地会话消息列表和 Report Mode 占位开关。
+- 每次提交调用 `POST /api/agent/run`，请求体为 `AgentRunRequestDto`：`message`、`reportMode`、可选 `conversationId`。
+- API 返回 `ApiResult<AgentRunResponseDto>`，包含 `answer`、`intent`、`steps`、`trace`、`requestId` 和结构化错误。
+- 右侧调试面板展示最近一次 run 的工具选择/调用详情和 trace timeline，数据来自真实 Agent 响应，不硬编码 demo trace。
+- `reportMode` 在 Week 1 只作为 UI 和 API 占位信号；自然语言报告/PDF 请求会被 Intent Router 识别为 `report_skill` 并返回占位结果，不启动完整 Workflow。
+
+本地 API 验证：
+
+```bash
+curl -X POST http://localhost:3001/api/agent/run \
+  -H "content-type: application/json" \
+  -d '{"message":"帮我查询 000001.SZ 最近一期净利润和 ROE。","reportMode":false}'
+```
 
 ## LLM Client
 
@@ -153,9 +176,10 @@ pnpm build
 pnpm test
 pnpm --filter @aiagent/agent test
 pnpm --filter @aiagent/tools test
+pnpm --filter @aiagent/api test
 ```
 
-根目录脚本会通过 workspace 执行各应用和 package 的对应命令。`pnpm dev` 默认启动 `apps/web`。
+根目录脚本会通过 workspace 执行各应用和 package 的对应命令。`pnpm dev` 会同时启动 `apps/api` 和 `apps/web`；web 的 Vite dev server 会把 `/api` 代理到 `http://localhost:3001`。如果 `5173` 被占用，Vite 会自动选择下一个可用端口。
 
 ## 学习路线
 

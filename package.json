@@ -4,13 +4,14 @@
   "private": true,
   "packageManager": "pnpm@9.15.4",
   "scripts": {
-    "dev": "pnpm --filter @aiagent/web dev",
+    "dev": "concurrently -n api,web -c blue,green \"pnpm --filter @aiagent/api dev\" \"pnpm --filter @aiagent/web dev\"",
     "build": "pnpm -r build",
     "test": "pnpm -r --if-present test",
     "typecheck": "pnpm -r typecheck"
   },
   "devDependencies": {
     "@types/node": "^22.10.5",
+    "concurrently": "^10.0.3",
     "tsx": "^4.22.4",
     "typescript": "^5.7.2"
   }

@@ -32,23 +32,23 @@ Immersive 是面向股票研究、公告分析、财务指标查询和研报生�
 - 单一蓝紫色系铺满整个页面。
 - 为了“高级感”牺牲可读性的低对比度文字。
 
-## 当前设计诊断与改进优先级
+## 当前设计状态与改进优先级
 
-当前 Week 1 页面已经具备工作台雏形：左侧对话、右侧 run summary / tool calls / trace timeline、底部输入区、深色主题和基础按钮组件。下一轮视觉改进不应重做成营销页，而应把“金融研究证据链”做得更清楚。
+当前 Week 1 页面已经从“开发调试台”重构为 Agent Chat 基础形态：左侧本地会话列表，中间简洁对话流，底部 composer，运行状态、工具调用和 trace 作为 assistant 消息内的可展开派生信息。
 
 优先级：
 
-1. **先改善信息分区**：把对话、研究上下文、工具证据和 trace 调试拆成稳定面板，减少所有内容都像 JSON 调试块的感觉。
-2. **再改善金融语义**：增加 ticker context、指标摘要、引用/证据列表、风险提示，让页面一眼像投研工具。
-3. **然后改善组件复用**：把 `RunSummary`、`ToolPanel`、`TracePanel`、`JsonBlock` 逐步拆到 `apps/web/src/components`，基础视觉控件沉淀到 `apps/web/src/components/ui`。
-4. **最后做视觉润色**：增加状态 badge、紧凑 tabs、分段筛选、hover/focus 微交互和 skeleton，但不引入大面积装饰背景。
+1. **继续完善金融语义**：在 assistant 消息和 run details 中逐步加入 ticker context、指标摘要、引用/证据列表和风险提示。
+2. **增强 Report Workflow**：把 planning、collecting、analysis、writing、citation check 和 export 状态作为消息派生内容展示。
+3. **推进组件复用**：后续可把 `ConversationSidebar`、`ChatTimeline`、`ChatComposer`、`RunDetails`、`ToolCallsList`、`TraceTimeline`、`JsonDetails` 拆到独立文件，降低 `App.tsx` 体积。
+4. **扩展会话能力**：在保持 API contract 清晰的前提下，引入真实多轮上下文和持久化会话历史。
 
 当前设计债务：
 
-- `styles.css` 中存在 radial / linear 背景，后续应控制在轻量氛围层级，不能演变成装饰性主视觉。
-- 右侧面板在移动端会下移但缺少 tabs / accordion 级别的信息组织。
-- 工具调用和 trace 目前偏原始 JSON，应默认展示摘要，把完整 JSON 作为二级调试入口。
-- demo prompt chip 内容较长，后续应改为“问题类型 + 示例短句”的紧凑结构。
+- `App.tsx` 仍承载多个业务组件，后续页面继续增长时应拆分到 `apps/web/src/components`。
+- 本地会话刷新后丢失，符合 Week 1 约束；后续真实产品需要服务端持久化。
+- Report Mode 当前仍是 UI/API 占位信号，尚未启动完整 Workflow。
+- 工具调用和 trace 已有摘要和二级 JSON 折叠，后续应补充金融引用、证据质量和风险提示。
 
 ## 技术约束
 
@@ -76,47 +76,59 @@ apps/web/src/components/ui
 
 ## 页面结构
 
-默认主页面是工作台布局：
+默认主页面是 Agent Chat 布局，而不是左右调试工作台：
 
 ```text
-左侧主工作区：对话、研究问题、报告预览、引用结果
-右侧调试/证据区：run summary、tool calls、trace timeline、JSON details
-底部或局部输入区：研究问题输入、Report Mode、提交操作
+左侧会话栏：新建会话、历史会话、本地运行状态
+中央对话区：消息流、assistant 回答、消息内 run details、底部输入框
+输入框派生区：Report Mode、提交状态、错误提示、starter prompts
 ```
 
 推荐结构：
 
 ```text
-Top bar:
-  产品名 / 当前会话状态 / Report Mode / 运行状态
+App Shell:
+  Sidebar:
+    New Chat
+    Conversation List
+    Local status
 
-Main workspace:
-  左侧 60%-70%：研究问题、对话回答、报告预览、引用证据
-  右侧 30%-40%：Run Summary、Tool Evidence、Trace Timeline
+  Chat Main:
+    Header:
+      产品名 / 当前会话标题 / Report Mode / 最新运行状态
 
-Input dock:
-  多行研究问题输入 / 示例问题 / 提交按钮 / 错误提示
+    Message Timeline:
+      用户消息
+      assistant 回答
+      assistant 消息内 RunDetails / ToolCalls / TraceTimeline
+
+    Composer Dock:
+      多行研究问题输入 / 示例问题 / 提交按钮 / 错误提示 / 请求进度
 ```
 
-后续进入 Report Workflow 后，可以改成三栏：
+后续进入 Report Workflow 后，仍优先保持会话型体验：
 
 ```text
-左栏：会话与研究 brief
-中栏：报告正文、指标、引用
-右栏：workflow steps、tool calls、trace
+左栏：会话列表
+中栏：对话、报告正文、引用证据、workflow 派生状态
+消息内或抽屉：工具调用、trace、JSON details
 ```
+
+只有当用户显式打开“调试详情”或“证据抽屉”时，才临时展示辅助面板；默认首屏不放独立右侧调试栏。
 
 桌面端：
 
-- 最大宽度可以约束在 `1440px` 到 `1600px`。
-- 使用两栏或三栏布局，右侧面板宽度保持稳定，避免随着内容跳动。
-- 重要状态永远在首屏可见：当前意图、Report Mode、请求状态、最新工具调用。
-- 主对话区需要足够宽度承载长文本和表格。
+- 左侧会话栏宽度保持稳定，建议 `260px` 到 `300px`。
+- 中央对话区最大阅读宽度建议 `760px` 到 `900px`。
+- 页面不再使用独立右侧 Run State / Tools / Trace 面板。
+- 重要状态在对话 header、composer 和 assistant 消息内可见：Report Mode、请求状态、当前 intent、工具调用数量。
+- 主对话区需要足够宽度承载长文本、表格、引用和折叠 run details。
 
 移动端：
 
 - 优先单列布局。
-- 右侧调试面板应下移为折叠区、tabs 或分段内容。
+- 会话栏默认收起为 drawer。
+- Run details、工具调用和 trace 留在 assistant 消息内折叠展示。
 - 输入框和提交按钮不能挤压到不可用。
 - 长 ticker、requestId、traceId、JSON path 必须允许换行或横向滚动。
 
@@ -133,7 +145,7 @@ Input dock:
 - trace timeline：事件类型、时间、耗时、结构化错误。
 - Report Mode 状态和后续 Workflow 占位。
 
-不要隐藏调试信息，但也不要让 JSON 淹没主体验。默认显示摘要，细节用折叠面板或 `details` 展开。
+不要隐藏调试信息，但也不要让 JSON 淹没主体验。默认显示摘要，细节用 assistant 消息内折叠面板或 `details` 展开。`Run State`、工具调用和 trace 不应作为默认右侧栏存在。
 
 ## 金融研究专用 UI 模式
 
@@ -153,11 +165,16 @@ Input dock:
 
 后续页面改版时，优先按以下模块组合，而不是从空白页面自由发挥：
 
+- **Conversation Sidebar**：展示新建会话、本地会话列表、最后消息摘要和最新运行状态。
+- **Chat Header**：展示产品名、当前会话标题、Report Mode 和最新请求状态。
+- **Chat Timeline**：展示用户消息、assistant 回答、消息级运行详情和错误状态。
+- **Chat Composer**：展示多行输入、提交按钮、Report Mode 快捷控制、请求进度和错误提示。
+- **Run Details**：作为 assistant 消息的派生内容，展示 intent、status、steps、tool calls、trace events 和 requestId。
 - **Research Brief Bar**：展示 ticker、公司名、市场、报告期、数据更新时间、当前意图。
 - **Answer Workspace**：展示最终回答、关键结论、引用编号和可继续追问入口。
 - **Evidence Drawer**：展示公告、财报、工具结果、引用可靠性和缺口。
-- **Tool Evidence Panel**：展示工具名、参数摘要、返回摘要、耗时、错误状态。
-- **Trace Timeline Panel**：展示 agent / model / tool 事件，用摘要作为默认视图，JSON 作为展开详情。
+- **Tool Calls List**：展示工具名、参数摘要、返回摘要、耗时、错误状态，默认放在 `Run Details` 内。
+- **Trace Timeline**：展示 agent / model / tool 事件，用摘要作为默认视图，JSON 作为展开详情，默认放在 `Run Details` 内。
 - **Report Workflow Rail**：展示规划、收集、分析、写作、引用校验、导出等步骤。
 - **Risk & Uncertainty Block**：展示模型不确定性、数据缺口、时间敏感性和免责声明。
 
@@ -165,12 +182,12 @@ Input dock:
 
 如果只做一轮 UI 改造，推荐范围如下：
 
-1. 把顶部 header 改成紧凑工作台 top bar：左侧产品和当前 run 状态，右侧 Report Mode 与 request 状态。
-2. 把 demo prompt chip 改成四个“任务类型”按钮：营收变化、指标查询、公告检索、研报生成。
-3. 给右侧 `Run State` 增加 badge 化状态：intent、ok/failed、report mode、trace count。
-4. 把 `Tools` 默认从 JSON 块改成摘要卡，JSON 放到展开详情。
-5. 把 `Trace Timeline` 加上事件状态点、事件类型 badge 和耗时 badge。
-6. 移动端把 Summary / Tools / Trace 放进 tabs，避免调试区过长。
+1. 把页面改成左侧会话列表 + 中央对话流 + 底部 composer。
+2. 删除右侧 `Run State` / `Tools` / `Trace Timeline` 独立面板。
+3. 把 demo prompt chip 改为空状态 starter prompts 或 composer 上方的紧凑建议。
+4. 把 `activeRun` 从全局右侧状态改成 assistant message 的 `run` 派生数据。
+5. 新增消息内 `RunDetails`：默认 badge 摘要，展开后显示 steps、tools、trace、JSON details。
+6. 移动端把会话列表收起为 drawer，run details 仍在消息内折叠展示。
 
 ## 响应式验收
 
@@ -186,7 +203,8 @@ Input dock:
 - 没有按钮文字溢出。
 - trace JSON 不撑破页面。
 - 输入区始终可用。
-- 右侧面板移动端有合理展示方式。
+- 会话栏移动端可收起，且不会遮挡输入框。
+- assistant 消息内 run details 展开后仍不造成横向滚动。
 - loading、error、empty 状态可读。
 
 ## Codex 前端任务提示词模板
@@ -196,7 +214,7 @@ Input dock:
 ```text
 请先阅读 README.md、DESIGN.md、docs/IMMERSIVE_PRODUCT_DESIGN.md、相关 docs/implementation 任务卡和 apps/web 当前代码。
 
-目标：实现/改进一个专业金融研究 Agent 工作台页面，不要做营销 landing page。
+目标：实现/改进一个专业金融研究 Agent Chat 页面，不要做营销 landing page，也不要保留独立右侧调试栏。
 
 技术约束：
 - React + TypeScript + Tailwind CSS v4
@@ -207,6 +225,8 @@ Input dock:
 
 设计要求：
 - 遵循 DESIGN.md 的 Meridian 通用视觉系统
+- 左侧会话列表，中间简洁对话流，底部输入框
+- Run State、工具调用和 trace 作为 assistant 消息内派生内容
 - 高信息密度但层级清楚
 - 深色专业工作台风格
 - 避免装饰性渐变球、过度圆角和大面积单色主题
@@ -225,23 +245,25 @@ Input dock:
 用于 Stitch、v0 或其他 AI UI 工具生成视觉参考时，必须只描述布局、内容和交互结构。若工具项目已有 design system，不要在生成提示词里写 hex、字体名、圆角数值或主题 token。
 
 ```text
-Create a professional financial research agent workspace for a web desktop app.
+Create a professional financial research agent chat application for a web desktop app.
 
 PLATFORM: Web, desktop-first with responsive mobile behavior.
 
 PAGE STRUCTURE:
 1. Header:
-   Compact workspace top bar with product name, current run status, report mode switch, and request state indicator.
-2. Primary Workspace:
-   Split-view layout. The main column contains a research question composer, conversation timeline, assistant answer area, and a compact research brief bar with ticker/company/market/reporting period metadata.
-3. Evidence and Debug Area:
-   Right-side panel with three stacked sections: run summary, tool evidence cards, and trace timeline. Each section shows concise summaries by default and supports expandable technical details.
-4. Financial Research Modules:
-   Include metric grid, citation/evidence list, risk and uncertainty block, and report workflow step rail placeholders.
-5. States:
+   Compact chat top bar with product name, current conversation title, report mode switch, and latest request state indicator.
+2. Sidebar:
+   Left conversation list with new chat action, conversation titles, last message previews, timestamps, and local run status.
+3. Primary Chat:
+   Centered conversation timeline with user bubbles, assistant answers, and a bottom composer.
+4. Run Details:
+   Agent run state, tool calls, trace timeline, citation evidence, and JSON details appear as expandable sections inside assistant messages, not as a separate right sidebar.
+5. Financial Research Modules:
+   Include compact ticker context, metric snippets, citation/evidence list, risk and uncertainty block, and report workflow placeholders inside the chat flow.
+6. States:
    Include empty, loading, failed, disabled, and long-content states. Long request IDs, ticker symbols, JSON, and trace paths must not break the layout.
-6. Mobile:
-   Convert the right-side evidence/debug area into tabs or accordion sections below the main workspace.
+7. Mobile:
+   Collapse the conversation sidebar into a drawer. Keep run details as expandable sections inside assistant messages.
 ```
 
 Stitch / v0 结果只能作为视觉参考。落地到本仓库时，Codex 必须使用本地 `apps/web/src/components/ui` 基础组件、共享 DTO 和真实 API 数据重写。
@@ -256,4 +278,3 @@ Stitch / v0 结果只能作为视觉参考。落地到本仓库时，Codex 必�
 - 改变 Agent run、tool calls、trace 的展示方式。
 - 新增金融指标、图表、表格或 PDF 预览规范。
 - 改变产品级信息架构、页面模块或核心用户流程。
-

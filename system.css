@@ -5,37 +5,37 @@
 
 :root {
   /* Color: surface tiers */
-  --md-color-canvas: #020617;
-  --md-color-surface: #0f172a;
-  --md-color-elevated: #111827;
-  --md-color-muted: #1e293b;
-  --md-color-overlay: rgba(2, 6, 23, 0.74);
+  --md-color-canvas: #161e17;
+  --md-color-surface: #1b241d;
+  --md-color-elevated: #202b23;
+  --md-color-muted: #2c3a32;
+  --md-color-overlay: rgba(22, 30, 23, 0.78);
 
   /* Color: borders */
-  --md-color-border-subtle: #1e293b;
-  --md-color-border: #334155;
-  --md-color-border-strong: #475569;
+  --md-color-border-subtle: rgba(255, 244, 225, 0.1);
+  --md-color-border: rgba(255, 244, 225, 0.18);
+  --md-color-border-strong: #428475;
 
   /* Color: foreground */
-  --md-color-text-primary: #f8fafc;
-  --md-color-text-secondary: #cbd5e1;
-  --md-color-text-muted: #94a3b8;
-  --md-color-text-disabled: #64748b;
-  --md-color-text-inverse: #020617;
+  --md-color-text-primary: #fff4e1;
+  --md-color-text-secondary: rgba(255, 244, 225, 0.78);
+  --md-color-text-muted: rgba(255, 244, 225, 0.56);
+  --md-color-text-disabled: rgba(255, 244, 225, 0.36);
+  --md-color-text-inverse: #161e17;
 
   /* Color: action and signal */
-  --md-color-primary: #22d3ee;
-  --md-color-primary-hover: #67e8f9;
-  --md-color-primary-pressed: #0891b2;
-  --md-color-primary-soft: rgba(34, 211, 238, 0.12);
-  --md-color-success: #22c55e;
-  --md-color-success-soft: rgba(34, 197, 94, 0.14);
-  --md-color-warning: #f59e0b;
-  --md-color-warning-soft: rgba(245, 158, 11, 0.16);
-  --md-color-danger: #f43f5e;
-  --md-color-danger-soft: rgba(244, 63, 94, 0.16);
-  --md-color-info: #38bdf8;
-  --md-color-info-soft: rgba(56, 189, 248, 0.14);
+  --md-color-primary: #89d7b7;
+  --md-color-primary-hover: #a6e6cc;
+  --md-color-primary-pressed: #428475;
+  --md-color-primary-soft: rgba(137, 215, 183, 0.14);
+  --md-color-success: #89d7b7;
+  --md-color-success-soft: rgba(137, 215, 183, 0.14);
+  --md-color-warning: #d9a441;
+  --md-color-warning-soft: rgba(217, 164, 65, 0.17);
+  --md-color-danger: #d36a5f;
+  --md-color-danger-soft: rgba(211, 106, 95, 0.17);
+  --md-color-info: #428475;
+  --md-color-info-soft: rgba(66, 132, 117, 0.18);
 
   /* Typography */
   --md-font-ui: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -83,7 +83,7 @@
 
   /* Borders, focus, shadow, motion */
   --md-border-width: 1px;
-  --md-focus-ring: 0 0 0 3px rgba(34, 211, 238, 0.24);
+  --md-focus-ring: 0 0 0 3px rgba(137, 215, 183, 0.26);
   --md-shadow-popover: 0 18px 44px rgba(0, 0, 0, 0.42), 0 1px 0 rgba(255, 255, 255, 0.03) inset;
   --md-motion-fast: 120ms;
   --md-motion-base: 160ms;
@@ -650,4 +650,3 @@ svg {
   background: var(--md-color-danger-soft);
   color: #ffe4e6;
 }
-

@@ -1,17 +1,44 @@
 import * as Switch from "@radix-ui/react-switch";
 import type { AgentRunResponseDto, ApiError, ApiResult } from "@aiagent/types";
-import { Activity, Bot, Braces, Clock3, Loader2, Send, Sparkles, Wrench } from "lucide-react";
-import { type FormEvent, useMemo, useState } from "react";
-import { Button } from "./components/ui/button";
+import {
+  Activity,
+  AlertTriangle,
+  Bot,
+  Braces,
+  ChevronDown,
+  Clock3,
+  Loader2,
+  Menu,
+  Plus,
+  Send,
+  Sparkles,
+  User,
+  Wrench,
+  X
+} from "lucide-react";
+import { type FormEvent, type ReactNode, useMemo, useState } from "react";
 
 type MessageRole = "user" | "assistant";
+type MessageStatus = "complete" | "pending" | "failed";
 
 interface UiMessage {
   id: string;
   role: MessageRole;
   content: string;
   createdAt: string;
+  status: MessageStatus;
   ok?: boolean;
+  run?: AgentRunResponseDto;
+}
+
+interface LocalConversation {
+  id: string;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+  messages: UiMessage[];
+  latestRun?: AgentRunResponseDto;
+  reportMode: boolean;
 }
 
 type TraceEventDto = AgentRunResponseDto["trace"]["events"][number];
@@ -24,26 +51,27 @@ const demoPrompts = [
 ];
 
 /**
- * 渲染 Immersive Playground，负责本地消息状态和 API run 结果展示。
+ * 渲染 Immersive Agent Chat，负责本地会话编排和真实 Agent API 调用。
  *
- * @returns Week 1 可演示的金融研究工作台页面。
+ * @returns Week 1 Agent Chat 产品页面。
  */
 export function App() {
-  const [messages, setMessages] = useState<UiMessage[]>([]);
+  const [conversations, setConversations] = useState<LocalConversation[]>(() => [createConversation()]);
+  const [activeConversationId, setActiveConversationId] = useState(() => conversations[0]?.id ?? "");
   const [input, setInput] = useState(demoPrompts[1]);
-  const [reportMode, setReportMode] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [activeRun, setActiveRun] = useState<AgentRunResponseDto | undefined>();
-  const [conversationId, setConversationId] = useState<string | undefined>();
-  const [error, setError] = useState<string | undefined>();
+  const [composerError, setComposerError] = useState<string | undefined>();
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
 
-  const toolEvents = useMemo(
-    () => activeRun?.trace.events.filter((event) => event.type === "tool_call") ?? [],
-    [activeRun]
+  const activeConversation = useMemo(
+    () => conversations.find((conversation) => conversation.id === activeConversationId) ?? conversations[0],
+    [activeConversationId, conversations]
   );
+  const latestRun = activeConversation?.latestRun;
+  const isEmpty = (activeConversation?.messages.length ?? 0) === 0;
 
   /**
-   * 提交当前输入到 Fastify API，Week 1 不发送历史消息。
+   * 处理表单提交，保持提交入口只在顶层触发 API。
    *
    * @param event 表单提交事件。
    * @returns 请求完成 Promise。
@@ -54,153 +82,646 @@ export function App() {
   }
 
   /**
-   * 发送单条消息并把真实 Agent response 派生为 UI 状态。
+   * 创建新的浏览器本地会话，并切换到该会话。
+   *
+   * @returns void。
+   */
+  function handleNewConversation(): void {
+    const conversation = createConversation();
+    setConversations((current) => [conversation, ...current]);
+    setActiveConversationId(conversation.id);
+    setInput("");
+    setComposerError(undefined);
+    setIsSidebarOpen(false);
+  }
+
+  /**
+   * 切换当前浏览器本地会话，同时关闭移动端 drawer。
+   *
+   * @param conversationId 会话 id。
+   * @returns void。
+   */
+  function handleSelectConversation(conversationId: string): void {
+    setActiveConversationId(conversationId);
+    setComposerError(undefined);
+    setIsSidebarOpen(false);
+  }
+
+  /**
+   * 更新当前会话的 Report Mode；该状态会随下一次请求提交给 API。
+   *
+   * @param checked Report Mode 是否启用。
+   * @returns void。
+   */
+  function handleReportModeChange(checked: boolean): void {
+    updateConversation(activeConversationId, (conversation) => ({
+      ...conversation,
+      reportMode: checked,
+      updatedAt: new Date().toISOString()
+    }));
+  }
+
+  /**
+   * 发送用户输入并把 run 结果挂到对应 assistant 消息，避免使用全局右侧调试状态。
    *
    * @param message 用户输入。
    * @returns 请求完成 Promise。
    */
   async function submitMessage(message: string): Promise<void> {
     const trimmed = message.trim();
+    const conversation = activeConversation;
 
-    if (!trimmed || isSubmitting) {
+    if (!trimmed || isSubmitting || !conversation) {
       return;
     }
 
+    const submittedConversationId = conversation.id;
+    const submittedReportMode = conversation.reportMode;
+    const pendingMessageId = createUiId("assistant");
+    const now = new Date().toISOString();
     const userMessage: UiMessage = {
       id: createUiId("user"),
       role: "user",
       content: trimmed,
-      createdAt: new Date().toISOString()
+      createdAt: now,
+      status: "complete"
+    };
+    const pendingMessage: UiMessage = {
+      id: pendingMessageId,
+      role: "assistant",
+      content: "Agent 正在分析问题、路由意图并准备回答。",
+      createdAt: now,
+      status: "pending"
     };
 
-    setMessages((current) => [...current, userMessage]);
+    updateConversation(submittedConversationId, (current) => ({
+      ...current,
+      title: current.messages.length === 0 ? createConversationTitle(trimmed) : current.title,
+      updatedAt: now,
+      messages: [...current.messages, userMessage, pendingMessage]
+    }));
     setInput("");
-    setError(undefined);
+    setComposerError(undefined);
     setIsSubmitting(true);
 
     try {
-      const result = await runAgent(trimmed, reportMode, conversationId);
+      const result = await runAgent(trimmed, submittedReportMode, submittedConversationId);
 
       if (!result.ok) {
-        setError(formatApiError(result.error));
+        const messageText = formatApiError(result.error);
+        replaceMessage(submittedConversationId, pendingMessageId, {
+          content: messageText,
+          status: "failed",
+          ok: false
+        });
+        setComposerError("请求失败，已把结构化错误写入当前 assistant 消息。");
         return;
       }
 
       const run = result.data;
-      setActiveRun(run);
-      setConversationId(run.conversationId);
-      setMessages((current) => [
+      replaceMessage(submittedConversationId, pendingMessageId, {
+        content: run.answer,
+        status: run.ok ? "complete" : "failed",
+        ok: run.ok,
+        run
+      });
+      updateConversation(submittedConversationId, (current) => ({
         ...current,
-        {
-          id: createUiId("assistant"),
-          role: "assistant",
-          content: run.answer,
-          createdAt: new Date().toISOString(),
-          ok: run.ok
-        }
-      ]);
+        latestRun: run,
+        updatedAt: new Date().toISOString()
+      }));
 
       if (!run.ok && run.error) {
-        setError(formatApiError(run.error));
+        setComposerError(formatApiError(run.error));
       }
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "请求失败，请检查 API 服务是否已启动。");
+      const messageText = caught instanceof Error ? caught.message : "请求失败，请检查 API 服务是否已启动。";
+      replaceMessage(submittedConversationId, pendingMessageId, {
+        content: messageText,
+        status: "failed",
+        ok: false
+      });
+      setComposerError("请求失败，请确认 apps/api 和 apps/web 已通过 pnpm dev 启动。");
     } finally {
       setIsSubmitting(false);
     }
   }
 
+  /**
+   * 更新指定会话，集中处理本地会话数组不可变写入。
+   *
+   * @param conversationId 会话 id。
+   * @param updater 会话更新函数。
+   * @returns void。
+   */
+  function updateConversation(
+    conversationId: string,
+    updater: (conversation: LocalConversation) => LocalConversation
+  ): void {
+    setConversations((current) =>
+      current.map((conversation) => (conversation.id === conversationId ? updater(conversation) : conversation))
+    );
+  }
+
+  /**
+   * 替换 pending assistant 消息，保证每次 run 的派生数据保留在消息内。
+   *
+   * @param conversationId 会话 id。
+   * @param messageId 消息 id。
+   * @param patch 消息补丁。
+   * @returns void。
+   */
+  function replaceMessage(conversationId: string, messageId: string, patch: Partial<UiMessage>): void {
+    updateConversation(conversationId, (conversation) => ({
+      ...conversation,
+      updatedAt: new Date().toISOString(),
+      messages: conversation.messages.map((messageItem) =>
+        messageItem.id === messageId ? { ...messageItem, ...patch } : messageItem
+      )
+    }));
+  }
+
   return (
-    <main className="min-h-screen bg-slate-950 text-slate-100">
-      <div className="mx-auto grid min-h-screen w-full max-w-[1440px] grid-cols-1 gap-0 lg:grid-cols-[minmax(0,1fr)_420px]">
-        <section className="flex min-h-screen flex-col border-slate-800 lg:border-r">
-          <header className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-800 px-5 py-4 md:px-8">
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-cyan-300">Week 1 Immersive</p>
-              <h1 className="mt-2 text-2xl font-semibold text-white md:text-3xl">Financial Research Playground</h1>
-            </div>
+    <main className="agent-app-shell">
+      <ConversationSidebar
+        activeConversationId={activeConversation?.id}
+        conversations={conversations}
+        isOpen={isSidebarOpen}
+        onClose={() => setIsSidebarOpen(false)}
+        onNewConversation={handleNewConversation}
+        onSelectConversation={handleSelectConversation}
+      />
 
-            <label className="flex items-center gap-3 rounded-lg border border-slate-700 bg-slate-900 px-3 py-2">
-              <span className="text-sm text-slate-300">Report Mode</span>
-              <Switch.Root
-                checked={reportMode}
-                className="relative h-6 w-11 rounded-full bg-slate-700 outline-none data-[state=checked]:bg-cyan-500"
-                onCheckedChange={setReportMode}
-              >
-                <Switch.Thumb className="block size-5 translate-x-0.5 rounded-full bg-white transition-transform data-[state=checked]:translate-x-[22px]" />
-              </Switch.Root>
-            </label>
-          </header>
+      <section className="chat-main" aria-label="Agent Chat 主区域">
+        <ChatHeader
+          conversationTitle={activeConversation?.title ?? "新会话"}
+          isSubmitting={isSubmitting}
+          latestRun={latestRun}
+          onMenuClick={() => setIsSidebarOpen(true)}
+          onReportModeChange={handleReportModeChange}
+          reportMode={activeConversation?.reportMode ?? false}
+        />
 
-          <section className="grid gap-3 border-b border-slate-800 px-5 py-4 md:grid-cols-2 md:px-8 xl:grid-cols-4">
-            {demoPrompts.map((prompt) => (
-              <Button className="demo-chip" key={prompt} onClick={() => setInput(prompt)} type="button" variant="ghost">
-                {prompt}
-              </Button>
-            ))}
-          </section>
+        <ChatTimeline
+          isSubmitting={isSubmitting}
+          messages={activeConversation?.messages ?? []}
+          onUsePrompt={setInput}
+        />
 
-          <section className="flex-1 overflow-y-auto px-5 py-6 md:px-8" aria-label="消息列表">
-            {messages.length === 0 ? (
-              <div className="grid h-full min-h-[360px] place-items-center rounded-lg border border-dashed border-slate-700 bg-slate-900/50 p-6 text-center">
-                <div className="max-w-lg">
-                  <Sparkles className="mx-auto mb-4 size-10 text-cyan-300" />
-                  <h2 className="text-xl font-semibold text-white">输入一个金融研究问题开始演示</h2>
-                  <p className="mt-3 text-sm leading-6 text-slate-400">
-                    页面会调用本地 Fastify API，再由 Agent 返回回答、步骤和 trace。历史仅保存在当前浏览器会话中。
-                  </p>
-                </div>
-              </div>
-            ) : (
-              <div className="space-y-4">
-                {messages.map((message) => (
-                  <article className={`message ${message.role === "user" ? "message-user" : "message-assistant"}`} key={message.id}>
-                    <div className="message-icon">{message.role === "user" ? "你" : <Bot className="size-4" />}</div>
-                    <div className="min-w-0 flex-1">
-                      <div className="mb-1 flex flex-wrap items-center gap-2 text-xs text-slate-500">
-                        <span>{message.role === "user" ? "User" : "Assistant"}</span>
-                        <span>{formatTime(message.createdAt)}</span>
-                        {message.ok === false ? <span className="rounded bg-red-950 px-2 py-0.5 text-red-200">failed</span> : null}
-                      </div>
-                      <p className="whitespace-pre-wrap break-words leading-7">{message.content}</p>
-                    </div>
-                  </article>
-                ))}
-              </div>
-            )}
-          </section>
-
-          <form className="border-t border-slate-800 bg-slate-950/95 px-5 py-4 md:px-8" onSubmit={handleSubmit}>
-            {error ? (
-              <div className="mb-3 rounded-lg border border-red-800 bg-red-950/50 px-3 py-2 text-sm text-red-100">{error}</div>
-            ) : null}
-            <div className="flex gap-3">
-              <textarea
-                className="min-h-24 flex-1 resize-none rounded-lg border border-slate-700 bg-slate-900 px-4 py-3 text-sm text-white outline-none placeholder:text-slate-500 focus:border-cyan-400 disabled:cursor-not-allowed disabled:opacity-60"
-                disabled={isSubmitting}
-                onChange={(event) => setInput(event.target.value)}
-                placeholder="输入金融研究问题..."
-                value={input}
-              />
-              <Button
-                className="grid h-24 w-14 place-items-center rounded-lg bg-cyan-400 text-slate-950 transition hover:bg-cyan-300 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400"
-                disabled={isSubmitting || !input.trim()}
-                type="submit"
-              >
-                {isSubmitting ? <Loader2 className="size-5 animate-spin" /> : <Send className="size-5" />}
-              </Button>
-            </div>
-          </form>
-        </section>
-
-        <aside className="grid min-h-screen grid-rows-[auto_auto_minmax(0,1fr)] bg-slate-900/80">
-          <RunSummary activeRun={activeRun} reportMode={reportMode} />
-          <ToolPanel steps={activeRun?.steps ?? []} toolEvents={toolEvents} />
-          <TracePanel activeRun={activeRun} />
-        </aside>
-      </div>
+        <ChatComposer
+          error={composerError}
+          input={input}
+          isEmpty={isEmpty}
+          isSubmitting={isSubmitting}
+          onInputChange={setInput}
+          onSubmit={handleSubmit}
+          onUsePrompt={setInput}
+          reportMode={activeConversation?.reportMode ?? false}
+        />
+      </section>
     </main>
   );
+}
+
+interface ConversationSidebarProps {
+  activeConversationId: string | undefined;
+  conversations: LocalConversation[];
+  isOpen: boolean;
+  onClose: () => void;
+  onNewConversation: () => void;
+  onSelectConversation: (conversationId: string) => void;
+}
+
+/**
+ * 展示浏览器本地会话列表；移动端作为 drawer，桌面端作为固定左栏。
+ *
+ * @param props 组件属性。
+ * @returns 会话侧栏。
+ */
+function ConversationSidebar(props: ConversationSidebarProps) {
+  return (
+    <>
+      <button
+        aria-label="关闭会话列表"
+        className={`sidebar-backdrop ${props.isOpen ? "is-visible" : ""}`}
+        onClick={props.onClose}
+        type="button"
+      />
+      <aside className={`conversation-sidebar ${props.isOpen ? "is-open" : ""}`} aria-label="会话列表">
+        <div className="sidebar-header">
+          <div>
+            <p className="md-label">Immersive</p>
+            <h1 className="sidebar-title">Agent Chat</h1>
+          </div>
+          <button className="icon-button mobile-only" onClick={props.onClose} type="button" aria-label="关闭">
+            <X className="icon-size" />
+          </button>
+        </div>
+
+        <button className="new-chat-button" onClick={props.onNewConversation} type="button">
+          <Plus className="icon-size" />
+          <span>New Chat</span>
+        </button>
+
+        <div className="conversation-list" role="list">
+          {props.conversations.map((conversation) => (
+            <button
+              className={`conversation-item ${
+                conversation.id === props.activeConversationId ? "is-active" : ""
+              }`}
+              key={conversation.id}
+              onClick={() => props.onSelectConversation(conversation.id)}
+              type="button"
+            >
+              <span className="conversation-title">{conversation.title}</span>
+              <span className="conversation-preview">{getConversationPreview(conversation)}</span>
+              <span className="conversation-meta">
+                <span>{formatRelativeTime(conversation.updatedAt)}</span>
+                <span>{formatRunStatus(conversation.latestRun)}</span>
+              </span>
+            </button>
+          ))}
+        </div>
+
+        <footer className="sidebar-footer">
+          <span>Local session</span>
+          <span>{props.conversations.length} chats</span>
+        </footer>
+      </aside>
+    </>
+  );
+}
+
+interface ChatHeaderProps {
+  conversationTitle: string;
+  isSubmitting: boolean;
+  latestRun: AgentRunResponseDto | undefined;
+  onMenuClick: () => void;
+  onReportModeChange: (checked: boolean) => void;
+  reportMode: boolean;
+}
+
+/**
+ * 渲染紧凑顶部栏，展示当前会话、Report Mode 和最近一次 run 状态。
+ *
+ * @param props 组件属性。
+ * @returns 聊天顶部栏。
+ */
+function ChatHeader(props: ChatHeaderProps) {
+  return (
+    <header className="chat-header">
+      <div className="header-title-group">
+        <button className="icon-button mobile-only" onClick={props.onMenuClick} type="button" aria-label="打开会话列表">
+          <Menu className="icon-size" />
+        </button>
+        <div className="min-w-0">
+          <p className="md-label">Financial Research Agent</p>
+          <h2 className="chat-title">{props.conversationTitle}</h2>
+        </div>
+      </div>
+
+      <div className="header-actions">
+        <label className="report-switch">
+          <span>Report Mode</span>
+          <Switch.Root
+            checked={props.reportMode}
+            className="switch-root"
+            onCheckedChange={props.onReportModeChange}
+          >
+            <Switch.Thumb className="switch-thumb" />
+          </Switch.Root>
+        </label>
+        <StatusBadge tone={props.isSubmitting ? "info" : props.latestRun?.ok === false ? "danger" : "success"}>
+          {props.isSubmitting ? "running" : formatRunStatus(props.latestRun)}
+        </StatusBadge>
+      </div>
+    </header>
+  );
+}
+
+interface ChatTimelineProps {
+  isSubmitting: boolean;
+  messages: UiMessage[];
+  onUsePrompt: (prompt: string) => void;
+}
+
+/**
+ * 渲染中央对话时间线；空状态只显示紧凑 starter prompts。
+ *
+ * @param props 组件属性。
+ * @returns 对话消息列表。
+ */
+function ChatTimeline(props: ChatTimelineProps) {
+  if (props.messages.length === 0) {
+    return (
+      <section className="chat-timeline empty-timeline" aria-label="消息列表">
+        <div className="empty-state">
+          <Sparkles className="empty-icon" />
+          <h2>从一个金融研究问题开始</h2>
+          <p>回答会保留真实 Agent run、工具调用和 trace，可在 assistant 消息内展开查看。</p>
+          <StarterPrompts disabled={props.isSubmitting} onUsePrompt={props.onUsePrompt} />
+        </div>
+      </section>
+    );
+  }
+
+  return (
+    <section className="chat-timeline" aria-label="消息列表">
+      <div className="timeline-inner">
+        {props.messages.map((message) => (
+          <ChatMessage key={message.id} message={message} />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+/**
+ * 渲染单条 user 或 assistant 消息；assistant 消息承载 run details。
+ *
+ * @param props 组件属性。
+ * @returns 消息块。
+ */
+function ChatMessage(props: { message: UiMessage }) {
+  const { message } = props;
+  const isUser = message.role === "user";
+
+  return (
+    <article className={`chat-message ${isUser ? "is-user" : "is-assistant"}`}>
+      <div className="message-avatar" aria-hidden="true">
+        {isUser ? <User className="icon-size" /> : <Bot className="icon-size" />}
+      </div>
+      <div className="message-content">
+        <div className="message-meta">
+          <span>{isUser ? "User" : "Assistant"}</span>
+          <span>{formatTime(message.createdAt)}</span>
+          {message.status === "pending" ? <StatusBadge tone="info">running</StatusBadge> : null}
+          {message.status === "failed" ? <StatusBadge tone="danger">failed</StatusBadge> : null}
+        </div>
+        <p className="message-text">{message.content}</p>
+        {message.status === "pending" ? (
+          <div className="message-progress">
+            <Loader2 className="icon-size spin" />
+            <span>routing / tool selection / finalizing</span>
+          </div>
+        ) : null}
+        {message.run ? <RunDetails reportMode={message.run.intent === "report_skill"} run={message.run} /> : null}
+      </div>
+    </article>
+  );
+}
+
+interface ChatComposerProps {
+  error: string | undefined;
+  input: string;
+  isEmpty: boolean;
+  isSubmitting: boolean;
+  onInputChange: (value: string) => void;
+  onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+  onUsePrompt: (prompt: string) => void;
+  reportMode: boolean;
+}
+
+/**
+ * 渲染底部 composer，集中承载输入、状态、错误和快捷 prompt。
+ *
+ * @param props 组件属性。
+ * @returns 输入区表单。
+ */
+function ChatComposer(props: ChatComposerProps) {
+  return (
+    <form className="chat-composer" onSubmit={props.onSubmit}>
+      {!props.isEmpty ? <StarterPrompts disabled={props.isSubmitting} onUsePrompt={props.onUsePrompt} compact /> : null}
+      {props.error ? (
+        <div className="composer-error" role="status">
+          <AlertTriangle className="icon-size" />
+          <span>{props.error}</span>
+        </div>
+      ) : null}
+      <div className="composer-box">
+        <textarea
+          className="composer-textarea"
+          disabled={props.isSubmitting}
+          onChange={(event) => props.onInputChange(event.target.value)}
+          placeholder="输入金融研究问题..."
+          value={props.input}
+        />
+        <div className="composer-actions">
+          <StatusBadge tone={props.reportMode ? "info" : "neutral"}>
+            {props.reportMode ? "report" : "chat"}
+          </StatusBadge>
+          <button
+            className="send-button"
+            disabled={props.isSubmitting || !props.input.trim()}
+            type="submit"
+            aria-label="发送"
+          >
+            {props.isSubmitting ? <Loader2 className="icon-size spin" /> : <Send className="icon-size" />}
+          </button>
+        </div>
+      </div>
+      {props.isSubmitting ? <p className="composer-progress">Agent 正在分析 / routing / calling tool / finalizing</p> : null}
+    </form>
+  );
+}
+
+/**
+ * 展示示例问题，空状态和 composer 复用同一组真实请求入口。
+ *
+ * @param props 组件属性。
+ * @returns 示例问题按钮组。
+ */
+function StarterPrompts(props: {
+  compact?: boolean;
+  disabled: boolean;
+  onUsePrompt: (prompt: string) => void;
+}) {
+  return (
+    <div className={`starter-prompts ${props.compact ? "is-compact" : ""}`}>
+      {demoPrompts.map((prompt) => (
+        <button disabled={props.disabled} key={prompt} onClick={() => props.onUsePrompt(prompt)} type="button">
+          {prompt}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * 渲染 assistant 消息内的 run 派生详情，默认折叠减少调试信息干扰。
+ *
+ * @param props 组件属性。
+ * @returns run 详情折叠区。
+ */
+function RunDetails(props: { reportMode: boolean; run: AgentRunResponseDto }) {
+  const { run } = props;
+  const toolEvents = run.trace.events.filter((event) => event.type === "tool_call");
+
+  return (
+    <details className="run-details">
+      <summary>
+        <span className="summary-title">
+          <Activity className="icon-size" />
+          Run details
+        </span>
+        <span className="summary-badges">
+          <StatusBadge tone="neutral">{run.intent}</StatusBadge>
+          <StatusBadge tone={run.ok ? "success" : "danger"}>{run.ok ? "ok" : "failed"}</StatusBadge>
+          <StatusBadge tone={props.reportMode ? "info" : "neutral"}>{props.reportMode ? "report" : "chat"}</StatusBadge>
+          <StatusBadge tone="neutral">{run.steps.length} steps</StatusBadge>
+          <StatusBadge tone="neutral">{toolEvents.length} tools</StatusBadge>
+          <StatusBadge tone="neutral">{run.trace.events.length} trace</StatusBadge>
+        </span>
+        <ChevronDown className="details-chevron" />
+      </summary>
+      <div className="run-details-body">
+        <div className="run-identifiers">
+          <span>requestId: {run.requestId}</span>
+          <span>traceId: {run.traceId}</span>
+        </div>
+        {run.error ? <ErrorBlock error={run.error} /> : null}
+        <RunStepsList steps={run.steps} />
+        <ToolCallsList events={toolEvents} />
+        <TraceTimeline events={run.trace.events} />
+        <JsonDetails title="run json" value={run} />
+      </div>
+    </details>
+  );
+}
+
+/**
+ * 展示 Agent steps 的摘要列表，避免默认展示完整 JSON。
+ *
+ * @param props 组件属性。
+ * @returns step 列表。
+ */
+function RunStepsList(props: { steps: AgentRunResponseDto["steps"] }) {
+  return (
+    <section className="details-section">
+      <h3>
+        <Activity className="icon-size" />
+        Steps
+      </h3>
+      <div className="detail-list">
+        {props.steps.length === 0 ? <p className="muted-row">暂无 step。</p> : null}
+        {props.steps.map((step) => (
+          <article className="detail-row" key={`${step.index}-${step.type}`}>
+            <div>
+              <strong>
+                {step.index}. {step.type}
+              </strong>
+              <span>{step.error?.message ?? `${step.durationMs} ms`}</span>
+            </div>
+            <StatusBadge tone={step.status === "succeeded" ? "success" : "danger"}>{step.status}</StatusBadge>
+            <JsonDetails title="step json" value={step} />
+          </article>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+/**
+ * 展示工具调用摘要，工具参数和结果放入二级 JSON 折叠。
+ *
+ * @param props 组件属性。
+ * @returns 工具调用列表。
+ */
+function ToolCallsList(props: { events: TraceEventDto[] }) {
+  return (
+    <section className="details-section">
+      <h3>
+        <Wrench className="icon-size" />
+        Tool calls
+      </h3>
+      <div className="detail-list">
+        {props.events.length === 0 ? <p className="muted-row">暂无工具调用。</p> : null}
+        {props.events.map((event) => (
+          <article className="detail-row" key={event.id}>
+            <div>
+              <strong>{"toolName" in event ? event.toolName : "unknown tool"}</strong>
+              <span>{formatEventSummary(event)}</span>
+            </div>
+            <StatusBadge tone={"ok" in event && event.ok ? "success" : "danger"}>{formatLatency(event)}</StatusBadge>
+            <JsonDetails title="tool json" value={event} />
+          </article>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+/**
+ * 展示 trace 事件时间线，用摘要承载默认可读信息。
+ *
+ * @param props 组件属性。
+ * @returns trace timeline。
+ */
+function TraceTimeline(props: { events: TraceEventDto[] }) {
+  return (
+    <section className="details-section">
+      <h3>
+        <Clock3 className="icon-size" />
+        Trace timeline
+      </h3>
+      <div className="trace-list">
+        {props.events.map((event, index) => (
+          <article className="trace-row" key={event.id}>
+            <span className="trace-index">{index + 1}</span>
+            <div>
+              <strong>{formatEventTitle(event)}</strong>
+              <span>{formatEventSummary(event)}</span>
+              <small>{formatTime(event.createdAt)}</small>
+              <JsonDetails title="event json" value={event} />
+            </div>
+          </article>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+/**
+ * 以折叠方式展示 JSON，防止长 request payload 撑破对话区。
+ *
+ * @param props 组件属性。
+ * @returns JSON 折叠块。
+ */
+function JsonDetails(props: { title: string; value: unknown }) {
+  return (
+    <details className="json-details">
+      <summary>
+        <Braces className="icon-size" />
+        {props.title}
+      </summary>
+      <pre>{JSON.stringify(props.value, null, 2)}</pre>
+    </details>
+  );
+}
+
+/**
+ * 展示结构化错误，不暴露浏览器或服务端原始堆栈。
+ *
+ * @param props 组件属性。
+ * @returns 错误摘要。
+ */
+function ErrorBlock(props: { error: ApiError }) {
+  return (
+    <div className="error-block">
+      <AlertTriangle className="icon-size" />
+      <span>{formatApiError(props.error)}</span>
+    </div>
+  );
+}
+
+/**
+ * 渲染小型状态标签，统一 run、会话和 composer 状态表达。
+ *
+ * @param props 组件属性。
+ * @returns 状态标签。
+ */
+function StatusBadge(props: { children: ReactNode; tone: "danger" | "info" | "neutral" | "success" }) {
+  return <span className={`status-badge tone-${props.tone}`}>{props.children}</span>;
 }
 
 /**
@@ -237,7 +758,7 @@ async function runAgent(
 }
 
 /**
- * 解析 API 响应，兼容 dev proxy 断连、空响应和 HTML 错误页，避免浏览器抛出原始 JSON 解析异常。
+ * 解析 API 响应，兼容 dev proxy 断连、空响应和 HTML 错误页。
  *
  * @param response fetch 返回的响应对象。
  * @returns 结构化 API result。
@@ -300,144 +821,6 @@ function formatApiError(error: ApiError): string {
   return diagnostics.length > 0
     ? `${error.code}: ${error.message} (${diagnostics.join(", ")})`
     : `${error.code}: ${error.message}`;
-}
-
-/**
- * 展示最近一次 run 的关键元信息。
- *
- * @param props 组件属性。
- * @returns run summary 面板。
- */
-function RunSummary(props: { activeRun: AgentRunResponseDto | undefined; reportMode: boolean }) {
-  const { activeRun, reportMode } = props;
-
-  return (
-    <section className="border-b border-slate-800 p-5">
-      <div className="mb-4 flex items-center gap-2 text-sm font-semibold text-white">
-        <Activity className="size-4 text-cyan-300" />
-        Run State
-      </div>
-      <dl className="grid grid-cols-2 gap-3 text-sm">
-        <MetaItem label="Intent" value={activeRun?.intent ?? "idle"} />
-        <MetaItem label="Status" value={activeRun ? (activeRun.ok ? "ok" : "failed") : "waiting"} />
-        <MetaItem label="Report Mode" value={reportMode ? "on" : "off"} />
-        <MetaItem label="Trace Events" value={String(activeRun?.trace.events.length ?? 0)} />
-      </dl>
-      {activeRun ? (
-        <p className="mt-4 break-all rounded-lg bg-slate-950 p-3 text-xs leading-5 text-slate-400">
-          requestId: {activeRun.requestId}
-          <br />
-          traceId: {activeRun.traceId}
-        </p>
-      ) : null}
-    </section>
-  );
-}
-
-/**
- * 展示一个 run summary 字段。
- *
- * @param props 组件属性。
- * @returns 元信息条目。
- */
-function MetaItem(props: { label: string; value: string }) {
-  return (
-    <div className="rounded-lg border border-slate-800 bg-slate-950 p-3">
-      <dt className="text-xs text-slate-500">{props.label}</dt>
-      <dd className="mt-1 break-words font-medium text-slate-100">{props.value}</dd>
-    </div>
-  );
-}
-
-/**
- * 展示 Agent step 和 tool_call trace 的工具执行细节。
- *
- * @param props 组件属性。
- * @returns 工具调用面板。
- */
-function ToolPanel(props: { steps: AgentRunResponseDto["steps"]; toolEvents: TraceEventDto[] }) {
-  const toolSteps = props.steps.filter((step) => step.type === "select_tool" || step.type === "call_tool");
-
-  return (
-    <section className="border-b border-slate-800 p-5">
-      <div className="mb-4 flex items-center gap-2 text-sm font-semibold text-white">
-        <Wrench className="size-4 text-cyan-300" />
-        Tools
-      </div>
-      {toolSteps.length === 0 && props.toolEvents.length === 0 ? (
-        <p className="rounded-lg border border-slate-800 bg-slate-950 p-4 text-sm text-slate-400">暂无工具调用。</p>
-      ) : (
-        <div className="space-y-3">
-          {toolSteps.map((step) => (
-            <JsonBlock key={`${step.index}-${step.type}`} title={`${step.index}. ${step.type}`} value={step} />
-          ))}
-          {props.toolEvents.map((event) => (
-            <JsonBlock key={event.id} title={`trace tool_call: ${"toolName" in event ? event.toolName : "unknown"}`} value={event} />
-          ))}
-        </div>
-      )}
-    </section>
-  );
-}
-
-/**
- * 展示 request trace 时间线和原始事件快照。
- *
- * @param props 组件属性。
- * @returns trace 面板。
- */
-function TracePanel(props: { activeRun: AgentRunResponseDto | undefined }) {
-  const events = props.activeRun?.trace.events ?? [];
-
-  return (
-    <section className="min-h-0 overflow-y-auto p-5">
-      <div className="mb-4 flex items-center gap-2 text-sm font-semibold text-white">
-        <Clock3 className="size-4 text-cyan-300" />
-        Trace Timeline
-      </div>
-      {events.length === 0 ? (
-        <p className="rounded-lg border border-slate-800 bg-slate-950 p-4 text-sm text-slate-400">提交请求后显示 trace。</p>
-      ) : (
-        <div className="space-y-3">
-          {events.map((event, index) => (
-            <article className="rounded-lg border border-slate-800 bg-slate-950 p-4" key={event.id}>
-              <div className="mb-2 flex items-start justify-between gap-3">
-                <div>
-                  <p className="text-sm font-semibold text-white">
-                    {index + 1}. {formatEventTitle(event)}
-                  </p>
-                  <p className="mt-1 text-xs text-slate-500">{formatTime(event.createdAt)}</p>
-                </div>
-                <span className="rounded bg-slate-800 px-2 py-1 text-xs text-slate-300">{formatLatency(event)}</span>
-              </div>
-              <p className="mb-3 text-sm leading-6 text-slate-300">{formatEventSummary(event)}</p>
-              <JsonBlock title="event json" value={event} />
-            </article>
-          ))}
-        </div>
-      )}
-    </section>
-  );
-}
-
-/**
- * 以可读深色块展示 JSON，供调试工具参数、结果和 trace。
- *
- * @param props 组件属性。
- * @returns JSON 展示块。
- */
-function JsonBlock(props: { title: string; value: unknown }) {
-  return (
-    <details className="rounded-lg border border-slate-800 bg-slate-950/80" open>
-      <summary className="flex cursor-pointer items-center gap-2 px-3 py-2 text-xs font-medium text-slate-300">
-        <Braces className="size-3.5 text-cyan-300" />
-        {props.title}
-      </summary>
-      <pre className="max-h-72 overflow-auto border-t border-slate-800 p-3 text-xs leading-5 text-slate-300">
-        {JSON.stringify(props.value, null, 2)}
-      </pre>
-    </details>
-  );
 }
 
 /**
@@ -517,7 +900,81 @@ function formatTime(value: string): string {
 }
 
 /**
- * 生成浏览器本地消息 id，避免依赖服务端会话。
+ * 格式化较短的会话更新时间。
+ *
+ * @param value ISO 时间字符串。
+ * @returns 简短时间文案。
+ */
+function formatRelativeTime(value: string): string {
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return "unknown";
+  }
+
+  return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+/**
+ * 把最近一次 run 转成会话列表和 header 的状态文案。
+ *
+ * @param run 最近一次 run。
+ * @returns 状态文案。
+ */
+function formatRunStatus(run: AgentRunResponseDto | undefined): string {
+  if (!run) {
+    return "idle";
+  }
+
+  return run.ok ? run.intent : "failed";
+}
+
+/**
+ * 生成会话列表摘要，优先展示最后一条消息内容。
+ *
+ * @param conversation 本地会话。
+ * @returns 摘要文案。
+ */
+function getConversationPreview(conversation: LocalConversation): string {
+  const lastMessage = conversation.messages.at(-1);
+
+  if (!lastMessage) {
+    return "尚未提问";
+  }
+
+  return lastMessage.content.length > 54 ? `${lastMessage.content.slice(0, 54)}...` : lastMessage.content;
+}
+
+/**
+ * 从第一条用户输入生成本地会话标题。
+ *
+ * @param message 用户输入。
+ * @returns 会话标题。
+ */
+function createConversationTitle(message: string): string {
+  return message.length > 24 ? `${message.slice(0, 24)}...` : message;
+}
+
+/**
+ * 创建浏览器本地会话；刷新后丢失符合 Week 1 约束。
+ *
+ * @returns 本地会话对象。
+ */
+function createConversation(): LocalConversation {
+  const now = new Date().toISOString();
+
+  return {
+    id: createUiId("conversation"),
+    title: "新会话",
+    createdAt: now,
+    updatedAt: now,
+    messages: [],
+    reportMode: false
+  };
+}
+
+/**
+ * 生成浏览器本地 id，避免依赖服务端持久化能力。
  *
  * @param prefix id 前缀。
  * @returns UI id。

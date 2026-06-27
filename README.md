@@ -63,10 +63,10 @@
 
 Week 1 已实现最小可演示的 Immersive Playground：
 
-- 页面提供金融研究输入框、本地会话消息列表和 Report Mode 占位开关。
+- 页面采用 Agent Chat 布局：左侧本地会话列表，中间对话流，底部 composer 和 Report Mode 占位开关。
 - 每次提交调用 `POST /api/agent/run`，请求体为 `AgentRunRequestDto`：`message`、`reportMode`、可选 `conversationId`。
 - API 返回 `ApiResult<AgentRunResponseDto>`，包含 `answer`、`intent`、`steps`、`trace`、`requestId` 和结构化错误。
-- 右侧调试面板展示最近一次 run 的工具选择/调用详情和 trace timeline，数据来自真实 Agent 响应，不硬编码 demo trace。
+- run state、工具调用和 trace 作为 assistant 消息内的可展开派生内容展示，不再使用独立右侧调试栏。
 - `reportMode` 在 Week 1 只作为 UI 和 API 占位信号；自然语言报告/PDF 请求会被 Intent Router 识别为 `report_skill` 并返回占位结果，不启动完整 Workflow。
 
 本地 API 验证：

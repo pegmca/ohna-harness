@@ -7,24 +7,24 @@ description: A quiet, precise, data-first design system for professional AI work
 theme: dark-first
 css: system.css
 colors:
-  canvas: "#020617"
-  surface: "#0F172A"
-  elevated: "#111827"
-  muted: "#1E293B"
-  border-subtle: "#1E293B"
-  border: "#334155"
-  border-strong: "#475569"
-  text-primary: "#F8FAFC"
-  text-secondary: "#CBD5E1"
-  text-muted: "#94A3B8"
-  text-disabled: "#64748B"
-  primary: "#22D3EE"
-  primary-hover: "#67E8F9"
-  primary-pressed: "#0891B2"
-  success: "#22C55E"
-  warning: "#F59E0B"
-  danger: "#F43F5E"
-  info: "#38BDF8"
+  canvas: "#161E17"
+  surface: "#1B241D"
+  elevated: "#202B23"
+  muted: "#2C3A32"
+  border-subtle: "rgba(255, 244, 225, 0.10)"
+  border: "rgba(255, 244, 225, 0.18)"
+  border-strong: "#428475"
+  text-primary: "#FFF4E1"
+  text-secondary: "rgba(255, 244, 225, 0.78)"
+  text-muted: "rgba(255, 244, 225, 0.56)"
+  text-disabled: "rgba(255, 244, 225, 0.36)"
+  primary: "#89D7B7"
+  primary-hover: "#A6E6CC"
+  primary-pressed: "#428475"
+  success: "#89D7B7"
+  warning: "#D9A441"
+  danger: "#D36A5F"
+  info: "#428475"
 typography:
   ui:
     fontFamily: "Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
@@ -92,7 +92,7 @@ The system is intentionally product-neutral. Product goals, workflows, domain en
 
 ## Design Philosophy
 
-The interface should recede and the information should carry the attention. Meridian uses quiet dark surfaces, crisp borders, restrained accent color, and stable layout rhythm. It is optimized for scanning, comparison, debugging, and long working sessions.
+The interface should recede and the information should carry the attention. Meridian uses a near-black green canvas, neutral dark surfaces, crisp low-contrast borders, restrained green accent color, and stable layout rhythm. It is optimized for scanning, comparison, debugging, and long working sessions.
 
 Keywords:
 
@@ -131,30 +131,35 @@ When using Stitch, v0, or similar tools, use this document as the design-system 
 
 ### Color
 
-Meridian is dark-first. Depth comes from surface tiers and borders, not from decorative shadows.
+Meridian is dark-first. The base experience should read as a deep dark interface, not as an all-green page. The left rail, panels, cards, and inputs should stay in near-neutral dark surface tiers. Green is the product accent for actions, focus, selected states, and status highlights. Depth comes from surface tiers and borders, not from decorative shadows.
 
 | Token | Hex | Role |
 | --- | --- | --- |
-| `canvas` | `#020617` | App background and outer viewport |
-| `surface` | `#0F172A` | Panels, cards, inputs, list rows |
-| `elevated` | `#111827` | Active tabs, hover surfaces, popovers |
-| `muted` | `#1E293B` | Subtle fills and inactive controls |
-| `border-subtle` | `#1E293B` | Quiet separators |
-| `border` | `#334155` | Default component outline |
-| `border-strong` | `#475569` | Focused structures and emphasized dividers |
-| `text-primary` | `#F8FAFC` | Primary readable text |
-| `text-secondary` | `#CBD5E1` | Supporting copy |
-| `text-muted` | `#94A3B8` | Metadata and captions |
-| `text-disabled` | `#64748B` | Disabled copy |
-| `primary` | `#22D3EE` | Primary action, focus, current state |
-| `success` | `#22C55E` | Completed, positive, available |
-| `warning` | `#F59E0B` | Caution, incomplete, needs review |
-| `danger` | `#F43F5E` | Error, destructive, failed |
-| `info` | `#38BDF8` | Neutral informational highlight |
+| `canvas` | `#161E17` | App background and outer viewport |
+| `surface` | `#1B241D` | Panels, cards, inputs, list rows |
+| `elevated` | `#202B23` | Active tabs, hover surfaces, popovers |
+| `muted` | `#2C3A32` | Subtle fills and inactive controls |
+| `border-subtle` | `rgba(255, 244, 225, 0.10)` | Quiet separators |
+| `border` | `rgba(255, 244, 225, 0.18)` | Default component outline |
+| `border-strong` | `#428475` | Focused structures and emphasized dividers |
+| `text-primary` | `#FFF4E1` | Primary readable text |
+| `text-secondary` | `rgba(255, 244, 225, 0.78)` | Supporting copy |
+| `text-muted` | `rgba(255, 244, 225, 0.56)` | Metadata and captions |
+| `text-disabled` | `rgba(255, 244, 225, 0.36)` | Disabled copy |
+| `primary` | `#89D7B7` | Primary action, focus, current state |
+| `primary-hover` | `#A6E6CC` | Hover state for primary actions |
+| `primary-pressed` | `#428475` | Pressed state for primary actions |
+| `success` | `#89D7B7` | Completed, positive, available |
+| `warning` | `#D9A441` | Caution, incomplete, needs review |
+| `danger` | `#D36A5F` | Error, destructive, failed |
+| `info` | `#428475` | Neutral informational highlight |
 
 Rules:
 
-- Primary cyan is for action, focus, selected state, and key icons. Do not flood the screen with it.
+- `#161E17` is the dominant canvas, and `#1B241D` / `#202B23` are the main large-surface colors. Do not use `#428475` or `#89D7B7` as large page backgrounds.
+- Primary green is for action, focus, selected state, and key icons. Do not flood the screen with it.
+- `#428475` is a secondary accent for pressed states, emphasized borders, and compact informational states, not a sidebar or panel fill.
+- Warm text `#FFF4E1` should provide readability and contrast; use opacity variants for secondary text rather than introducing gray-blue copy.
 - Signal colors must be paired with text or icon labels. Never rely on color alone.
 - Use darker soft backgrounds for error and warning states so text remains readable.
 - JSON, logs, traces, and evidence panels should use calmer surfaces than primary content.
@@ -428,4 +433,3 @@ The companion CSS implementation is `system.css`. It defines:
 - Utility classes for layout, surfaces, text, buttons, fields, badges, panels, tabs, metric grids, timelines, and code blocks.
 
 Projects may either import `system.css` directly or translate the tokens into Tailwind/shadcn-style local components.
-

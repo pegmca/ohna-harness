@@ -8,11 +8,13 @@ interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
 }
 
 const baseClassName =
-  "inline-flex items-center justify-center rounded-lg text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-60";
+  "inline-flex items-center justify-center rounded-lg border text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-60";
 
 const variantClassNames: Record<ButtonVariant, string> = {
-  primary: "bg-cyan-400 text-slate-950 hover:bg-cyan-300 disabled:bg-slate-700 disabled:text-slate-400",
-  ghost: "border border-slate-700 bg-slate-900 text-slate-300 hover:border-cyan-400 hover:text-white"
+  primary:
+    "border-[var(--md-color-border)] bg-[var(--md-color-primary)] text-[var(--md-color-text-inverse)] hover:bg-[var(--md-color-primary-hover)] disabled:bg-[var(--md-color-muted)] disabled:text-[var(--md-color-text-disabled)]",
+  ghost:
+    "border-[var(--md-color-border-subtle)] bg-[var(--md-color-surface)] text-[var(--md-color-text-secondary)] hover:border-[var(--md-color-border)] hover:bg-[var(--md-color-elevated)] hover:text-[var(--md-color-text-primary)]"
 };
 
 /**

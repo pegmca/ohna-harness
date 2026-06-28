@@ -134,13 +134,13 @@ pnpm --filter @aiagent/tools test
 
 ## Week 2 RAG Package Foundation
 
-Week 2 新增三个 RAG 相关 package 骨架，当前只提供稳定边界、核心类型和最小测试，不接入真实 PDF 解析、embedding provider、向量库或 Agent Chat：
+Week 2 新增三个 RAG 相关 package，当前已具备 Markdown/TXT 公告 ingestion 入口和 RAG 基础边界；暂不接入真实 PDF 解析、embedding provider、向量库或 Agent Chat：
 
-- `@aiagent/filings`：保存公告/财报文件来源、document metadata、原始文本来源和最小 parse result 类型。
+- `@aiagent/filings`：保存公告/财报文件来源、document metadata、原始文本来源和 ingestion pipeline。`ingestFiling()` 支持 Markdown 与 TXT 解析，输出 `IngestedFilingDocument` 和带 `heading`、`lineStart`、`lineEnd` 的 blocks；PDF 当前返回 `pdf_parser_not_configured` 结构化错误，不静默生成文档。
 - `@aiagent/rag`：保存 `RagDocument`、`RagChunk`、`Citation`、`RetrievalResult`、`RagAnswer`、embedding 输入输出和结构化错误类型。
 - `@aiagent/eval`：保存 `EvalCase`、`EvalMetric`、`EvalResult`、runner 输入和评测结构化错误类型。
 
-跨 API 边界会复用的 DTO 放在 `packages/types`，包括 filing source/document、RAG document/chunk/citation/retrieval/answer 和 eval case/metric/result。只属于运行时 package 的抽象，例如 chunking options、embedding result、package summary 和 runner input，保留在对应 package 内部导出。
+跨 API 边界会复用的 DTO 放在 `packages/types`，包括 filing source/document、ingested filing document/block、RAG document/chunk/citation/retrieval/answer 和 eval case/metric/result。只属于运行时 package 的抽象，例如 ingestion options、chunking options、embedding result、package summary 和 runner input，保留在对应 package 内部导出。
 
 可调用验证入口：
 

@@ -160,4 +160,129 @@ export interface AgentRunResponseDto {
   error?: ApiError;
 }
 
+/**
+ * 公告/财报来源类型是 API 边界稳定枚举，避免 UI 和 ingestion package 重复声明。
+ */
+export type FilingSourceKindDto = "local_file" | "remote_url" | "mock_text";
+
+/**
+ * 文件来源 DTO 只保存跨边界需要展示和追踪的信息，不包含解析器内部状态。
+ */
+export interface FilingSourceDto {
+  kind: FilingSourceKindDto;
+  uri: string;
+  provider?: string;
+}
+
+/**
+ * 公告/财报类型用于后续筛选和检索，不绑定任何数据库模型。
+ */
+export type FilingReportTypeDto =
+  | "annual_report"
+  | "quarterly_report"
+  | "interim_report"
+  | "announcement"
+  | "unknown";
+
+/**
+ * 公告/财报文档 DTO 表达 ingestion 输出的原始文本和元数据边界。
+ */
+export interface FilingDocumentDto {
+  id: string;
+  title: string;
+  ticker?: string;
+  reportType: FilingReportTypeDto;
+  publishedAt?: ISODateTimeString;
+  source: FilingSourceDto;
+  metadata: Record<string, string | number | boolean | null>;
+  rawText: string;
+}
+
+/**
+ * RAG 文档 DTO 表达可检索文档的稳定身份和来源，不包含全文。
+ */
+export interface RagDocumentDto {
+  id: string;
+  title: string;
+  sourceUri: string;
+  metadata: Record<string, string | number | boolean | null>;
+}
+
+/**
+ * RAG chunk DTO 表达切分后的文本片段和来源位置，用于检索、引用和评测。
+ */
+export interface RagChunkDto {
+  id: string;
+  documentId: string;
+  text: string;
+  startOffset: number;
+  endOffset: number;
+  pageNumber?: number;
+  metadata?: Record<string, string | number | boolean | null>;
+}
+
+/**
+ * 引用 DTO 连接回答片段和原始 chunk，是 grounded answer 的最小证据结构。
+ */
+export interface CitationDto {
+  chunkId: string;
+  documentId: string;
+  quote: string;
+  pageNumber?: number;
+  confidence: number;
+}
+
+/**
+ * 检索结果 DTO 保存 chunk 文本、分数和可直接展示的引用信息。
+ */
+export interface RetrievalResultDto {
+  chunkId: string;
+  documentId: string;
+  score: number;
+  text: string;
+  citation: CitationDto;
+}
+
+/**
+ * RAG answer DTO 是 API 返回给 UI 的 grounded answer 合同。
+ */
+export interface RagAnswerDto {
+  answer: string;
+  citations: CitationDto[];
+  retrievalResults: RetrievalResultDto[];
+}
+
+/**
+ * Eval case DTO 描述单条 RAG 回归评测输入和期望约束。
+ */
+export interface EvalCaseDto {
+  id: string;
+  question: string;
+  expectedAnswer?: string;
+  requiredDocumentIds?: string[];
+  tags?: string[];
+}
+
+/**
+ * Eval metric DTO 表达单项评测指标，便于后续报告和 CI 回归消费。
+ */
+export interface EvalMetricDto {
+  name: string;
+  score: number;
+  passed: boolean;
+  details?: string;
+}
+
+/**
+ * Eval result DTO 聚合模型回答和指标结果，是 eval 报告的跨边界输出。
+ */
+export interface EvalResultDto {
+  caseId: string;
+  question: string;
+  answer: RagAnswerDto;
+  expectedAnswer?: string;
+  metrics: EvalMetricDto[];
+  passed: boolean;
+}
+
 export * from "./llm.js";

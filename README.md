@@ -24,6 +24,7 @@
 ├── packages/
 │   ├── agent/
 │   ├── types/
+│   ├── filings/
 │   ├── rag/
 │   ├── tools/
 │   ├── workflow/
@@ -52,6 +53,9 @@
 - `apps/api`：Fastify HTTP adapter，当前暴露 `POST /api/agent/run` 和 `/health`，负责请求校验、DTO 映射和结构化响应。
 - `packages/agent`：Agent 能力边界，后续承载意图识别、循环调度和模型交互。
 - `packages/types`：前后端共享类型边界，承载 API contract、DTO、结构化错误和稳定枚举。
+- `packages/filings`：公告/财报 ingestion 边界，负责文件来源、document metadata 和原始文本来源信息。
+- `packages/rag`：RAG 运行时边界，负责 chunking、embedding 抽象、检索、引用和 grounded answer 的稳定类型入口。
+- `packages/eval`：RAG 评测边界，负责 eval case、metrics、runner 输入和报告输出结构。
 - `packages/tools`：工具注册与工具调用边界，后续承载外部数据和函数工具。
 - `packages/trace`：运行轨迹边界，后续承载事件记录、时间线和调试视图。
 
@@ -128,6 +132,27 @@ pnpm --filter @aiagent/tools test
 
 该测试覆盖四个 mock tools、缺失 `ticker` 的 zod 参数错误、非法 calculator 表达式和 trace 写入。
 
+## Week 2 RAG Package Foundation
+
+Week 2 新增三个 RAG 相关 package 骨架，当前只提供稳定边界、核心类型和最小测试，不接入真实 PDF 解析、embedding provider、向量库或 Agent Chat：
+
+- `@aiagent/filings`：保存公告/财报文件来源、document metadata、原始文本来源和最小 parse result 类型。
+- `@aiagent/rag`：保存 `RagDocument`、`RagChunk`、`Citation`、`RetrievalResult`、`RagAnswer`、embedding 输入输出和结构化错误类型。
+- `@aiagent/eval`：保存 `EvalCase`、`EvalMetric`、`EvalResult`、runner 输入和评测结构化错误类型。
+
+跨 API 边界会复用的 DTO 放在 `packages/types`，包括 filing source/document、RAG document/chunk/citation/retrieval/answer 和 eval case/metric/result。只属于运行时 package 的抽象，例如 chunking options、embedding result、package summary 和 runner input，保留在对应 package 内部导出。
+
+可调用验证入口：
+
+```bash
+pnpm --filter @aiagent/filings test
+pnpm --filter @aiagent/rag test
+pnpm --filter @aiagent/eval test
+pnpm typecheck
+pnpm test
+pnpm build
+```
+
 ## Agent Loop
 
 `packages/agent` 现在导出 Week 1 最小 Agent API：`createAgent(config)`、`runAgent(request, config)`、`createIntentRouter()` 和 `routeIntent()`。核心公开类型包括 `AgentRequest`、`AgentResponse`、`AgentIntent`、`AgentStep`、`AgentError` 和 `AgentRoute`。
@@ -177,6 +202,9 @@ pnpm test
 pnpm --filter @aiagent/agent test
 pnpm --filter @aiagent/tools test
 pnpm --filter @aiagent/api test
+pnpm --filter @aiagent/filings test
+pnpm --filter @aiagent/rag test
+pnpm --filter @aiagent/eval test
 ```
 
 根目录脚本会通过 workspace 执行各应用和 package 的对应命令。`pnpm dev` 会同时启动 `apps/api` 和 `apps/web`；web 的 Vite dev server 会把 `/api` 代理到 `http://localhost:3001`。如果 `5173` 被占用，Vite 会自动选择下一个可用端口。

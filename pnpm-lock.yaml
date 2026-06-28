@@ -95,6 +95,27 @@ importers:
         specifier: workspace:*
         version: link:../types
 
+  packages/eval:
+    dependencies:
+      '@aiagent/rag':
+        specifier: workspace:^
+        version: link:../rag
+      '@aiagent/types':
+        specifier: workspace:^
+        version: link:../types
+
+  packages/filings:
+    dependencies:
+      '@aiagent/types':
+        specifier: workspace:^
+        version: link:../types
+
+  packages/rag:
+    dependencies:
+      '@aiagent/types':
+        specifier: workspace:^
+        version: link:../types
+
   packages/tools:
     dependencies:
       '@aiagent/trace':

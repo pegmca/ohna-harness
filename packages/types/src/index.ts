@@ -244,13 +244,20 @@ export interface RagDocumentDto {
  * RAG chunk DTO 表达切分后的文本片段和来源位置，用于检索、引用和评测。
  */
 export interface RagChunkDto {
+  chunkId: string;
   id: string;
   documentId: string;
+  source: string;
+  chunkIndex: number;
   text: string;
+  charStart: number;
+  charEnd: number;
   startOffset: number;
   endOffset: number;
+  page?: number;
   pageNumber?: number;
-  metadata?: Record<string, string | number | boolean | null>;
+  heading?: string;
+  metadata: Record<string, string | number | boolean | null>;
 }
 
 /**

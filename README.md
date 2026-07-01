@@ -134,13 +134,21 @@ pnpm --filter @aiagent/tools test
 
 ## Week 2 RAG Package Foundation
 
-Week 2 新增三个 RAG 相关 package，当前已具备 Markdown/TXT 公告 ingestion 入口和 RAG 基础边界；暂不接入真实 PDF 解析、embedding provider、向量库或 Agent Chat：
+Week 2 新增三个 RAG 相关 package，当前已具备 Markdown/TXT 公告 ingestion 入口、RAG 基础边界和纯函数 chunk 策略；暂不接入真实 PDF 解析、embedding provider、向量库或 Agent Chat：
 
 - `@aiagent/filings`：保存公告/财报文件来源、document metadata、原始文本来源和 ingestion pipeline。`ingestFiling()` 支持 Markdown 与 TXT 解析，输出 `IngestedFilingDocument` 和带 `heading`、`lineStart`、`lineEnd` 的 blocks；PDF 当前返回 `pdf_parser_not_configured` 结构化错误，不静默生成文档。
-- `@aiagent/rag`：保存 `RagDocument`、`RagChunk`、`Citation`、`RetrievalResult`、`RagAnswer`、embedding 输入输出和结构化错误类型。
+- `@aiagent/rag`：保存 `RagDocument`、`RagChunk`、`Citation`、`RetrievalResult`、`RagAnswer`、embedding 输入输出和结构化错误类型，并导出 `chunkText()`、`chunkDocumentBlocks()`、`chunkIngestedFilingDocument()` 三个纯函数 chunk 入口。
 - `@aiagent/eval`：保存 `EvalCase`、`EvalMetric`、`EvalResult`、runner 输入和评测结构化错误类型。
 
 跨 API 边界会复用的 DTO 放在 `packages/types`，包括 filing source/document、ingested filing document/block、RAG document/chunk/citation/retrieval/answer 和 eval case/metric/result。只属于运行时 package 的抽象，例如 ingestion options、chunking options、embedding result、package summary 和 runner input，保留在对应 package 内部导出。
+
+RAG chunk 策略当前规则：
+
+- 默认 `DEFAULT_CHUNKING_OPTIONS` 使用 `heading_aware`，`maxChars: 1200`，`overlapChars: 150`。这个大小适合公告/财报段落检索，能保留足够上下文，同时避免后续 embedding 输入过长。
+- `fixed_size` 按字符窗口切分长文本，使用 overlap 保留相邻 chunk 上下文；`overlapChars >= maxChars` 会返回 `invalid_chunking_options` 结构化错误，避免无限循环。
+- `heading_aware` 优先沿用 ingestion block 的 `heading`、`lineStart`、`lineEnd`、`pageNumber` 和 block id；单个超长 block 会继续按 fixed-size 切分。
+- `chunkIndex` 从 0 开始并在文档内连续；`chunkId` 稳定派生为 `${documentId}_chunk_0000` 这类形式。
+- 每个 chunk 都保留 `documentId`、`source`、`page/pageNumber`、`heading`、`charStart`、`charEnd` 和 metadata，后续 citation 可以从 chunk 追溯到原始 block、行号或页码。
 
 可调用验证入口：
 

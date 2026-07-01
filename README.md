@@ -161,6 +161,10 @@ pnpm test
 pnpm build
 ```
 
+## Notes And Review Logs
+
+`notes/` 是学习复盘和 AI Coding review 的正式交付目录。实现任务如果在 task card、weekly plan 或 roadmap 中列出 `notes/*.md`，需要在同一任务里创建或更新对应文件。涉及 agent、tools、RAG、eval、workflow、report、trace 或公共 API 的功能改动，需要同步维护对应周的 `notes/ai-coding-review-*.md`，记录审查发现、验证命令、剩余风险和下一步改进。
+
 ## Agent Loop
 
 `packages/agent` 现在导出 Week 1 最小 Agent API：`createAgent(config)`、`runAgent(request, config)`、`createIntentRouter()` 和 `routeIntent()`。核心公开类型包括 `AgentRequest`、`AgentResponse`、`AgentIntent`、`AgentStep`、`AgentError` 和 `AgentRoute`。

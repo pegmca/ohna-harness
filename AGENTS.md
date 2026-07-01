@@ -74,7 +74,7 @@ Update related docs in the same task when the change affects any of these:
 
 If no documentation update is needed, state that explicitly in the final response with the reason.
 
-For feature work, also consider whether a review note belongs in `notes/ai-coding-review-*.md` when that notes directory exists.
+For feature work, keep `notes/` usable as the learning review log. If the relevant task card, weekly plan, or roadmap names a `notes/*.md` deliverable, create or update that file in the same task. If the work changes core agent, tool, RAG, eval, workflow, report, trace, or public API behavior, also create or update the matching `notes/ai-coding-review-*.md` file for that week and record review findings, validation, and remaining risks.
 
 ## AI Coding Workflow
 

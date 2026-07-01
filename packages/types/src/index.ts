@@ -261,6 +261,31 @@ export interface RagChunkDto {
 }
 
 /**
+ * Embedded chunk DTO 在 chunk 基础上增加向量和 embedding 模型信息，作为检索索引的跨边界数据形态。
+ */
+export interface EmbeddedChunkDto extends RagChunkDto {
+  embedding: readonly number[];
+  embeddingModel: string;
+}
+
+/**
+ * Embedding usage DTO 记录本次 mock 或真实 provider 调用的输入规模，后续可扩展为 token 成本统计。
+ */
+export interface EmbeddingUsageDto {
+  inputTexts: number;
+  inputCharacters: number;
+}
+
+/**
+ * 向量检索命中 DTO 保存完整 chunk、相似度分数和排序，便于 API/UI 展示证据。
+ */
+export interface VectorSearchMatchDto {
+  chunk: EmbeddedChunkDto;
+  score: number;
+  rank: number;
+}
+
+/**
  * 引用 DTO 连接回答片段和原始 chunk，是 grounded answer 的最小证据结构。
  */
 export interface CitationDto {

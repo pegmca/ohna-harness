@@ -1,11 +1,14 @@
 import type {
   CitationDto,
+  EmbeddedChunkDto,
+  EmbeddingUsageDto,
   IngestedFilingDocumentDto,
   IngestedTextBlockDto,
   RagAnswerDto,
   RagChunkDto,
   RagDocumentDto,
-  RetrievalResultDto
+  RetrievalResultDto,
+  VectorSearchMatchDto
 } from "@aiagent/types";
 
 export type RagDocument = RagDocumentDto;
@@ -13,6 +16,9 @@ export type RagChunk = RagChunkDto;
 export type Citation = CitationDto;
 export type RetrievalResult = RetrievalResultDto;
 export type RagAnswer = RagAnswerDto;
+export type EmbeddedChunk = EmbeddedChunkDto;
+export type EmbeddingUsage = EmbeddingUsageDto;
+export type VectorSearchMatch = VectorSearchMatchDto;
 
 export type EmbeddingVector = readonly number[];
 
@@ -24,22 +30,104 @@ export interface ChunkingOptions {
   overlapChars: number;
 }
 
-export interface EmbeddingInput {
-  chunkId: string;
+/**
+ * 单条 embedding 输出，保留原文、序号和模型名，便于调用方把向量映射回 chunk。
+ */
+export interface EmbeddingItem {
   text: string;
+  vector: EmbeddingVector;
+  index: number;
+  model: string;
 }
 
-export interface EmbeddingResult {
-  chunkId: string;
-  vector: EmbeddingVector;
+/**
+ * embedding 批量结果使用 ok/error union，避免 provider 或 mock 校验失败时向上抛原始异常。
+ */
+export type EmbeddingResult =
+  | {
+      ok: true;
+      embeddings: EmbeddingItem[];
+      usage: EmbeddingUsage;
+      dimensions: number;
+      model: string;
+    }
+  | {
+      ok: false;
+      error: RagStructuredError;
+    };
+
+/**
+ * EmbeddingClient 是真实 provider 和 mock provider 的替换边界，调用方只依赖文本到向量的稳定合同。
+ */
+export interface EmbeddingClient {
+  embedTexts(texts: readonly string[]): Promise<EmbeddingResult>;
+}
+
+/**
+ * deterministic mock embedding 的配置，允许单测显式固定模型名和维度。
+ */
+export interface DeterministicMockEmbeddingClientOptions {
   model: string;
+  dimensions: number;
+}
+
+/**
+ * 向量检索选项控制召回数量和 metadata 过滤，第一版只支持文档和来源两个稳定条件。
+ */
+export interface VectorSearchOptions {
+  topK?: number;
+  filter?: {
+    documentId?: string;
+    source?: string;
+  };
+}
+
+/**
+ * 向量库写入结果记录 upsert 数量和替换数量，用于验证索引状态而不暴露内部 Map。
+ */
+export type VectorStoreResult =
+  | {
+      ok: true;
+      upsertedCount: number;
+      replacedCount: number;
+      totalCount: number;
+      dimensions: number;
+    }
+  | {
+      ok: false;
+      error: RagStructuredError;
+    };
+
+/**
+ * 向量检索结果统一返回有序 matches；空索引是成功空数组，只有参数或维度错误才返回失败。
+ */
+export type VectorSearchResult =
+  | {
+      ok: true;
+      matches: VectorSearchMatch[];
+    }
+  | {
+      ok: false;
+      error: RagStructuredError;
+    };
+
+/**
+ * VectorStore 是内存实现和未来 Qdrant/pgvector 实现的替换边界。
+ */
+export interface VectorStore {
+  upsertChunks(chunks: readonly EmbeddedChunk[]): Promise<VectorStoreResult>;
+  search(queryVector: EmbeddingVector, options?: VectorSearchOptions): Promise<VectorSearchResult>;
 }
 
 export interface RagStructuredError {
   code:
     | "invalid_chunking_options"
     | "chunking_failed"
+    | "invalid_embedding_input"
     | "embedding_failed"
+    | "embedding_dimension_mismatch"
+    | "invalid_vector_search_options"
+    | "vector_store_dimension_mismatch"
     | "retrieval_failed"
     | "answer_failed";
   message: string;
@@ -76,7 +164,7 @@ export type ChunkingResult =
 export interface RagPackageSummary {
   packageName: "@aiagent/rag";
   boundary: "chunking_embedding_retrieval_citation_answer";
-  runtimeState: "chunking_ready";
+  runtimeState: "embedding_vector_store_ready";
 }
 
 export const DEFAULT_CHUNKING_OPTIONS: ChunkingOptions = {
@@ -84,6 +172,11 @@ export const DEFAULT_CHUNKING_OPTIONS: ChunkingOptions = {
   maxChars: 1200,
   overlapChars: 150
 };
+
+export const DEFAULT_MOCK_EMBEDDING_MODEL = "deterministic-mock-embedding-v1";
+export const DEFAULT_MOCK_EMBEDDING_DIMENSIONS = 32;
+export const DEFAULT_VECTOR_SEARCH_TOP_K = 5;
+export const MAX_VECTOR_SEARCH_TOP_K = 50;
 
 /**
  * 创建 RAG package 的边界摘要，明确本阶段只提供骨架和稳定类型。
@@ -94,8 +187,262 @@ export function createRagPackageSummary(): RagPackageSummary {
   return {
     packageName: "@aiagent/rag",
     boundary: "chunking_embedding_retrieval_citation_answer",
-    runtimeState: "chunking_ready"
+    runtimeState: "embedding_vector_store_ready"
   };
+}
+
+/**
+ * 创建 deterministic mock embedding client。
+ *
+ * 第一版使用 mock 而不接真实 provider，是为了让 RAG 索引和检索测试完全稳定、
+ * 不依赖 API key、网络或供应商限流；后续接 OpenAI/通义时只需替换 EmbeddingClient 边界。
+ *
+ * @param options 可选模型名和向量维度，默认维度足够覆盖单测语义相似度。
+ * @returns 实现 EmbeddingClient 的 deterministic mock client。
+ */
+export function createDeterministicMockEmbeddingClient(
+  options: Partial<DeterministicMockEmbeddingClientOptions> = {}
+): EmbeddingClient {
+  return new DeterministicMockEmbeddingClient({
+    model: options.model ?? DEFAULT_MOCK_EMBEDDING_MODEL,
+    dimensions: options.dimensions ?? DEFAULT_MOCK_EMBEDDING_DIMENSIONS
+  });
+}
+
+/**
+ * 创建内存向量库。
+ *
+ * 内存实现只适合单测、学习和本地 demo，不提供持久化、并发隔离或跨进程共享；
+ * 后续接 Qdrant/pgvector 时应替换 VectorStore 实现，而不是改调用方。
+ *
+ * @param options 可选固定向量维度；不传时会由第一次 upsert 的 chunk 推断。
+ * @returns 实现 VectorStore 的内存向量库。
+ */
+export function createInMemoryVectorStore(options: { dimensions?: number } = {}): VectorStore {
+  return new InMemoryVectorStore(options.dimensions);
+}
+
+/**
+ * deterministic mock embedding 的运行时实现。
+ *
+ * 通过规范化 token、稳定 hash 和 L2 normalize 生成固定维度向量，使同一文本每次输出完全一致；
+ * 这能先验证索引、检索和错误边界，避免把真实 embedding provider 的网络变量混入 Week 2 单测。
+ */
+class DeterministicMockEmbeddingClient implements EmbeddingClient {
+  private readonly model: string;
+  private readonly dimensions: number;
+
+  /**
+   * 创建 mock embedding client。
+   *
+   * @param options 模型名和向量维度。
+   */
+  public constructor(options: DeterministicMockEmbeddingClientOptions) {
+    this.model = options.model;
+    this.dimensions = options.dimensions;
+  }
+
+  /**
+   * 将文本数组转换为稳定向量。
+   *
+   * @param texts 待 embedding 的文本数组。
+   * @returns 成功时返回每段文本的向量和 usage；维度非法时返回结构化错误。
+   */
+  public async embedTexts(texts: readonly string[]): Promise<EmbeddingResult> {
+    if (!Number.isInteger(this.dimensions) || this.dimensions <= 0) {
+      return {
+        ok: false,
+        error: {
+          code: "invalid_embedding_input",
+          message: "embedding dimensions 必须是大于 0 的整数。",
+          details: {
+            dimensions: this.dimensions
+          }
+        }
+      };
+    }
+
+    const embeddings = texts.map((text, index) => ({
+      text,
+      vector: createDeterministicEmbeddingVector(text, this.dimensions),
+      index,
+      model: this.model
+    }));
+
+    return {
+      ok: true,
+      embeddings,
+      usage: {
+        inputTexts: texts.length,
+        inputCharacters: texts.reduce((total, text) => total + text.length, 0)
+      },
+      dimensions: this.dimensions,
+      model: this.model
+    };
+  }
+}
+
+/**
+ * 内存向量库实现，用 Map 按 chunkId 替换写入，保持 upsert 行为可预测。
+ */
+class InMemoryVectorStore implements VectorStore {
+  private readonly chunksById = new Map<string, EmbeddedChunk>();
+  private dimensions: number | undefined;
+
+  /**
+   * 创建内存向量库实例。
+   *
+   * @param dimensions 可选固定向量维度；不传时由第一次 upsert 推断。
+   */
+  public constructor(dimensions?: number) {
+    this.dimensions = dimensions;
+  }
+
+  /**
+   * 写入 embedded chunks，相同 chunkId 会被替换。
+   *
+   * @param chunks 已带 embedding 的 chunks。
+   * @returns 写入数量、替换数量和当前索引规模；维度不一致时返回结构化错误。
+   */
+  public async upsertChunks(chunks: readonly EmbeddedChunk[]): Promise<VectorStoreResult> {
+    const dimensionsResult = this.resolveUpsertDimensions(chunks);
+
+    if (!dimensionsResult.ok) {
+      return dimensionsResult;
+    }
+
+    let replacedCount = 0;
+
+    chunks.forEach((chunk) => {
+      if (this.chunksById.has(chunk.chunkId)) {
+        replacedCount += 1;
+      }
+
+      this.chunksById.set(chunk.chunkId, { ...chunk, embedding: [...chunk.embedding] });
+    });
+
+    return {
+      ok: true,
+      upsertedCount: chunks.length,
+      replacedCount,
+      totalCount: this.chunksById.size,
+      dimensions: dimensionsResult.dimensions
+    };
+  }
+
+  /**
+   * 按 cosine similarity 检索 topK chunks，并支持 documentId/source metadata 过滤。
+   *
+   * @param queryVector 查询向量。
+   * @param options topK 和 metadata filter；topK 缺省为小值并受上限保护。
+   * @returns 命中列表；空索引返回空数组，维度错误返回结构化错误。
+   */
+  public async search(
+    queryVector: EmbeddingVector,
+    options: VectorSearchOptions = {}
+  ): Promise<VectorSearchResult> {
+    const topKResult = normalizeTopK(options.topK);
+
+    if (!topKResult.ok) {
+      return topKResult;
+    }
+
+    if (this.chunksById.size === 0) {
+      return {
+        ok: true,
+        matches: []
+      };
+    }
+
+    if (this.dimensions !== undefined && queryVector.length !== this.dimensions) {
+      return {
+        ok: false,
+        error: {
+          code: "vector_store_dimension_mismatch",
+          message: "query vector 维度与向量库维度不一致。",
+          details: {
+            expectedDimensions: this.dimensions,
+            actualDimensions: queryVector.length
+          }
+        }
+      };
+    }
+
+    const matches = [...this.chunksById.values()]
+      .filter((chunk) => matchesVectorSearchFilter(chunk, options.filter))
+      .map((chunk) => ({
+        chunk,
+        score: cosineSimilarity(queryVector, chunk.embedding)
+      }))
+      .sort((left, right) => right.score - left.score)
+      .slice(0, topKResult.topK)
+      .map((match, index) => ({
+        ...match,
+        rank: index + 1
+      }));
+
+    return {
+      ok: true,
+      matches
+    };
+  }
+
+  /**
+   * 校验 upsert chunks 的维度，并在首次写入时确定 store 维度。
+   *
+   * @param chunks 待写入 chunks。
+   * @returns 合法时返回向量库维度，否则返回结构化错误。
+   */
+  private resolveUpsertDimensions(
+    chunks: readonly EmbeddedChunk[]
+  ): { ok: true; dimensions: number } | { ok: false; error: RagStructuredError } {
+    if (chunks.length === 0) {
+      return {
+        ok: true,
+        dimensions: this.dimensions ?? 0
+      };
+    }
+
+    const firstDimensions = this.dimensions ?? chunks[0]?.embedding.length ?? 0;
+
+    if (!Number.isInteger(firstDimensions) || firstDimensions <= 0) {
+      return {
+        ok: false,
+        error: {
+          code: "embedding_dimension_mismatch",
+          message: "embedded chunk 必须包含非空向量。",
+          details: {
+            expectedDimensions: this.dimensions ?? null,
+            actualDimensions: firstDimensions
+          }
+        }
+      };
+    }
+
+    const mismatchedChunk = chunks.find((chunk) => chunk.embedding.length !== firstDimensions);
+
+    if (mismatchedChunk) {
+      return {
+        ok: false,
+        error: {
+          code: "embedding_dimension_mismatch",
+          message: "同一个向量库中的 chunk embedding 维度必须一致。",
+          details: {
+            chunkId: mismatchedChunk.chunkId,
+            expectedDimensions: firstDimensions,
+            actualDimensions: mismatchedChunk.embedding.length
+          }
+        }
+      };
+    }
+
+    this.dimensions = firstDimensions;
+
+    return {
+      ok: true,
+      dimensions: firstDimensions
+    };
+  }
 }
 
 /**
@@ -446,4 +793,161 @@ function firstDefined<TValue>(values: readonly (TValue | undefined)[]): TValue |
  */
 function lastDefined<TValue>(values: readonly (TValue | undefined)[]): TValue | undefined {
   return [...values].reverse().find((value): value is TValue => value !== undefined);
+}
+
+/**
+ * 为文本生成固定维度 mock embedding。
+ *
+ * @param text 输入文本。
+ * @param dimensions 输出向量维度。
+ * @returns L2 normalize 后的稳定向量。
+ */
+function createDeterministicEmbeddingVector(text: string, dimensions: number): EmbeddingVector {
+  const vector = new Array<number>(dimensions).fill(0);
+  const tokens = tokenizeForMockEmbedding(text);
+
+  if (tokens.length === 0) {
+    return vector;
+  }
+
+  tokens.forEach((token) => {
+    const hash = stableHash(token);
+    const dimension = hash % dimensions;
+    const sign = hash % 2 === 0 ? 1 : -1;
+    vector[dimension] += sign;
+  });
+
+  return normalizeVector(vector);
+}
+
+/**
+ * 将文本规范化为 mock embedding token。
+ *
+ * @param text 输入文本。
+ * @returns 小写英文/数字词和 CJK 字符 token，保证中英文样例都有可比较特征。
+ */
+function tokenizeForMockEmbedding(text: string): string[] {
+  const normalized = text.toLowerCase();
+  const words = normalized.match(/[a-z0-9]+/g) ?? [];
+  const cjkChars = normalized.match(/[\u4e00-\u9fff]/g) ?? [];
+
+  return [...words, ...cjkChars];
+}
+
+/**
+ * 使用 FNV-1a 变体生成稳定 32-bit hash，避免依赖运行时随机种子。
+ *
+ * @param value 待 hash 字符串。
+ * @returns 无符号整数 hash。
+ */
+function stableHash(value: string): number {
+  let hash = 2166136261;
+
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+
+  return hash >>> 0;
+}
+
+/**
+ * L2 normalize 向量，便于 cosine similarity 稳定比较。
+ *
+ * @param vector 原始向量。
+ * @returns 归一化向量；零向量保持不变。
+ */
+function normalizeVector(vector: readonly number[]): EmbeddingVector {
+  const norm = Math.sqrt(vector.reduce((total, value) => total + value * value, 0));
+
+  if (norm === 0) {
+    return [...vector];
+  }
+
+  return vector.map((value) => value / norm);
+}
+
+/**
+ * 计算 cosine similarity。
+ *
+ * @param left 左向量。
+ * @param right 右向量。
+ * @returns 相似度分数；任一零向量返回 0。
+ */
+function cosineSimilarity(left: EmbeddingVector, right: EmbeddingVector): number {
+  if (left.length !== right.length) {
+    return 0;
+  }
+
+  const leftNorm = Math.sqrt(left.reduce((total, value) => total + value * value, 0));
+  const rightNorm = Math.sqrt(right.reduce((total, value) => total + value * value, 0));
+
+  if (leftNorm === 0 || rightNorm === 0) {
+    return 0;
+  }
+
+  const dotProduct = left.reduce((total, value, index) => total + value * right[index], 0);
+
+  return dotProduct / (leftNorm * rightNorm);
+}
+
+/**
+ * 校验并限制 topK，避免调用方一次取回过多结果。
+ *
+ * @param topK 调用方请求的 topK。
+ * @returns 合法时返回限制后的 topK，否则返回结构化错误。
+ */
+function normalizeTopK(
+  topK: number | undefined
+): { ok: true; topK: number } | { ok: false; error: RagStructuredError } {
+  if (topK === undefined) {
+    return {
+      ok: true,
+      topK: DEFAULT_VECTOR_SEARCH_TOP_K
+    };
+  }
+
+  if (!Number.isInteger(topK) || topK <= 0) {
+    return {
+      ok: false,
+      error: {
+        code: "invalid_vector_search_options",
+        message: "topK 必须是大于 0 的整数。",
+        details: {
+          topK
+        }
+      }
+    };
+  }
+
+  return {
+    ok: true,
+    topK: Math.min(topK, MAX_VECTOR_SEARCH_TOP_K)
+  };
+}
+
+/**
+ * 判断 chunk 是否满足向量检索 metadata filter。
+ *
+ * @param chunk 候选 chunk。
+ * @param filter documentId/source 过滤条件。
+ * @returns 满足条件时返回 true。
+ */
+function matchesVectorSearchFilter(
+  chunk: EmbeddedChunk,
+  filter: VectorSearchOptions["filter"]
+): boolean {
+  if (!filter) {
+    return true;
+  }
+
+  if (filter.documentId !== undefined && chunk.documentId !== filter.documentId) {
+    return false;
+  }
+
+  if (filter.source !== undefined && chunk.source !== filter.source) {
+    return false;
+  }
+
+  return true;
 }

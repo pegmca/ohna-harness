@@ -134,13 +134,13 @@ pnpm --filter @aiagent/tools test
 
 ## Week 2 RAG Package Foundation
 
-Week 2 新增三个 RAG 相关 package，当前已具备 Markdown/TXT 公告 ingestion 入口、RAG 基础边界和纯函数 chunk 策略；暂不接入真实 PDF 解析、embedding provider、向量库或 Agent Chat：
+Week 2 新增三个 RAG 相关 package，当前已具备 Markdown/TXT 公告 ingestion 入口、RAG 基础边界、纯函数 chunk 策略、deterministic mock embedding 和内存向量库；暂不接入真实 PDF 解析、真实 embedding provider、Qdrant/pgvector 或 Agent Chat：
 
 - `@aiagent/filings`：保存公告/财报文件来源、document metadata、原始文本来源和 ingestion pipeline。`ingestFiling()` 支持 Markdown 与 TXT 解析，输出 `IngestedFilingDocument` 和带 `heading`、`lineStart`、`lineEnd` 的 blocks；PDF 当前返回 `pdf_parser_not_configured` 结构化错误，不静默生成文档。
-- `@aiagent/rag`：保存 `RagDocument`、`RagChunk`、`Citation`、`RetrievalResult`、`RagAnswer`、embedding 输入输出和结构化错误类型，并导出 `chunkText()`、`chunkDocumentBlocks()`、`chunkIngestedFilingDocument()` 三个纯函数 chunk 入口。
+- `@aiagent/rag`：保存 `RagDocument`、`RagChunk`、`EmbeddedChunk`、`Citation`、`RetrievalResult`、`RagAnswer`、embedding/vector store 抽象和结构化错误类型，并导出 `chunkText()`、`chunkDocumentBlocks()`、`chunkIngestedFilingDocument()`、`createDeterministicMockEmbeddingClient()`、`createInMemoryVectorStore()` 等入口。
 - `@aiagent/eval`：保存 `EvalCase`、`EvalMetric`、`EvalResult`、runner 输入和评测结构化错误类型。
 
-跨 API 边界会复用的 DTO 放在 `packages/types`，包括 filing source/document、ingested filing document/block、RAG document/chunk/citation/retrieval/answer 和 eval case/metric/result。只属于运行时 package 的抽象，例如 ingestion options、chunking options、embedding result、package summary 和 runner input，保留在对应 package 内部导出。
+跨 API 边界会复用的 DTO 放在 `packages/types`，包括 filing source/document、ingested filing document/block、RAG document/chunk/embedded chunk/vector search match/citation/retrieval/answer 和 eval case/metric/result。只属于运行时 package 的抽象，例如 ingestion options、chunking options、embedding client、vector store、package summary 和 runner input，保留在对应 package 内部导出。
 
 RAG chunk 策略当前规则：
 
@@ -149,6 +149,14 @@ RAG chunk 策略当前规则：
 - `heading_aware` 优先沿用 ingestion block 的 `heading`、`lineStart`、`lineEnd`、`pageNumber` 和 block id；单个超长 block 会继续按 fixed-size 切分。
 - `chunkIndex` 从 0 开始并在文档内连续；`chunkId` 稳定派生为 `${documentId}_chunk_0000` 这类形式。
 - 每个 chunk 都保留 `documentId`、`source`、`page/pageNumber`、`heading`、`charStart`、`charEnd` 和 metadata，后续 citation 可以从 chunk 追溯到原始 block、行号或页码。
+
+RAG embedding 和内存向量库当前规则：
+
+- `EmbeddingClient` 抽象暴露 `embedTexts(texts)`，当前实现 `createDeterministicMockEmbeddingClient()` 使用规范化 token、稳定 hash 和 L2 normalize 生成固定维度向量。同一文本多次 embedding 结果完全一致，便于无网络、无 API key 的单测。
+- `VectorStore` 抽象暴露 `upsertChunks(chunks)` 和 `search(queryVector, options)`。`createInMemoryVectorStore()` 用 `Map` 按 `chunkId` upsert，相同 `chunkId` 会替换旧 chunk。
+- vector search 使用 cosine similarity，支持 `topK`、`documentId` 和 `source` filter。`topK` 默认 `5`，上限 `50`，避免一次返回过多结果。
+- 向量维度必须一致；chunk embedding 或 query vector 维度不匹配会返回 `embedding_dimension_mismatch` 或 `vector_store_dimension_mismatch` 结构化错误，而不是向 UI 泄漏异常。
+- 内存向量库只适合本地 demo 和测试，不持久化、不跨进程共享。后续接 Qdrant/pgvector 时应替换 `VectorStore` 实现；后续接 OpenAI/通义 embedding 时应替换 `EmbeddingClient` 实现。
 
 可调用验证入口：
 

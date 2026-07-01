@@ -161,7 +161,7 @@ pnpm test
 pnpm build
 ```
 
-## Notes And Review Logs
+## Notes And Learning Logs
 
 `notes/` 是阶段技术学习笔记目录，用来记录每个阶段的技术重点、核心概念、实现脉络、关键权衡和学习检查点。实现任务如果在 task card、weekly plan 或 roadmap 中列出 `notes/*.md`，需要在同一任务里创建或更新对应文件。涉及 agent、tools、RAG、eval、workflow、report、trace 或公共 API 的功能改动，需要同步维护对应周的 note，让后续复习时能从“为什么这样设计”理解 Agent 项目。
 

@@ -134,13 +134,13 @@ pnpm --filter @aiagent/tools test
 
 ## Week 2 RAG Package Foundation
 
-Week 2 新增三个 RAG 相关 package，当前已具备 Markdown/TXT 公告 ingestion 入口、RAG 基础边界、纯函数 chunk 策略、deterministic mock embedding 和内存向量库；暂不接入真实 PDF 解析、真实 embedding provider、Qdrant/pgvector 或 Agent Chat：
+Week 2 新增三个 RAG 相关 package，当前已具备 Markdown/TXT 公告 ingestion 入口、RAG 基础边界、纯函数 chunk 策略、deterministic mock embedding、内存向量库、hybrid retrieval 和 deterministic heuristic rerank；暂不接入真实 PDF 解析、真实 embedding provider、Qdrant/pgvector、cross-encoder、LLM rerank 或 Agent Chat：
 
 - `@aiagent/filings`：保存公告/财报文件来源、document metadata、原始文本来源和 ingestion pipeline。`ingestFiling()` 支持 Markdown 与 TXT 解析，输出 `IngestedFilingDocument` 和带 `heading`、`lineStart`、`lineEnd` 的 blocks；PDF 当前返回 `pdf_parser_not_configured` 结构化错误，不静默生成文档。
-- `@aiagent/rag`：保存 `RagDocument`、`RagChunk`、`EmbeddedChunk`、`Citation`、`RetrievalResult`、`RagAnswer`、embedding/vector store 抽象和结构化错误类型，并导出 `chunkText()`、`chunkDocumentBlocks()`、`chunkIngestedFilingDocument()`、`createDeterministicMockEmbeddingClient()`、`createInMemoryVectorStore()` 等入口。
+- `@aiagent/rag`：保存 `RagDocument`、`RagChunk`、`EmbeddedChunk`、`Citation`、`RetrievalResult`、`RagAnswer`、embedding/vector store/retriever/reranker 抽象和结构化错误类型，并导出 `chunkText()`、`chunkDocumentBlocks()`、`chunkIngestedFilingDocument()`、`createDeterministicMockEmbeddingClient()`、`createInMemoryVectorStore()`、`createHybridRetriever()` 和 `createHeuristicReranker()` 等入口。
 - `@aiagent/eval`：保存 `EvalCase`、`EvalMetric`、`EvalResult`、runner 输入和评测结构化错误类型。
 
-跨 API 边界会复用的 DTO 放在 `packages/types`，包括 filing source/document、ingested filing document/block、RAG document/chunk/embedded chunk/vector search match/citation/retrieval/answer 和 eval case/metric/result。只属于运行时 package 的抽象，例如 ingestion options、chunking options、embedding client、vector store、package summary 和 runner input，保留在对应 package 内部导出。
+跨 API 边界会复用的 DTO 放在 `packages/types`，包括 filing source/document、ingested filing document/block、RAG document/chunk/embedded chunk/vector search match/retrieval score breakdown/citation/retrieval/answer、retrieval trace event 和 eval case/metric/result。只属于运行时 package 的抽象，例如 ingestion options、chunking options、embedding client、vector store、retriever、reranker、package summary 和 runner input，保留在对应 package 内部导出。
 
 RAG chunk 策略当前规则：
 
@@ -157,6 +157,15 @@ RAG embedding 和内存向量库当前规则：
 - vector search 使用 cosine similarity，支持 `topK`、`documentId` 和 `source` filter。`topK` 默认 `5`，上限 `50`，避免一次返回过多结果。
 - 向量维度必须一致；chunk embedding 或 query vector 维度不匹配会返回 `embedding_dimension_mismatch` 或 `vector_store_dimension_mismatch` 结构化错误，而不是向 UI 泄漏异常。
 - 内存向量库只适合本地 demo 和测试，不持久化、不跨进程共享。后续接 Qdrant/pgvector 时应替换 `VectorStore` 实现；后续接 OpenAI/通义 embedding 时应替换 `EmbeddingClient` 实现。
+
+RAG hybrid retrieval 和 rerank 当前规则：
+
+- `Retriever` 抽象暴露 `retrieve(query, options)`，`createHybridRetriever()` 组合 `EmbeddingClient`、`VectorStore` 和调用方传入的 embedded chunks。向量召回仍走 `VectorStore`，关键词召回扫描本地 chunks，保持未来替换持久化索引的边界。
+- 支持 `mode: "vector" | "keyword" | "hybrid"`。`topK` 复用向量检索默认值 `5` 和上限 `50`；`candidateLimit` 默认 `20`，并受同一上限保护。
+- 第一版 keyword scoring 是轻量 BM25-like heuristic：中英文 token 匹配、query term coverage、term frequency 和 heading boost，不新增重型生产依赖。它适合小规模公告/财报 demo，后续可替换为真实 BM25 索引。
+- hybrid 模式默认使用 `vectorWeight: 0.65`、`keywordWeight: 0.35`；vector-only 和 keyword-only 模式默认分别使用 1/0 与 0/1。返回结果会输出 `vectorScore`、`keywordScore`、`hybridScore`、`finalScore`、命中词、覆盖率和 heading match。
+- `createHeuristicReranker()` 用 deterministic 规则重排：hybrid score、query term coverage 和 heading match；相同分数按 `chunkIndex` 和 `chunkId` 稳定排序。后续 cross-encoder 或 LLM rerank 只需实现 `Reranker` 接口。
+- retrieval trace summary 只记录 `queryPreview`、mode、topK、candidateLimit、耗时、retrieved chunk ids 和 score summary，不记录完整敏感文档。`packages/trace` 也保留了 `retrieval` event 结构，方便后续 Agent timeline 写入。
 
 可调用验证入口：
 

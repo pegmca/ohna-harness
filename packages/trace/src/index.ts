@@ -14,6 +14,7 @@ export type TraceEventType =
   | "request_received"
   | "intent_routed"
   | "agent_step"
+  | "retrieval"
   | "model_call"
   | "tool_call"
   | "final_response";
@@ -56,6 +57,29 @@ export interface TraceAgentStepEvent extends TraceEventBase {
   data?: Record<string, unknown>;
 }
 
+export interface TraceRetrievalScoreSummary {
+  chunkId: string;
+  vectorScore: number;
+  keywordScore: number;
+  hybridScore: number;
+  rerankScore?: number;
+  finalScore: number;
+  rank: number;
+}
+
+export interface TraceRetrievalEvent extends TraceEventBase {
+  type: "retrieval";
+  queryPreview: string;
+  mode: "vector" | "keyword" | "hybrid";
+  topK: number;
+  candidateLimit: number;
+  durationMs: number;
+  chunkIds: string[];
+  scoreSummary: TraceRetrievalScoreSummary[];
+  ok: boolean;
+  error?: TraceError;
+}
+
 export interface TraceModelCallEvent extends TraceEventBase {
   type: "model_call";
   model: string;
@@ -91,6 +115,7 @@ export type TraceEvent =
   | TraceRequestReceivedEvent
   | TraceIntentRoutedEvent
   | TraceAgentStepEvent
+  | TraceRetrievalEvent
   | TraceModelCallEvent
   | TraceToolCallEvent
   | TraceFinalResponseEvent;

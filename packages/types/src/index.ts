@@ -75,6 +75,7 @@ export type TraceEventDto =
   | TraceRequestReceivedEventDto
   | TraceIntentRoutedEventDto
   | TraceAgentStepEventDto
+  | TraceRetrievalEventDto
   | TraceModelCallEventDto
   | TraceToolCallEventDto
   | TraceFinalResponseEventDto;
@@ -108,6 +109,29 @@ export interface TraceAgentStepEventDto extends TraceEventBaseDto {
   status: "started" | "succeeded" | "failed";
   durationMs: number;
   data?: Record<string, unknown>;
+  error?: TraceErrorDto;
+}
+
+export interface TraceRetrievalScoreSummaryDto {
+  chunkId: string;
+  vectorScore: number;
+  keywordScore: number;
+  hybridScore: number;
+  rerankScore?: number;
+  finalScore: number;
+  rank: number;
+}
+
+export interface TraceRetrievalEventDto extends TraceEventBaseDto {
+  type: "retrieval";
+  queryPreview: string;
+  mode: "vector" | "keyword" | "hybrid";
+  topK: number;
+  candidateLimit: number;
+  durationMs: number;
+  chunkIds: string[];
+  scoreSummary: TraceRetrievalScoreSummaryDto[];
+  ok: boolean;
   error?: TraceErrorDto;
 }
 
@@ -286,6 +310,22 @@ export interface VectorSearchMatchDto {
 }
 
 /**
+ * 检索 score breakdown DTO 暴露向量、关键词、rerank 与最终分数，便于 UI 和 trace 解释排序原因。
+ */
+export interface RetrievalScoreBreakdownDto {
+  vectorScore: number;
+  keywordScore: number;
+  hybridScore: number;
+  rerankScore?: number;
+  finalScore: number;
+  vectorWeight: number;
+  keywordWeight: number;
+  matchedTerms: string[];
+  queryTermCoverage: number;
+  headingMatch: boolean;
+}
+
+/**
  * 引用 DTO 连接回答片段和原始 chunk，是 grounded answer 的最小证据结构。
  */
 export interface CitationDto {
@@ -303,7 +343,9 @@ export interface RetrievalResultDto {
   chunkId: string;
   documentId: string;
   score: number;
+  rank?: number;
   text: string;
+  scoreBreakdown?: RetrievalScoreBreakdownDto;
   citation: CitationDto;
 }
 

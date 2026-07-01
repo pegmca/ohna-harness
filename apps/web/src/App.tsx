@@ -837,6 +837,8 @@ function formatEventTitle(event: TraceEventDto): string {
       return `Intent Routed: ${event.intent}`;
     case "agent_step":
       return `Agent Step: ${event.stepType}`;
+    case "retrieval":
+      return `Retrieval: ${event.mode}`;
     case "model_call":
       return `Model Call: ${event.purpose}`;
     case "tool_call":
@@ -874,6 +876,10 @@ function formatEventSummary(event: TraceEventDto): string {
       return event.reason;
     case "agent_step":
       return `${event.status} with ${event.error?.code ?? "no_error"}`;
+    case "retrieval":
+      return event.ok
+        ? `${event.chunkIds.length} chunks retrieved, topK=${event.topK}`
+        : event.error?.message ?? "检索失败。";
     case "model_call":
       return event.ok ? `${event.model} responded` : event.error?.message ?? "model failed";
     case "tool_call":

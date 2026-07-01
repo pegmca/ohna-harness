@@ -5,11 +5,15 @@ import {
   chunkIngestedFilingDocument,
   chunkText,
   createDeterministicMockEmbeddingClient,
+  createHeuristicReranker,
+  createHybridRetriever,
   createInMemoryVectorStore,
   createRagAnswer,
   createRagPackageSummary,
   DEFAULT_CHUNKING_OPTIONS,
+  DEFAULT_KEYWORD_WEIGHT,
   DEFAULT_VECTOR_SEARCH_TOP_K,
+  DEFAULT_VECTOR_WEIGHT,
   MAX_VECTOR_SEARCH_TOP_K
 } from "../dist/index.js";
 
@@ -18,7 +22,7 @@ test("rag package entry exposes its boundary summary", () => {
 
   assert.equal(summary.packageName, "@aiagent/rag");
   assert.equal(summary.boundary, "chunking_embedding_retrieval_citation_answer");
-  assert.equal(summary.runtimeState, "embedding_vector_store_ready");
+  assert.equal(summary.runtimeState, "hybrid_retrieval_ready");
 });
 
 test("default chunking options keep heading-aware chunks within a conservative size", () => {
@@ -454,6 +458,121 @@ test("in-memory vector store applies default and maximum topK", async () => {
   assert.equal(invalidResult.error.code, "invalid_vector_search_options");
 });
 
+test("hybrid retriever supports vector-only mode with score breakdown", async () => {
+  const { retriever } = await createRetrieverFixture();
+  const result = await retriever.retrieve("净利润增长", {
+    mode: "vector",
+    topK: 2,
+    rerank: false
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.results.length, 2);
+  assert.equal(result.results[0].scoreBreakdown.keywordScore, 0);
+  assert.equal(result.results[0].scoreBreakdown.vectorWeight, 1);
+  assert.equal(result.results[0].scoreBreakdown.keywordWeight, 0);
+  assert.equal(result.trace.mode, "vector");
+  assert.deepEqual(
+    result.trace.chunkIds,
+    result.results.map((entry) => entry.chunk.chunkId)
+  );
+});
+
+test("hybrid retriever supports keyword-only mode and lifts exact financial terms", async () => {
+  const { retriever } = await createRetrieverFixture();
+  const result = await retriever.retrieve("资产质量", {
+    mode: "keyword",
+    topK: 1
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.results.length, 1);
+  assert.match(result.results[0].chunk.text, /资产质量/);
+  assert.equal(result.results[0].scoreBreakdown.vectorScore, 0);
+  assert.equal(result.results[0].scoreBreakdown.vectorWeight, 0);
+  assert.equal(result.results[0].scoreBreakdown.keywordWeight, 1);
+  assert.ok(result.results[0].scoreBreakdown.keywordScore > 0);
+  assert.ok(result.results[0].scoreBreakdown.matchedTerms.includes("资产质量"));
+});
+
+test("hybrid retriever merges vector and keyword candidates with final score explanation", async () => {
+  const { retriever } = await createRetrieverFixture();
+  const result = await retriever.retrieve("净利润 ROE", {
+    mode: "hybrid",
+    topK: 3,
+    candidateLimit: 4,
+    rerank: false
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.results.length, 3);
+  assert.equal(result.trace.candidateLimit, 4);
+  assert.equal(result.results[0].scoreBreakdown.vectorWeight, DEFAULT_VECTOR_WEIGHT);
+  assert.equal(result.results[0].scoreBreakdown.keywordWeight, DEFAULT_KEYWORD_WEIGHT);
+  assert.ok(result.results.some((entry) => /ROE/.test(entry.chunk.text)));
+  assert.ok(
+    result.results.every(
+      (entry) =>
+        typeof entry.scoreBreakdown.vectorScore === "number" &&
+        typeof entry.scoreBreakdown.keywordScore === "number" &&
+        entry.scoreBreakdown.finalScore === entry.score
+    )
+  );
+  assert.deepEqual(
+    result.trace.scoreSummary.map((entry) => entry.chunkId),
+    result.results.map((entry) => entry.chunk.chunkId)
+  );
+});
+
+test("heuristic reranker is stable and explains coverage and heading matches", async () => {
+  const reranker = createHeuristicReranker();
+  const first = createRetrievedTestChunk(
+    {
+      ...createEmbeddedTestChunk("tie_b", "doc_tie", "mock://tie", "资产质量", [1, 0]),
+      chunkIndex: 0,
+      heading: "资产质量"
+    },
+    0.5
+  );
+  const second = createRetrievedTestChunk(
+    {
+      ...createEmbeddedTestChunk("tie_a", "doc_tie", "mock://tie", "资产质量", [1, 0]),
+      chunkIndex: 0,
+      heading: "资产质量"
+    },
+    0.5
+  );
+  const result = await reranker.rerank("资产质量", [first, second]);
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(
+    result.results.map((entry) => entry.chunk.chunkId),
+    ["tie_a", "tie_b"]
+  );
+  assert.equal(result.results[0].scoreBreakdown.headingMatch, true);
+  assert.equal(result.results[0].scoreBreakdown.queryTermCoverage, 1);
+  assert.equal(typeof result.results[0].scoreBreakdown.rerankScore, "number");
+});
+
+test("hybrid retriever enforces topK, candidateLimit and structured option errors", async () => {
+  const { retriever } = await createRetrieverFixture();
+  const limited = await retriever.retrieve("净利润 资产质量 ROE", {
+    mode: "hybrid",
+    topK: 3,
+    candidateLimit: 2
+  });
+  const invalid = await retriever.retrieve("净利润", {
+    candidateLimit: 0
+  });
+
+  assert.equal(limited.ok, true);
+  assert.equal(limited.results.length, 2);
+  assert.equal(limited.trace.topK, 3);
+  assert.equal(limited.trace.candidateLimit, 2);
+  assert.equal(invalid.ok, false);
+  assert.equal(invalid.error.code, "invalid_retrieval_options");
+});
+
 test("rag answer can express citations and retrieval results", () => {
   const answer = createRagAnswer({
     answer: "公司净利润同比增长，依据年报管理层讨论章节。",
@@ -513,5 +632,109 @@ function createEmbeddedTestChunk(chunkId, documentId, source, text, embedding) {
     metadata: {},
     embedding,
     embeddingModel: "mock"
+  };
+}
+
+/**
+ * 创建混合检索测试 fixture，复用同一批公告/财报片段。
+ *
+ * @returns {Promise<{ retriever: import("../dist/index.js").Retriever }>} 检索器 fixture。
+ */
+async function createRetrieverFixture() {
+  const client = createDeterministicMockEmbeddingClient({
+    dimensions: 24
+  });
+  const rawChunks = [
+    {
+      ...createEmbeddedTestChunk(
+        "doc_rag_chunk_0000",
+        "doc_rag",
+        "mock://rag",
+        "公司净利润同比增长，ROE 保持在较高水平。",
+        []
+      ),
+      chunkIndex: 0,
+      heading: "盈利能力"
+    },
+    {
+      ...createEmbeddedTestChunk(
+        "doc_rag_chunk_0001",
+        "doc_rag",
+        "mock://rag",
+        "资产质量保持稳健，不良贷款率下降。",
+        []
+      ),
+      chunkIndex: 1,
+      heading: "资产质量"
+    },
+    {
+      ...createEmbeddedTestChunk(
+        "doc_rag_chunk_0002",
+        "doc_rag",
+        "mock://rag",
+        "现金流短期承压，资本开支增加。",
+        []
+      ),
+      chunkIndex: 2,
+      heading: "现金流"
+    },
+    {
+      ...createEmbeddedTestChunk(
+        "doc_rag_chunk_0003",
+        "doc_rag",
+        "mock://rag",
+        "费用率改善带动经营效率提升。",
+        []
+      ),
+      chunkIndex: 3,
+      heading: "经营效率"
+    }
+  ];
+  const embeddingResult = await client.embedTexts(rawChunks.map((chunk) => chunk.text));
+
+  assert.equal(embeddingResult.ok, true);
+
+  const chunks = rawChunks.map((chunk, index) => ({
+    ...chunk,
+    embedding: embeddingResult.embeddings[index].vector,
+    embeddingModel: embeddingResult.model
+  }));
+  const store = createInMemoryVectorStore();
+  const upsertResult = await store.upsertChunks(chunks);
+
+  assert.equal(upsertResult.ok, true);
+
+  return {
+    retriever: createHybridRetriever({
+      embeddingClient: client,
+      vectorStore: store,
+      chunks
+    })
+  };
+}
+
+/**
+ * 创建 rerank 测试候选，便于直接验证 tie-break 和 explanation。
+ *
+ * @param {object} chunk embedded chunk。
+ * @param {number} score 初始分数。
+ * @returns {object} RetrievedChunk 形状的测试对象。
+ */
+function createRetrievedTestChunk(chunk, score) {
+  return {
+    chunk,
+    rank: 0,
+    score,
+    scoreBreakdown: {
+      vectorScore: score,
+      keywordScore: score,
+      hybridScore: score,
+      finalScore: score,
+      vectorWeight: 0.5,
+      keywordWeight: 0.5,
+      matchedTerms: [],
+      queryTermCoverage: 0,
+      headingMatch: false
+    }
   };
 }

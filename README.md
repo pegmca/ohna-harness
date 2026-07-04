@@ -178,6 +178,42 @@ pnpm test
 pnpm build
 ```
 
+## Week 2 Citation Answer And Data Sources
+
+Week 2-013 已把 RAG ingestion、chunk、retrieval 和 citation answer 接入 HTTP API 与 Web 页面，形成最小可演示的 Data Sources 工作区：
+
+- `packages/rag` 新增 `createDataSourceRuntime()`，在一个 Node.js 进程内保存 documents、chunks 和 embedded chunks，并组合 `@aiagent/filings` ingestion、heading-aware chunking、deterministic mock embedding、内存 vector store、hybrid retriever 和 grounded answer policy。
+- `apps/api` 新增 `POST /api/data-sources/ingest`、`GET /api/data-sources/documents`、`GET /api/data-sources/chunks`、`POST /api/rag/search`、`POST /api/rag/answer`。Route handler 只做 zod 校验、调用 RAG runtime、DTO 映射和 `ApiResult` 结构化响应。
+- `packages/types` 新增 Data Sources/RAG API DTO，并扩展 `CitationDto`：每条 citation 包含 `chunkId`、`documentId`、`source`、`heading`、`chunkIndex`、`quote` 和 `confidence`，可以从 answer 追溯到原始文档、来源、章节和 chunk 顺序。
+- `apps/web` 左侧工作区导航新增 Data Sources 页面。页面通过 HTTP API 展示粘贴/上传文本、document list、chunk list、retrieval results、answer 和 citations；前端不直接依赖 RAG runtime。
+- unknown answer policy：answer synthesis 只使用召回结果中命中有信息量术语的 chunks。证据不足时仍返回 `ok: true`，但 answer 明确说明当前资料不足，不编造结论。
+
+当前 runtime 限制：
+
+- 只支持 Markdown/TXT demo 文档；PDF 仍返回结构化未配置错误。
+- 内存状态只存在于当前 API 进程，不持久化、不跨进程共享、不做多用户隔离。
+- answer synthesis 是 deterministic heuristic 摘要，不调用真实 LLM；后续可在同一 RAG 边界内替换为带 context packing 的模型生成。
+
+API 验证：
+
+```bash
+curl -X POST http://localhost:3001/api/data-sources/ingest \
+  -H "content-type: application/json" \
+  -d '{"source":"demo","fileName":"annual-report.md","content":"# 资产质量\n公司不良率保持稳定。"}'
+
+curl -X GET http://localhost:3001/api/data-sources/documents
+
+curl -X GET http://localhost:3001/api/data-sources/chunks
+
+curl -X POST http://localhost:3001/api/rag/search \
+  -H "content-type: application/json" \
+  -d '{"query":"资产质量","topK":5}'
+
+curl -X POST http://localhost:3001/api/rag/answer \
+  -H "content-type: application/json" \
+  -d '{"question":"公司资产质量如何？","topK":5}'
+```
+
 ## Notes And Learning Logs
 
 `notes/` 是阶段技术学习笔记目录，用来记录每个阶段的技术重点、核心概念、实现脉络、关键权衡和学习检查点。实现任务如果在 task card、weekly plan 或 roadmap 中列出 `notes/*.md`，需要在同一任务里创建或更新对应文件。涉及 agent、tools、RAG、eval、workflow、report、trace 或公共 API 的功能改动，需要同步维护对应周的 note，让后续复习时能从“为什么这样设计”理解 Agent 项目。

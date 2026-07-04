@@ -1,5 +1,17 @@
 import * as Switch from "@radix-ui/react-switch";
-import type { AgentRunResponseDto, ApiError, ApiResult } from "@aiagent/types";
+import type {
+  AgentRunResponseDto,
+  ApiError,
+  ApiResult,
+  DataSourceChunksResponseDto,
+  DataSourceDocumentsResponseDto,
+  DataSourceIngestResponseDto,
+  IngestedFilingDocumentDto,
+  RagAnswerResponseDto,
+  RagChunkDto,
+  RagSearchResponseDto,
+  RetrievalResultDto
+} from "@aiagent/types";
 import {
   Activity,
   AlertTriangle,
@@ -7,9 +19,13 @@ import {
   Braces,
   ChevronDown,
   Clock3,
+  Database,
+  FileText,
   Loader2,
   Menu,
   Plus,
+  Quote,
+  Search,
   Send,
   Sparkles,
   User,
@@ -20,6 +36,7 @@ import { type FormEvent, type ReactNode, useMemo, useState } from "react";
 
 type MessageRole = "user" | "assistant";
 type MessageStatus = "complete" | "pending" | "failed";
+type WorkspaceView = "chat" | "data-sources";
 
 interface UiMessage {
   id: string;
@@ -49,6 +66,14 @@ const demoPrompts = [
   "检索一下 000001.SZ 最近年报中关于资产质量的描述。",
   "帮我生成一份 000001.SZ 的公司研究报告 PDF。"
 ];
+const demoDataSourceContent = `# 资产质量
+公司不良率保持稳定，拨备覆盖率维持在安全水平。
+
+# 盈利能力
+公司净利润同比增长，ROE 保持在较高水平。
+
+# 现金流
+经营性现金流改善，但资本开支增加带来短期压力。`;
 
 /**
  * 渲染 Immersive Agent Chat，负责本地会话编排和真实 Agent API 调用。
@@ -62,6 +87,7 @@ export function App() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [composerError, setComposerError] = useState<string | undefined>();
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [workspaceView, setWorkspaceView] = useState<WorkspaceView>("chat");
 
   const activeConversation = useMemo(
     () => conversations.find((conversation) => conversation.id === activeConversationId) ?? conversations[0],
@@ -250,35 +276,44 @@ export function App() {
         onClose={() => setIsSidebarOpen(false)}
         onNewConversation={handleNewConversation}
         onSelectConversation={handleSelectConversation}
+        onSelectView={(view) => {
+          setWorkspaceView(view);
+          setIsSidebarOpen(false);
+        }}
+        workspaceView={workspaceView}
       />
 
-      <section className="chat-main" aria-label="Agent Chat 主区域">
-        <ChatHeader
-          conversationTitle={activeConversation?.title ?? "新会话"}
-          isSubmitting={isSubmitting}
-          latestRun={latestRun}
-          onMenuClick={() => setIsSidebarOpen(true)}
-          onReportModeChange={handleReportModeChange}
-          reportMode={activeConversation?.reportMode ?? false}
-        />
+      {workspaceView === "chat" ? (
+        <section className="chat-main" aria-label="Agent Chat 主区域">
+          <ChatHeader
+            conversationTitle={activeConversation?.title ?? "新会话"}
+            isSubmitting={isSubmitting}
+            latestRun={latestRun}
+            onMenuClick={() => setIsSidebarOpen(true)}
+            onReportModeChange={handleReportModeChange}
+            reportMode={activeConversation?.reportMode ?? false}
+          />
 
-        <ChatTimeline
-          isSubmitting={isSubmitting}
-          messages={activeConversation?.messages ?? []}
-          onUsePrompt={setInput}
-        />
+          <ChatTimeline
+            isSubmitting={isSubmitting}
+            messages={activeConversation?.messages ?? []}
+            onUsePrompt={setInput}
+          />
 
-        <ChatComposer
-          error={composerError}
-          input={input}
-          isEmpty={isEmpty}
-          isSubmitting={isSubmitting}
-          onInputChange={setInput}
-          onSubmit={handleSubmit}
-          onUsePrompt={setInput}
-          reportMode={activeConversation?.reportMode ?? false}
-        />
-      </section>
+          <ChatComposer
+            error={composerError}
+            input={input}
+            isEmpty={isEmpty}
+            isSubmitting={isSubmitting}
+            onInputChange={setInput}
+            onSubmit={handleSubmit}
+            onUsePrompt={setInput}
+            reportMode={activeConversation?.reportMode ?? false}
+          />
+        </section>
+      ) : (
+        <DataSourcesWorkspace onMenuClick={() => setIsSidebarOpen(true)} />
+      )}
     </main>
   );
 }
@@ -290,6 +325,8 @@ interface ConversationSidebarProps {
   onClose: () => void;
   onNewConversation: () => void;
   onSelectConversation: (conversationId: string) => void;
+  onSelectView: (view: WorkspaceView) => void;
+  workspaceView: WorkspaceView;
 }
 
 /**
@@ -323,6 +360,25 @@ function ConversationSidebar(props: ConversationSidebarProps) {
           <span>New Chat</span>
         </button>
 
+        <nav className="workspace-nav" aria-label="工作区导航">
+          <button
+            className={props.workspaceView === "chat" ? "is-active" : ""}
+            onClick={() => props.onSelectView("chat")}
+            type="button"
+          >
+            <Bot className="icon-size" />
+            <span>Agent Chat</span>
+          </button>
+          <button
+            className={props.workspaceView === "data-sources" ? "is-active" : ""}
+            onClick={() => props.onSelectView("data-sources")}
+            type="button"
+          >
+            <Database className="icon-size" />
+            <span>Data Sources</span>
+          </button>
+        </nav>
+
         <div className="conversation-list" role="list">
           {props.conversations.map((conversation) => (
             <button
@@ -351,6 +407,299 @@ function ConversationSidebar(props: ConversationSidebarProps) {
     </>
   );
 }
+
+/**
+ * Data Sources 页面通过 HTTP API 演示 ingestion、chunk、retrieval 和 citation answer 数据流。
+ *
+ * @param props 组件属性。
+ * @returns Data Sources 产品功能页。
+ */
+function DataSourcesWorkspace(props: { onMenuClick: () => void }) {
+  const [source, setSource] = useState("demo");
+  const [fileName, setFileName] = useState("annual-report.md");
+  const [content, setContent] = useState(demoDataSourceContent);
+  const [query, setQuery] = useState("资产质量");
+  const [question, setQuestion] = useState("公司资产质量如何？");
+  const [documents, setDocuments] = useState<IngestedFilingDocumentDto[]>([]);
+  const [chunks, setChunks] = useState<RagChunkDto[]>([]);
+  const [searchResults, setSearchResults] = useState<RetrievalResultDto[]>([]);
+  const [answer, setAnswer] = useState<RagAnswerResponseDto | undefined>();
+  const [status, setStatus] = useState("idle");
+  const [error, setError] = useState<string | undefined>();
+
+  /**
+   * 刷新 documents 和 chunks，保证页面展示服务端内存 runtime 当前状态。
+   *
+   * @returns 请求完成 Promise。
+   */
+  async function refreshDataSources(): Promise<void> {
+    const [documentsResult, chunksResult] = await Promise.all([fetchDataSourceDocuments(), fetchDataSourceChunks()]);
+
+    if (!documentsResult.ok) {
+      setError(formatApiError(documentsResult.error));
+      return;
+    }
+
+    if (!chunksResult.ok) {
+      setError(formatApiError(chunksResult.error));
+      return;
+    }
+
+    setDocuments(documentsResult.data.documents);
+    setChunks(chunksResult.data.chunks);
+  }
+
+  /**
+   * 提交 Markdown/TXT 文档到 ingestion API，并刷新列表。
+   *
+   * @returns 请求完成 Promise。
+   */
+  async function handleIngest(): Promise<void> {
+    setStatus("ingesting");
+    setError(undefined);
+
+    const result = await ingestDataSource({
+      source,
+      fileName,
+      contentType: fileName.endsWith(".txt") ? "text/plain" : "text/markdown",
+      content
+    });
+
+    if (!result.ok) {
+      setError(formatApiError(result.error));
+      setStatus("failed");
+      return;
+    }
+
+    setDocuments((current) => upsertBy(current, result.data.document, (item) => item.documentId));
+    setChunks((current) => mergeChunks(current, result.data.chunks));
+    setStatus(`indexed ${result.data.indexedChunkCount} chunks`);
+  }
+
+  /**
+   * 调用 RAG search API 并展示检索结果。
+   *
+   * @returns 请求完成 Promise。
+   */
+  async function handleSearch(): Promise<void> {
+    setStatus("searching");
+    setError(undefined);
+
+    const result = await searchRag(query);
+
+    if (!result.ok) {
+      setError(formatApiError(result.error));
+      setStatus("failed");
+      return;
+    }
+
+    setSearchResults(result.data.results);
+    setStatus(`${result.data.results.length} results`);
+  }
+
+  /**
+   * 调用 RAG answer API，展示 answer 和 citations。
+   *
+   * @returns 请求完成 Promise。
+   */
+  async function handleAnswer(): Promise<void> {
+    setStatus("answering");
+    setError(undefined);
+
+    const result = await answerRag(question);
+
+    if (!result.ok) {
+      setError(formatApiError(result.error));
+      setStatus("failed");
+      return;
+    }
+
+    setAnswer(result.data);
+    setStatus(`${result.data.answer.citations.length} citations`);
+  }
+
+  return (
+    <section className="data-sources-main" aria-label="Data Sources">
+      <header className="data-header">
+        <div className="header-title-group">
+          <button className="icon-button mobile-only" onClick={props.onMenuClick} type="button" aria-label="打开会话列表">
+            <Menu className="icon-size" />
+          </button>
+          <div className="min-w-0">
+            <p className="md-label">RAG Knowledge Base</p>
+            <h2 className="chat-title">Data Sources</h2>
+          </div>
+        </div>
+        <div className="header-actions">
+          <button className="secondary-button" onClick={refreshDataSources} type="button">
+            <Database className="icon-size" />
+            <span>Refresh</span>
+          </button>
+          <StatusBadge tone={status === "failed" ? "danger" : status === "idle" ? "neutral" : "info"}>{status}</StatusBadge>
+        </div>
+      </header>
+
+      <div className="data-sources-grid">
+        <section className="data-panel ingest-panel">
+          <div className="panel-heading">
+            <h3>
+              <FileText className="icon-size" />
+              Ingest
+            </h3>
+            <button className="secondary-button" onClick={handleIngest} type="button">
+              <Plus className="icon-size" />
+              <span>Index</span>
+            </button>
+          </div>
+          <div className="field-grid">
+            <label>
+              <span>Source</span>
+              <input value={source} onChange={(event) => setSource(event.target.value)} />
+            </label>
+            <label>
+              <span>File</span>
+              <input value={fileName} onChange={(event) => setFileName(event.target.value)} />
+            </label>
+          </div>
+          <textarea className="data-textarea" value={content} onChange={(event) => setContent(event.target.value)} />
+          {error ? <ErrorBlock error={{ code: "internal_error", message: error }} /> : null}
+        </section>
+
+        <section className="data-panel retrieval-panel">
+          <div className="panel-heading">
+            <h3>
+              <Database className="icon-size" />
+              Documents
+            </h3>
+            <StatusBadge tone="neutral">{documents.length}</StatusBadge>
+          </div>
+          <div className="data-list">
+            {documents.length === 0 ? <p className="muted-row">暂无文档。先 ingest Markdown/TXT。</p> : null}
+            {documents.map((document) => (
+              <article className="data-row" key={document.documentId}>
+                <strong>{document.title}</strong>
+                <span>{document.fileName}</span>
+                <small>{document.source}</small>
+              </article>
+            ))}
+          </div>
+        </section>
+
+        <section className="data-panel chunks-panel">
+          <div className="panel-heading">
+            <h3>
+              <Braces className="icon-size" />
+              Chunks
+            </h3>
+            <StatusBadge tone="neutral">{chunks.length}</StatusBadge>
+          </div>
+          <div className="data-list">
+            {chunks.length === 0 ? <p className="muted-row">暂无 chunks。</p> : null}
+            {chunks.map((chunk) => (
+              <article className="data-row" key={chunk.chunkId}>
+                <strong>{chunk.heading ?? "未命名章节"}</strong>
+                <span>{chunk.text}</span>
+                <small>
+                  {chunk.documentId} / chunk {chunk.chunkIndex}
+                </small>
+              </article>
+            ))}
+          </div>
+        </section>
+
+        <section className="data-panel">
+          <div className="panel-heading">
+            <h3>
+              <Search className="icon-size" />
+              Retrieval
+            </h3>
+            <button className="secondary-button" onClick={handleSearch} type="button">
+              <Search className="icon-size" />
+              <span>Search</span>
+            </button>
+          </div>
+          <input className="data-input" value={query} onChange={(event) => setQuery(event.target.value)} />
+          <RetrievalResults results={searchResults} />
+        </section>
+
+        <section className="data-panel answer-panel">
+          <div className="panel-heading">
+            <h3>
+              <Quote className="icon-size" />
+              Citation Answer
+            </h3>
+            <button className="secondary-button" onClick={handleAnswer} type="button">
+              <Send className="icon-size" />
+              <span>Answer</span>
+            </button>
+          </div>
+          <input className="data-input" value={question} onChange={(event) => setQuestion(event.target.value)} />
+          {answer ? (
+            <div className="answer-output">
+              <p>{answer.answer.answer}</p>
+              <CitationList citations={answer.answer.citations} />
+              <RetrievalResults results={answer.answer.retrievalResults} compact />
+            </div>
+          ) : (
+            <p className="muted-row">暂无 answer。可以先提问一个资料中不存在的问题验证 unknown policy。</p>
+          )}
+        </section>
+      </div>
+    </section>
+  );
+}
+
+/**
+ * 展示 retrieval result 列表，默认包含 score 和 citation 元数据。
+ *
+ * @param props 组件属性。
+ * @returns retrieval results。
+ */
+function RetrievalResults(props: { compact?: boolean; results: RetrievalResultDto[] }) {
+  return (
+    <div className={`retrieval-results ${props.compact ? "is-compact" : ""}`}>
+      {props.results.length === 0 ? <p className="muted-row">暂无检索结果。</p> : null}
+      {props.results.map((result) => (
+        <article className="data-row" key={`${result.chunkId}-${result.rank ?? 0}`}>
+          <strong>
+            #{result.rank ?? "-"} score {result.score.toFixed(3)}
+          </strong>
+          <span>{result.text}</span>
+          <small>
+            {result.citation.source} / {result.citation.heading ?? "no heading"} / chunk{" "}
+            {result.citation.chunkIndex}
+          </small>
+        </article>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * 展示 answer citations，强调每条引用可以追溯到 source、heading 和 chunkIndex。
+ *
+ * @param props 组件属性。
+ * @returns citation 列表。
+ */
+function CitationList(props: { citations: RagAnswerResponseDto["answer"]["citations"] }) {
+  return (
+    <div className="citation-list">
+      {props.citations.length === 0 ? <p className="muted-row">当前 answer 没有可用 citation。</p> : null}
+      {props.citations.map((citation, index) => (
+        <article className="citation-row" key={`${citation.chunkId}-${index}`}>
+          <strong>[{index + 1}]</strong>
+          <div>
+            <span>{citation.quote}</span>
+            <small>
+              {citation.source} / {citation.heading ?? "no heading"} / chunk {citation.chunkIndex}
+            </small>
+          </div>
+        </article>
+      ))}
+    </div>
+  );
+}
+
 
 interface ChatHeaderProps {
   conversationTitle: string;
@@ -748,7 +1097,7 @@ async function runAgent(
       conversationId
     })
   });
-  const result = await parseApiResult(response);
+  const result = await parseApiResult<AgentRunResponseDto>(response);
 
   if (!response.ok && result.ok) {
     throw new Error("API 返回了不一致的成功状态。");
@@ -758,12 +1107,95 @@ async function runAgent(
 }
 
 /**
+ * 调用 Data Sources ingestion API。
+ *
+ * @param request ingestion 请求。
+ * @returns 结构化 ingestion 结果。
+ */
+async function ingestDataSource(request: {
+  source: string;
+  fileName: string;
+  contentType?: string;
+  content: string;
+}): Promise<ApiResult<DataSourceIngestResponseDto>> {
+  const response = await fetch("/api/data-sources/ingest", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json"
+    },
+    body: JSON.stringify(request)
+  });
+
+  return parseApiResult(response);
+}
+
+/**
+ * 获取当前 API 进程内的文档列表。
+ *
+ * @returns 文档列表 API result。
+ */
+async function fetchDataSourceDocuments(): Promise<ApiResult<DataSourceDocumentsResponseDto>> {
+  return parseApiResult(await fetch("/api/data-sources/documents"));
+}
+
+/**
+ * 获取当前 API 进程内的 chunk 列表。
+ *
+ * @returns chunk 列表 API result。
+ */
+async function fetchDataSourceChunks(): Promise<ApiResult<DataSourceChunksResponseDto>> {
+  return parseApiResult(await fetch("/api/data-sources/chunks"));
+}
+
+/**
+ * 调用 RAG search API。
+ *
+ * @param query 检索问题。
+ * @returns search API result。
+ */
+async function searchRag(query: string): Promise<ApiResult<RagSearchResponseDto>> {
+  const response = await fetch("/api/rag/search", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json"
+    },
+    body: JSON.stringify({
+      query,
+      topK: 5
+    })
+  });
+
+  return parseApiResult(response);
+}
+
+/**
+ * 调用 RAG answer API。
+ *
+ * @param question 用户问题。
+ * @returns answer API result。
+ */
+async function answerRag(question: string): Promise<ApiResult<RagAnswerResponseDto>> {
+  const response = await fetch("/api/rag/answer", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json"
+    },
+    body: JSON.stringify({
+      question,
+      topK: 5
+    })
+  });
+
+  return parseApiResult(response);
+}
+
+/**
  * 解析 API 响应，兼容 dev proxy 断连、空响应和 HTML 错误页。
  *
  * @param response fetch 返回的响应对象。
  * @returns 结构化 API result。
  */
-async function parseApiResult(response: Response): Promise<ApiResult<AgentRunResponseDto>> {
+async function parseApiResult<TData>(response: Response): Promise<ApiResult<TData>> {
   const text = await response.text();
   const requestId = response.headers.get("x-request-id") ?? "unknown";
 
@@ -786,7 +1218,7 @@ async function parseApiResult(response: Response): Promise<ApiResult<AgentRunRes
   }
 
   try {
-    return JSON.parse(text) as ApiResult<AgentRunResponseDto>;
+    return JSON.parse(text) as ApiResult<TData>;
   } catch {
     return {
       ok: false,
@@ -977,6 +1409,45 @@ function createConversation(): LocalConversation {
     messages: [],
     reportMode: false
   };
+}
+
+/**
+ * 按稳定 key 更新或插入数组项，避免 ingest 后出现重复文档。
+ *
+ * @template TItem 数组元素类型。
+ * @param current 当前数组。
+ * @param next 新元素。
+ * @param getKey key 提取函数。
+ * @returns 合并后的新数组。
+ */
+function upsertBy<TItem>(
+  current: readonly TItem[],
+  next: TItem,
+  getKey: (item: TItem) => string
+): TItem[] {
+  const nextKey = getKey(next);
+  const exists = current.some((item) => getKey(item) === nextKey);
+
+  return exists ? current.map((item) => (getKey(item) === nextKey ? next : item)) : [next, ...current];
+}
+
+/**
+ * 合并 chunk 列表，相同 chunkId 使用最新 ingestion 输出替换。
+ *
+ * @param current 当前 chunk 列表。
+ * @param next 本次 ingest 生成的 chunks。
+ * @returns 合并后的 chunk 列表。
+ */
+function mergeChunks(current: readonly RagChunkDto[], next: readonly RagChunkDto[]): RagChunkDto[] {
+  const chunksById = new Map(current.map((chunk) => [chunk.chunkId, chunk]));
+
+  next.forEach((chunk) => chunksById.set(chunk.chunkId, chunk));
+
+  return [...chunksById.values()].sort((left, right) =>
+    left.documentId === right.documentId
+      ? left.chunkIndex - right.chunkIndex
+      : left.documentId.localeCompare(right.documentId)
+  );
 }
 
 /**

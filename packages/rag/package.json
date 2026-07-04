@@ -17,6 +17,7 @@
     "typecheck": "pnpm --filter @aiagent/types build && tsc -p tsconfig.json --pretty false --noEmit"
   },
   "dependencies": {
+    "@aiagent/filings": "workspace:^",
     "@aiagent/types": "workspace:^"
   }
 }

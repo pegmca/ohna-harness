@@ -1,11 +1,18 @@
 import { runAgent } from "@aiagent/agent";
 import type { AgentResponse, AgentStep } from "@aiagent/agent";
+import { createDataSourceRuntime } from "@aiagent/rag";
+import type { RagStructuredError } from "@aiagent/rag";
 import type {
   AgentRunRequestDto,
   AgentRunResponseDto,
   AgentStepDto,
   ApiError,
-  ApiResult
+  ApiResult,
+  DataSourceChunksResponseDto,
+  DataSourceDocumentsResponseDto,
+  DataSourceIngestResponseDto,
+  RagAnswerResponseDto,
+  RagSearchResponseDto
 } from "@aiagent/types";
 import Fastify, { type FastifyInstance } from "fastify";
 import { z } from "zod";
@@ -14,6 +21,20 @@ const agentRunRequestSchema = z.object({
   message: z.string(),
   reportMode: z.boolean().optional(),
   conversationId: z.string().min(1).optional()
+});
+const dataSourceIngestRequestSchema = z.object({
+  source: z.string().min(1),
+  fileName: z.string().min(1),
+  contentType: z.string().min(1).optional(),
+  content: z.string().min(1)
+});
+const ragSearchRequestSchema = z.object({
+  query: z.string().min(1),
+  topK: z.number().int().positive().optional()
+});
+const ragAnswerRequestSchema = z.object({
+  question: z.string().min(1),
+  topK: z.number().int().positive().optional()
 });
 
 const DEFAULT_CONVERSATION_ID = "week1-local-session";
@@ -27,12 +48,167 @@ export function createApiServer(): FastifyInstance {
   const app = Fastify({
     logger: true
   });
+  const dataSourceRuntime = createDataSourceRuntime();
 
+  /**
+   * 健康检查接口只暴露 API 服务存活状态，供本地 dev server、脚本和部署探针快速验证。
+   *
+   * @returns 服务名称和 ok 状态。
+   */
   app.get("/health", async () => ({
     ok: true,
     service: "@aiagent/api"
   }));
 
+  /**
+   * Data Sources ingestion 接口负责接收 Markdown/TXT 文本，校验后交给 RAG runtime 完成解析、切块和索引。
+   *
+   * @param request Fastify 请求对象，body 必须符合 DataSourceIngestRequestDto。
+   * @param reply Fastify 响应对象，用于在校验或 runtime 失败时设置 HTTP 状态码。
+   * @returns 成功时返回 ingest 后的 document、chunks 和索引数量；失败时返回结构化 ApiResult。
+   */
+  app.post("/api/data-sources/ingest", async (request, reply): Promise<ApiResult<DataSourceIngestResponseDto>> => {
+    const requestId = createRequestId();
+    const parsed = dataSourceIngestRequestSchema.safeParse(request.body);
+
+    if (!parsed.success) {
+      const error = toApiError("validation_failed", "Data source ingest 请求格式不正确。", requestId, {
+        issues: parsed.error.issues
+      });
+      reply.code(400);
+      return fail(error, requestId);
+    }
+
+    const result = await dataSourceRuntime.ingest({
+      source: parsed.data.source.trim(),
+      fileName: parsed.data.fileName.trim(),
+      contentType: parsed.data.contentType?.trim(),
+      content: parsed.data.content
+    });
+
+    if (!result.ok) {
+      reply.code(400);
+      return fail(toApiErrorFromRagError(result.error, requestId), requestId);
+    }
+
+    return {
+      ok: true,
+      data: result.data,
+      requestId
+    };
+  });
+
+  /**
+   * Data Sources 文档列表接口只读取当前进程内 runtime 快照，不在 API 层保存业务状态。
+   *
+   * @returns 当前已 ingest 的文档列表。
+   */
+  app.get("/api/data-sources/documents", async (): Promise<ApiResult<DataSourceDocumentsResponseDto>> => {
+    const requestId = createRequestId();
+
+    return {
+      ok: true,
+      data: {
+        documents: dataSourceRuntime.listDocuments()
+      },
+      requestId
+    };
+  });
+
+  /**
+   * Data Sources chunk 列表接口返回可展示 chunk，不暴露 embedding 向量等内部索引字段。
+   *
+   * @returns 当前已索引的 chunk 列表。
+   */
+  app.get("/api/data-sources/chunks", async (): Promise<ApiResult<DataSourceChunksResponseDto>> => {
+    const requestId = createRequestId();
+
+    return {
+      ok: true,
+      data: {
+        chunks: dataSourceRuntime.listChunks()
+      },
+      requestId
+    };
+  });
+
+  /**
+   * RAG search 接口执行混合检索，并把 runtime 检索结果映射为带 score、metadata 和 citation 的 DTO。
+   *
+   * @param request Fastify 请求对象，body 必须符合 RagSearchRequestDto。
+   * @param reply Fastify 响应对象，用于在校验或检索失败时设置 HTTP 状态码。
+   * @returns 成功时返回 retrieval results 和脱敏 retrieval trace。
+   */
+  app.post("/api/rag/search", async (request, reply): Promise<ApiResult<RagSearchResponseDto>> => {
+    const requestId = createRequestId();
+    const parsed = ragSearchRequestSchema.safeParse(request.body);
+
+    if (!parsed.success) {
+      const error = toApiError("validation_failed", "RAG search 请求格式不正确。", requestId, {
+        issues: parsed.error.issues
+      });
+      reply.code(400);
+      return fail(error, requestId);
+    }
+
+    const result = await dataSourceRuntime.search(parsed.data.query.trim(), {
+      topK: parsed.data.topK
+    });
+
+    if (!result.ok) {
+      reply.code(400);
+      return fail(toApiErrorFromRagError(result.error, requestId), requestId);
+    }
+
+    return {
+      ok: true,
+      data: result.data,
+      requestId
+    };
+  });
+
+  /**
+   * RAG answer 接口基于检索证据生成 citation answer，并在证据不足时触发 unknown answer policy。
+   *
+   * @param request Fastify 请求对象，body 必须符合 RagAnswerRequestDto。
+   * @param reply Fastify 响应对象，用于在校验或回答生成失败时设置 HTTP 状态码。
+   * @returns 成功时返回带 citations 的 grounded answer 和 retrieval trace。
+   */
+  app.post("/api/rag/answer", async (request, reply): Promise<ApiResult<RagAnswerResponseDto>> => {
+    const requestId = createRequestId();
+    const parsed = ragAnswerRequestSchema.safeParse(request.body);
+
+    if (!parsed.success) {
+      const error = toApiError("validation_failed", "RAG answer 请求格式不正确。", requestId, {
+        issues: parsed.error.issues
+      });
+      reply.code(400);
+      return fail(error, requestId);
+    }
+
+    const result = await dataSourceRuntime.answer(parsed.data.question.trim(), {
+      topK: parsed.data.topK
+    });
+
+    if (!result.ok) {
+      reply.code(400);
+      return fail(toApiErrorFromRagError(result.error, requestId), requestId);
+    }
+
+    return {
+      ok: true,
+      data: result.data,
+      requestId
+    };
+  });
+
+  /**
+   * Agent run 接口负责把前端研究问题转交给 agent package，API 层只做请求校验和 DTO 映射。
+   *
+   * @param request Fastify 请求对象，body 必须符合 AgentRunRequestDto。
+   * @param reply Fastify 响应对象，用于在请求无效或服务异常时设置 HTTP 状态码。
+   * @returns 成功时返回 Agent run 响应、steps 和 trace；失败时返回结构化 ApiResult。
+   */
   app.post("/api/agent/run", async (request, reply): Promise<ApiResult<AgentRunResponseDto>> => {
     const requestId = createRequestId();
     const parsed = agentRunRequestSchema.safeParse(request.body);
@@ -175,6 +351,28 @@ function toApiError(
     requestId,
     details
   };
+}
+
+/**
+ * 把 RAG runtime 的结构化错误映射成 API 边界错误。
+ *
+ * @param error RAG runtime 错误。
+ * @param requestId API 请求标识。
+ * @returns 前端可消费的 ApiError。
+ */
+function toApiErrorFromRagError(error: RagStructuredError, requestId: string): ApiError {
+  const code: ApiError["code"] =
+    error.code === "ingestion_failed" ||
+    error.code === "invalid_chunking_options" ||
+    error.code === "invalid_retrieval_options" ||
+    error.code === "invalid_vector_search_options"
+      ? "validation_failed"
+      : "internal_error";
+
+  return toApiError(code, error.message, requestId, {
+    ragCode: error.code,
+    ...error.details
+  });
 }
 
 /**

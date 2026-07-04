@@ -331,6 +331,9 @@ export interface RetrievalScoreBreakdownDto {
 export interface CitationDto {
   chunkId: string;
   documentId: string;
+  source: string;
+  heading?: string;
+  chunkIndex: number;
   quote: string;
   pageNumber?: number;
   confidence: number;
@@ -356,6 +359,71 @@ export interface RagAnswerDto {
   answer: string;
   citations: CitationDto[];
   retrievalResults: RetrievalResultDto[];
+}
+
+/**
+ * Data Sources ingestion 请求 DTO，API adapter 负责校验后交给 RAG runtime。
+ */
+export interface DataSourceIngestRequestDto {
+  source: string;
+  fileName: string;
+  contentType?: string;
+  content: string;
+}
+
+/**
+ * Data Sources ingestion 响应 DTO，展示文档和本次入库 chunk 数量。
+ */
+export interface DataSourceIngestResponseDto {
+  document: IngestedFilingDocumentDto;
+  chunks: RagChunkDto[];
+  indexedChunkCount: number;
+}
+
+/**
+ * Data Sources 文档列表响应 DTO。
+ */
+export interface DataSourceDocumentsResponseDto {
+  documents: IngestedFilingDocumentDto[];
+}
+
+/**
+ * Data Sources chunk 列表响应 DTO。
+ */
+export interface DataSourceChunksResponseDto {
+  chunks: RagChunkDto[];
+}
+
+/**
+ * RAG search 请求 DTO。
+ */
+export interface RagSearchRequestDto {
+  query: string;
+  topK?: number;
+}
+
+/**
+ * RAG search 响应 DTO，包含可展示结果和脱敏检索 trace。
+ */
+export interface RagSearchResponseDto {
+  results: RetrievalResultDto[];
+  trace: TraceRetrievalEventDto;
+}
+
+/**
+ * RAG answer 请求 DTO。
+ */
+export interface RagAnswerRequestDto {
+  question: string;
+  topK?: number;
+}
+
+/**
+ * RAG answer 响应 DTO，answer 内含 citations，trace 用于解释召回。
+ */
+export interface RagAnswerResponseDto {
+  answer: RagAnswerDto;
+  trace: TraceRetrievalEventDto;
 }
 
 /**

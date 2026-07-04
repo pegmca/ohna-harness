@@ -26,6 +26,9 @@ importers:
       '@aiagent/agent':
         specifier: workspace:*
         version: link:../../packages/agent
+      '@aiagent/rag':
+        specifier: workspace:*
+        version: link:../../packages/rag
       '@aiagent/types':
         specifier: workspace:*
         version: link:../../packages/types
@@ -112,6 +115,9 @@ importers:
 
   packages/rag:
     dependencies:
+      '@aiagent/filings':
+        specifier: workspace:^
+        version: link:../filings
       '@aiagent/types':
         specifier: workspace:^
         version: link:../types

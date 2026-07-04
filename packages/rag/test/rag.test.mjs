@@ -5,6 +5,7 @@ import {
   chunkIngestedFilingDocument,
   chunkText,
   createDeterministicMockEmbeddingClient,
+  createDataSourceRuntime,
   createHeuristicReranker,
   createHybridRetriever,
   createInMemoryVectorStore,
@@ -580,6 +581,9 @@ test("rag answer can express citations and retrieval results", () => {
       {
         chunkId: "chunk_001",
         documentId: "doc_001",
+        source: "mock://annual-report.md",
+        heading: "管理层讨论",
+        chunkIndex: 0,
         quote: "净利润同比增长",
         pageNumber: 12,
         confidence: 0.92
@@ -594,6 +598,9 @@ test("rag answer can express citations and retrieval results", () => {
         citation: {
           chunkId: "chunk_001",
           documentId: "doc_001",
+          source: "mock://annual-report.md",
+          heading: "管理层讨论",
+          chunkIndex: 0,
           quote: "净利润同比增长",
           pageNumber: 12,
           confidence: 0.92
@@ -605,6 +612,55 @@ test("rag answer can express citations and retrieval results", () => {
   assert.equal(answer.citations.length, 1);
   assert.equal(answer.retrievalResults[0].score, 0.88);
   assert.match(answer.answer, /净利润/);
+});
+
+test("data source runtime ingests, searches and answers with traceable citations", async () => {
+  const runtime = createDataSourceRuntime();
+  const ingestResult = await runtime.ingest({
+    source: "demo",
+    fileName: "annual-report.md",
+    contentType: "text/markdown",
+    content: "# 资产质量\n公司不良率保持稳定。\n\n# 盈利能力\n公司净利润同比增长。"
+  });
+
+  assert.equal(ingestResult.ok, true);
+  assert.equal(runtime.listDocuments().length, 1);
+  assert.equal(runtime.listChunks().length, ingestResult.data.indexedChunkCount);
+
+  const searchResult = await runtime.search("资产质量", {
+    topK: 3
+  });
+
+  assert.equal(searchResult.ok, true);
+  assert.equal(searchResult.data.results.length > 0, true);
+  assert.equal(searchResult.data.results[0].citation.source, "demo");
+  assert.equal(searchResult.data.results[0].citation.heading, "资产质量");
+  assert.equal(typeof searchResult.data.results[0].citation.chunkIndex, "number");
+
+  const answerResult = await runtime.answer("公司资产质量如何？", {
+    topK: 3
+  });
+
+  assert.equal(answerResult.ok, true);
+  assert.match(answerResult.data.answer.answer, /资料|摘要|资产质量|不良率/);
+  assert.equal(answerResult.data.answer.citations[0].source, "demo");
+  assert.equal(answerResult.data.trace.ok, true);
+});
+
+test("data source runtime applies unknown answer policy when evidence is missing", async () => {
+  const runtime = createDataSourceRuntime();
+  const ingestResult = await runtime.ingest({
+    source: "demo",
+    fileName: "annual-report.md",
+    content: "# 资产质量\n公司不良率保持稳定。"
+  });
+  const answerResult = await runtime.answer("公司海外新能源业务收入是多少？", {
+    topK: 3
+  });
+
+  assert.equal(ingestResult.ok, true);
+  assert.equal(answerResult.ok, true);
+  assert.match(answerResult.data.answer.answer, /资料不足|无法可靠回答/);
 });
 
 /**

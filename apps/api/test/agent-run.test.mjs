@@ -60,3 +60,83 @@ test("POST /api/agent/run returns structured agent failures with trace", async (
 
   await app.close();
 });
+
+test("data sources and rag routes expose ingest, chunks, search and citation answer", async () => {
+  const app = createApiServer();
+  const ingestResponse = await app.inject({
+    method: "POST",
+    url: "/api/data-sources/ingest",
+    payload: {
+      source: "demo",
+      fileName: "annual-report.md",
+      content: "# 资产质量\n公司不良率保持稳定。\n\n# 盈利能力\n公司净利润同比增长。"
+    }
+  });
+
+  assert.equal(ingestResponse.statusCode, 200);
+  const ingestBody = ingestResponse.json();
+  assert.equal(ingestBody.ok, true);
+  assert.equal(ingestBody.data.indexedChunkCount > 0, true);
+
+  const documentsResponse = await app.inject({
+    method: "GET",
+    url: "/api/data-sources/documents"
+  });
+  const chunksResponse = await app.inject({
+    method: "GET",
+    url: "/api/data-sources/chunks"
+  });
+
+  assert.equal(documentsResponse.statusCode, 200);
+  assert.equal(chunksResponse.statusCode, 200);
+  assert.equal(documentsResponse.json().data.documents.length, 1);
+  assert.equal(chunksResponse.json().data.chunks.length, ingestBody.data.indexedChunkCount);
+
+  const searchResponse = await app.inject({
+    method: "POST",
+    url: "/api/rag/search",
+    payload: {
+      query: "资产质量",
+      topK: 5
+    }
+  });
+  const searchBody = searchResponse.json();
+
+  assert.equal(searchResponse.statusCode, 200);
+  assert.equal(searchBody.ok, true);
+  assert.equal(searchBody.data.results.length > 0, true);
+  assert.equal(searchBody.data.results[0].citation.source, "demo");
+  assert.equal(searchBody.data.results[0].citation.heading, "资产质量");
+  assert.equal(typeof searchBody.data.results[0].citation.chunkIndex, "number");
+
+  const answerResponse = await app.inject({
+    method: "POST",
+    url: "/api/rag/answer",
+    payload: {
+      question: "公司资产质量如何？",
+      topK: 5
+    }
+  });
+  const answerBody = answerResponse.json();
+
+  assert.equal(answerResponse.statusCode, 200);
+  assert.equal(answerBody.ok, true);
+  assert.equal(answerBody.data.answer.citations.length > 0, true);
+  assert.equal(answerBody.data.answer.citations[0].documentId, ingestBody.data.document.documentId);
+
+  const unknownResponse = await app.inject({
+    method: "POST",
+    url: "/api/rag/answer",
+    payload: {
+      question: "公司海外新能源业务收入是多少？",
+      topK: 5
+    }
+  });
+  const unknownBody = unknownResponse.json();
+
+  assert.equal(unknownResponse.statusCode, 200);
+  assert.equal(unknownBody.ok, true);
+  assert.match(unknownBody.data.answer.answer, /资料不足|无法可靠回答/);
+
+  await app.close();
+});

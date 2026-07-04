@@ -1,5 +1,8 @@
+import { ingestFiling } from "@aiagent/filings";
 import type {
   CitationDto,
+  DataSourceIngestRequestDto,
+  DataSourceIngestResponseDto,
   EmbeddedChunkDto,
   EmbeddingUsageDto,
   IngestedFilingDocumentDto,
@@ -7,8 +10,9 @@ import type {
   RagAnswerDto,
   RagChunkDto,
   RagDocumentDto,
-  RetrievalScoreBreakdownDto,
   RetrievalResultDto,
+  RetrievalScoreBreakdownDto,
+  TraceRetrievalEventDto,
   VectorSearchMatchDto
 } from "@aiagent/types";
 
@@ -184,6 +188,44 @@ export interface Retriever {
   retrieve(query: string, options?: RetrievalOptions): Promise<HybridRetrievalResult>;
 }
 
+export interface DataSourceRuntimeSnapshot {
+  documents: IngestedFilingDocumentDto[];
+  chunks: RagChunk[];
+  embeddedChunks: EmbeddedChunk[];
+}
+
+export type DataSourceRuntimeResult<TData> =
+  | {
+      ok: true;
+      data: TData;
+    }
+  | {
+      ok: false;
+      error: RagStructuredError;
+    };
+
+export interface RagSearchRuntimeResponse {
+  results: RetrievalResult[];
+  trace: TraceRetrievalEventDto;
+}
+
+export interface RagAnswerRuntimeResponse {
+  answer: RagAnswer;
+  trace: TraceRetrievalEventDto;
+}
+
+/**
+ * DataSourceRuntime 封装本地 demo 的 ingestion、chunk、embedding、index、retrieval 和 answer policy。
+ */
+export interface DataSourceRuntime {
+  ingest(request: DataSourceIngestRequestDto): Promise<DataSourceRuntimeResult<DataSourceIngestResponseDto>>;
+  listDocuments(): DataSourceRuntimeSnapshot["documents"];
+  listChunks(): DataSourceRuntimeSnapshot["chunks"];
+  search(query: string, options?: RetrievalOptions): Promise<DataSourceRuntimeResult<RagSearchRuntimeResponse>>;
+  answer(question: string, options?: RetrievalOptions): Promise<DataSourceRuntimeResult<RagAnswerRuntimeResponse>>;
+  snapshot(): DataSourceRuntimeSnapshot;
+}
+
 export interface HybridRetrieverOptions {
   embeddingClient: EmbeddingClient;
   vectorStore: VectorStore;
@@ -202,6 +244,8 @@ export interface RagStructuredError {
     | "vector_store_dimension_mismatch"
     | "invalid_retrieval_options"
     | "retrieval_failed"
+    | "ingestion_failed"
+    | "indexing_failed"
     | "answer_failed";
   message: string;
   details?: Record<string, unknown>;
@@ -322,6 +366,251 @@ export function createHeuristicReranker(): Reranker {
  */
 export function createHybridRetriever(options: HybridRetrieverOptions): Retriever {
   return new HybridRetriever(options);
+}
+
+/**
+ * 创建最小内存 Data Sources runtime。
+ *
+ * 这个 runtime 只服务本地 demo 和测试：文档、chunks 和向量索引都保存在当前 Node.js 进程内；
+ * API adapter 只调用这里的稳定方法，不把 RAG 状态管理逻辑复制到 HTTP route 中。
+ *
+ * @returns 可执行 ingest、list、search 和 grounded answer 的内存 runtime。
+ */
+export function createDataSourceRuntime(): DataSourceRuntime {
+  return new InMemoryDataSourceRuntime();
+}
+
+/**
+ * 从检索候选创建可展示 citation，确保回答来源能回到 document、source、heading 和 chunkIndex。
+ *
+ * @param result 检索命中的 chunk 和分数。
+ * @returns 标准 citation DTO。
+ */
+export function createCitationFromRetrievedChunk(result: RetrievedChunk): Citation {
+  return {
+    chunkId: result.chunk.chunkId,
+    documentId: result.chunk.documentId,
+    source: result.chunk.source,
+    heading: result.chunk.heading,
+    chunkIndex: result.chunk.chunkIndex,
+    quote: createQuote(result.chunk.text),
+    pageNumber: result.chunk.pageNumber ?? result.chunk.page,
+    confidence: result.scoreBreakdown.finalScore
+  };
+}
+
+/**
+ * 把检索候选投影为 API/UI 可展示的 retrieval result。
+ *
+ * @param result 检索命中的 chunk 和 score breakdown。
+ * @returns 包含 citation 的 retrieval result DTO。
+ */
+export function createRetrievalResultFromRetrievedChunk(result: RetrievedChunk): RetrievalResult {
+  return {
+    chunkId: result.chunk.chunkId,
+    documentId: result.chunk.documentId,
+    score: result.score,
+    rank: result.rank,
+    text: result.chunk.text,
+    scoreBreakdown: result.scoreBreakdown,
+    citation: createCitationFromRetrievedChunk(result)
+  };
+}
+
+/**
+ * Data Sources 内存 runtime 实现，负责把 filings ingestion 和 RAG 检索链路串起来。
+ */
+class InMemoryDataSourceRuntime implements DataSourceRuntime {
+  private readonly embeddingClient = createDeterministicMockEmbeddingClient();
+  private readonly vectorStore = createInMemoryVectorStore();
+  private readonly documentsById = new Map<string, IngestedFilingDocumentDto>();
+  private readonly embeddedChunksById = new Map<string, EmbeddedChunk>();
+
+  /**
+   * ingest Markdown/TXT 文档，生成 chunks、embedding，并写入内存向量库。
+   *
+   * @param request API 校验后的 data source ingestion 请求。
+   * @returns 文档、chunks 和索引数量；失败时返回结构化 RAG 错误。
+   */
+  public async ingest(
+    request: DataSourceIngestRequestDto
+  ): Promise<DataSourceRuntimeResult<DataSourceIngestResponseDto>> {
+    const ingestionResult = ingestFiling({
+      source: request.source,
+      fileName: request.fileName,
+      contentType: request.contentType,
+      content: request.content
+    });
+
+    if (!ingestionResult.ok) {
+      return {
+        ok: false,
+        error: {
+          code: "ingestion_failed",
+          message: ingestionResult.error.message,
+          details: {
+            filingCode: ingestionResult.error.code,
+            ...ingestionResult.error.details
+          }
+        }
+      };
+    }
+
+    const chunkingResult = chunkIngestedFilingDocument(ingestionResult.document);
+
+    if (!chunkingResult.ok) {
+      return {
+        ok: false,
+        error: chunkingResult.error
+      };
+    }
+
+    const embeddingResult = await this.embeddingClient.embedTexts(chunkingResult.chunks.map((chunk) => chunk.text));
+
+    if (!embeddingResult.ok) {
+      return {
+        ok: false,
+        error: embeddingResult.error
+      };
+    }
+
+    const embeddedChunks = chunkingResult.chunks.map((chunk, index) => ({
+      ...chunk,
+      embedding: embeddingResult.embeddings[index].vector,
+      embeddingModel: embeddingResult.model
+    }));
+    const upsertResult = await this.vectorStore.upsertChunks(embeddedChunks);
+
+    if (!upsertResult.ok) {
+      return {
+        ok: false,
+        error: {
+          code: "indexing_failed",
+          message: upsertResult.error.message,
+          details: upsertResult.error.details
+        }
+      };
+    }
+
+    this.documentsById.set(ingestionResult.document.documentId, ingestionResult.document);
+    embeddedChunks.forEach((chunk) => this.embeddedChunksById.set(chunk.chunkId, chunk));
+
+    return {
+      ok: true,
+      data: {
+        document: ingestionResult.document,
+        chunks: chunkingResult.chunks,
+        indexedChunkCount: embeddedChunks.length
+      }
+    };
+  }
+
+  /**
+   * 列出当前进程内已 ingest 的文档。
+   *
+   * @returns 文档数组副本。
+   */
+  public listDocuments(): IngestedFilingDocumentDto[] {
+    return [...this.documentsById.values()];
+  }
+
+  /**
+   * 列出当前进程内已索引的 chunks，不返回 embedding，避免 UI 拉取无用大字段。
+   *
+   * @returns chunk 数组副本。
+   */
+  public listChunks(): RagChunk[] {
+    return [...this.embeddedChunksById.values()].map(stripEmbedding);
+  }
+
+  /**
+   * 执行 RAG search，并返回带 citation 的 retrieval results。
+   *
+   * @param query 用户查询。
+   * @param options topK、mode 等检索选项。
+   * @returns search 结果和脱敏 trace event。
+   */
+  public async search(
+    query: string,
+    options: RetrievalOptions = {}
+  ): Promise<DataSourceRuntimeResult<RagSearchRuntimeResponse>> {
+    const retrievalResult = await this.createRetriever().retrieve(query, options);
+    const trace = createTraceRetrievalEvent(query, retrievalResult);
+
+    if (!retrievalResult.ok) {
+      return {
+        ok: false,
+        error: retrievalResult.error
+      };
+    }
+
+    return {
+      ok: true,
+      data: {
+        results: retrievalResult.results.map(createRetrievalResultFromRetrievedChunk),
+        trace
+      }
+    };
+  }
+
+  /**
+   * 基于召回结果合成短研究摘要；证据不足时明确返回未知，不编造结论。
+   *
+   * @param question 用户问题。
+   * @param options topK、mode 等检索选项。
+   * @returns grounded answer 和 retrieval trace。
+   */
+  public async answer(
+    question: string,
+    options: RetrievalOptions = {}
+  ): Promise<DataSourceRuntimeResult<RagAnswerRuntimeResponse>> {
+    const retrievalResult = await this.createRetriever().retrieve(question, options);
+    const trace = createTraceRetrievalEvent(question, retrievalResult);
+
+    if (!retrievalResult.ok) {
+      return {
+        ok: false,
+        error: retrievalResult.error
+      };
+    }
+
+    return {
+      ok: true,
+      data: {
+        answer: synthesizeRagAnswer(question, retrievalResult.results),
+        trace
+      }
+    };
+  }
+
+  /**
+   * 返回 runtime 快照，供测试和调试验证当前内存状态。
+   *
+   * @returns 文档、chunks 和 embedded chunks 副本。
+   */
+  public snapshot(): DataSourceRuntimeSnapshot {
+    return {
+      documents: this.listDocuments(),
+      chunks: this.listChunks(),
+      embeddedChunks: [...this.embeddedChunksById.values()].map((chunk) => ({
+        ...chunk,
+        embedding: [...chunk.embedding]
+      }))
+    };
+  }
+
+  /**
+   * 基于当前内存 chunks 创建检索器。
+   *
+   * @returns 绑定当前语料的 hybrid retriever。
+   */
+  private createRetriever(): Retriever {
+    return createHybridRetriever({
+      embeddingClient: this.embeddingClient,
+      vectorStore: this.vectorStore,
+      chunks: [...this.embeddedChunksById.values()]
+    });
+  }
 }
 
 /**
@@ -1068,8 +1357,23 @@ function tokenizeForRetrieval(text: string): string[] {
   const words = normalized.match(/[a-z0-9]+/g) ?? [];
   const cjkPhrases = normalized.match(/[\u4e00-\u9fff]+/g) ?? [];
   const cjkChars = cjkPhrases.flatMap((phrase) => [...phrase]);
+  const domainTerms = [
+    "资产质量",
+    "不良率",
+    "拨备覆盖率",
+    "净利润",
+    "盈利能力",
+    "现金流",
+    "经营性现金流",
+    "资本开支",
+    "营收",
+    "收入",
+    "roe",
+    "海外",
+    "新能源"
+  ].filter((term) => normalized.includes(term));
 
-  return [...new Set([...words, ...cjkPhrases, ...cjkChars])];
+  return [...new Set([...words, ...cjkPhrases, ...domainTerms, ...cjkChars])];
 }
 
 /**
@@ -1326,6 +1630,130 @@ export function createRagAnswer(input: {
     answer: input.answer,
     citations: [...input.citations],
     retrievalResults: [...input.retrievalResults]
+  };
+}
+
+/**
+ * 根据检索证据生成 deterministic grounded answer。
+ *
+ * 第一版不调用 LLM，而是把高相关 chunk 摘成简短摘要；当没有足够匹配证据时明确说明资料不足，
+ * 用来验证 unknown answer policy 和 citation 数据流。
+ *
+ * @param question 用户问题。
+ * @param results 检索结果。
+ * @returns 带 citations 和 retrieval results 的 RAG answer。
+ */
+function synthesizeRagAnswer(question: string, results: readonly RetrievedChunk[]): RagAnswer {
+  const retrievalResults = results.map(createRetrievalResultFromRetrievedChunk);
+  const sufficientResults = results.filter(isEvidenceSufficient);
+
+  if (sufficientResults.length === 0) {
+    return createRagAnswer({
+      answer: `当前资料不足，无法可靠回答“${question.trim()}”。请先 ingest 包含该问题信息的 Markdown/TXT 文档，或换一个与现有资料更匹配的问题。`,
+      citations: retrievalResults.slice(0, 2).map((result) => result.citation),
+      retrievalResults
+    });
+  }
+
+  const citations = sufficientResults.map(createCitationFromRetrievedChunk);
+  const evidenceLines = sufficientResults.slice(0, 3).map((result, index) => {
+    const heading = result.chunk.heading ? `${result.chunk.heading}：` : "";
+
+    return `[${index + 1}] ${heading}${createAnswerSentence(result.chunk.text)}`;
+  });
+
+  return createRagAnswer({
+    answer: `基于当前已 ingest 资料，可以得到以下摘要：\n${evidenceLines.join("\n")}`,
+    citations,
+    retrievalResults
+  });
+}
+
+/**
+ * 判断单条召回结果是否足以进入 answer synthesis。
+ *
+ * @param result 检索结果。
+ * @returns 相关性足够时返回 true。
+ */
+function isEvidenceSufficient(result: RetrievedChunk): boolean {
+  const hasMeaningfulTerm = result.scoreBreakdown.matchedTerms.some(
+    (term) => term.length > 1 && !["公司", "如何", "多少", "是什么"].includes(term)
+  );
+
+  return hasMeaningfulTerm && (result.scoreBreakdown.queryTermCoverage >= 0.15 || result.scoreBreakdown.finalScore >= 0.42);
+}
+
+/**
+ * 截取适合 answer 主体展示的证据句。
+ *
+ * @param text chunk 原文。
+ * @returns 短句摘要。
+ */
+function createAnswerSentence(text: string): string {
+  const normalized = text.replace(/\s+/g, " ").trim();
+  const sentence = normalized.split(/(?<=[。！？!?；;])\s*/u).find((item) => item.trim().length > 0) ?? normalized;
+
+  return sentence.length > 120 ? `${sentence.slice(0, 120)}...` : sentence;
+}
+
+/**
+ * 截取 citation quote，避免 UI 中引用片段过长。
+ *
+ * @param text chunk 原文。
+ * @returns citation 引文片段。
+ */
+function createQuote(text: string): string {
+  const normalized = text.replace(/\s+/g, " ").trim();
+
+  return normalized.length > 120 ? `${normalized.slice(0, 120)}...` : normalized;
+}
+
+/**
+ * 去掉 embedding 字段，把内部索引 chunk 转回可展示 RagChunk。
+ *
+ * @param chunk embedded chunk。
+ * @returns 不包含向量的 chunk。
+ */
+function stripEmbedding(chunk: EmbeddedChunk): RagChunk {
+  const { embedding: _embedding, embeddingModel: _embeddingModel, ...ragChunk } = chunk;
+
+  return ragChunk;
+}
+
+/**
+ * 创建可返回 API/UI 的 retrieval trace event。
+ *
+ * @param query 原始问题或搜索词。
+ * @param result 检索结果。
+ * @returns trace retrieval event DTO。
+ */
+function createTraceRetrievalEvent(
+  query: string,
+  result: HybridRetrievalResult
+): TraceRetrievalEventDto {
+  const now = new Date().toISOString();
+
+  return {
+    type: "retrieval",
+    id: `retrieval_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
+    traceId: "rag_runtime_trace",
+    requestId: "rag_runtime_request",
+    createdAt: now,
+    queryPreview: result.trace.queryPreview || createQueryPreview(query),
+    mode: result.trace.mode,
+    topK: result.trace.topK,
+    candidateLimit: result.trace.candidateLimit,
+    durationMs: result.trace.durationMs,
+    chunkIds: result.trace.chunkIds,
+    scoreSummary: result.trace.scoreSummary,
+    ok: result.ok,
+    error: result.ok
+      ? undefined
+      : {
+          code: result.error.code,
+          message: result.error.message,
+          details: result.error.details
+        }
   };
 }
 

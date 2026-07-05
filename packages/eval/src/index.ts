@@ -1,9 +1,35 @@
 import type { RagAnswer } from "@aiagent/rag";
 import type { EvalCaseDto, EvalMetricDto, EvalResultDto } from "@aiagent/types";
+import { DEMO_DOCUMENTS, RAG_EVAL_CASES, createDemoRagRuntime } from "./cases.js";
+import { computeRagMetrics } from "./metrics.js";
+import { createRagEvalReport, runRagEval } from "./runner.js";
+import type {
+  RagEvalAnswerContext,
+  RagEvalCase,
+  RagEvalError,
+  RagEvalMetrics,
+  RagEvalRunnerInput,
+  RagEvalRunnerOptions,
+  RagEvalRunnerOutput,
+  RagEvalRunnerResult
+} from "./types.js";
 
 export type EvalCase = EvalCaseDto;
 export type EvalMetric = EvalMetricDto;
 export type EvalResult = EvalResultDto;
+
+export type {
+  RagEvalCase,
+  RagEvalAnswerContext,
+  RagEvalMetrics,
+  RagEvalRunnerInput,
+  RagEvalRunnerOptions,
+  RagEvalRunnerOutput,
+  RagEvalRunnerResult,
+  RagEvalError
+};
+
+export { createRagEvalReport, runRagEval, computeRagMetrics, RAG_EVAL_CASES, DEMO_DOCUMENTS, createDemoRagRuntime };
 
 export interface EvalRunnerInput {
   case: EvalCase;
@@ -19,11 +45,11 @@ export interface EvalStructuredError {
 export interface EvalPackageSummary {
   packageName: "@aiagent/eval";
   boundary: "rag_eval_cases_metrics_reports";
-  runtimeState: "types_and_mock_only";
+  runtimeState: "runner_and_cases_ready";
 }
 
 /**
- * 创建 eval package 的边界摘要，说明本阶段只沉淀评测 contract。
+ * 创建 eval package 的边界摘要，说明本阶段已实现 case、runner、指标和报告。
  *
  * @returns eval package 的职责边界和当前实现状态。
  */
@@ -31,7 +57,7 @@ export function createEvalPackageSummary(): EvalPackageSummary {
   return {
     packageName: "@aiagent/eval",
     boundary: "rag_eval_cases_metrics_reports",
-    runtimeState: "types_and_mock_only"
+    runtimeState: "runner_and_cases_ready"
   };
 }
 

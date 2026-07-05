@@ -138,7 +138,7 @@ Week 2 新增三个 RAG 相关 package，当前已具备 Markdown/TXT 公告 ing
 
 - `@aiagent/filings`：保存公告/财报文件来源、document metadata、原始文本来源和 ingestion pipeline。`ingestFiling()` 支持 Markdown 与 TXT 解析，输出 `IngestedFilingDocument` 和带 `heading`、`lineStart`、`lineEnd` 的 blocks；PDF 当前返回 `pdf_parser_not_configured` 结构化错误，不静默生成文档。
 - `@aiagent/rag`：保存 `RagDocument`、`RagChunk`、`EmbeddedChunk`、`Citation`、`RetrievalResult`、`RagAnswer`、embedding/vector store/retriever/reranker 抽象和结构化错误类型，并导出 `chunkText()`、`chunkDocumentBlocks()`、`chunkIngestedFilingDocument()`、`createDeterministicMockEmbeddingClient()`、`createInMemoryVectorStore()`、`createHybridRetriever()` 和 `createHeuristicReranker()` 等入口。
-- `@aiagent/eval`：保存 `EvalCase`、`EvalMetric`、`EvalResult`、runner 输入和评测结构化错误类型。
+- `@aiagent/eval`：保存 `EvalCase`、`EvalMetric`、`EvalResult`、`RagEvalMetrics`、`RagEvalReport`，并导出 `runRagEval()` runner、`createRagEvalReport()` 报告生成、`computeRagMetrics()` 指标计算、`RAG_EVAL_CASES` 30 条评测用例、`DEMO_DOCUMENTS` demo 文档和 `createDemoRagRuntime()` 预加载 runtime。
 
 跨 API 边界会复用的 DTO 放在 `packages/types`，包括 filing source/document、ingested filing document/block、RAG document/chunk/embedded chunk/vector search match/retrieval score breakdown/citation/retrieval/answer、retrieval trace event 和 eval case/metric/result。只属于运行时 package 的抽象，例如 ingestion options、chunking options、embedding client、vector store、retriever、reranker、package summary 和 runner input，保留在对应 package 内部导出。
 
@@ -213,6 +213,35 @@ curl -X POST http://localhost:3001/api/rag/answer \
   -H "content-type: application/json" \
   -d '{"question":"公司资产质量如何？","topK":5}'
 ```
+
+## Week 2 RAG Eval And Report
+
+Week 2-014 完成 RAG eval 闭环：30 条 QA case、eval runner、四个指标、报告输出和失败案例分析。
+
+- **评测用例**：`packages/eval/src/cases.ts` 的 `RAG_EVAL_CASES` 包含 30 条 case，覆盖 4 份 demo 文档（平安银行年报、宁德时代三季报、招商银行资产质量公告、新能源汽车行业研究）。
+- **评测入口**：`pnpm --filter @aiagent/eval test` 会自动 ingest demo 文档、运行 runner、输出报告。
+- **四个指标**：
+  - `retrievalHitRate`：期望 source 是否进入 topK。
+  - `answerCorrectness`：答案是否覆盖 `expectedKeywords`。
+  - `faithfulness`：答案词元是否被 citation quotes 支撑。
+  - `citationCoverage`：citation 数量是否达到 `minCitations`，以及答案词元是否被 retrieval results 覆盖。
+- **失败案例**：报告固定输出前 3 个失败 case，包含 question、answer、retrieved chunk ids、citation chunk ids、失败指标和分析。
+- **当前结果示例**（实际以运行输出为准）：
+
+```text
+{
+  totalCases: 30,
+  passedCases: 16,
+  failedCases: 14,
+  passRate: 0.533,
+  retrievalHitRate: 1,
+  answerCorrectness: 0.583,
+  faithfulness: 0.496,
+  citationCoverage: 0.513
+}
+```
+
+- **说明文档**：详细指标解释、失败案例分析和优化建议见 ``。
 
 ## Notes And Learning Logs
 

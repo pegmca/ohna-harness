@@ -76,6 +76,8 @@ export type TraceEventDto =
   | TraceIntentRoutedEventDto
   | TraceAgentStepEventDto
   | TraceRetrievalEventDto
+  | TraceReportSkillActivationEventDto
+  | TraceReportPlanEventDto
   | TraceModelCallEventDto
   | TraceToolCallEventDto
   | TraceFinalResponseEventDto;
@@ -135,6 +137,22 @@ export interface TraceRetrievalEventDto extends TraceEventBaseDto {
   error?: TraceErrorDto;
 }
 
+export interface TraceReportSkillActivationEventDto extends TraceEventBaseDto {
+  type: "report_skill_activation";
+  triggerSource: ReportTriggerSourceDto;
+  routeReason: string;
+  matchedRules: string[];
+  plannerInput: ReportPlannerInputDto;
+}
+
+export interface TraceReportPlanEventDto extends TraceEventBaseDto {
+  type: "report_plan";
+  plan: ReportPlanDto;
+  assumptions: string[];
+  ok: boolean;
+  error?: TraceErrorDto;
+}
+
 export interface TraceModelCallEventDto extends TraceEventBaseDto {
   type: "model_call";
   model: string;
@@ -169,6 +187,7 @@ export interface TraceFinalResponseEventDto extends TraceEventBaseDto {
 export interface AgentRunRequestDto {
   message: string;
   reportMode?: boolean;
+  reportTriggerSource?: ReportTriggerSourceDto;
   conversationId?: string;
 }
 
@@ -181,7 +200,54 @@ export interface AgentRunResponseDto {
   answer: string;
   steps: AgentStepDto[];
   trace: TraceDto;
+  reportPlan?: ReportPlanDto;
   error?: ApiError;
+}
+
+export type ReportTriggerSourceDto = "toggle" | "button" | "natural_language";
+
+export type ReportPlanStatusDto = "ready" | "needs_clarification" | "partial";
+
+export type ReportTypeDto = "company_brief" | "earnings_review" | "risk_review" | "custom";
+
+export type ReportPlanStepKindDto =
+  | "clarify_requirements"
+  | "collect_filings"
+  | "collect_financial_metrics"
+  | "retrieve_evidence"
+  | "analyze_findings"
+  | "draft_report"
+  | "review_citations"
+  | "prepare_export";
+
+export interface ReportPlannerInputDto {
+  message: string;
+  triggerSource: ReportTriggerSourceDto;
+  reportMode: boolean;
+  matchedRules: string[];
+  routeReason: string;
+}
+
+export interface ReportPlanStepDto {
+  id: string;
+  kind: ReportPlanStepKindDto;
+  title: string;
+  description: string;
+  requiredData: string[];
+  optional: boolean;
+}
+
+export interface ReportPlanDto {
+  planId: string;
+  status: ReportPlanStatusDto;
+  triggerSource: ReportTriggerSourceDto;
+  reportType: ReportTypeDto;
+  subject?: string;
+  timeRange?: string;
+  requiredData: string[];
+  assumptions: string[];
+  clarificationQuestions: string[];
+  steps: ReportPlanStepDto[];
 }
 
 /**

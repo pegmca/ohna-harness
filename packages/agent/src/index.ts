@@ -20,6 +20,7 @@ export function createAgentStatus(): AgentStatus {
 export { createAgent, runAgent } from "./agent-loop.js";
 export { createIntentRouter, routeIntent } from "./intent-router.js";
 export { createLlmClient, createLlmClientFromEnv } from "./llm-client.js";
+export { createReportActivation, createReportPlan, isNaturalLanguageReportRequest } from "./report-planner.js";
 
 export type {
   Agent,

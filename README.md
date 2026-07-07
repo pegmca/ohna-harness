@@ -65,13 +65,13 @@
 
 ## Immersive Playground
 
-Week 1 已实现最小可演示的 Immersive Playground：
+Immersive Playground 已从 Week 1 最小 Chat 形态演进到 Week 3 Report Skill Planner：
 
-- 页面采用 Agent Chat 布局：左侧本地会话列表，中间对话流，底部 composer 和 Report Mode 占位开关。
-- 每次提交调用 `POST /api/agent/run`，请求体为 `AgentRunRequestDto`：`message`、`reportMode`、可选 `conversationId`。
-- API 返回 `ApiResult<AgentRunResponseDto>`，包含 `answer`、`intent`、`steps`、`trace`、`requestId` 和结构化错误。
+- 页面采用 Agent Chat 布局：左侧本地会话列表，中间对话流，底部 composer，顶部提供 Report Mode 开关和生成研报按钮。
+- 每次提交调用 `POST /api/agent/run`，请求体为 `AgentRunRequestDto`：`message`、`reportMode`、可选 `reportTriggerSource` 和可选 `conversationId`。
+- API 返回 `ApiResult<AgentRunResponseDto>`，包含 `answer`、`intent`、`steps`、`trace`、`requestId`、可选 `reportPlan` 和结构化错误。
 - run state、工具调用和 trace 作为 assistant 消息内的可展开派生内容展示，不再使用独立右侧调试栏。
-- `reportMode` 在 Week 1 只作为 UI 和 API 占位信号；自然语言报告/PDF 请求会被 Intent Router 识别为 `report_skill` 并返回占位结果，不启动完整 Workflow。
+- `reportMode`、生成研报按钮和自然语言报告/PDF 请求会进入同一个 Report Skill activation 边界，生成结构化 `ReportPlanDto`；本阶段仍不执行完整 Workflow、Citation Verifier 或 PDF 导出。
 
 本地 API 验证：
 
@@ -249,21 +249,24 @@ Week 2-014 完成 RAG eval 闭环：30 条 QA case、eval runner、四个指标�
 
 ## Agent Loop
 
-`packages/agent` 现在导出 Week 1 最小 Agent API：`createAgent(config)`、`runAgent(request, config)`、`createIntentRouter()` 和 `routeIntent()`。核心公开类型包括 `AgentRequest`、`AgentResponse`、`AgentIntent`、`AgentStep`、`AgentError` 和 `AgentRoute`。
+`packages/agent` 现在导出最小 Agent API：`createAgent(config)`、`runAgent(request, config)`、`createIntentRouter()`、`routeIntent()`、`createReportActivation()`、`createReportPlan()` 和 `isNaturalLanguageReportRequest()`。核心公开类型包括 `AgentRequest`、`AgentResponse`、`AgentIntent`、`AgentStep`、`AgentError` 和 `AgentRoute`。
 
 Intent Router 第一版采用可审查规则优先：
 
-- 报告、研报、研究报告、PDF、导出、生成一份等正式交付诉求路由到 `report_skill`。
+- 自然语言 report skill 触发不只看单一关键词，必须同时具备报告交付诉求和数据需求信号，例如 ticker、公告、财务数据、年报或风险等。
+- 显式 `reportMode` 开关会以 `toggle` 来源进入 `report_skill`；Web 生成研报按钮会以 `button` 来源进入同一 activation 边界；自然语言触发来源为 `natural_language`。
 - 年报、公告、披露、检索、资产质量等公告文本诉求路由到 `filing_search_mock`。
 - 营收、净利润、ROE、毛利率、现金流、最近一期、同比等财务指标查询路由到 `financial_metric_mock`。
 - “解释 ROE 是什么”这类概念问题保留在 `chat` 路径，不调用工具。
-- report 和 tool 同时命中时，Week 1 优先返回 report skill 占位结果，并说明完整 Report Workflow 在 Week 3 接入。
+- report 和 tool 同时命中时，优先进入 report skill planner，因为用户表达的是研报交付，而不是一次性数据查询。
 
-Agent Loop 每一步都会返回结构化 `AgentStep`：`route_intent`、`model_answer`、`select_tool`、`call_tool`、`report_skill_placeholder`、`final_response` 或 `max_steps_exceeded`。`maxSteps` 在每个步骤前检查，达到上限时返回用户可理解的 `max_steps_exceeded`，不会无限等待或抛出原始异常。
+Report Planner 第一版是 deterministic planner，不调用真实 Workflow。公共 DTO 包括 `ReportTriggerSourceDto`、`ReportPlanStatusDto`、`ReportTypeDto`、`ReportPlannerInputDto`、`ReportPlanStepDto` 和 `ReportPlanDto`。Planner 会识别报告类型、研究对象、时间范围和数据需求；信息不足时返回 `needs_clarification` 或 `partial`，信息足够时返回 `ready`，并把默认时间范围等选择写入 `assumptions`。
+
+Agent Loop 每一步都会返回结构化 `AgentStep`：`route_intent`、`model_answer`、`select_tool`、`call_tool`、`report_skill_activation`、`report_skill_plan`、`final_response` 或 `max_steps_exceeded`。`maxSteps` 在每个步骤前检查，达到上限时返回用户可理解的 `max_steps_exceeded`，不会无限等待或抛出原始异常。
 
 工具路径只通过 `ToolRegistry.execute()` 调用工具，不直接依赖工具实现。工具参数错误、工具不存在、工具执行错误会以 `validation_error`、`tool_not_found`、`execution_error` 等结构化 `AgentError` 返回，同时保留底层 `toolError` details。
 
-`@aiagent/trace` 的事件类型扩展为 `request_received`、`intent_routed`、`agent_step`、`model_call`、`tool_call` 和 `final_response`。事件只记录输入/输出摘要、工具参数、结构化错误、耗时和 token usage，不记录 API key 或完整环境变量。
+`@aiagent/trace` 的事件类型扩展为 `request_received`、`intent_routed`、`agent_step`、`retrieval`、`report_skill_activation`、`report_plan`、`model_call`、`tool_call` 和 `final_response`。Report trace 会记录 trigger source、planner input、planner output 和 assumptions；事件只记录输入/输出摘要、工具参数、结构化错误、耗时和 token usage，不记录 API key 或完整环境变量。
 
 可调用验证入口：
 

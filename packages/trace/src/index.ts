@@ -15,6 +15,8 @@ export type TraceEventType =
   | "intent_routed"
   | "agent_step"
   | "retrieval"
+  | "report_skill_activation"
+  | "report_plan"
   | "model_call"
   | "tool_call"
   | "final_response";
@@ -80,6 +82,68 @@ export interface TraceRetrievalEvent extends TraceEventBase {
   error?: TraceError;
 }
 
+export type ReportTriggerSource = "toggle" | "button" | "natural_language";
+
+export type ReportPlanStatus = "ready" | "needs_clarification" | "partial";
+
+export type ReportType = "company_brief" | "earnings_review" | "risk_review" | "custom";
+
+export type ReportPlanStepKind =
+  | "clarify_requirements"
+  | "collect_filings"
+  | "collect_financial_metrics"
+  | "retrieve_evidence"
+  | "analyze_findings"
+  | "draft_report"
+  | "review_citations"
+  | "prepare_export";
+
+export interface ReportPlannerInputTracePayload {
+  message: string;
+  triggerSource: ReportTriggerSource;
+  reportMode: boolean;
+  matchedRules: string[];
+  routeReason: string;
+}
+
+export interface ReportPlanStepTracePayload {
+  id: string;
+  kind: ReportPlanStepKind;
+  title: string;
+  description: string;
+  requiredData: string[];
+  optional: boolean;
+}
+
+export interface ReportPlanTracePayload {
+  planId: string;
+  status: ReportPlanStatus;
+  triggerSource: ReportTriggerSource;
+  reportType: ReportType;
+  subject?: string;
+  timeRange?: string;
+  requiredData: string[];
+  assumptions: string[];
+  clarificationQuestions: string[];
+  steps: ReportPlanStepTracePayload[];
+}
+
+export interface TraceReportSkillActivationEvent extends TraceEventBase {
+  type: "report_skill_activation";
+  triggerSource: ReportTriggerSource;
+  routeReason: string;
+  matchedRules: string[];
+  plannerInput: ReportPlannerInputTracePayload;
+}
+
+export interface TraceReportPlanEvent extends TraceEventBase {
+  type: "report_plan";
+  plan: ReportPlanTracePayload;
+  assumptions: string[];
+  ok: boolean;
+  error?: TraceError;
+}
+
 export interface TraceModelCallEvent extends TraceEventBase {
   type: "model_call";
   model: string;
@@ -116,6 +180,8 @@ export type TraceEvent =
   | TraceIntentRoutedEvent
   | TraceAgentStepEvent
   | TraceRetrievalEvent
+  | TraceReportSkillActivationEvent
+  | TraceReportPlanEvent
   | TraceModelCallEvent
   | TraceToolCallEvent
   | TraceFinalResponseEvent;

@@ -23,6 +23,32 @@ test("POST /api/agent/run returns structured agent response", async () => {
   await app.close();
 });
 
+test("POST /api/agent/run forwards report activation DTOs and returns report plan", async () => {
+  const app = createApiServer();
+  const response = await app.inject({
+    method: "POST",
+    url: "/api/agent/run",
+    payload: {
+      message: "基于最近两年公告和财务数据，为 000001.SZ 生成研究简报。",
+      reportMode: true,
+      reportTriggerSource: "button"
+    }
+  });
+
+  assert.equal(response.statusCode, 200);
+  const body = response.json();
+  assert.equal(body.ok, true);
+  assert.equal(body.data.intent, "report_skill");
+  assert.equal(body.data.reportPlan.status, "ready");
+  assert.equal(body.data.reportPlan.triggerSource, "button");
+  assert.equal(body.data.reportPlan.subject, "000001.SZ");
+  assert.equal(body.data.reportPlan.timeRange, "最近两年");
+  assert.equal(body.data.trace.events.some((event) => event.type === "report_skill_activation"), true);
+  assert.equal(body.data.trace.events.some((event) => event.type === "report_plan"), true);
+
+  await app.close();
+});
+
 test("POST /api/agent/run rejects empty messages with ApiResult failure", async () => {
   const app = createApiServer();
   const response = await app.inject({

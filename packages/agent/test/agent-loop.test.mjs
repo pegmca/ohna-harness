@@ -60,7 +60,7 @@ test("filing search questions select filing_search_mock through the registry", a
   assert.equal(toolEvent.ok, true);
 });
 
-test("report PDF requests return the Week 3 workflow placeholder", async () => {
+test("natural language report PDF requests activate planner and return a ready plan", async () => {
   const trace = createInMemoryTraceRecorder("trace_report_test");
   const response = await runAgent(
     { message: "帮我生成一份 000001.SZ 的公司研究报告 PDF。" },
@@ -69,11 +69,64 @@ test("report PDF requests return the Week 3 workflow placeholder", async () => {
 
   assert.equal(response.ok, true);
   assert.equal(response.intent, "report_skill");
-  assert.match(response.answer, /Week 3/);
+  assert.equal(response.reportPlan.status, "ready");
+  assert.equal(response.reportPlan.triggerSource, "natural_language");
+  assert.equal(response.reportPlan.subject, "000001.SZ");
+  assert.equal(response.reportPlan.reportType, "company_brief");
+  assert.equal(response.reportPlan.timeRange, "最近两年");
+  assert.equal(response.reportPlan.requiredData.includes("filings"), true);
+  assert.equal(response.reportPlan.requiredData.includes("financial_metrics"), true);
+  assert.match(response.answer, /ready plan/);
   assert.deepEqual(
     response.steps.map((step) => step.type),
-    ["route_intent", "report_skill_placeholder", "final_response"]
+    ["route_intent", "report_skill_activation", "report_skill_plan", "final_response"]
   );
+  assert.equal(trace.getEvents().some((event) => event.type === "report_skill_activation"), true);
+  const planEvent = trace.getEvents().find((event) => event.type === "report_plan");
+  assert.equal(planEvent.plan.subject, "000001.SZ");
+  assert.equal(planEvent.assumptions.length > 0, true);
+});
+
+test("report mode toggle activates planner and asks for missing subject", async () => {
+  const trace = createInMemoryTraceRecorder("trace_report_toggle_test");
+  const response = await runAgent(
+    { message: "开启 Report Mode", reportMode: true },
+    { traceRecorder: trace }
+  );
+
+  assert.equal(response.ok, true);
+  assert.equal(response.intent, "report_skill");
+  assert.equal(response.reportPlan.status, "needs_clarification");
+  assert.equal(response.reportPlan.triggerSource, "toggle");
+  assert.equal(response.reportPlan.clarificationQuestions.length, 1);
+});
+
+test("natural language company report requests without ticker return a partial plan", async () => {
+  const trace = createInMemoryTraceRecorder("trace_report_partial_nl_test");
+  const response = await runAgent(
+    { message: "帮我生成一份公司研究报告 PDF。" },
+    { traceRecorder: trace }
+  );
+
+  assert.equal(response.ok, true);
+  assert.equal(response.intent, "report_skill");
+  assert.equal(response.reportPlan.status, "partial");
+  assert.equal(response.reportPlan.triggerSource, "natural_language");
+  assert.equal(response.reportPlan.clarificationQuestions.length, 1);
+});
+
+test("report button activates the same planner boundary and can return a partial plan", async () => {
+  const trace = createInMemoryTraceRecorder("trace_report_button_test");
+  const response = await runAgent(
+    { message: "帮我生成一份公司研究报告 PDF。", reportTriggerSource: "button", reportMode: true },
+    { traceRecorder: trace }
+  );
+
+  assert.equal(response.ok, true);
+  assert.equal(response.intent, "report_skill");
+  assert.equal(response.reportPlan.status, "partial");
+  assert.equal(response.reportPlan.triggerSource, "button");
+  assert.equal(response.reportPlan.steps[0].kind, "clarify_requirements");
 });
 
 test("maxSteps returns a structured failure instead of continuing the loop", async () => {

@@ -1,4 +1,5 @@
 import type { LlmClient } from "@aiagent/types";
+import type { ReportPlanDto } from "@aiagent/types";
 import type { ToolRegistry } from "@aiagent/tools";
 import type { Trace, TraceRecorder } from "@aiagent/trace";
 
@@ -9,7 +10,8 @@ export type AgentStepType =
   | "model_answer"
   | "select_tool"
   | "call_tool"
-  | "report_skill_placeholder"
+  | "report_skill_activation"
+  | "report_skill_plan"
   | "final_response"
   | "max_steps_exceeded";
 
@@ -44,6 +46,8 @@ export interface AgentStep {
 
 export interface AgentRequest {
   message: string;
+  reportMode?: boolean;
+  reportTriggerSource?: "toggle" | "button" | "natural_language";
   maxSteps?: number;
 }
 
@@ -55,6 +59,7 @@ export interface AgentResponse {
   requestId: string;
   trace: Trace;
   steps: AgentStep[];
+  reportPlan?: ReportPlanDto;
   error?: AgentError;
 }
 

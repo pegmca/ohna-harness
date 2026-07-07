@@ -1,7 +1,8 @@
 import { createDefaultToolRegistry } from "@aiagent/tools";
 import { createInMemoryTraceRecorder, type TraceRecorder } from "@aiagent/trace";
-import type { LlmClient, LlmError } from "@aiagent/types";
+import type { LlmClient, LlmError, ReportPlanDto } from "@aiagent/types";
 import { createIntentRouter } from "./intent-router.js";
+import { createReportActivation, createReportPlan } from "./report-planner.js";
 import type {
   Agent,
   AgentConfig,
@@ -84,7 +85,18 @@ export async function runAgent(request: AgentRequest, config: AgentConfig = {}):
 
   try {
     route = await runStep(steps, trace, maxSteps, "route_intent", async () => {
-      const routed = await router.route(message);
+      const routed =
+        request.reportMode || request.reportTriggerSource === "button"
+          ? {
+              intent: "report_skill" as const,
+              confidence: 1,
+              reason:
+                request.reportTriggerSource === "button"
+                  ? "用户点击生成研报按钮，显式进入 report skill planner。"
+                  : "Report Mode 开关已开启，显式进入 report skill planner。",
+              matchedRules: [request.reportTriggerSource === "button" ? "report_button" : "report_mode_toggle"]
+            }
+          : await router.route(message);
       recordTrace(trace, {
         type: "intent_routed",
         id: createTraceEventId(trace.traceId, "intent"),
@@ -119,7 +131,7 @@ export async function runAgent(request: AgentRequest, config: AgentConfig = {}):
   }
 
   if (route.intent === "report_skill") {
-    return runReportPlaceholder(trace, steps, maxSteps, route);
+    return runReportSkillPath(trace, steps, maxSteps, route, request);
   }
 
   if (route.intent === "tool") {
@@ -130,19 +142,21 @@ export async function runAgent(request: AgentRequest, config: AgentConfig = {}):
 }
 
 /**
- * 执行 report skill 占位路径，Week 1 只识别意图，不启动完整 workflow。
+ * 执行 Report Skill activation 和 planner 路径，只生成计划，不启动完整 workflow。
  *
  * @param trace trace recorder。
  * @param steps Agent 步骤列表。
  * @param maxSteps 最大步骤数。
  * @param route 路由结果。
+ * @param request Agent 请求。
  * @returns Agent 响应。
  */
-async function runReportPlaceholder(
+async function runReportSkillPath(
   trace: TraceRecorder,
   steps: AgentStep[],
   maxSteps: number,
-  route: AgentRoute
+  route: AgentRoute,
+  request: AgentRequest
 ): Promise<AgentResponse> {
   const budget = ensureStepBudget(steps, maxSteps, trace);
 
@@ -150,16 +164,80 @@ async function runReportPlaceholder(
     return finish(trace, steps, route.intent, budget.message, false, budget);
   }
 
-  const answer = "已识别为研究报告/PDF 生成诉求。Week 1 先返回占位结果，完整 Report Workflow 将在 Week 3 接入。";
-  await runStep(steps, trace, maxSteps, "report_skill_placeholder", async () => ({
-    result: answer,
-    data: {
-      placeholder: true,
-      plannedWorkflow: "Week 3 Report Workflow"
-    }
-  }));
+  const activation = await runStep(steps, trace, maxSteps, "report_skill_activation", async () => {
+    const result = createReportActivation({
+      message: request.message.trim(),
+      reportMode: request.reportMode,
+      explicitTriggerSource: request.reportTriggerSource,
+      routeReason: route.reason,
+      matchedRules: route.matchedRules
+    });
 
-  return finish(trace, steps, route.intent, answer, true);
+    recordTrace(trace, {
+      type: "report_skill_activation",
+      id: createTraceEventId(trace.traceId, "report_activation"),
+      traceId: trace.traceId,
+      requestId: trace.requestId,
+      triggerSource: result.triggerSource,
+      routeReason: route.reason,
+      matchedRules: route.matchedRules,
+      plannerInput: result.plannerInput,
+      createdAt: new Date().toISOString()
+    });
+
+    return {
+      result,
+      data: {
+        triggerSource: result.triggerSource,
+        plannerInput: result.plannerInput
+      }
+    };
+  });
+
+  const plan = await runStep(steps, trace, maxSteps, "report_skill_plan", async () => {
+    const result = createReportPlan(activation.plannerInput);
+
+    recordTrace(trace, {
+      type: "report_plan",
+      id: createTraceEventId(trace.traceId, "report_plan"),
+      traceId: trace.traceId,
+      requestId: trace.requestId,
+      plan: result,
+      assumptions: result.assumptions,
+      ok: true,
+      createdAt: new Date().toISOString()
+    });
+
+    return {
+      result,
+      data: {
+        plan: result
+      }
+    };
+  });
+  const answer = formatReportPlanAnswer(plan);
+
+  return finish(trace, steps, route.intent, answer, true, undefined, plan);
+}
+
+/**
+ * 把 ReportPlanDto 压缩成 assistant 消息可读摘要，完整 plan 仍保留在 DTO 和 trace 中。
+ *
+ * @param plan Report planner 输出。
+ * @returns 面向用户的计划摘要。
+ */
+function formatReportPlanAnswer(plan: ReportPlanDto): string {
+  const subject = plan.subject ?? "待确认研究对象";
+  const timeRange = plan.timeRange ?? "待确认时间范围";
+  const questions =
+    plan.clarificationQuestions.length > 0 ? `\n需要澄清：${plan.clarificationQuestions.join("；")}` : "";
+
+  return [
+    `已进入 Report Mode，并生成 ${plan.status} plan。`,
+    `报告类型：${plan.reportType}；研究对象：${subject}；时间范围：${timeRange}。`,
+    `数据需求：${plan.requiredData.join("、")}。`,
+    `下一步：${plan.steps.map((step) => step.title).join(" -> ")}。${questions}`
+  ].join("\n");
 }
 
 /**
@@ -457,6 +535,7 @@ function pushStep(steps: AgentStep[], trace: TraceRecorder, step: AgentStep): Ag
  * @param answer 面向用户的回答。
  * @param ok 是否成功。
  * @param error 可选结构化错误。
+ * @param reportPlan 可选 Report planner 输出。
  * @returns Agent 响应。
  */
 function finish(
@@ -465,7 +544,8 @@ function finish(
   intent: AgentIntent,
   answer: string,
   ok: boolean,
-  error?: AgentError
+  error?: AgentError,
+  reportPlan?: ReportPlanDto
 ): AgentResponse {
   if (steps.at(-1)?.type !== "final_response") {
     pushStep(steps, trace, {
@@ -500,6 +580,7 @@ function finish(
     requestId: trace.requestId,
     trace: trace.getTrace(),
     steps,
+    reportPlan,
     error
   };
 }

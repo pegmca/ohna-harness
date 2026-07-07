@@ -10,6 +10,7 @@ import type {
   RagAnswerResponseDto,
   RagChunkDto,
   RagSearchResponseDto,
+  ReportTriggerSourceDto,
   RetrievalResultDto
 } from "@aiagent/types";
 import {
@@ -20,6 +21,7 @@ import {
   ChevronDown,
   Clock3,
   Database,
+  FilePlus2,
   FileText,
   Loader2,
   Menu,
@@ -154,6 +156,27 @@ export function App() {
    * @returns 请求完成 Promise。
    */
   async function submitMessage(message: string): Promise<void> {
+    await submitAgentMessage(message);
+  }
+
+  /**
+   * 从按钮显式触发 Report Skill，和自然语言、Report Mode 开关复用同一个 API activation 边界。
+   *
+   * @returns 请求完成 Promise。
+   */
+  async function handleGenerateReport(): Promise<void> {
+    const message = input.trim() || "帮我生成一份公司研究报告 PDF。";
+    await submitAgentMessage(message, "button");
+  }
+
+  /**
+   * 发送用户输入并把 run 结果挂到对应 assistant 消息，避免使用全局右侧调试状态。
+   *
+   * @param message 用户输入。
+   * @param triggerSource 可选 Report Skill 显式触发来源。
+   * @returns 请求完成 Promise。
+   */
+  async function submitAgentMessage(message: string, triggerSource?: ReportTriggerSourceDto): Promise<void> {
     const trimmed = message.trim();
     const conversation = activeConversation;
 
@@ -191,7 +214,12 @@ export function App() {
     setIsSubmitting(true);
 
     try {
-      const result = await runAgent(trimmed, submittedReportMode, submittedConversationId);
+      const result = await runAgent(
+        trimmed,
+        submittedReportMode || triggerSource === "button",
+        submittedConversationId,
+        triggerSource
+      );
 
       if (!result.ok) {
         const messageText = formatApiError(result.error);
@@ -289,6 +317,7 @@ export function App() {
             conversationTitle={activeConversation?.title ?? "新会话"}
             isSubmitting={isSubmitting}
             latestRun={latestRun}
+            onGenerateReport={handleGenerateReport}
             onMenuClick={() => setIsSidebarOpen(true)}
             onReportModeChange={handleReportModeChange}
             reportMode={activeConversation?.reportMode ?? false}
@@ -705,6 +734,7 @@ interface ChatHeaderProps {
   conversationTitle: string;
   isSubmitting: boolean;
   latestRun: AgentRunResponseDto | undefined;
+  onGenerateReport: () => void;
   onMenuClick: () => void;
   onReportModeChange: (checked: boolean) => void;
   reportMode: boolean;
@@ -730,6 +760,10 @@ function ChatHeader(props: ChatHeaderProps) {
       </div>
 
       <div className="header-actions">
+        <button className="secondary-button" disabled={props.isSubmitting} onClick={props.onGenerateReport} type="button">
+          <FilePlus2 className="icon-size" />
+          <span>生成研报</span>
+        </button>
         <label className="report-switch">
           <span>Report Mode</span>
           <Switch.Root
@@ -929,12 +963,60 @@ function RunDetails(props: { reportMode: boolean; run: AgentRunResponseDto }) {
           <span>traceId: {run.traceId}</span>
         </div>
         {run.error ? <ErrorBlock error={run.error} /> : null}
+        {run.reportPlan ? <ReportPlanPanel plan={run.reportPlan} /> : null}
         <RunStepsList steps={run.steps} />
         <ToolCallsList events={toolEvents} />
         <TraceTimeline events={run.trace.events} />
         <JsonDetails title="run json" value={run} />
       </div>
     </details>
+  );
+}
+
+/**
+ * 展示 Report planner 结构化输出摘要，完整 DTO 仍可在 run JSON 中查看。
+ *
+ * @param props 组件属性。
+ * @returns report plan 摘要面板。
+ */
+function ReportPlanPanel(props: { plan: NonNullable<AgentRunResponseDto["reportPlan"]> }) {
+  const { plan } = props;
+
+  return (
+    <section className="details-section">
+      <h3>
+        <FileText className="icon-size" />
+        Report plan
+      </h3>
+      <div className="report-plan-panel">
+        <div className="report-plan-grid">
+          <span>status</span>
+          <strong>{plan.status}</strong>
+          <span>trigger</span>
+          <strong>{plan.triggerSource}</strong>
+          <span>type</span>
+          <strong>{plan.reportType}</strong>
+          <span>subject</span>
+          <strong>{plan.subject ?? "待确认"}</strong>
+          <span>timeRange</span>
+          <strong>{plan.timeRange ?? "待确认"}</strong>
+          <span>data</span>
+          <strong>{plan.requiredData.join(" / ")}</strong>
+        </div>
+        {plan.clarificationQuestions.length > 0 ? (
+          <div className="report-plan-note">
+            <strong>Clarification</strong>
+            <span>{plan.clarificationQuestions.join("；")}</span>
+          </div>
+        ) : null}
+        {plan.assumptions.length > 0 ? (
+          <div className="report-plan-note">
+            <strong>Assumptions</strong>
+            <span>{plan.assumptions.join("；")}</span>
+          </div>
+        ) : null}
+      </div>
+    </section>
   );
 }
 
@@ -1084,7 +1166,8 @@ function StatusBadge(props: { children: ReactNode; tone: "danger" | "info" | "ne
 async function runAgent(
   message: string,
   reportMode: boolean,
-  conversationId: string | undefined
+  conversationId: string | undefined,
+  reportTriggerSource?: ReportTriggerSourceDto
 ): Promise<ApiResult<AgentRunResponseDto>> {
   const response = await fetch("/api/agent/run", {
     method: "POST",
@@ -1094,6 +1177,7 @@ async function runAgent(
     body: JSON.stringify({
       message,
       reportMode,
+      reportTriggerSource,
       conversationId
     })
   });
@@ -1271,6 +1355,10 @@ function formatEventTitle(event: TraceEventDto): string {
       return `Agent Step: ${event.stepType}`;
     case "retrieval":
       return `Retrieval: ${event.mode}`;
+    case "report_skill_activation":
+      return `Report Activation: ${event.triggerSource}`;
+    case "report_plan":
+      return "Report Plan";
     case "model_call":
       return `Model Call: ${event.purpose}`;
     case "tool_call":
@@ -1312,6 +1400,10 @@ function formatEventSummary(event: TraceEventDto): string {
       return event.ok
         ? `${event.chunkIds.length} chunks retrieved, topK=${event.topK}`
         : event.error?.message ?? "检索失败。";
+    case "report_skill_activation":
+      return `${event.triggerSource} activation; ${event.routeReason}`;
+    case "report_plan":
+      return event.ok ? `${event.plan.status} plan created` : event.error?.message ?? "planner failed";
     case "model_call":
       return event.ok ? `${event.model} responded` : event.error?.message ?? "model failed";
     case "tool_call":

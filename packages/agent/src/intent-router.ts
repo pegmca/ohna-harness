@@ -1,5 +1,6 @@
 import type { TraceRecorder } from "@aiagent/trace";
 import type { LlmClient } from "@aiagent/types";
+import { isNaturalLanguageReportRequest } from "./report-planner.js";
 import type { AgentRoute, AgentRouter, AgentToolSelection } from "./types.js";
 
 interface ModelRouteJson {
@@ -7,7 +8,7 @@ interface ModelRouteJson {
   reason?: string;
 }
 
-const REPORT_KEYWORDS = ["报告", "研报", "研究报告", "PDF", "pdf", "导出", "生成一份"];
+const REPORT_KEYWORDS = ["报告", "研报", "研究报告", "研究简报", "PDF", "pdf", "导出", "生成一份"];
 const FILING_KEYWORDS = ["年报", "公告", "财报原文", "披露", "检索", "资产质量描述", "资产质量"];
 const METRIC_KEYWORDS = ["营收", "净利润", "ROE", "roe", "毛利率", "现金流", "财务指标", "最近一期", "同比"];
 const CONCEPT_KEYWORDS = ["解释", "是什么", "什么意思", "概念", "定义"];
@@ -47,12 +48,12 @@ export async function routeIntent(message: string, options: IntentRouterOptions 
   const filingMatches = findMatches(normalized, FILING_KEYWORDS);
   const metricMatches = findMatches(normalized, METRIC_KEYWORDS);
 
-  if (reportMatches.length > 0) {
+  if (isNaturalLanguageReportRequest(normalized)) {
     return {
       intent: "report_skill",
       confidence: 0.95,
-      reason: "命中正式报告/PDF 交付诉求，Week 1 优先识别为 report skill。",
-      matchedRules: reportMatches
+      reason: "同时命中报告交付诉求和数据需求，进入 report skill planner。",
+      matchedRules: [...new Set([...reportMatches, ...filingMatches, ...metricMatches, "report_delivery_with_data_need"])]
     };
   }
 

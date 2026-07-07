@@ -20,6 +20,7 @@ import { z } from "zod";
 const agentRunRequestSchema = z.object({
   message: z.string(),
   reportMode: z.boolean().optional(),
+  reportTriggerSource: z.enum(["toggle", "button", "natural_language"]).optional(),
   conversationId: z.string().min(1).optional()
 });
 const dataSourceIngestRequestSchema = z.object({
@@ -231,7 +232,9 @@ export function createApiServer(): FastifyInstance {
 
     try {
       const agentResponse = await runAgent({
-        message
+        message,
+        reportMode: parsed.data.reportMode,
+        reportTriggerSource: parsed.data.reportTriggerSource
       });
       const responseDto = toAgentRunResponseDto(agentResponse, parsed.data, requestId);
 
@@ -274,6 +277,7 @@ function toAgentRunResponseDto(
     answer: response.answer,
     steps: response.steps.map(toAgentStepDto),
     trace: response.trace,
+    reportPlan: response.reportPlan,
     error: response.error
       ? {
           code: "agent_failed",

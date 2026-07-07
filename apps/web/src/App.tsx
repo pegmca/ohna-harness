@@ -1359,6 +1359,8 @@ function formatEventTitle(event: TraceEventDto): string {
       return `Report Activation: ${event.triggerSource}`;
     case "report_plan":
       return "Report Plan";
+    case "workflow_node":
+      return `Workflow Node: ${event.nodeId}`;
     case "model_call":
       return `Model Call: ${event.purpose}`;
     case "tool_call":
@@ -1404,6 +1406,8 @@ function formatEventSummary(event: TraceEventDto): string {
       return `${event.triggerSource} activation; ${event.routeReason}`;
     case "report_plan":
       return event.ok ? `${event.plan.status} plan created` : event.error?.message ?? "planner failed";
+    case "workflow_node":
+      return `${event.status} ${event.nodeType} in ${event.durationMs} ms`;
     case "model_call":
       return event.ok ? `${event.model} responded` : event.error?.message ?? "model failed";
     case "tool_call":

@@ -122,6 +122,21 @@ importers:
         specifier: workspace:^
         version: link:../types
 
+  packages/report:
+    dependencies:
+      '@aiagent/trace':
+        specifier: workspace:^
+        version: link:../trace
+      '@aiagent/types':
+        specifier: workspace:^
+        version: link:../types
+      '@aiagent/workflow':
+        specifier: workspace:^
+        version: link:../workflow
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
+
   packages/tools:
     dependencies:
       '@aiagent/trace':
@@ -134,6 +149,18 @@ importers:
   packages/trace: {}
 
   packages/types: {}
+
+  packages/workflow:
+    dependencies:
+      '@aiagent/trace':
+        specifier: workspace:^
+        version: link:../trace
+      '@aiagent/types':
+        specifier: workspace:^
+        version: link:../types
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
 
 packages:
 

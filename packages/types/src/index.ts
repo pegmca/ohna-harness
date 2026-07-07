@@ -78,6 +78,7 @@ export type TraceEventDto =
   | TraceRetrievalEventDto
   | TraceReportSkillActivationEventDto
   | TraceReportPlanEventDto
+  | TraceWorkflowNodeEventDto
   | TraceModelCallEventDto
   | TraceToolCallEventDto
   | TraceFinalResponseEventDto;
@@ -151,6 +152,18 @@ export interface TraceReportPlanEventDto extends TraceEventBaseDto {
   assumptions: string[];
   ok: boolean;
   error?: TraceErrorDto;
+}
+
+export interface TraceWorkflowNodeEventDto extends TraceEventBaseDto {
+  type: "workflow_node";
+  workflowRunId: string;
+  nodeId: string;
+  nodeType: string;
+  status: WorkflowNodeStatusDto;
+  durationMs: number;
+  inputSummary?: Record<string, unknown>;
+  outputSummary?: Record<string, unknown>;
+  error?: WorkflowErrorDto;
 }
 
 export interface TraceModelCallEventDto extends TraceEventBaseDto {
@@ -248,6 +261,66 @@ export interface ReportPlanDto {
   assumptions: string[];
   clarificationQuestions: string[];
   steps: ReportPlanStepDto[];
+}
+
+export type WorkflowRunStatusDto = "pending" | "running" | "succeeded" | "failed";
+
+export type WorkflowNodeStatusDto = "pending" | "running" | "succeeded" | "failed" | "skipped";
+
+export type WorkflowErrorCodeDto =
+  | "invalid_workflow"
+  | "invalid_node_input"
+  | "invalid_node_output"
+  | "node_execution_failed"
+  | "max_steps_exceeded";
+
+export interface WorkflowErrorDto {
+  code: WorkflowErrorCodeDto;
+  message: string;
+  nodeId?: string;
+  details?: Record<string, unknown>;
+}
+
+export interface WorkflowNodeDto {
+  nodeId: string;
+  type: string;
+  title: string;
+  status: WorkflowNodeStatusDto;
+  startedAt?: ISODateTimeString;
+  completedAt?: ISODateTimeString;
+  durationMs: number;
+  inputSummary?: Record<string, unknown>;
+  outputSummary?: Record<string, unknown>;
+  error?: WorkflowErrorDto;
+}
+
+export interface WorkflowEdgeDto {
+  from: string;
+  to: string;
+}
+
+export interface WorkflowEventDto {
+  id: string;
+  type: "node_started" | "node_succeeded" | "node_failed" | "workflow_failed" | "workflow_succeeded";
+  nodeId?: string;
+  createdAt: ISODateTimeString;
+  data?: Record<string, unknown>;
+  error?: WorkflowErrorDto;
+}
+
+export interface WorkflowRunDto {
+  runId: string;
+  workflowName: string;
+  status: WorkflowRunStatusDto;
+  startedAt: ISODateTimeString;
+  completedAt?: ISODateTimeString;
+  durationMs: number;
+  maxSteps: number;
+  executedSteps: number;
+  nodes: WorkflowNodeDto[];
+  edges: WorkflowEdgeDto[];
+  events: WorkflowEventDto[];
+  error?: WorkflowErrorDto;
 }
 
 /**

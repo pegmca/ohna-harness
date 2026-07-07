@@ -56,6 +56,8 @@
 - `packages/filings`：公告/财报 ingestion 边界，负责文件来源、document metadata 和原始文本来源信息。
 - `packages/rag`：RAG 运行时边界，负责 chunking、embedding 抽象、检索、引用和 grounded answer 的稳定类型入口。
 - `packages/eval`：RAG 评测边界，负责 eval case、metrics、runner 输入和报告输出结构。
+- `packages/workflow`：通用顺序 workflow runtime，负责节点 schema 校验、状态流转、max steps、结构化错误和节点 trace。
+- `packages/report`：研报领域节点边界，负责 mock Data Collector、Analyzer、Risk Checker、Citation Verifier、Report Writer 和 PDF Exporter 占位。
 - `packages/tools`：工具注册与工具调用边界，后续承载外部数据和函数工具。
 - `packages/trace`：运行轨迹边界，后续承载事件记录、时间线和调试视图。
 
@@ -71,7 +73,7 @@ Immersive Playground 已从 Week 1 最小 Chat 形态演进到 Week 3 Report Ski
 - 每次提交调用 `POST /api/agent/run`，请求体为 `AgentRunRequestDto`：`message`、`reportMode`、可选 `reportTriggerSource` 和可选 `conversationId`。
 - API 返回 `ApiResult<AgentRunResponseDto>`，包含 `answer`、`intent`、`steps`、`trace`、`requestId`、可选 `reportPlan` 和结构化错误。
 - run state、工具调用和 trace 作为 assistant 消息内的可展开派生内容展示，不再使用独立右侧调试栏。
-- `reportMode`、生成研报按钮和自然语言报告/PDF 请求会进入同一个 Report Skill activation 边界，生成结构化 `ReportPlanDto`；本阶段仍不执行完整 Workflow、Citation Verifier 或 PDF 导出。
+- `reportMode`、生成研报按钮和自然语言报告/PDF 请求会进入同一个 Report Skill activation 边界，生成结构化 `ReportPlanDto`。Agent Chat 当前只返回 plan；package 层已经提供可独立测试的 mock Report Workflow runtime。
 
 本地 API 验证：
 
@@ -266,13 +268,38 @@ Agent Loop 每一步都会返回结构化 `AgentStep`：`route_intent`、`model_
 
 工具路径只通过 `ToolRegistry.execute()` 调用工具，不直接依赖工具实现。工具参数错误、工具不存在、工具执行错误会以 `validation_error`、`tool_not_found`、`execution_error` 等结构化 `AgentError` 返回，同时保留底层 `toolError` details。
 
-`@aiagent/trace` 的事件类型扩展为 `request_received`、`intent_routed`、`agent_step`、`retrieval`、`report_skill_activation`、`report_plan`、`model_call`、`tool_call` 和 `final_response`。Report trace 会记录 trigger source、planner input、planner output 和 assumptions；事件只记录输入/输出摘要、工具参数、结构化错误、耗时和 token usage，不记录 API key 或完整环境变量。
+`@aiagent/trace` 的事件类型扩展为 `request_received`、`intent_routed`、`agent_step`、`retrieval`、`report_skill_activation`、`report_plan`、`workflow_node`、`model_call`、`tool_call` 和 `final_response`。Report trace 会记录 trigger source、planner input、planner output 和 assumptions；workflow trace 会记录 workflow run id、node id、node type、状态、输入摘要、输出摘要、耗时和结构化错误；事件不记录 API key 或完整环境变量。
 
 可调用验证入口：
 
 ```bash
 pnpm --filter @aiagent/agent test
 pnpm --filter @aiagent/tools test
+```
+
+## Report Workflow Runtime
+
+Week 3-016 新增两个 package：
+
+- `@aiagent/workflow`：通用顺序节点执行器。每个节点必须声明 `inputSchema` 和 `outputSchema`，runtime 在节点执行前后用 zod 校验，节点异常、输入错误、输出错误和 max steps 超限都会转换成 `WorkflowErrorDto`。
+- `@aiagent/report`：研报领域 workflow 节点实现。`runReportWorkflow(plan, options)` 从 `ReportPlanDto` 创建 workflow run，依次执行 mock Data Collector、Analyzer、Risk Checker、Citation Verifier、Report Writer 和 PDF Exporter 占位节点。
+
+Workflow DTO 放在 `packages/types`：`WorkflowRunDto`、`WorkflowNodeDto`、`WorkflowNodeStatusDto`、`WorkflowEdgeDto`、`WorkflowEventDto` 和 `WorkflowErrorDto`。第一版只实现线性节点链路，不做复杂 DAG、持久化 store、真实 PDF 生成或 MCP 工具调用。
+
+Report Workflow 当前 mock 节点输出：
+
+- Data Collector：生成 mock filings、financial metrics 和 evidence。
+- Analyzer：生成 thesis、findings 和 evidence ids。
+- Risk Checker：输出 risk level、risk items 和 passed 状态。
+- Citation Verifier：把 findings 映射到 mock evidence，输出 citations 和 missing citation findings。
+- Report Writer：生成 Markdown 和最小 HTML 草稿。
+- PDF Exporter：返回 `placeholder` 导出结构，不生成真实 PDF。
+
+可调用验证入口：
+
+```bash
+pnpm --filter @aiagent/workflow test
+pnpm --filter @aiagent/report test
 ```
 
 ## 技术栈约束
@@ -302,6 +329,8 @@ pnpm --filter @aiagent/api test
 pnpm --filter @aiagent/filings test
 pnpm --filter @aiagent/rag test
 pnpm --filter @aiagent/eval test
+pnpm --filter @aiagent/workflow test
+pnpm --filter @aiagent/report test
 ```
 
 根目录脚本会通过 workspace 执行各应用和 package 的对应命令。`pnpm dev` 会同时启动 `apps/api` 和 `apps/web`；web 的 Vite dev server 会把 `/api` 代理到 `http://localhost:3001`。如果 `5173` 被占用，Vite 会自动选择下一个可用端口。

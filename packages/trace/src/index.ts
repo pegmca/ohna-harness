@@ -17,6 +17,7 @@ export type TraceEventType =
   | "retrieval"
   | "report_skill_activation"
   | "report_plan"
+  | "workflow_node"
   | "model_call"
   | "tool_call"
   | "final_response";
@@ -144,6 +145,34 @@ export interface TraceReportPlanEvent extends TraceEventBase {
   error?: TraceError;
 }
 
+export type WorkflowNodeStatus = "pending" | "running" | "succeeded" | "failed" | "skipped";
+
+export type WorkflowErrorCode =
+  | "invalid_workflow"
+  | "invalid_node_input"
+  | "invalid_node_output"
+  | "node_execution_failed"
+  | "max_steps_exceeded";
+
+export interface WorkflowTraceError {
+  code: WorkflowErrorCode;
+  message: string;
+  nodeId?: string;
+  details?: Record<string, unknown>;
+}
+
+export interface TraceWorkflowNodeEvent extends TraceEventBase {
+  type: "workflow_node";
+  workflowRunId: string;
+  nodeId: string;
+  nodeType: string;
+  status: WorkflowNodeStatus;
+  durationMs: number;
+  inputSummary?: Record<string, unknown>;
+  outputSummary?: Record<string, unknown>;
+  error?: WorkflowTraceError;
+}
+
 export interface TraceModelCallEvent extends TraceEventBase {
   type: "model_call";
   model: string;
@@ -182,6 +211,7 @@ export type TraceEvent =
   | TraceRetrievalEvent
   | TraceReportSkillActivationEvent
   | TraceReportPlanEvent
+  | TraceWorkflowNodeEvent
   | TraceModelCallEvent
   | TraceToolCallEvent
   | TraceFinalResponseEvent;

@@ -281,18 +281,18 @@ pnpm --filter @aiagent/tools test
 
 Week 3-016 新增两个 package：
 
-- `@aiagent/workflow`：通用顺序节点执行器。每个节点必须声明 `inputSchema` 和 `outputSchema`，runtime 在节点执行前后用 zod 校验，节点异常、输入错误、输出错误和 max steps 超限都会转换成 `WorkflowErrorDto`。
-- `@aiagent/report`：研报领域 workflow 节点实现。`runReportWorkflow(plan, options)` 从 `ReportPlanDto` 创建 workflow run，依次执行 mock Data Collector、Analyzer、Risk Checker、Citation Verifier、Report Writer 和 PDF Exporter 占位节点。
+- `@aiagent/workflow`：通用节点执行器。每个节点必须声明 `inputSchema` 和 `outputSchema`，runtime 在节点执行前后用 zod 校验，节点异常、输入错误、输出错误和 max steps 超限都会转换成 `WorkflowErrorDto`。Week 3-017 为其增加 `decideNext` 能力，支持节点执行成功后跳转到指定节点，从而实现 verifier loop 等有限循环。
+- `@aiagent/report`：研报领域 workflow 节点实现。`runReportWorkflow(plan, options)` 从 `ReportPlanDto` 创建 workflow run，依次执行 Data Collector、Analyzer、Risk Checker、Citation Verifier、Report Writer 和 PDF Exporter 占位节点。
 
-Workflow DTO 放在 `packages/types`：`WorkflowRunDto`、`WorkflowNodeDto`、`WorkflowNodeStatusDto`、`WorkflowEdgeDto`、`WorkflowEventDto` 和 `WorkflowErrorDto`。第一版只实现线性节点链路，不做复杂 DAG、持久化 store、真实 PDF 生成或 MCP 工具调用。
+Workflow DTO 放在 `packages/types`：`WorkflowRunDto`、`WorkflowNodeDto`、`WorkflowNodeStatusDto`、`WorkflowEdgeDto`、`WorkflowEventDto` 和 `WorkflowErrorDto`。第一版不做复杂 DAG、持久化 store、真实 PDF 生成或 MCP 工具调用。
 
-Report Workflow 当前 mock 节点输出：
+Report Workflow 当前节点输出：
 
-- Data Collector：生成 mock filings、financial metrics 和 evidence。
-- Analyzer：生成 thesis、findings 和 evidence ids。
-- Risk Checker：输出 risk level、risk items 和 passed 状态。
-- Citation Verifier：把 findings 映射到 mock evidence，输出 citations 和 missing citation findings。
-- Report Writer：生成 Markdown 和最小 HTML 草稿。
+- Data Collector：调用 `@aiagent/rag` 的 `DataSourceRuntime.search()`，基于 plan 生成 RAG queries，返回带 citation 的 evidence、financial metrics 和 retrieval traces。支持通过 `options.documents` 传入 demo 文档。
+- Analyzer：从 evidence 生成 thesis、findings、结构化 claims 和 metric requirements。每个 claim 都记录 `evidenceIds` 和 `citationIds`。
+- Risk Checker：输出 risk level、risk items 和 passed 状态；当 `reportType` 为 `risk_review` 且风险披露不足时，输出 `needsMoreEvidence` 和 follow-up queries。
+- Citation Verifier：检查每个 claim 是否有 citation 支撑、required metric 是否齐全。决策类型为 `pass | needs_more_evidence | needs_metric | retry_tool | fail`；缺证据时生成 follow-up queries，并通过 `decideNext` 跳回 Data Collector 做补充检索，受 `maxRetries` 限制。
+- Report Writer：生成 Markdown 和最小 HTML 草稿；证据不足时保留“资料不足说明”，不编造结论。
 - PDF Exporter：返回 `placeholder` 导出结构，不生成真实 PDF。
 
 可调用验证入口：

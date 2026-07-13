@@ -48,6 +48,15 @@ export interface WorkflowNodeDefinition<TInput, TOutput, TState extends Workflow
    * @returns 新的 workflow state。
    */
   applyOutput(state: TState, output: TOutput): TState;
+  /**
+   * 节点执行成功后，决定下一个要执行的节点。返回 nodeId 时跳转到对应节点，
+   * 用来实现 verifier loop 等有限循环；返回 undefined 时按顺序执行下一个节点。
+   *
+   * @param output 已校验的节点输出。
+   * @param context 当前节点执行上下文。
+   * @returns 下一个节点的 nodeId，或 undefined。
+   */
+  decideNext?(output: TOutput, context: WorkflowNodeExecutionContext<TState>): string | undefined;
   summarizeInput?: (input: TInput) => Record<string, unknown>;
   summarizeOutput?: (output: TOutput) => Record<string, unknown>;
 }
@@ -143,8 +152,10 @@ export async function runSequentialWorkflow<TState extends WorkflowState>(
     };
   }
 
-  for (const definition of input.nodes) {
-    const nodeIndex = nodes.findIndex((node) => node.nodeId === definition.nodeId);
+  let nodeIndex = 0;
+
+  while (nodeIndex >= 0 && nodeIndex < input.nodes.length) {
+    const definition = input.nodes[nodeIndex];
     const budgetError = ensureStepBudget(executedSteps, maxSteps, definition.nodeId);
 
     if (budgetError) {
@@ -275,6 +286,26 @@ export async function runSequentialWorkflow<TState extends WorkflowState>(
       };
       events.push(createWorkflowEvent("node_succeeded", definition.nodeId, { outputSummary }));
       recordWorkflowTrace(input.trace, runId, definition, nodes[nodeIndex], "succeeded");
+
+      const nextNodeId = definition.decideNext?.(parsedOutput.data, {
+        runId,
+        nodeId: definition.nodeId,
+        nodeType: definition.type,
+        state,
+        trace: input.trace,
+        executedSteps
+      });
+
+      if (nextNodeId) {
+        const nextIndex = input.nodes.findIndex((node) => node.nodeId === nextNodeId);
+
+        if (nextIndex >= 0) {
+          nodeIndex = nextIndex;
+          continue;
+        }
+      }
+
+      nodeIndex += 1;
     } catch (caught) {
       const error: WorkflowErrorDto = {
         code: "node_execution_failed",

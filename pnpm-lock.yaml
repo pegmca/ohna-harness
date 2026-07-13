@@ -124,6 +124,9 @@ importers:
 
   packages/report:
     dependencies:
+      '@aiagent/rag':
+        specifier: workspace:^
+        version: link:../rag
       '@aiagent/trace':
         specifier: workspace:^
         version: link:../trace

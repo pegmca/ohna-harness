@@ -94,6 +94,72 @@ test("max steps returns structured failure before executing the next node", asyn
   assert.equal(result.run.nodes[1].status, "failed");
 });
 
+test("decideNext can loop back to an earlier node with max steps protection", async () => {
+  const trace = createInMemoryTraceRecorder("trace_workflow_loop");
+  const result = await runSequentialWorkflow({
+    workflowName: "test_loop",
+    initialState: { value: 0 },
+    maxSteps: 6,
+    trace,
+    nodes: [
+      {
+        nodeId: "increment",
+        type: "test.increment",
+        title: "Increment",
+        inputSchema: z.object({ value: z.number() }),
+        outputSchema: z.object({ value: z.number() }),
+        buildInput: (state) => ({ value: state.value }),
+        execute: (input) => ({ value: input.value + 1 }),
+        applyOutput: (state, output) => ({ ...state, value: output.value }),
+        decideNext: (output) => (output.value < 3 ? "increment" : undefined)
+      },
+      {
+        nodeId: "finalize",
+        type: "test.finalize",
+        title: "Finalize",
+        inputSchema: z.object({ value: z.number() }),
+        outputSchema: z.object({ value: z.number() }),
+        buildInput: (state) => ({ value: state.value }),
+        execute: (input) => ({ value: input.value * 10 }),
+        applyOutput: (state, output) => ({ ...state, value: output.value })
+      }
+    ]
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.state.value, 30);
+  assert.equal(result.run.executedSteps, 4);
+  assert.deepEqual(
+    result.run.nodes.map((node) => node.status),
+    ["succeeded", "succeeded"]
+  );
+  const workflowEvents = trace.getEvents().filter((event) => event.type === "workflow_node");
+  assert.equal(workflowEvents.length, 8);
+
+  const maxStepsResult = await runSequentialWorkflow({
+    workflowName: "test_loop_max_steps",
+    initialState: { value: 0 },
+    maxSteps: 2,
+    nodes: [
+      {
+        nodeId: "increment",
+        type: "test.increment",
+        title: "Increment",
+        inputSchema: z.object({ value: z.number() }),
+        outputSchema: z.object({ value: z.number() }),
+        buildInput: (state) => ({ value: state.value }),
+        execute: (input) => ({ value: input.value + 1 }),
+        applyOutput: (state, output) => ({ ...state, value: output.value }),
+        decideNext: () => "increment"
+      }
+    ]
+  });
+
+  assert.equal(maxStepsResult.ok, false);
+  assert.equal(maxStepsResult.error.code, "max_steps_exceeded");
+  assert.equal(maxStepsResult.run.executedSteps, 2);
+});
+
 test("node exceptions and schema failures are returned as workflow errors", async () => {
   const trace = createInMemoryTraceRecorder("trace_workflow_failure");
   const thrown = await runSequentialWorkflow({

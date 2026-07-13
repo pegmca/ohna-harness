@@ -14,9 +14,10 @@
   "scripts": {
     "build": "tsc -b",
     "test": "pnpm build && node --test test/*.test.mjs",
-    "typecheck": "pnpm --filter @aiagent/types build && pnpm --filter @aiagent/trace build && pnpm --filter @aiagent/workflow build && tsc -p tsconfig.json --pretty false --noEmit"
+    "typecheck": "pnpm --filter @aiagent/types build && pnpm --filter @aiagent/filings build && pnpm --filter @aiagent/rag build && pnpm --filter @aiagent/trace build && pnpm --filter @aiagent/workflow build && tsc -p tsconfig.json --pretty false --noEmit"
   },
   "dependencies": {
+    "@aiagent/rag": "workspace:^",
     "@aiagent/trace": "workspace:^",
     "@aiagent/types": "workspace:^",
     "@aiagent/workflow": "workspace:^",

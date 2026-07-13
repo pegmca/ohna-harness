@@ -115,12 +115,20 @@ pnpm --filter @aiagent/agent test
 
 ## Tools Infrastructure
 
-`packages/tools` 导出统一工具基础设施，当前实现 Week 1 的稳定 mock tools：`calculator`、`market_data_mock`、`filing_search_mock`、`financial_metric_mock`。
+`packages/tools` 导出统一工具基础设施，当前实现稳定 mock tools：`calculator`、`market_data_mock`、`filing_search_mock`、`financial_metric_mock`、`sql_query_mock`。
 
-- `Tool<TInput, TOutput>`：每个工具必须声明 `inputSchema`、`outputSchema` 和 `execute()`。
+- `Tool<TInput, TOutput>`：每个工具必须声明 `inputSchema`、`outputSchema` 和 `execute()`，可选声明 `permissionLevel` 和 `evaluatePermission()`。
 - `ToolRegistry`：支持按名称注册、查找、列出和执行工具。
-- `createDefaultToolRegistry()`：返回已注册首批四个 mock tools 的 registry。
-- `executeTool()` / `registry.execute()`：执行前用 zod 校验参数，执行后校验输出，并把异常转换为 `ToolExecutionResult` 结构化失败。
+- `createDefaultToolRegistry()`：返回已注册默认 mock tools 的 registry。
+- `executeTool()` / `registry.execute()`：执行前用 zod 校验参数和 permission policy，执行后校验输出，并把异常转换为 `ToolExecutionResult` 结构化失败。
+
+默认权限：
+
+- `safe`：`calculator`、`market_data_mock`、`filing_search_mock`、`financial_metric_mock` 可直接执行。
+- `needs_approval`：`sql_query_mock` 的只读查询需要人工批准后执行。
+- `blocked`：`sql_query_mock` 发现写 SQL 或 schema 变更关键词时直接阻断，返回 `permission_denied`。
+
+SQL readonly 第一版是启发式白名单：只允许 `SELECT` / `WITH` 开头的单条查询，并禁止 `insert`、`update`、`delete`、`drop`、`alter`、`truncate`、`create` 等写操作关键词。它适合学习阶段保护工具边界，但不能替代真实数据库只读账号、SQL parser 或服务端权限隔离。
 
 源码按职责拆分在 `packages/tools/src`：`types.ts` 保存公共 contract，`registry.ts` 保存注册表，`executor.ts` 保存执行与 trace 写入，`default-registry.ts` 组合默认 mock tools，`tools/*.ts` 按工具名分别保存 schema 和实现。`index.ts` 只作为 package 入口导出公共 API。
 
@@ -132,7 +140,7 @@ pnpm --filter @aiagent/agent test
 pnpm --filter @aiagent/tools test
 ```
 
-该测试覆盖四个 mock tools、缺失 `ticker` 的 zod 参数错误、非法 calculator 表达式和 trace 写入。
+该测试覆盖默认 mock tools、safe 工具直跑、只读 SQL 审批、写 SQL 阻断、缺失 `ticker` 的 zod 参数错误、非法 calculator 表达式和 trace 写入。
 
 ## Week 2 RAG Package Foundation
 
@@ -281,10 +289,10 @@ pnpm --filter @aiagent/tools test
 
 Week 3-016 新增两个 package：
 
-- `@aiagent/workflow`：通用节点执行器。每个节点必须声明 `inputSchema` 和 `outputSchema`，runtime 在节点执行前后用 zod 校验，节点异常、输入错误、输出错误和 max steps 超限都会转换成 `WorkflowErrorDto`。Week 3-017 为其增加 `decideNext` 能力，支持节点执行成功后跳转到指定节点，从而实现 verifier loop 等有限循环。
-- `@aiagent/report`：研报领域 workflow 节点实现。`runReportWorkflow(plan, options)` 从 `ReportPlanDto` 创建 workflow run，依次执行 Data Collector、Analyzer、Risk Checker、Citation Verifier、Report Writer 和 PDF Exporter 占位节点。
+- `@aiagent/workflow`：通用节点执行器。每个节点必须声明 `inputSchema` 和 `outputSchema`，runtime 在节点执行前后用 zod 校验，节点异常、输入错误、输出错误和 max steps 超限都会转换成 `WorkflowErrorDto`。Week 3-017 为其增加 `decideNext` 能力，支持节点执行成功后跳转到指定节点，从而实现 verifier loop 等有限循环。Week 3-018 增加 `createApprovalRequest()`，敏感节点未批准前返回 `paused`，拒绝后返回 `rejected`。
+- `@aiagent/report`：研报领域 workflow 节点实现。`runReportWorkflow(plan, options)` 从 `ReportPlanDto` 创建 workflow run，依次执行 Data Collector、Analyzer、Risk Checker、Citation Verifier、Report Writer 和 PDF Exporter 占位节点；PDF Exporter 被视为敏感导出动作，需要 `approvalDecisions` 中包含批准 decision 后才会执行。
 
-Workflow DTO 放在 `packages/types`：`WorkflowRunDto`、`WorkflowNodeDto`、`WorkflowNodeStatusDto`、`WorkflowEdgeDto`、`WorkflowEventDto` 和 `WorkflowErrorDto`。第一版不做复杂 DAG、持久化 store、真实 PDF 生成或 MCP 工具调用。
+Workflow DTO 放在 `packages/types`：`WorkflowRunDto`、`WorkflowNodeDto`、`WorkflowNodeStatusDto`、`WorkflowEdgeDto`、`WorkflowEventDto`、`WorkflowErrorDto`、`ToolApprovalRequestDto` 和 `ToolApprovalDecisionDto`。第一版不做复杂 DAG、持久化 store、真实 PDF 生成或 MCP 工具调用；approval queue 也是进程内 demo，不是多用户权限系统。
 
 Report Workflow 当前节点输出：
 
@@ -293,7 +301,9 @@ Report Workflow 当前节点输出：
 - Risk Checker：输出 risk level、risk items 和 passed 状态；当 `reportType` 为 `risk_review` 且风险披露不足时，输出 `needsMoreEvidence` 和 follow-up queries。
 - Citation Verifier：检查每个 claim 是否有 citation 支撑、required metric 是否齐全。决策类型为 `pass | needs_more_evidence | needs_metric | retry_tool | fail`；缺证据时生成 follow-up queries，并通过 `decideNext` 跳回 Data Collector 做补充检索，受 `maxRetries` 限制。
 - Report Writer：生成 Markdown 和最小 HTML 草稿；证据不足时保留“资料不足说明”，不编造结论。
-- PDF Exporter：返回 `placeholder` 导出结构，不生成真实 PDF。
+- PDF Exporter：审批通过后返回 `placeholder` 导出结构，不生成真实 PDF；未审批时 workflow 暂停，拒绝时不产生 export。
+
+Approval trace 使用 `approval` event 记录 `requested`、`approved`、`rejected`，只保存 `inputPreview` 和 reviewer note，不记录完整敏感 payload。
 
 可调用验证入口：
 
@@ -307,6 +317,10 @@ pnpm --filter @aiagent/report test
 前端固定采用 Vite + React + TypeScript + Tailwind CSS + shadcn/ui + Radix UI，图标统一使用 lucide-react。基础 UI 组件放在 `apps/web/src/components/ui`，业务组件组合基础组件实现，避免同时引入 Ant Design、MUI、Chakra 等第二套组件体系。
 
 后端在需要 HTTP 服务时使用 `apps/api` + Fastify。Fastify route handler 只作为 HTTP adapter：完成请求校验、调用 `packages/agent` / `packages/tools` / `packages/trace`、返回结构化响应。Agent 编排、工具执行、trace 构造等运行时逻辑不得放进 `apps/api` 或 `apps/web`。
+
+`POST /api/approvals/decision` 是人工确认的最小 API 边界，只提交 `ToolApprovalDecisionDto`，不做权限判断；真正的 permission gate 在 `packages/tools` 和 `packages/workflow` 执行敏感动作前完成。Web 的确认 UI 放在 assistant message 的 `Run details -> Approvals` 区块，只展示 approval request 并提交 approve/reject decision。
+
+手动 demo：在 Agent Chat 输入 `执行 SQL：SELECT ticker, roe FROM metrics`，Agent 会路由到 `sql_query_mock` 并返回 `permission_required`，展开 assistant 消息的 Run details 可看到 Approvals；提交 Reject 后会调用 `/api/approvals/decision`。输入 `执行 SQL：DROP TABLE filings` 可验证写 SQL 被 readonly validator 阻断。
 
 前后端共享的请求、响应、DTO、错误码和稳定枚举统一放在 `packages/types`，由 `apps/web`、`apps/api` 和 runtime packages 通过 `@aiagent/types` 引用。不要在前端或 API route 中重复声明协议类型；包内也不要放 UI-only props、数据库私有模型或只属于单个 runtime package 的内部状态。
 

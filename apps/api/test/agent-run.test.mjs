@@ -23,6 +23,27 @@ test("POST /api/agent/run returns structured agent response", async () => {
   await app.close();
 });
 
+test("POST /api/approvals/decision records approval decisions", async () => {
+  const app = createApiServer();
+  const response = await app.inject({
+    method: "POST",
+    url: "/api/approvals/decision",
+    payload: {
+      approvalId: "approval_demo",
+      decision: "approved",
+      reviewerNote: "manual test"
+    }
+  });
+
+  assert.equal(response.statusCode, 200);
+  const body = response.json();
+  assert.equal(body.ok, true);
+  assert.equal(body.data.approvalId, "approval_demo");
+  assert.equal(body.data.decision, "approved");
+
+  await app.close();
+});
+
 test("POST /api/agent/run forwards report activation DTOs and returns report plan", async () => {
   const app = createApiServer();
   const response = await app.inject({

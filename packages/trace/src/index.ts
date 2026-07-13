@@ -14,6 +14,7 @@ export type TraceEventType =
   | "request_received"
   | "intent_routed"
   | "agent_step"
+  | "approval"
   | "retrieval"
   | "report_skill_activation"
   | "report_plan"
@@ -58,6 +59,16 @@ export interface TraceAgentStepEvent extends TraceEventBase {
   durationMs: number;
   error?: TraceError;
   data?: Record<string, unknown>;
+}
+
+export interface TraceApprovalEvent extends TraceEventBase {
+  type: "approval";
+  approvalId: string;
+  toolName: string;
+  status: "requested" | "approved" | "rejected";
+  reason: string;
+  inputPreview: unknown;
+  reviewerNote?: string;
 }
 
 export interface TraceRetrievalScoreSummary {
@@ -145,14 +156,16 @@ export interface TraceReportPlanEvent extends TraceEventBase {
   error?: TraceError;
 }
 
-export type WorkflowNodeStatus = "pending" | "running" | "succeeded" | "failed" | "skipped";
+export type WorkflowNodeStatus = "pending" | "running" | "paused" | "approved" | "rejected" | "succeeded" | "failed" | "skipped";
 
 export type WorkflowErrorCode =
   | "invalid_workflow"
   | "invalid_node_input"
   | "invalid_node_output"
   | "node_execution_failed"
-  | "max_steps_exceeded";
+  | "max_steps_exceeded"
+  | "approval_required"
+  | "approval_rejected";
 
 export interface WorkflowTraceError {
   code: WorkflowErrorCode;
@@ -208,6 +221,7 @@ export type TraceEvent =
   | TraceRequestReceivedEvent
   | TraceIntentRoutedEvent
   | TraceAgentStepEvent
+  | TraceApprovalEvent
   | TraceRetrievalEvent
   | TraceReportSkillActivationEvent
   | TraceReportPlanEvent

@@ -1,18 +1,19 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createInMemoryTraceRecorder } from "@aiagent/trace";
-import { createDefaultToolRegistry, getToolRegistrySummary } from "../dist/index.js";
+import { createDefaultToolRegistry, getToolRegistrySummary, isReadonlySql } from "../dist/index.js";
 
 test("default registry exposes and executes the week 1 mock tools", async () => {
   const registry = createDefaultToolRegistry();
   const summary = getToolRegistrySummary(registry);
 
-  assert.equal(summary.availableTools, 4);
+  assert.equal(summary.availableTools, 5);
   assert.deepEqual(summary.toolNames, [
     "calculator",
     "market_data_mock",
     "filing_search_mock",
-    "financial_metric_mock"
+    "financial_metric_mock",
+    "sql_query_mock"
   ]);
 
   const calculator = await registry.execute("calculator", { expression: "12.5 * 8" });
@@ -34,6 +35,59 @@ test("default registry exposes and executes the week 1 mock tools", async () => 
   assert.equal(metrics.ok, true);
   assert.equal(metrics.result.metrics.net_profit.value, 14932000000);
   assert.equal(metrics.result.metrics.roe.value, 3.42);
+});
+
+test("safe tools execute without approval", async () => {
+  const registry = createDefaultToolRegistry();
+  const trace = createInMemoryTraceRecorder("trace_safe_tool");
+  const result = await registry.execute("calculator", { expression: "2 + 3" }, { trace });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.result.value, 5);
+  assert.equal(trace.getEvents().some((event) => event.type === "approval"), false);
+});
+
+test("readonly sql requires approval and executes after approval decision", async () => {
+  const registry = createDefaultToolRegistry();
+  const trace = createInMemoryTraceRecorder("trace_sql_approval");
+  const pending = await registry.execute("sql_query_mock", { query: "SELECT ticker, roe FROM metrics" }, { trace });
+
+  assert.equal(pending.ok, false);
+  assert.equal(pending.error.code, "permission_required");
+  assert.equal(pending.approvalRequest.permissionLevel, "needs_approval");
+  assert.equal(trace.getEvents().some((event) => event.type === "approval" && event.status === "requested"), true);
+
+  const approved = await registry.execute(
+    "sql_query_mock",
+    { query: "SELECT ticker, roe FROM metrics" },
+    {
+      trace,
+      approvalDecisions: [
+        {
+          approvalId: pending.approvalRequest.approvalId,
+          decision: "approved",
+          reviewerNote: "test approval"
+        }
+      ]
+    }
+  );
+
+  assert.equal(approved.ok, true);
+  assert.equal(approved.result.rowCount, 1);
+  assert.equal(trace.getEvents().some((event) => event.type === "approval" && event.status === "approved"), true);
+});
+
+test("sql write operations are blocked by readonly validator", async () => {
+  const registry = createDefaultToolRegistry();
+  const trace = createInMemoryTraceRecorder("trace_sql_blocked");
+  const result = await registry.execute("sql_query_mock", { query: "DROP TABLE filings" }, { trace });
+
+  assert.equal(isReadonlySql("SELECT * FROM filings"), true);
+  assert.equal(isReadonlySql("DROP TABLE filings"), false);
+  assert.equal(result.ok, false);
+  assert.equal(result.error.code, "permission_denied");
+  assert.equal(result.approvalRequest.permissionLevel, "blocked");
+  assert.equal(trace.getEvents().some((event) => event.type === "approval" && event.status === "rejected"), true);
 });
 
 test("zod validation errors are returned and recorded instead of thrown", async () => {

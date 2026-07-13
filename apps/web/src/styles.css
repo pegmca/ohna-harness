@@ -830,6 +830,7 @@ textarea:disabled {
 }
 
 .detail-row,
+.approval-row,
 .trace-row,
 .muted-row {
   border: 1px solid var(--md-color-border-subtle);
@@ -838,7 +839,8 @@ textarea:disabled {
   padding: var(--md-space-3);
 }
 
-.detail-row {
+.detail-row,
+.approval-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: var(--md-space-3);
@@ -846,6 +848,7 @@ textarea:disabled {
 }
 
 .detail-row > div,
+.approval-row > div,
 .trace-row > div {
   display: grid;
   min-width: 0;
@@ -853,18 +856,33 @@ textarea:disabled {
 }
 
 .detail-row strong,
+.approval-row strong,
 .trace-row strong {
   color: var(--md-color-text-primary);
   font-size: var(--md-text-body-sm-size);
 }
 
 .detail-row span,
+.approval-row span,
+.approval-row small,
 .trace-row span,
 .trace-row small,
 .muted-row {
   color: var(--md-color-text-muted);
   font-size: var(--md-text-body-sm-size);
   line-height: 1.5;
+}
+
+.approval-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--md-space-2);
+}
+
+.danger-action {
+  border-color: color-mix(in srgb, var(--md-color-danger) 42%, var(--md-color-border));
+  color: var(--md-color-danger);
 }
 
 .trace-row {
@@ -1102,8 +1120,13 @@ textarea:disabled {
   }
 
   .run-details > summary,
-  .detail-row {
+  .detail-row,
+  .approval-row {
     grid-template-columns: 1fr;
+  }
+
+  .approval-actions {
+    justify-content: flex-start;
   }
 
   .details-chevron {

@@ -60,6 +60,27 @@ test("filing search questions select filing_search_mock through the registry", a
   assert.equal(toolEvent.ok, true);
 });
 
+test("sql queries route to approval-gated sql_query_mock", async () => {
+  const trace = createInMemoryTraceRecorder("trace_sql_agent_test");
+  const response = await runAgent(
+    { message: "执行 SQL：SELECT ticker, roe FROM metrics" },
+    { traceRecorder: trace }
+  );
+
+  assert.equal(response.ok, false);
+  assert.equal(response.intent, "tool");
+  assert.equal(response.error.code, "permission_required");
+  assert.equal(response.error.details.toolName, "sql_query_mock");
+
+  const approvalEvent = trace.getEvents().find((event) => event.type === "approval");
+  assert.equal(approvalEvent.status, "requested");
+  assert.equal(approvalEvent.toolName, "sql_query_mock");
+
+  const toolEvent = trace.getEvents().find((event) => event.type === "tool_call");
+  assert.equal(toolEvent.ok, false);
+  assert.equal(toolEvent.error.code, "permission_required");
+});
+
 test("natural language report PDF requests activate planner and return a ready plan", async () => {
   const trace = createInMemoryTraceRecorder("trace_report_test");
   const response = await runAgent(

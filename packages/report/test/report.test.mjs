@@ -50,9 +50,12 @@ test("report workflow nodes declare input and output schemas", () => {
 
 test("report workflow executes a ready plan to draft and PDF placeholder", async () => {
   const trace = createInMemoryTraceRecorder("trace_report_workflow_happy");
+  const runId = "report_wf_test_happy";
   const result = await runReportWorkflow(createReadyPlan(), {
+    runId,
     trace,
-    documents: [createDemoDocument()]
+    documents: [createDemoDocument()],
+    approvalDecisions: [approvePdfExport(runId)]
   });
 
   assert.equal(result.ok, true);
@@ -62,10 +65,12 @@ test("report workflow executes a ready plan to draft and PDF placeholder", async
   assert.equal(result.export.status, "placeholder");
   assert.equal(result.run.nodes.every((node) => node.status === "succeeded"), true);
   assert.equal(trace.getEvents().filter((event) => event.type === "workflow_node").length, 12);
+  assert.equal(trace.getEvents().some((event) => event.type === "approval" && event.status === "approved"), true);
 });
 
 test("report workflow triggers supplementary retrieval when citations are missing", async () => {
   const trace = createInMemoryTraceRecorder("trace_report_workflow_retry");
+  const runId = "report_wf_test_retry";
   const result = await runReportWorkflow(
     {
       ...createReadyPlan(),
@@ -73,9 +78,11 @@ test("report workflow triggers supplementary retrieval when citations are missin
       requiredData: ["filings", "financial_metrics", "risk"]
     },
     {
+      runId,
       trace,
       documents: [],
-      maxRetries: 2
+      maxRetries: 2,
+      approvalDecisions: [approvePdfExport(runId)]
     }
   );
 
@@ -103,6 +110,37 @@ test("report workflow returns max step structured failure", async () => {
   assert.equal(result.run.nodes[3].status, "failed");
 });
 
+test("report workflow pauses and rejects PDF export without executing sensitive action", async () => {
+  const runId = "report_wf_test_approval";
+  const paused = await runReportWorkflow(createReadyPlan(), {
+    runId,
+    documents: [createDemoDocument()]
+  });
+
+  assert.equal(paused.ok, false);
+  assert.equal(paused.run.status, "paused");
+  assert.equal(paused.error.code, "approval_required");
+  assert.equal(paused.approvalRequest.approvalId, `approval_${runId}_pdf_exporter`);
+  assert.equal(paused.run.nodes[5].status, "paused");
+
+  const rejected = await runReportWorkflow(createReadyPlan(), {
+    runId,
+    documents: [createDemoDocument()],
+    approvalDecisions: [
+      {
+        approvalId: `approval_${runId}_pdf_exporter`,
+        decision: "rejected",
+        reviewerNote: "demo reject"
+      }
+    ]
+  });
+
+  assert.equal(rejected.ok, false);
+  assert.equal(rejected.run.status, "rejected");
+  assert.equal(rejected.error.code, "approval_rejected");
+  assert.equal(rejected.state.export, undefined);
+});
+
 test("report workflow rejects plans without subject as structured invalid workflow", async () => {
   const result = await runReportWorkflow({
     ...createReadyPlan(),
@@ -117,6 +155,7 @@ test("report workflow rejects plans without subject as structured invalid workfl
 });
 
 test("report workflow risk review asks for more evidence when risk disclosure is missing", async () => {
+  const runId = "report_wf_test_risk";
   const result = await runReportWorkflow(
     {
       ...createReadyPlan(),
@@ -124,6 +163,7 @@ test("report workflow risk review asks for more evidence when risk disclosure is
       requiredData: ["filings", "risk"]
     },
     {
+      runId,
       documents: [
         {
           source: "demo/no-risk-doc",
@@ -132,7 +172,8 @@ test("report workflow risk review asks for more evidence when risk disclosure is
           content: "# 经营情况\n公司营业收入保持稳定增长。"
         }
       ],
-      maxRetries: 1
+      maxRetries: 1,
+      approvalDecisions: [approvePdfExport(runId)]
     }
   );
 
@@ -163,6 +204,14 @@ function createReadyPlan() {
         optional: false
       }
     ]
+  };
+}
+
+function approvePdfExport(runId) {
+  return {
+    approvalId: `approval_${runId}_pdf_exporter`,
+    decision: "approved",
+    reviewerNote: "test approval"
   };
 }
 

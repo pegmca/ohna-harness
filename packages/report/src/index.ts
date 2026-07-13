@@ -1,7 +1,13 @@
 import { createDataSourceRuntime } from "@aiagent/rag";
 import type { Citation, DataSourceRuntime, RetrievalResult } from "@aiagent/rag";
 import type { TraceRecorder } from "@aiagent/trace";
-import type { DataSourceIngestRequestDto, ReportPlanDto, WorkflowErrorDto, WorkflowRunDto } from "@aiagent/types";
+import type {
+  DataSourceIngestRequestDto,
+  ReportPlanDto,
+  ToolApprovalDecisionDto,
+  WorkflowErrorDto,
+  WorkflowRunDto
+} from "@aiagent/types";
 import {
   runSequentialWorkflow,
   type AnyWorkflowNodeDefinition,
@@ -201,6 +207,7 @@ export interface RunReportWorkflowOptions {
   maxRetries?: number;
   trace?: TraceRecorder;
   documents?: ReportWorkflowDemoDocument[];
+  approvalDecisions?: ToolApprovalDecisionDto[];
 }
 
 export interface ReportWorkflowResultOk {
@@ -216,6 +223,7 @@ export interface ReportWorkflowResultError {
   run: WorkflowRunDto;
   state: ReportWorkflowState;
   error: WorkflowErrorDto;
+  approvalRequest?: WorkflowRunDto["approvalRequest"];
 }
 
 export type ReportWorkflowResult = ReportWorkflowResultOk | ReportWorkflowResultError;
@@ -307,7 +315,8 @@ export async function runReportWorkflow(
     initialState,
     nodes: createReportWorkflowNodes(options.maxRetries ?? DEFAULT_MAX_RETRIES),
     maxSteps: options.maxSteps ?? DEFAULT_MAX_STEPS,
-    trace: options.trace
+    trace: options.trace,
+    approvalDecisions: options.approvalDecisions
   });
 
   if (!result.ok) {
@@ -315,7 +324,8 @@ export async function runReportWorkflow(
       ok: false,
       run: result.run,
       state: result.state,
-      error: result.error
+      error: result.error,
+      approvalRequest: result.approvalRequest
     };
   }
 
@@ -838,6 +848,18 @@ function createPdfExporterNode(): WorkflowNodeDefinition<ReportPdfExporterInput,
     outputSchema: reportPdfExporterOutputSchema,
     buildInput: (state) => ({
       draft: state.draft
+    }),
+    createApprovalRequest: (state, context) => ({
+      approvalId: `approval_${context.runId}_pdf_exporter`,
+      traceId: context.trace?.traceId ?? context.runId,
+      toolName: "report_pdf_exporter",
+      reason: "PDF export is a sensitive external action and requires human approval before execution.",
+      inputPreview: {
+        title: state.draft?.title,
+        markdownLength: state.draft?.markdown.length,
+        citationCount: state.draft?.citationCount
+      },
+      permissionLevel: "needs_approval"
     }),
     execute: (input) => ({
       status: "placeholder",

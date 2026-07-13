@@ -3,19 +3,21 @@ import { calculatorTool } from "./tools/calculator.js";
 import { filingSearchMockTool } from "./tools/filing-search-mock.js";
 import { financialMetricMockTool } from "./tools/financial-metric-mock.js";
 import { marketDataMockTool } from "./tools/market-data-mock.js";
+import { sqlQueryMockTool } from "./tools/sql-query-mock.js";
 import type { ToolRegistrySummary } from "./types.js";
 
 /**
- * 创建默认工具注册表，包含 Week 1 首批四个 mock tools。
+ * 创建默认工具注册表，包含安全 mock tools 和需要审批的 SQL 查询 demo tool。
  *
- * @returns 已注册 calculator、market_data_mock、filing_search_mock、financial_metric_mock 的 registry。
+ * @returns 已注册 calculator、market_data_mock、filing_search_mock、financial_metric_mock、sql_query_mock 的 registry。
  */
 export function createDefaultToolRegistry(): ToolRegistry {
   return new ToolRegistry()
     .register(calculatorTool)
     .register(marketDataMockTool)
     .register(filingSearchMockTool)
-    .register(financialMetricMockTool);
+    .register(financialMetricMockTool)
+    .register(sqlQueryMockTool);
 }
 
 /**

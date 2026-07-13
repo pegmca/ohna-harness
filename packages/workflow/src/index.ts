@@ -1,5 +1,7 @@
 import type { TraceRecorder } from "@aiagent/trace";
 import type {
+  ToolApprovalDecisionDto,
+  ToolApprovalRequestDto,
   WorkflowEdgeDto,
   WorkflowErrorDto,
   WorkflowEventDto,
@@ -32,6 +34,17 @@ export interface WorkflowNodeDefinition<TInput, TOutput, TState extends Workflow
    * @returns 未信任的节点输入。
    */
   buildInput(state: TState): unknown;
+  /**
+   * 在节点执行前生成审批请求；runtime 会先检查 approval decision，未批准则暂停或拒绝。
+   *
+   * @param state 当前 workflow state。
+   * @param context 当前节点执行上下文。
+   * @returns 审批请求；没有敏感动作时返回 undefined。
+   */
+  createApprovalRequest?(
+    state: TState,
+    context: WorkflowNodeExecutionContext<TState>
+  ): ToolApprovalRequestDto | undefined;
   /**
    * 执行节点逻辑。节点可以抛错，runtime 会统一转成结构化 WorkflowError。
    *
@@ -70,6 +83,7 @@ export interface RunSequentialWorkflowInput<TState extends WorkflowState> {
   nodes: readonly AnyWorkflowNodeDefinition<TState>[];
   maxSteps?: number;
   trace?: TraceRecorder;
+  approvalDecisions?: ToolApprovalDecisionDto[];
 }
 
 export type WorkflowRunResult<TState extends WorkflowState = WorkflowState> =
@@ -83,6 +97,7 @@ export type WorkflowRunResult<TState extends WorkflowState = WorkflowState> =
       run: WorkflowRunDto;
       state: TState;
       error: WorkflowErrorDto;
+      approvalRequest?: ToolApprovalRequestDto;
     };
 
 export interface WorkflowPackageSummary {
@@ -184,6 +199,97 @@ export async function runSequentialWorkflow<TState extends WorkflowState>(
 
     const nodeStartedAtMs = performance.now();
     const nodeStartedAt = new Date().toISOString();
+    const approvalRequest = definition.createApprovalRequest?.(state, {
+      runId,
+      nodeId: definition.nodeId,
+      nodeType: definition.type,
+      state,
+      trace: input.trace,
+      executedSteps
+    });
+
+    if (approvalRequest) {
+      const approvalDecision = input.approvalDecisions?.find((decision) => decision.approvalId === approvalRequest.approvalId);
+
+      if (approvalDecision?.decision === "rejected") {
+        const error: WorkflowErrorDto = {
+          code: "approval_rejected",
+          message: `Workflow node rejected by reviewer: ${definition.nodeId}`,
+          nodeId: definition.nodeId,
+          details: {
+            approvalId: approvalRequest.approvalId,
+            reviewerNote: approvalDecision.reviewerNote
+          }
+        };
+        nodes[nodeIndex] = markNodeWithApproval(nodes[nodeIndex], "rejected", nodeStartedAt, nodeStartedAtMs, approvalRequest, error);
+        events.push(createWorkflowEvent("node_rejected", definition.nodeId, { approvalRequest }, error));
+        events.push(createWorkflowEvent("workflow_rejected", definition.nodeId, { approvalRequest }, error));
+        recordApprovalTrace(input.trace, approvalRequest, "rejected", approvalDecision.reviewerNote);
+        recordWorkflowTrace(input.trace, runId, definition, nodes[nodeIndex], "rejected", error);
+        return {
+          ok: false,
+          state,
+          error,
+          approvalRequest,
+          run: buildRunDto({
+            runId,
+            workflowName: input.workflowName,
+            status: "rejected",
+            startedAt,
+            startedAtMs,
+            maxSteps,
+            executedSteps,
+            nodes,
+            edges,
+            events,
+            approvalRequest,
+            error
+          })
+        };
+      }
+
+      if (approvalDecision?.decision !== "approved") {
+        const error: WorkflowErrorDto = {
+          code: "approval_required",
+          message: `Workflow paused before sensitive node: ${definition.nodeId}`,
+          nodeId: definition.nodeId,
+          details: {
+            approvalId: approvalRequest.approvalId,
+            permissionLevel: approvalRequest.permissionLevel
+          }
+        };
+        nodes[nodeIndex] = markNodeWithApproval(nodes[nodeIndex], "paused", nodeStartedAt, nodeStartedAtMs, approvalRequest, error);
+        events.push(createWorkflowEvent("node_paused", definition.nodeId, { approvalRequest }, error));
+        events.push(createWorkflowEvent("workflow_paused", definition.nodeId, { approvalRequest }, error));
+        recordApprovalTrace(input.trace, approvalRequest, "requested");
+        recordWorkflowTrace(input.trace, runId, definition, nodes[nodeIndex], "paused", error);
+        return {
+          ok: false,
+          state,
+          error,
+          approvalRequest,
+          run: buildRunDto({
+            runId,
+            workflowName: input.workflowName,
+            status: "paused",
+            startedAt,
+            startedAtMs,
+            maxSteps,
+            executedSteps,
+            nodes,
+            edges,
+            events,
+            approvalRequest,
+            error
+          })
+        };
+      }
+
+      events.push(createWorkflowEvent("node_approved", definition.nodeId, { approvalRequest }));
+      events.push(createWorkflowEvent("workflow_approved", definition.nodeId, { approvalRequest }));
+      recordApprovalTrace(input.trace, approvalRequest, "approved", approvalDecision.reviewerNote);
+    }
+
     const rawInput = definition.buildInput(state);
     const parsedInput = definition.inputSchema.safeParse(rawInput);
 
@@ -452,6 +558,78 @@ function failRunningNode(
 }
 
 /**
+ * 构造带审批状态的节点 DTO，暂停/拒绝时保留 approval request 摘要。
+ *
+ * @param node 原节点 DTO。
+ * @param status 审批相关节点状态。
+ * @param startedAt 节点开始时间。
+ * @param startedAtMs performance 起始时间。
+ * @param approvalRequest 审批请求。
+ * @param error 结构化审批错误。
+ * @returns paused/rejected node DTO。
+ */
+function markNodeWithApproval(
+  node: WorkflowNodeDto,
+  status: "paused" | "rejected",
+  startedAt: string,
+  startedAtMs: number,
+  approvalRequest: ToolApprovalRequestDto,
+  error: WorkflowErrorDto
+): WorkflowNodeDto {
+  return {
+    ...node,
+    status,
+    startedAt,
+    completedAt: new Date().toISOString(),
+    durationMs: elapsedMs(startedAtMs),
+    inputSummary: {
+      approvalId: approvalRequest.approvalId,
+      toolName: approvalRequest.toolName,
+      permissionLevel: approvalRequest.permissionLevel,
+      inputPreview: approvalRequest.inputPreview
+    },
+    error
+  };
+}
+
+/**
+ * 写入 workflow 级 approval trace event；审批事件只包含 preview，不记录完整敏感 payload。
+ *
+ * @param trace trace recorder。
+ * @param request 审批请求。
+ * @param status 审批状态。
+ * @param reviewerNote reviewer 说明。
+ */
+function recordApprovalTrace(
+  trace: TraceRecorder | undefined,
+  request: ToolApprovalRequestDto,
+  status: "requested" | "approved" | "rejected",
+  reviewerNote?: string
+): void {
+  if (!trace) {
+    return;
+  }
+
+  try {
+    trace.record({
+      type: "approval",
+      id: `${trace.traceId}_${request.approvalId}_${status}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
+      traceId: trace.traceId,
+      requestId: trace.requestId,
+      approvalId: request.approvalId,
+      toolName: request.toolName,
+      status,
+      reason: request.reason,
+      inputPreview: request.inputPreview,
+      reviewerNote,
+      createdAt: new Date().toISOString()
+    });
+  } catch {
+    // trace 是旁路观测能力，不能影响 workflow 权限边界。
+  }
+}
+
+/**
  * 写入 workflow node trace event，trace 失败不影响 workflow 主流程。
  *
  * @param trace trace recorder。
@@ -604,6 +782,7 @@ function buildRunDto(input: {
   nodes: WorkflowNodeDto[];
   edges: WorkflowEdgeDto[];
   events: WorkflowEventDto[];
+  approvalRequest?: ToolApprovalRequestDto;
   error?: WorkflowErrorDto;
 }): WorkflowRunDto {
   return {
@@ -618,6 +797,7 @@ function buildRunDto(input: {
     nodes: input.nodes,
     edges: input.edges,
     events: input.events,
+    approvalRequest: input.approvalRequest,
     error: input.error
   };
 }

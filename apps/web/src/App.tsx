@@ -11,7 +11,9 @@ import type {
   RagChunkDto,
   RagSearchResponseDto,
   ReportTriggerSourceDto,
-  RetrievalResultDto
+  RetrievalResultDto,
+  ToolApprovalDecisionDto,
+  ToolApprovalRequestDto
 } from "@aiagent/types";
 import {
   Activity,
@@ -29,6 +31,7 @@ import {
   Quote,
   Search,
   Send,
+  ShieldCheck,
   Sparkles,
   User,
   Wrench,
@@ -66,6 +69,7 @@ const demoPrompts = [
   "这家公司最近两年的营收变化如何？",
   "帮我查询 000001.SZ 最近一期净利润和 ROE。",
   "检索一下 000001.SZ 最近年报中关于资产质量的描述。",
+  "执行 SQL：SELECT ticker, roe FROM metrics",
   "帮我生成一份 000001.SZ 的公司研究报告 PDF。"
 ];
 const demoDataSourceContent = `# 资产质量
@@ -90,6 +94,7 @@ export function App() {
   const [composerError, setComposerError] = useState<string | undefined>();
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [workspaceView, setWorkspaceView] = useState<WorkspaceView>("chat");
+  const [approvalStatusById, setApprovalStatusById] = useState<Record<string, string>>({});
 
   const activeConversation = useMemo(
     () => conversations.find((conversation) => conversation.id === activeConversationId) ?? conversations[0],
@@ -295,6 +300,38 @@ export function App() {
     }));
   }
 
+  /**
+   * 提交人工审批决定；UI 只转交 decision，不在浏览器内重复实现权限判断。
+   *
+   * @param approvalId 审批请求 id。
+   * @param decision approve/reject 决策。
+   * @returns 请求完成 Promise。
+   */
+  async function handleApprovalDecision(
+    approvalId: string,
+    decision: ToolApprovalDecisionDto["decision"]
+  ): Promise<void> {
+    setApprovalStatusById((current) => ({
+      ...current,
+      [approvalId]: "submitting"
+    }));
+
+    const result = await submitApprovalDecision({
+      approvalId,
+      decision,
+      reviewerNote: decision === "approved" ? "Approved from Immersive UI." : "Rejected from Immersive UI."
+    });
+
+    setApprovalStatusById((current) => ({
+      ...current,
+      [approvalId]: result.ok ? result.data.decision : "failed"
+    }));
+
+    if (!result.ok) {
+      setComposerError(formatApiError(result.error));
+    }
+  }
+
   return (
     <main className="agent-app-shell">
       <ConversationSidebar
@@ -324,8 +361,10 @@ export function App() {
           />
 
           <ChatTimeline
+            approvalStatusById={approvalStatusById}
             isSubmitting={isSubmitting}
             messages={activeConversation?.messages ?? []}
+            onApprovalDecision={handleApprovalDecision}
             onUsePrompt={setInput}
           />
 
@@ -783,8 +822,10 @@ function ChatHeader(props: ChatHeaderProps) {
 }
 
 interface ChatTimelineProps {
+  approvalStatusById: Record<string, string>;
   isSubmitting: boolean;
   messages: UiMessage[];
+  onApprovalDecision: (approvalId: string, decision: ToolApprovalDecisionDto["decision"]) => Promise<void>;
   onUsePrompt: (prompt: string) => void;
 }
 
@@ -812,7 +853,12 @@ function ChatTimeline(props: ChatTimelineProps) {
     <section className="chat-timeline" aria-label="消息列表">
       <div className="timeline-inner">
         {props.messages.map((message) => (
-          <ChatMessage key={message.id} message={message} />
+          <ChatMessage
+            approvalStatusById={props.approvalStatusById}
+            key={message.id}
+            message={message}
+            onApprovalDecision={props.onApprovalDecision}
+          />
         ))}
       </div>
     </section>
@@ -825,7 +871,11 @@ function ChatTimeline(props: ChatTimelineProps) {
  * @param props 组件属性。
  * @returns 消息块。
  */
-function ChatMessage(props: { message: UiMessage }) {
+function ChatMessage(props: {
+  approvalStatusById: Record<string, string>;
+  message: UiMessage;
+  onApprovalDecision: (approvalId: string, decision: ToolApprovalDecisionDto["decision"]) => Promise<void>;
+}) {
   const { message } = props;
   const isUser = message.role === "user";
 
@@ -848,7 +898,14 @@ function ChatMessage(props: { message: UiMessage }) {
             <span>routing / tool selection / finalizing</span>
           </div>
         ) : null}
-        {message.run ? <RunDetails reportMode={message.run.intent === "report_skill"} run={message.run} /> : null}
+        {message.run ? (
+          <RunDetails
+            approvalStatusById={props.approvalStatusById}
+            onApprovalDecision={props.onApprovalDecision}
+            reportMode={message.run.intent === "report_skill"}
+            run={message.run}
+          />
+        ) : null}
       </div>
     </article>
   );
@@ -936,9 +993,15 @@ function StarterPrompts(props: {
  * @param props 组件属性。
  * @returns run 详情折叠区。
  */
-function RunDetails(props: { reportMode: boolean; run: AgentRunResponseDto }) {
+function RunDetails(props: {
+  approvalStatusById: Record<string, string>;
+  onApprovalDecision: (approvalId: string, decision: ToolApprovalDecisionDto["decision"]) => Promise<void>;
+  reportMode: boolean;
+  run: AgentRunResponseDto;
+}) {
   const { run } = props;
   const toolEvents = run.trace.events.filter((event) => event.type === "tool_call");
+  const approvalRequests = getApprovalRequests(run);
 
   return (
     <details className="run-details">
@@ -953,6 +1016,7 @@ function RunDetails(props: { reportMode: boolean; run: AgentRunResponseDto }) {
           <StatusBadge tone={props.reportMode ? "info" : "neutral"}>{props.reportMode ? "report" : "chat"}</StatusBadge>
           <StatusBadge tone="neutral">{run.steps.length} steps</StatusBadge>
           <StatusBadge tone="neutral">{toolEvents.length} tools</StatusBadge>
+          <StatusBadge tone={approvalRequests.length > 0 ? "info" : "neutral"}>{approvalRequests.length} approvals</StatusBadge>
           <StatusBadge tone="neutral">{run.trace.events.length} trace</StatusBadge>
         </span>
         <ChevronDown className="details-chevron" />
@@ -964,6 +1028,11 @@ function RunDetails(props: { reportMode: boolean; run: AgentRunResponseDto }) {
         </div>
         {run.error ? <ErrorBlock error={run.error} /> : null}
         {run.reportPlan ? <ReportPlanPanel plan={run.reportPlan} /> : null}
+        <ApprovalRequestsPanel
+          approvalStatusById={props.approvalStatusById}
+          onApprovalDecision={props.onApprovalDecision}
+          requests={approvalRequests}
+        />
         <RunStepsList steps={run.steps} />
         <ToolCallsList events={toolEvents} />
         <TraceTimeline events={run.trace.events} />
@@ -1015,6 +1084,68 @@ function ReportPlanPanel(props: { plan: NonNullable<AgentRunResponseDto["reportP
             <span>{plan.assumptions.join("；")}</span>
           </div>
         ) : null}
+      </div>
+    </section>
+  );
+}
+
+/**
+ * 展示需要人工确认的敏感动作；按钮只提交 decision，不执行敏感逻辑。
+ *
+ * @param props 组件属性。
+ * @returns approval request 面板。
+ */
+function ApprovalRequestsPanel(props: {
+  approvalStatusById: Record<string, string>;
+  onApprovalDecision: (approvalId: string, decision: ToolApprovalDecisionDto["decision"]) => Promise<void>;
+  requests: ToolApprovalRequestDto[];
+}) {
+  return (
+    <section className="details-section">
+      <h3>
+        <ShieldCheck className="icon-size" />
+        Approvals
+      </h3>
+      <div className="detail-list">
+        {props.requests.length === 0 ? <p className="muted-row">暂无人工确认请求。</p> : null}
+        {props.requests.map((request) => {
+          const status = props.approvalStatusById[request.approvalId] ?? "pending";
+          const disabled = status === "submitting" || status === "approved" || status === "rejected";
+
+          return (
+            <article className="approval-row" key={request.approvalId}>
+              <div>
+                <strong>{request.toolName}</strong>
+                <span>{request.reason}</span>
+                <small>{request.approvalId}</small>
+                <JsonDetails title="approval preview" value={request.inputPreview} />
+              </div>
+              <div className="approval-actions">
+                <StatusBadge tone={status === "approved" ? "success" : status === "rejected" ? "danger" : "info"}>
+                  {status}
+                </StatusBadge>
+                <button
+                  className="secondary-button"
+                  disabled={disabled}
+                  onClick={() => void props.onApprovalDecision(request.approvalId, "approved")}
+                  type="button"
+                >
+                  <ShieldCheck className="icon-size" />
+                  <span>Approve</span>
+                </button>
+                <button
+                  className="secondary-button danger-action"
+                  disabled={disabled}
+                  onClick={() => void props.onApprovalDecision(request.approvalId, "rejected")}
+                  type="button"
+                >
+                  <X className="icon-size" />
+                  <span>Reject</span>
+                </button>
+              </div>
+            </article>
+          );
+        })}
       </div>
     </section>
   );
@@ -1191,6 +1322,24 @@ async function runAgent(
 }
 
 /**
+ * 调用 Approval decision API，供 Run details 中的人工确认控件使用。
+ *
+ * @param decision 审批决定。
+ * @returns API result。
+ */
+async function submitApprovalDecision(decision: ToolApprovalDecisionDto): Promise<ApiResult<ToolApprovalDecisionDto>> {
+  const response = await fetch("/api/approvals/decision", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json"
+    },
+    body: JSON.stringify(decision)
+  });
+
+  return parseApiResult(response);
+}
+
+/**
  * 调用 Data Sources ingestion API。
  *
  * @param request ingestion 请求。
@@ -1340,6 +1489,33 @@ function formatApiError(error: ApiError): string {
 }
 
 /**
+ * 从 trace 中提取 approval request，前端只消费 trace DTO，不推断权限策略。
+ *
+ * @param run Agent run DTO。
+ * @returns 去重后的审批请求。
+ */
+function getApprovalRequests(run: AgentRunResponseDto): ToolApprovalRequestDto[] {
+  const requests = new Map<string, ToolApprovalRequestDto>();
+
+  for (const event of run.trace.events) {
+    if (event.type !== "approval" || event.status !== "requested") {
+      continue;
+    }
+
+    requests.set(event.approvalId, {
+      approvalId: event.approvalId,
+      traceId: event.traceId,
+      toolName: event.toolName,
+      reason: event.reason,
+      inputPreview: event.inputPreview,
+      permissionLevel: "needs_approval"
+    });
+  }
+
+  return [...requests.values()];
+}
+
+/**
  * 将 trace event 类型转换成适合 timeline 展示的标题。
  *
  * @param event trace event。
@@ -1353,6 +1529,8 @@ function formatEventTitle(event: TraceEventDto): string {
       return `Intent Routed: ${event.intent}`;
     case "agent_step":
       return `Agent Step: ${event.stepType}`;
+    case "approval":
+      return `Approval: ${event.status}`;
     case "retrieval":
       return `Retrieval: ${event.mode}`;
     case "report_skill_activation":
@@ -1398,6 +1576,8 @@ function formatEventSummary(event: TraceEventDto): string {
       return event.reason;
     case "agent_step":
       return `${event.status} with ${event.error?.code ?? "no_error"}`;
+    case "approval":
+      return `${event.toolName}: ${event.reason}`;
     case "retrieval":
       return event.ok
         ? `${event.chunkIds.length} chunks retrieved, topK=${event.topK}`

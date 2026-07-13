@@ -71,10 +71,30 @@ export interface TraceDto {
   events: TraceEventDto[];
 }
 
+export type ToolPermissionLevelDto = "safe" | "needs_approval" | "blocked";
+
+export type ToolApprovalDecisionValueDto = "approved" | "rejected";
+
+export interface ToolApprovalRequestDto {
+  approvalId: string;
+  traceId: string;
+  toolName: string;
+  reason: string;
+  inputPreview: unknown;
+  permissionLevel: ToolPermissionLevelDto;
+}
+
+export interface ToolApprovalDecisionDto {
+  approvalId: string;
+  decision: ToolApprovalDecisionValueDto;
+  reviewerNote?: string;
+}
+
 export type TraceEventDto =
   | TraceRequestReceivedEventDto
   | TraceIntentRoutedEventDto
   | TraceAgentStepEventDto
+  | TraceApprovalEventDto
   | TraceRetrievalEventDto
   | TraceReportSkillActivationEventDto
   | TraceReportPlanEventDto
@@ -113,6 +133,16 @@ export interface TraceAgentStepEventDto extends TraceEventBaseDto {
   durationMs: number;
   data?: Record<string, unknown>;
   error?: TraceErrorDto;
+}
+
+export interface TraceApprovalEventDto extends TraceEventBaseDto {
+  type: "approval";
+  approvalId: string;
+  toolName: string;
+  status: "requested" | "approved" | "rejected";
+  reason: string;
+  inputPreview: unknown;
+  reviewerNote?: string;
 }
 
 export interface TraceRetrievalScoreSummaryDto {
@@ -263,16 +293,18 @@ export interface ReportPlanDto {
   steps: ReportPlanStepDto[];
 }
 
-export type WorkflowRunStatusDto = "pending" | "running" | "succeeded" | "failed";
+export type WorkflowRunStatusDto = "pending" | "running" | "paused" | "approved" | "rejected" | "succeeded" | "failed";
 
-export type WorkflowNodeStatusDto = "pending" | "running" | "succeeded" | "failed" | "skipped";
+export type WorkflowNodeStatusDto = "pending" | "running" | "paused" | "approved" | "rejected" | "succeeded" | "failed" | "skipped";
 
 export type WorkflowErrorCodeDto =
   | "invalid_workflow"
   | "invalid_node_input"
   | "invalid_node_output"
   | "node_execution_failed"
-  | "max_steps_exceeded";
+  | "max_steps_exceeded"
+  | "approval_required"
+  | "approval_rejected";
 
 export interface WorkflowErrorDto {
   code: WorkflowErrorCodeDto;
@@ -301,7 +333,18 @@ export interface WorkflowEdgeDto {
 
 export interface WorkflowEventDto {
   id: string;
-  type: "node_started" | "node_succeeded" | "node_failed" | "workflow_failed" | "workflow_succeeded";
+  type:
+    | "node_started"
+    | "node_succeeded"
+    | "node_failed"
+    | "node_paused"
+    | "node_approved"
+    | "node_rejected"
+    | "workflow_paused"
+    | "workflow_approved"
+    | "workflow_rejected"
+    | "workflow_failed"
+    | "workflow_succeeded";
   nodeId?: string;
   createdAt: ISODateTimeString;
   data?: Record<string, unknown>;
@@ -320,6 +363,7 @@ export interface WorkflowRunDto {
   nodes: WorkflowNodeDto[];
   edges: WorkflowEdgeDto[];
   events: WorkflowEventDto[];
+  approvalRequest?: ToolApprovalRequestDto;
   error?: WorkflowErrorDto;
 }
 

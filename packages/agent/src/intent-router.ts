@@ -11,6 +11,7 @@ interface ModelRouteJson {
 const REPORT_KEYWORDS = ["报告", "研报", "研究报告", "研究简报", "PDF", "pdf", "导出", "生成一份"];
 const FILING_KEYWORDS = ["年报", "公告", "财报原文", "披露", "检索", "资产质量描述", "资产质量"];
 const METRIC_KEYWORDS = ["营收", "净利润", "ROE", "roe", "毛利率", "现金流", "财务指标", "最近一期", "同比"];
+const SQL_KEYWORDS = ["SQL", "sql", "SELECT", "select", "WITH", "with", "DROP", "drop", "查询 SQL", "执行 SQL"];
 const CONCEPT_KEYWORDS = ["解释", "是什么", "什么意思", "概念", "定义"];
 const DATA_NEED_KEYWORDS = ["最近", "查询", "变化", "多少", "同比", "公司", "这家公司"];
 const TICKER_PATTERN = /\b\d{6}\.(?:SZ|SH|BJ)\b/i;
@@ -47,6 +48,7 @@ export async function routeIntent(message: string, options: IntentRouterOptions 
   const reportMatches = findMatches(normalized, REPORT_KEYWORDS);
   const filingMatches = findMatches(normalized, FILING_KEYWORDS);
   const metricMatches = findMatches(normalized, METRIC_KEYWORDS);
+  const sqlMatches = findMatches(normalized, SQL_KEYWORDS);
 
   if (isNaturalLanguageReportRequest(normalized)) {
     return {
@@ -55,6 +57,10 @@ export async function routeIntent(message: string, options: IntentRouterOptions 
       reason: "同时命中报告交付诉求和数据需求，进入 report skill planner。",
       matchedRules: [...new Set([...reportMatches, ...filingMatches, ...metricMatches, "report_delivery_with_data_need"])]
     };
+  }
+
+  if (sqlMatches.length > 0) {
+    return toolRoute("sql_query_mock", buildSqlArgs(normalized), "命中 SQL 查询工具诉求，需要经过工具权限边界。", sqlMatches);
   }
 
   if (filingMatches.length > 0) {
@@ -208,6 +214,20 @@ function buildMetricArgs(message: string): Record<string, unknown> {
   return {
     ticker: extractTicker(message),
     metrics: ["net_profit", "roe"]
+  };
+}
+
+/**
+ * 从自然语言中提取 SQL 片段；demo 阶段保留原始 SQL 字符串交给 tools 权限边界校验。
+ *
+ * @param message 用户输入。
+ * @returns sql_query_mock 参数。
+ */
+function buildSqlArgs(message: string): Record<string, unknown> {
+  const sqlStart = message.search(/\b(select|with|drop|insert|update|delete|alter|truncate|create)\b/i);
+
+  return {
+    query: sqlStart >= 0 ? message.slice(sqlStart).trim() : message
   };
 }
 

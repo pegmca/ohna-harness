@@ -27,6 +27,8 @@ export type AgentErrorCode =
   | "validation_error"
   | "execution_error"
   | "output_validation_error"
+  | "permission_required"
+  | "permission_denied"
   | "router_error";
 
 export interface AgentError {

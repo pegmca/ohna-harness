@@ -6,7 +6,7 @@ export type {
   ToolExecutionFailure,
   ToolExecutionResult,
   ToolExecutionSuccess,
-  ToolRegistrySummary
+  ToolRegistrySummary,
 } from "./types.js";
 
 export { ToolRegistry } from "./registry.js";
@@ -41,3 +41,11 @@ export {
   type FinancialMetricMockInput,
   type FinancialMetricMockOutput
 } from "./tools/financial-metric-mock.js";
+export {
+  isReadonlySql,
+  sqlQueryMockInputSchema,
+  sqlQueryMockOutputSchema,
+  sqlQueryMockTool,
+  type SqlQueryMockInput,
+  type SqlQueryMockOutput
+} from "./tools/sql-query-mock.js";

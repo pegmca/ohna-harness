@@ -12,7 +12,8 @@ import type {
   DataSourceDocumentsResponseDto,
   DataSourceIngestResponseDto,
   RagAnswerResponseDto,
-  RagSearchResponseDto
+  RagSearchResponseDto,
+  ToolApprovalDecisionDto
 } from "@aiagent/types";
 import Fastify, { type FastifyInstance } from "fastify";
 import { z } from "zod";
@@ -37,6 +38,11 @@ const ragAnswerRequestSchema = z.object({
   question: z.string().min(1),
   topK: z.number().int().positive().optional()
 });
+const approvalDecisionRequestSchema = z.object({
+  approvalId: z.string().min(1),
+  decision: z.enum(["approved", "rejected"]),
+  reviewerNote: z.string().max(240).optional()
+});
 
 const DEFAULT_CONVERSATION_ID = "week1-local-session";
 
@@ -50,6 +56,7 @@ export function createApiServer(): FastifyInstance {
     logger: true
   });
   const dataSourceRuntime = createDataSourceRuntime();
+  const approvalDecisions = new Map<string, ToolApprovalDecisionDto>();
 
   /**
    * 健康检查接口只暴露 API 服务存活状态，供本地 dev server、脚本和部署探针快速验证。
@@ -199,6 +206,40 @@ export function createApiServer(): FastifyInstance {
     return {
       ok: true,
       data: result.data,
+      requestId
+    };
+  });
+
+  /**
+   * Approval decision 接口只接收人工 approve/reject 决策并存入当前进程内存。
+   * 权限判断仍由 packages/tools 或 packages/workflow 在执行敏感动作前完成。
+   *
+   * @param request Fastify 请求对象，body 必须符合 ToolApprovalDecisionDto。
+   * @param reply Fastify 响应对象，用于在请求无效时设置 HTTP 状态码。
+   * @returns 成功时返回已记录的 approval decision。
+   */
+  app.post("/api/approvals/decision", async (request, reply): Promise<ApiResult<ToolApprovalDecisionDto>> => {
+    const requestId = createRequestId();
+    const parsed = approvalDecisionRequestSchema.safeParse(request.body);
+
+    if (!parsed.success) {
+      const error = toApiError("validation_failed", "Approval decision 请求格式不正确。", requestId, {
+        issues: parsed.error.issues
+      });
+      reply.code(400);
+      return fail(error, requestId);
+    }
+
+    const decision: ToolApprovalDecisionDto = {
+      approvalId: parsed.data.approvalId.trim(),
+      decision: parsed.data.decision,
+      reviewerNote: parsed.data.reviewerNote?.trim()
+    };
+    approvalDecisions.set(decision.approvalId, decision);
+
+    return {
+      ok: true,
+      data: decision,
       requestId
     };
   });

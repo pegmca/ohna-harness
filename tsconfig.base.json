@@ -19,6 +19,7 @@
       "@aiagent/agent": ["./packages/agent/src/index.ts"],
       "@aiagent/eval": ["./packages/eval/src/index.ts"],
       "@aiagent/filings": ["./packages/filings/src/index.ts"],
+      "@aiagent/mcp": ["./packages/mcp/src/index.ts"],
       "@aiagent/rag": ["./packages/rag/src/index.ts"],
       "@aiagent/report": ["./packages/report/src/index.ts"],
       "@aiagent/types": ["./packages/types/src/index.ts"],

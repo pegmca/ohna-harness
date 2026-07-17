@@ -142,6 +142,28 @@ pnpm --filter @aiagent/tools test
 
 该测试覆盖默认 mock tools、safe 工具直跑、只读 SQL 审批、写 SQL 阻断、缺失 `ticker` 的 zod 参数错误、非法 calculator 表达式和 trace 写入。
 
+## MCP Financial Research Server
+
+`packages/mcp` 提供独立的 `@aiagent/mcp` stdio server，使用官方 MCP TypeScript SDK 暴露三个可发现、带输入/输出 schema 的金融研究工具：
+
+- `search_filings`：复用 `@aiagent/rag` 内存 runtime 检索 mock 公告，返回 snippets、citations 和 scores。
+- `get_financial_metrics`：复用 `@aiagent/tools` 的 `financial_metric_mock`，返回 metric、value、period、unit 和 source。
+- `get_market_data`：复用 `market_data_mock`，按 fields 返回 prices、returns、volume 或 summary。
+
+启动 stdio server：
+
+```bash
+pnpm --filter @aiagent/mcp start
+```
+
+stdio 的 stdout 专用于 MCP 协议帧，通常应由 MCP client 作为子进程启动，而不是在终端中手工输入。可运行真实 client/server smoke test：
+
+```bash
+pnpm --filter @aiagent/mcp test
+```
+
+当前公告、指标和行情数据均为本地 mock；RAG 检索与 citation 生成会真实执行，但不持久化，也不包含远程部署、鉴权、多租户或 Agent client 接入。工具失败同时使用 MCP `isError` 和结构化 error envelope，不向 client 泄漏 raw exception。实现取舍与 MCP/REST 对比见 ``。
+
 ## Week 2 RAG Package Foundation
 
 Week 2 新增三个 RAG 相关 package，当前已具备 Markdown/TXT 公告 ingestion 入口、RAG 基础边界、纯函数 chunk 策略、deterministic mock embedding、内存向量库、hybrid retrieval 和 deterministic heuristic rerank；暂不接入真实 PDF 解析、真实 embedding provider、Qdrant/pgvector、cross-encoder、LLM rerank 或 Agent Chat：

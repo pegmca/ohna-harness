@@ -320,7 +320,9 @@ Agent Loop 每一步都会返回结构化 `AgentStep`：`route_intent`、`model_
 
 工具路径只通过 `ToolRegistry.execute()` 调用工具，不直接依赖工具实现。工具参数错误、工具不存在、工具执行错误会以 `validation_error`、`tool_not_found`、`execution_error` 等结构化 `AgentError` 返回，同时保留底层 `toolError` details。
 
-`@aiagent/trace` 的事件类型扩展为 `request_received`、`intent_routed`、`agent_step`、`retrieval`、`report_skill_activation`、`report_plan`、`workflow_node`、`model_call`、`tool_call` 和 `final_response`。Report trace 会记录 trigger source、planner input、planner output 和 assumptions；workflow trace 会记录 workflow run id、node id、node type、状态、输入摘要、输出摘要、耗时和结构化错误；事件不记录 API key 或完整环境变量。
+`@aiagent/trace` 现在提供统一生产 trace contract：事件包含 `requestId`、`traceId`、`spanId`、`parentSpanId`，覆盖 request、model、tool/MCP、retrieval、Report activation/planner、workflow、approval、citation verifier、PDF export 和 final response。`Trace.summary` 在运行时边界聚合模型/工具/检索调用数、毫秒耗时、已知 token、未知 usage 调用数和错误数；未知 token 显式为 `unknown`。API 可通过 `GET /api/traces/:requestId` 查询当前进程内的完整脱敏 trace，进程重启后清空，不属于长期存储。
+
+Trace recorder 会递归脱敏密钥、authorization、password、secret 和认证 token，清理文本中的 Bearer/API key，并把长字符串截断到 500 字符。retrieval 事件只保留 document/chunk 标识、排名和分数，不复制正文；Web 的 assistant `Run details` 直接消费后端 summary 和按时间排序的事件，不在浏览器重新聚合。
 
 可调用验证入口：
 

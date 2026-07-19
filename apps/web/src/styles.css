@@ -836,6 +836,10 @@ textarea:disabled {
   gap: var(--md-space-2);
 }
 
+.trace-summary-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--md-space-2); }
+.trace-summary-grid > span { display: grid; gap: var(--md-space-1); padding: var(--md-space-3); border: 1px solid var(--md-color-border-subtle); border-radius: var(--md-radius-md); background: var(--md-color-surface); }
+.trace-summary-grid small { color: var(--md-color-text-muted); }
+
 .detail-row,
 .approval-row,
 .trace-row,

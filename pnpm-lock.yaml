@@ -32,6 +32,9 @@ importers:
       '@aiagent/report':
         specifier: workspace:*
         version: link:../../packages/report
+      '@aiagent/trace':
+        specifier: workspace:*
+        version: link:../../packages/trace
       '@aiagent/types':
         specifier: workspace:*
         version: link:../../packages/types

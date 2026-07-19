@@ -362,6 +362,17 @@ async function runChatPath(
       const startedAt = performance.now();
 
       if (!llmClient) {
+        recordTrace(trace, {
+          type: "model_call",
+          id: createTraceEventId(trace.traceId, "model_mock"),
+          traceId: trace.traceId,
+          requestId: trace.requestId,
+          model: "mock",
+          purpose: "chat_answer",
+          durationMs: elapsedMs(startedAt),
+          ok: true,
+          createdAt: new Date().toISOString()
+        });
         return {
           result: mockChatAnswer(message),
           data: {

@@ -21,6 +21,7 @@
     "@aiagent/agent": "workspace:*",
     "@aiagent/rag": "workspace:*",
     "@aiagent/report": "workspace:*",
+    "@aiagent/trace": "workspace:*",
     "@aiagent/types": "workspace:*",
     "fastify": "^5.6.2",
     "zod": "^4.4.3"

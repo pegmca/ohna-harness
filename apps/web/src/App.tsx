@@ -241,8 +241,12 @@ export function App() {
 
       const run = result.data;
       if (run.reportPlan?.status === "ready") {
-        const workflowResult = await startReportWorkflow(run.reportPlan);
-        if (workflowResult.ok) run.reportWorkflow = workflowResult.data;
+        const workflowResult = await startReportWorkflow(run.reportPlan, run.requestId, run.traceId);
+        if (workflowResult.ok) {
+          run.reportWorkflow = workflowResult.data;
+          const traceResult = await fetchTrace(run.requestId);
+          if (traceResult.ok) run.trace = traceResult.data;
+        }
       }
       replaceMessage(submittedConversationId, pendingMessageId, {
         content: run.answer,
@@ -1035,6 +1039,7 @@ function RunDetails(props: {
           <span>requestId: {run.requestId}</span>
           <span>traceId: {run.traceId}</span>
         </div>
+        <TraceSummaryPanel summary={run.trace.summary} />
         {run.error ? <ErrorBlock error={run.error} /> : null}
         {run.reportPlan ? <ReportPlanPanel plan={run.reportPlan} /> : null}
         {run.reportWorkflow ? <ReportWorkflowPanel workflow={run.reportWorkflow} /> : null}
@@ -1049,6 +1054,29 @@ function RunDetails(props: {
         <JsonDetails title="run json" value={run} />
       </div>
     </details>
+  );
+}
+
+/**
+ * 展示后端聚合的请求级指标，Web 不重复计算事件明细。
+ *
+ * @param props trace 汇总 DTO。
+ * @returns 指标摘要面板。
+ */
+function TraceSummaryPanel(props: { summary: AgentRunResponseDto["trace"]["summary"] }) {
+  const { summary } = props;
+  return (
+    <section className="details-section">
+      <h3><Activity className="icon-size" />Trace summary</h3>
+      <div className="trace-summary-grid">
+        <span><strong>{summary.durationMs} ms</strong><small>latency</small></span>
+        <span><strong>{summary.modelCallCount}</strong><small>model calls</small></span>
+        <span><strong>{summary.toolCallCount}</strong><small>tool calls</small></span>
+        <span><strong>{summary.knownTokenTotal}</strong><small>known tokens</small></span>
+        <span><strong>{summary.unknownTokenCallCount}</strong><small>unknown usage</small></span>
+        <span><strong>{summary.errorCount}</strong><small>errors</small></span>
+      </div>
+    </section>
   );
 }
 
@@ -1296,6 +1324,7 @@ function ToolCallsList(props: { events: TraceEventDto[] }) {
  * @returns trace timeline。
  */
 function TraceTimeline(props: { events: TraceEventDto[] }) {
+  const events = [...props.events].sort((left, right) => left.createdAt.localeCompare(right.createdAt));
   return (
     <section className="details-section">
       <h3>
@@ -1303,13 +1332,14 @@ function TraceTimeline(props: { events: TraceEventDto[] }) {
         Trace timeline
       </h3>
       <div className="trace-list">
-        {props.events.map((event, index) => (
+        {events.map((event, index) => (
           <article className="trace-row" key={event.id}>
             <span className="trace-index">{index + 1}</span>
             <div>
               <strong>{formatEventTitle(event)}</strong>
               <span>{formatEventSummary(event)}</span>
               <small>{formatTime(event.createdAt)}</small>
+              {event.spanId ? <small>span {event.spanId} · parent {event.parentSpanId ?? "root"}</small> : null}
               <JsonDetails title="event json" value={event} />
             </div>
           </article>
@@ -1595,9 +1625,14 @@ function getApprovalRequests(run: AgentRunResponseDto): ToolApprovalRequestDto[]
 }
 
 /** 启动 Report Workflow，前端仅提交 planner DTO。 */
-async function startReportWorkflow(plan: NonNullable<AgentRunResponseDto["reportPlan"]>): Promise<ApiResult<ReportWorkflowResponseDto>> {
-  const response = await fetch("/api/report-workflows", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ plan }) });
+async function startReportWorkflow(plan: NonNullable<AgentRunResponseDto["reportPlan"]>, requestId: string, traceId: string): Promise<ApiResult<ReportWorkflowResponseDto>> {
+  const response = await fetch("/api/report-workflows", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ plan, requestId, traceId }) });
   return parseApiResult(response);
+}
+
+/** 按 requestId 刷新 workflow 续写后的完整 trace。 */
+async function fetchTrace(requestId: string): Promise<ApiResult<AgentRunResponseDto["trace"]>> {
+  return parseApiResult(await fetch(`/api/traces/${encodeURIComponent(requestId)}`));
 }
 
 /**
@@ -1624,6 +1659,10 @@ function formatEventTitle(event: TraceEventDto): string {
       return "Report Plan";
     case "workflow_node":
       return `Workflow Node: ${event.nodeId}`;
+    case "citation_verifier":
+      return `Citation Verifier: ${event.decision}`;
+    case "pdf_export":
+      return `PDF Export: ${event.status}`;
     case "model_call":
       return `Model Call: ${event.purpose}`;
     case "tool_call":
@@ -1677,6 +1716,10 @@ function formatEventSummary(event: TraceEventDto): string {
       return event.ok ? `${event.plan.status} plan created` : event.error?.message ?? "planner failed";
     case "workflow_node":
       return `${event.status} ${event.nodeType} in ${event.durationMs} ms`;
+    case "citation_verifier":
+      return `${event.missingClaimCount} missing claims, ${event.missingMetricCount} missing metrics`;
+    case "pdf_export":
+      return event.fileName ?? "PDF export state updated";
     case "model_call":
       return event.ok ? `${event.model} responded` : event.error?.message ?? "model failed";
     case "tool_call":

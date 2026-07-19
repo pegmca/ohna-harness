@@ -4,6 +4,7 @@ import { createDataSourceRuntime } from "@aiagent/rag";
 import { runReportWorkflow } from "@aiagent/report";
 import type { ReportWorkflowResult } from "@aiagent/report";
 import type { RagStructuredError } from "@aiagent/rag";
+import { createInMemoryTraceRecorder, createInMemoryTraceStore } from "@aiagent/trace";
 import type {
   AgentRunRequestDto,
   AgentRunResponseDto,
@@ -19,6 +20,7 @@ import type {
   ReportPlanDto,
   ReportWorkflowResponseDto,
   ToolApprovalDecisionDto
+  , TraceDto
 } from "@aiagent/types";
 import Fastify, { type FastifyInstance } from "fastify";
 import { z } from "zod";
@@ -49,7 +51,9 @@ const approvalDecisionRequestSchema = z.object({
   reviewerNote: z.string().max(240).optional()
 });
 const startReportWorkflowRequestSchema = z.object({
-  plan: z.custom<ReportPlanDto>((value) => typeof value === "object" && value !== null)
+  plan: z.custom<ReportPlanDto>((value) => typeof value === "object" && value !== null),
+  requestId: z.string().min(1).optional(),
+  traceId: z.string().min(1).optional()
 });
 
 const DEFAULT_CONVERSATION_ID = "week1-local-session";
@@ -67,6 +71,7 @@ export function createApiServer(): FastifyInstance {
   const approvalDecisions = new Map<string, ToolApprovalDecisionDto>();
   const workflowRuns = new Map<string, ReportWorkflowResponseDto>();
   const reportArtifacts = new Map<string, ReportArtifactDto>();
+  const traceStore = createInMemoryTraceStore();
 
   /**
    * 健康检查接口只暴露 API 服务存活状态，供本地 dev server、脚本和部署探针快速验证。
@@ -77,6 +82,17 @@ export function createApiServer(): FastifyInstance {
     ok: true,
     service: "@aiagent/api"
   }));
+
+  /** 按对外 requestId 返回完整脱敏 trace；当前仅保存在 API 进程内存。 */
+  app.get<{ Params: { requestId: string } }>("/api/traces/:requestId", async (request, reply): Promise<ApiResult<TraceDto>> => {
+    const lookupRequestId = createRequestId();
+    const trace = traceStore.getByRequestId(request.params.requestId);
+    if (!trace) {
+      reply.code(404);
+      return fail(toApiError("not_found", "Trace 不存在或已随进程重启清除。", lookupRequestId), lookupRequestId);
+    }
+    return { ok: true, data: trace, requestId: lookupRequestId };
+  });
 
   /**
    * Data Sources ingestion 接口负责接收 Markdown/TXT 文本，校验后交给 RAG runtime 完成解析、切块和索引。
@@ -263,11 +279,19 @@ export function createApiServer(): FastifyInstance {
       return fail(toApiError("validation_failed", "Report workflow 请求格式不正确。", requestId), requestId);
     }
 
-    const result = await runReportWorkflow(parsed.data.plan, { documents: createReportDemoDocuments() });
+    const priorTrace = parsed.data.requestId ? traceStore.getByRequestId(parsed.data.requestId) : undefined;
+    const trace = createInMemoryTraceRecorder(
+      parsed.data.traceId ?? priorTrace?.traceId,
+      parsed.data.requestId ?? requestId,
+      priorTrace?.events,
+      priorTrace?.startedAt
+    );
+    const result = await runReportWorkflow(parsed.data.plan, { documents: createReportDemoDocuments(), trace });
+    traceStore.save(trace.getTrace());
     const response = toReportWorkflowResponseDto(result);
     workflowRuns.set(response.run.runId, response);
     if (response.artifact) reportArtifacts.set(response.artifact.artifactId, response.artifact);
-    return { ok: true, data: response, requestId };
+    return { ok: true, data: response, requestId: trace.requestId };
   });
 
   /** 读取进程内 workflow 快照；本阶段明确不提供持久化 artifact store。 */
@@ -320,11 +344,13 @@ export function createApiServer(): FastifyInstance {
     }
 
     try {
+      const trace = createInMemoryTraceRecorder(undefined, requestId);
       const agentResponse = await runAgent({
         message,
         reportMode: parsed.data.reportMode,
         reportTriggerSource: parsed.data.reportTriggerSource
-      });
+      }, { traceRecorder: trace });
+      traceStore.save(agentResponse.trace);
       const responseDto = toAgentRunResponseDto(agentResponse, parsed.data, requestId);
 
       return {

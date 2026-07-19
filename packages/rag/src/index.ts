@@ -1333,6 +1333,7 @@ function createRetrievalTraceSummary(input: {
     chunkIds: input.results.map((result) => result.chunk.chunkId),
     scoreSummary: input.results.map((result) => ({
       chunkId: result.chunk.chunkId,
+      documentId: result.chunk.documentId,
       vectorScore: result.scoreBreakdown.vectorScore,
       keywordScore: result.scoreBreakdown.keywordScore,
       hybridScore: result.scoreBreakdown.hybridScore,

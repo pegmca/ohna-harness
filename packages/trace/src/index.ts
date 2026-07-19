@@ -7,7 +7,24 @@ export interface Trace {
   traceId: string;
   requestId: string;
   startedAt: string;
+  completedAt?: string;
+  summary: TraceRunSummary;
   events: TraceEvent[];
+}
+
+export type TraceTokenCount = number | "unknown";
+
+export interface TraceRunSummary {
+  status: "running" | "succeeded" | "failed";
+  durationMs: number;
+  modelCallCount: number;
+  toolCallCount: number;
+  retrievalCount: number;
+  inputTokens: TraceTokenCount;
+  outputTokens: TraceTokenCount;
+  knownTokenTotal: number;
+  unknownTokenCallCount: number;
+  errorCount: number;
 }
 
 export type TraceEventType =
@@ -19,6 +36,8 @@ export type TraceEventType =
   | "report_skill_activation"
   | "report_plan"
   | "workflow_node"
+  | "citation_verifier"
+  | "pdf_export"
   | "model_call"
   | "tool_call"
   | "mcp_tool_discovered"
@@ -28,6 +47,7 @@ export type TraceEventType =
 export interface TraceError {
   code: string;
   message: string;
+  stage?: string;
   details?: Record<string, unknown>;
 }
 
@@ -36,6 +56,9 @@ interface TraceEventBase {
   id: string;
   traceId: string;
   requestId: string;
+  spanId?: string;
+  parentSpanId?: string;
+  stage?: string;
   createdAt: string;
 }
 
@@ -75,6 +98,7 @@ export interface TraceApprovalEvent extends TraceEventBase {
 
 export interface TraceRetrievalScoreSummary {
   chunkId: string;
+  documentId?: string;
   vectorScore: number;
   keywordScore: number;
   hybridScore: number;
@@ -172,6 +196,7 @@ export type WorkflowErrorCode =
 export interface WorkflowTraceError {
   code: WorkflowErrorCode;
   message: string;
+  stage?: string;
   nodeId?: string;
   details?: Record<string, unknown>;
 }
@@ -186,6 +211,27 @@ export interface TraceWorkflowNodeEvent extends TraceEventBase {
   inputSummary?: Record<string, unknown>;
   outputSummary?: Record<string, unknown>;
   error?: WorkflowTraceError;
+}
+
+export interface TraceCitationVerifierEvent extends TraceEventBase {
+  type: "citation_verifier";
+  workflowRunId: string;
+  decision: "pass" | "needs_more_evidence" | "needs_metric" | "retry_tool" | "fail";
+  retryCount: number;
+  missingClaimCount: number;
+  missingMetricCount: number;
+  durationMs: number;
+  ok: boolean;
+  error?: TraceError;
+}
+
+export interface TracePdfExportEvent extends TraceEventBase {
+  type: "pdf_export";
+  workflowRunId: string;
+  status: "queued" | "started" | "succeeded" | "failed" | "not_implemented";
+  fileName?: string;
+  durationMs: number;
+  error?: TraceError;
 }
 
 export interface TraceModelCallEvent extends TraceEventBase {
@@ -247,6 +293,8 @@ export type TraceEvent =
   | TraceReportSkillActivationEvent
   | TraceReportPlanEvent
   | TraceWorkflowNodeEvent
+  | TraceCitationVerifierEvent
+  | TracePdfExportEvent
   | TraceModelCallEvent
   | TraceToolCallEvent
   | TraceMcpToolDiscoveredEvent
@@ -276,6 +324,11 @@ export interface TraceRecorder {
   getTrace(): Trace;
 }
 
+export interface TraceStore {
+  save(trace: Trace): void;
+  getByRequestId(requestId: string): Trace | undefined;
+}
+
 /**
  * 创建 trace 摘要，当前用于验证 trace package 边界已经可被其他 package 引用。
  *
@@ -295,9 +348,9 @@ export function createTraceSummary(): TraceSummary {
  * @param requestId 对外请求标识，默认与 traceId 一起生成，便于 Week 4 接入 API 网关。
  * @returns 可记录并读取事件的内存 recorder。
  */
-export function createInMemoryTraceRecorder(traceId = createTraceId(), requestId = createRequestId()): TraceRecorder {
-  const events: TraceEvent[] = [];
-  const startedAt = new Date().toISOString();
+export function createInMemoryTraceRecorder(traceId = createTraceId(), requestId = createRequestId(), initialEvents: readonly TraceEvent[] = [], initialStartedAt?: string): TraceRecorder {
+  const events: TraceEvent[] = initialEvents.map(sanitizeTraceEvent);
+  const startedAt = initialStartedAt ?? new Date().toISOString();
 
   /**
    * 追加单个 trace event，保持 recorder 实现对调用方透明。
@@ -305,7 +358,9 @@ export function createInMemoryTraceRecorder(traceId = createTraceId(), requestId
    * @param event 要记录的事件。
    */
   function record(event: TraceEvent): void {
-    events.push(sanitizeTraceEvent(event));
+    const spanId = event.spanId ?? (event.type === "request_received" ? `${traceId}_root` : `${event.id}_span`);
+    const parentSpanId = event.parentSpanId ?? (event.type === "request_received" ? undefined : `${traceId}_root`);
+    events.push(sanitizeTraceEvent({ ...event, spanId, parentSpanId }));
   }
 
   /**
@@ -323,10 +378,13 @@ export function createInMemoryTraceRecorder(traceId = createTraceId(), requestId
    * @returns 当前 trace 快照。
    */
   function getTrace(): Trace {
+    const summary = summarizeTrace(events, startedAt);
     return {
       traceId,
       requestId,
       startedAt,
+      completedAt: summary.status === "running" ? undefined : latestCreatedAt(events),
+      summary,
       events: getEvents()
     };
   }
@@ -338,6 +396,54 @@ export function createInMemoryTraceRecorder(traceId = createTraceId(), requestId
     getEvents,
     getTrace
   };
+}
+
+/**
+ * 从事件明细计算请求级指标；未知 token 独立计数，避免把未知成本伪装成零。
+ *
+ * @param events 当前请求事件。
+ * @param startedAt 请求开始时间。
+ * @returns 与明细一致的运行汇总。
+ */
+export function summarizeTrace(events: readonly TraceEvent[], startedAt: string): TraceRunSummary {
+  const modelEvents = events.filter((event): event is TraceModelCallEvent => event.type === "model_call");
+  const input = sumKnownTokens(modelEvents.map((event) => event.usage?.promptTokens));
+  const output = sumKnownTokens(modelEvents.map((event) => event.usage?.completionTokens));
+  const final = [...events].reverse().find((event): event is TraceFinalResponseEvent => event.type === "final_response");
+  const end = latestCreatedAt(events);
+  return {
+    status: final ? (final.ok ? "succeeded" : "failed") : "running",
+    durationMs: end ? Math.max(0, Date.parse(end) - Date.parse(startedAt)) : 0,
+    modelCallCount: modelEvents.length,
+    toolCallCount: events.filter((event) => event.type === "tool_call" || event.type === "mcp_tool_call").length,
+    retrievalCount: events.filter((event) => event.type === "retrieval").length,
+    inputTokens: input.unknown ? "unknown" : input.total,
+    outputTokens: output.unknown ? "unknown" : output.total,
+    knownTokenTotal: input.total + output.total,
+    unknownTokenCallCount: modelEvents.filter((event) => event.usage?.promptTokens === undefined || event.usage?.completionTokens === undefined).length,
+    errorCount: events.filter(hasTraceError).length
+  };
+}
+
+/** 创建进程内 requestId 索引；本任务不承诺长期持久化。 */
+export function createInMemoryTraceStore(): TraceStore {
+  const traces = new Map<string, Trace>();
+  return {
+    save(trace) { traces.set(trace.requestId, sanitizeValue(trace) as Trace); },
+    getByRequestId(requestId) { const trace = traces.get(requestId); return trace ? structuredClone(trace) : undefined; }
+  };
+}
+
+function sumKnownTokens(values: readonly (number | undefined)[]): { total: number; unknown: boolean } {
+  return { total: values.reduce<number>((sum, value) => sum + (value ?? 0), 0), unknown: values.some((value) => value === undefined) };
+}
+
+function hasTraceError(event: TraceEvent): boolean {
+  return ("ok" in event && event.ok === false) || ("status" in event && (event.status === "failed" || event.status === "rejected"));
+}
+
+function latestCreatedAt(events: readonly TraceEvent[]): string | undefined {
+  return events.reduce<string | undefined>((latest, event) => !latest || event.createdAt > latest ? event.createdAt : latest, undefined);
 }
 
 /**
@@ -365,7 +471,10 @@ export function createRequestId(): string {
  * @returns 脱敏后的 trace event。
  */
 function sanitizeTraceEvent(event: TraceEvent): TraceEvent {
-  return sanitizeValue(event) as TraceEvent;
+  const withStage = "error" in event && event.error
+    ? { ...event, stage: event.stage ?? event.type, error: { ...event.error, stage: event.error.stage ?? event.stage ?? event.type } }
+    : event;
+  return sanitizeValue(withStage) as TraceEvent;
 }
 
 /**
@@ -377,6 +486,10 @@ function sanitizeTraceEvent(event: TraceEvent): TraceEvent {
 function sanitizeValue(value: unknown): unknown {
   if (Array.isArray(value)) {
     return value.map((item) => sanitizeValue(item));
+  }
+
+  if (typeof value === "string") {
+    return truncate(redactText(value));
   }
 
   if (!value || typeof value !== "object") {
@@ -392,6 +505,18 @@ function sanitizeValue(value: unknown): unknown {
   return sanitized;
 }
 
+const MAX_TRACE_STRING_LENGTH = 500;
+
+function truncate(value: string): string {
+  return value.length <= MAX_TRACE_STRING_LENGTH ? value : `${value.slice(0, MAX_TRACE_STRING_LENGTH)}…[truncated]`;
+}
+
+function redactText(value: string): string {
+  return value
+    .replace(/Bearer\s+[A-Za-z0-9._~+\/-]+/gi, "Bearer [redacted]")
+    .replace(/\b(?:sk|api)[-_][A-Za-z0-9_-]{12,}\b/gi, "[redacted]");
+}
+
 /**
  * 识别常见敏感字段名，避免 API key、token、密码或 Authorization 头进入 trace。
  *
@@ -399,5 +524,5 @@ function sanitizeValue(value: unknown): unknown {
  * @returns 是否应脱敏。
  */
 function isSensitiveKey(key: string): boolean {
-  return /api[-_]?key|authorization|password|secret|token/i.test(key);
+  return /api[-_]?key|authorization|password|secret|(^|[-_])(access[-_]?token|refresh[-_]?token|token)($|[-_])/i.test(key);
 }

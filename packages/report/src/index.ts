@@ -713,7 +713,7 @@ function createCitationVerifierNode(maxRetries: number): WorkflowNodeDefinition<
         decision = canRetry ? "needs_more_evidence" : "fail";
       }
 
-      recordVerifierDecisionTrace(context.trace, decision, missingClaims, missingMetrics, followUpQueries, retryCount, maxRetries);
+      recordVerifierDecisionTrace(context.trace, context.runId, decision, missingClaims, missingMetrics, followUpQueries, retryCount, maxRetries);
 
       return {
         decision,
@@ -857,24 +857,20 @@ function createPdfExporterNode(): WorkflowNodeDefinition<ReportPdfExporterInput,
     buildInput: (state) => ({
       draft: state.draft
     }),
-    createApprovalRequest: (state, context) => ({
-      approvalId: `approval_${context.runId}_pdf_exporter`,
-      traceId: context.trace?.traceId ?? context.runId,
-      toolName: "report_pdf_exporter",
-      reason: "PDF export is a sensitive external action and requires human approval before execution.",
-      inputPreview: {
-        title: state.draft?.title,
-        markdownLength: state.draft?.markdown.length,
-        citationCount: state.draft?.citationCount
-      },
-      permissionLevel: "needs_approval"
-    }),
-    execute: (input) => ({
-      status: "placeholder",
-      fileName: `${input.draft.title.replace(/\s+/g, "_")}.pdf`,
-      mimeType: "application/pdf",
-      message: "PDF 导出在后续阶段接入；当前节点只保留导出占位结构。"
-    }),
+    createApprovalRequest: (state, context) => {
+      recordPdfExportTrace(context.trace, context.runId, "queued", state.draft?.title);
+      return {
+        approvalId: `approval_${context.runId}_pdf_exporter`, traceId: context.trace?.traceId ?? context.runId,
+        toolName: "report_pdf_exporter", reason: "PDF export is a sensitive external action and requires human approval before execution.",
+        inputPreview: { title: state.draft?.title, markdownLength: state.draft?.markdown.length, citationCount: state.draft?.citationCount },
+        permissionLevel: "needs_approval"
+      };
+    },
+    execute: (input, context) => {
+      const fileName = `${input.draft.title.replace(/\s+/g, "_")}.pdf`;
+      recordPdfExportTrace(context.trace, context.runId, "not_implemented", input.draft.title, fileName);
+      return { status: "placeholder", fileName, mimeType: "application/pdf", message: "PDF 导出在后续阶段接入；当前节点只保留导出占位结构。" };
+    },
     applyOutput: (state, output) => ({
       ...state,
       export: output
@@ -1225,6 +1221,7 @@ function recordDataCollectorTrace(
  */
 function recordVerifierDecisionTrace(
   trace: TraceRecorder | undefined,
+  workflowRunId: string,
   decision: CitationVerifierDecision,
   missingClaims: readonly string[],
   missingMetrics: readonly string[],
@@ -1238,27 +1235,31 @@ function recordVerifierDecisionTrace(
 
   try {
     trace.record({
-      type: "agent_step",
+      type: "citation_verifier",
       id: `agent_step_verifier_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
       traceId: trace.traceId,
       requestId: trace.requestId,
-      stepIndex: retryCount,
-      stepType: "report.citation_verifier",
-      status: decision === "pass" ? "succeeded" : "started",
+      workflowRunId,
+      decision,
+      retryCount,
+      missingClaimCount: missingClaims.length,
+      missingMetricCount: missingMetrics.length,
       durationMs: 0,
-      data: {
-        decision,
-        missingClaimCount: missingClaims.length,
-        missingMetricCount: missingMetrics.length,
-        followUpQueryCount: followUpQueries.length,
-        followUpQueries: followUpQueries.map((query) => (query.length > 60 ? `${query.slice(0, 60)}...` : query)),
-        retryCount,
-        maxRetries
-      },
+      ok: decision !== "fail",
       createdAt: new Date().toISOString()
     });
   } catch {
     // trace 失败不应影响 workflow 主流程。
+  }
+}
+
+/** 记录 PDF 导出边界状态，不保存报告正文。 */
+function recordPdfExportTrace(trace: TraceRecorder | undefined, workflowRunId: string, status: "queued" | "not_implemented", title?: string, fileName?: string): void {
+  if (!trace) return;
+  try {
+    trace.record({ type: "pdf_export", id: `pdf_export_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`, traceId: trace.traceId, requestId: trace.requestId, workflowRunId, status, fileName: fileName ?? (title ? `${title.replace(/\s+/g, "_")}.pdf` : undefined), durationMs: 0, createdAt: new Date().toISOString() });
+  } catch {
+    // trace 是旁路观测能力，不能改变导出审批结果。
   }
 }
 

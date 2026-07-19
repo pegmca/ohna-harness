@@ -61,6 +61,7 @@ export interface AgentStepDto {
 export interface TraceErrorDto {
   code: string;
   message: string;
+  stage?: string;
   details?: Record<string, unknown>;
 }
 
@@ -68,7 +69,22 @@ export interface TraceDto {
   traceId: string;
   requestId: string;
   startedAt: ISODateTimeString;
+  completedAt?: ISODateTimeString;
+  summary: TraceRunSummaryDto;
   events: TraceEventDto[];
+}
+
+export interface TraceRunSummaryDto {
+  status: "running" | "succeeded" | "failed";
+  durationMs: number;
+  modelCallCount: number;
+  toolCallCount: number;
+  retrievalCount: number;
+  inputTokens: number | "unknown";
+  outputTokens: number | "unknown";
+  knownTokenTotal: number;
+  unknownTokenCallCount: number;
+  errorCount: number;
 }
 
 export type ToolPermissionLevelDto = "safe" | "needs_approval" | "blocked";
@@ -99,6 +115,8 @@ export type TraceEventDto =
   | TraceReportSkillActivationEventDto
   | TraceReportPlanEventDto
   | TraceWorkflowNodeEventDto
+  | TraceCitationVerifierEventDto
+  | TracePdfExportEventDto
   | TraceModelCallEventDto
   | TraceToolCallEventDto
   | TraceMcpToolDiscoveredEventDto
@@ -110,6 +128,9 @@ export interface TraceEventBaseDto {
   id: string;
   traceId: string;
   requestId: string;
+  spanId?: string;
+  parentSpanId?: string;
+  stage?: string;
   createdAt: ISODateTimeString;
 }
 
@@ -149,6 +170,7 @@ export interface TraceApprovalEventDto extends TraceEventBaseDto {
 
 export interface TraceRetrievalScoreSummaryDto {
   chunkId: string;
+  documentId?: string;
   vectorScore: number;
   keywordScore: number;
   hybridScore: number;
@@ -196,6 +218,27 @@ export interface TraceWorkflowNodeEventDto extends TraceEventBaseDto {
   inputSummary?: Record<string, unknown>;
   outputSummary?: Record<string, unknown>;
   error?: WorkflowErrorDto;
+}
+
+export interface TraceCitationVerifierEventDto extends TraceEventBaseDto {
+  type: "citation_verifier";
+  workflowRunId: string;
+  decision: "pass" | "needs_more_evidence" | "needs_metric" | "retry_tool" | "fail";
+  retryCount: number;
+  missingClaimCount: number;
+  missingMetricCount: number;
+  durationMs: number;
+  ok: boolean;
+  error?: TraceErrorDto;
+}
+
+export interface TracePdfExportEventDto extends TraceEventBaseDto {
+  type: "pdf_export";
+  workflowRunId: string;
+  status: "queued" | "started" | "succeeded" | "failed" | "not_implemented";
+  fileName?: string;
+  durationMs: number;
+  error?: TraceErrorDto;
 }
 
 export interface TraceModelCallEventDto extends TraceEventBaseDto {

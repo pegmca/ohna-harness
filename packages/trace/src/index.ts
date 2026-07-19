@@ -21,6 +21,8 @@ export type TraceEventType =
   | "workflow_node"
   | "model_call"
   | "tool_call"
+  | "mcp_tool_discovered"
+  | "mcp_tool_call"
   | "final_response";
 
 export interface TraceError {
@@ -210,6 +212,25 @@ export interface TraceToolCallEvent extends TraceEventBase {
   error?: TraceError;
 }
 
+export interface TraceMcpToolDiscoveredEvent extends TraceEventBase {
+  type: "mcp_tool_discovered";
+  serverName: string;
+  toolNames: string[];
+  ok: boolean;
+  durationMs: number;
+  error?: TraceError;
+}
+
+export interface TraceMcpToolCallEvent extends TraceEventBase {
+  type: "mcp_tool_call";
+  toolName: string;
+  args: Record<string, unknown>;
+  result?: unknown;
+  durationMs: number;
+  ok: boolean;
+  error?: TraceError;
+}
+
 export interface TraceFinalResponseEvent extends TraceEventBase {
   type: "final_response";
   answerPreview: string;
@@ -228,6 +249,8 @@ export type TraceEvent =
   | TraceWorkflowNodeEvent
   | TraceModelCallEvent
   | TraceToolCallEvent
+  | TraceMcpToolDiscoveredEvent
+  | TraceMcpToolCallEvent
   | TraceFinalResponseEvent;
 
 export interface TraceRecorder {

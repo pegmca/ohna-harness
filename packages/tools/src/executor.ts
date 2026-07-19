@@ -1,4 +1,4 @@
-import type { TraceToolCallEvent } from "@aiagent/trace";
+import type { TraceMcpToolCallEvent, TraceToolCallEvent } from "@aiagent/trace";
 import type { ToolApprovalDecisionDto, ToolApprovalRequestDto, ToolPermissionLevelDto } from "@aiagent/types";
 import type { ToolRegistry } from "./registry.js";
 import type { ToolExecutionContext, ToolExecutionResult } from "./types.js";
@@ -23,7 +23,7 @@ export async function executeTool(
   const tool = registry.get(name);
 
   if (!tool) {
-    return finishToolExecution(context, name, normalizedArgs, startedAt, {
+    return finishToolExecution(context, name, normalizedArgs, startedAt, undefined, {
       ok: false,
       toolName: name,
       args: normalizedArgs,
@@ -39,7 +39,7 @@ export async function executeTool(
   const parsedInput = tool.inputSchema.safeParse(args);
 
   if (!parsedInput.success) {
-    return finishToolExecution(context, name, normalizedArgs, startedAt, {
+    return finishToolExecution(context, name, normalizedArgs, startedAt, tool?.traceEventType, {
       ok: false,
       toolName: name,
       args: normalizedArgs,
@@ -59,7 +59,7 @@ export async function executeTool(
 
   if (permission.decision?.decision === "rejected") {
     recordApprovalTrace(context, permission.request, "rejected", permission.decision.reviewerNote);
-    return finishToolExecution(context, name, normalizedArgs, startedAt, {
+    return finishToolExecution(context, name, normalizedArgs, startedAt, tool?.traceEventType, {
       ok: false,
       toolName: name,
       args: normalizedArgs,
@@ -79,7 +79,7 @@ export async function executeTool(
 
   if (permission.level === "blocked") {
     recordApprovalTrace(context, permission.request, "rejected", "blocked_by_policy");
-    return finishToolExecution(context, name, normalizedArgs, startedAt, {
+    return finishToolExecution(context, name, normalizedArgs, startedAt, tool?.traceEventType, {
       ok: false,
       toolName: name,
       args: normalizedArgs,
@@ -99,7 +99,7 @@ export async function executeTool(
 
   if (permission.level === "needs_approval" && permission.decision?.decision !== "approved") {
     recordApprovalTrace(context, permission.request, "requested");
-    return finishToolExecution(context, name, normalizedArgs, startedAt, {
+    return finishToolExecution(context, name, normalizedArgs, startedAt, tool?.traceEventType, {
       ok: false,
       toolName: name,
       args: normalizedArgs,
@@ -126,7 +126,7 @@ export async function executeTool(
     const parsedOutput = tool.outputSchema.safeParse(rawOutput);
 
     if (!parsedOutput.success) {
-      return finishToolExecution(context, name, normalizedArgs, startedAt, {
+      return finishToolExecution(context, name, normalizedArgs, startedAt, tool?.traceEventType, {
         ok: false,
         toolName: name,
         args: normalizedArgs,
@@ -142,7 +142,7 @@ export async function executeTool(
       });
     }
 
-    return finishToolExecution(context, name, normalizedArgs, startedAt, {
+    return finishToolExecution(context, name, normalizedArgs, startedAt, tool?.traceEventType, {
       ok: true,
       toolName: name,
       args: normalizedArgs,
@@ -151,7 +151,7 @@ export async function executeTool(
       traceId: context.trace?.traceId
     });
   } catch (error) {
-    return finishToolExecution(context, name, normalizedArgs, startedAt, {
+    return finishToolExecution(context, name, normalizedArgs, startedAt, tool?.traceEventType, {
       ok: false,
       toolName: name,
       args: normalizedArgs,
@@ -318,6 +318,7 @@ function recordApprovalTrace(
  * @param toolName 工具名称。
  * @param args 已归一化的参数快照。
  * @param startedAt performance.now 起始值。
+ * @param traceEventType 工具声明的 trace 事件类型；默认 `tool_call`。
  * @param result 初始执行结果。
  * @returns 填充耗时后的执行结果。
  */
@@ -326,6 +327,7 @@ function finishToolExecution<TOutput>(
   toolName: string,
   args: Record<string, unknown>,
   startedAt: number,
+  traceEventType: "tool_call" | "mcp_tool_call" | undefined,
   result: ToolExecutionResult<TOutput>
 ): ToolExecutionResult<TOutput> {
   const durationMs = Math.round((performance.now() - startedAt) * 100) / 100;
@@ -336,7 +338,7 @@ function finishToolExecution<TOutput>(
 
   if (context.trace) {
     try {
-      context.trace.record(toTraceToolCallEvent(context.trace.traceId, context.trace.requestId, toolName, args, completedResult));
+      context.trace.record(toTraceToolCallEvent(context.trace.traceId, context.trace.requestId, toolName, args, completedResult, traceEventType));
     } catch {
       // trace 是旁路观测能力，记录失败不能影响工具主流程。
     }
@@ -346,24 +348,26 @@ function finishToolExecution<TOutput>(
 }
 
 /**
- * 将工具执行结果转换成 trace event，保证前端 timeline 有稳定字段可展示。
+ * 将工具执行结果转换成 trace event；MCP tool wrapper 通过 traceEventType 区分事件类型。
  *
  * @param traceId 当前请求链路标识。
  * @param requestId 当前请求标识。
  * @param toolName 工具名称。
  * @param args 工具参数快照。
  * @param result 工具执行结果。
- * @returns tool_call trace event。
+ * @param traceEventType 可选事件类型；默认 `tool_call`。
+ * @returns tool_call 或 mcp_tool_call trace event。
  */
 function toTraceToolCallEvent(
   traceId: string,
   requestId: string,
   toolName: string,
   args: Record<string, unknown>,
-  result: ToolExecutionResult
-): TraceToolCallEvent {
-  return {
-    type: "tool_call",
+  result: ToolExecutionResult,
+  traceEventType: "tool_call" | "mcp_tool_call" | undefined
+): TraceToolCallEvent | TraceMcpToolCallEvent {
+  const type = traceEventType ?? "tool_call";
+  const base = {
     id: `${traceId}_${toolName}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
     traceId,
     requestId,
@@ -375,6 +379,12 @@ function toTraceToolCallEvent(
     error: result.ok ? undefined : result.error,
     createdAt: new Date().toISOString()
   };
+
+  if (type === "mcp_tool_call") {
+    return { ...base, type: "mcp_tool_call" };
+  }
+
+  return { ...base, type: "tool_call" };
 }
 
 /**

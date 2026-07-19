@@ -12,13 +12,14 @@
     }
   },
   "dependencies": {
+    "@aiagent/mcp": "workspace:*",
     "@aiagent/tools": "workspace:*",
     "@aiagent/trace": "workspace:*",
     "@aiagent/types": "workspace:*"
   },
   "scripts": {
     "build": "tsc -b",
-    "test": "pnpm build && node --test test/*.test.mjs",
-    "typecheck": "pnpm --filter @aiagent/types build && pnpm --filter @aiagent/trace build && pnpm --filter @aiagent/tools build && tsc -p tsconfig.json --pretty false --noEmit"
+    "test": "pnpm --filter @aiagent/mcp build && pnpm build && node --test test/*.test.mjs",
+    "typecheck": "pnpm --filter @aiagent/types build && pnpm --filter @aiagent/trace build && pnpm --filter @aiagent/tools build && pnpm --filter @aiagent/mcp build && tsc -p tsconfig.json --pretty false --noEmit"
   }
 }

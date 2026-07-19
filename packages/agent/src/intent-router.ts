@@ -11,6 +11,7 @@ interface ModelRouteJson {
 const REPORT_KEYWORDS = ["报告", "研报", "研究报告", "研究简报", "PDF", "pdf", "导出", "生成一份"];
 const FILING_KEYWORDS = ["年报", "公告", "财报原文", "披露", "检索", "资产质量描述", "资产质量"];
 const METRIC_KEYWORDS = ["营收", "净利润", "ROE", "roe", "毛利率", "现金流", "财务指标", "最近一期", "同比"];
+const MARKET_DATA_KEYWORDS = ["股价", "行情", "涨幅", "成交量", "价格", "走势", " market"];
 const SQL_KEYWORDS = ["SQL", "sql", "SELECT", "select", "WITH", "with", "DROP", "drop", "查询 SQL", "执行 SQL"];
 const CONCEPT_KEYWORDS = ["解释", "是什么", "什么意思", "概念", "定义"];
 const DATA_NEED_KEYWORDS = ["最近", "查询", "变化", "多少", "同比", "公司", "这家公司"];
@@ -20,6 +21,8 @@ export interface IntentRouterOptions {
   llmClient?: LlmClient;
   enableModelRouter?: boolean;
   traceRecorder?: TraceRecorder;
+  /** true 时优先把 filing/metric 查询路由到 MCP tool 名称（search_filings / get_financial_metrics）。 */
+  preferMcpTools?: boolean;
 }
 
 /**
@@ -48,6 +51,7 @@ export async function routeIntent(message: string, options: IntentRouterOptions 
   const reportMatches = findMatches(normalized, REPORT_KEYWORDS);
   const filingMatches = findMatches(normalized, FILING_KEYWORDS);
   const metricMatches = findMatches(normalized, METRIC_KEYWORDS);
+  const marketDataMatches = findMatches(normalized, MARKET_DATA_KEYWORDS);
   const sqlMatches = findMatches(normalized, SQL_KEYWORDS);
 
   if (isNaturalLanguageReportRequest(normalized)) {
@@ -64,11 +68,22 @@ export async function routeIntent(message: string, options: IntentRouterOptions 
   }
 
   if (filingMatches.length > 0) {
-    return toolRoute("filing_search_mock", buildFilingArgs(normalized), "命中公告/披露文本检索诉求。", filingMatches);
+    const toolName = options.preferMcpTools ? "search_filings" : "filing_search_mock";
+    return toolRoute(toolName, buildFilingArgs(normalized, options.preferMcpTools), "命中公告/披露文本检索诉求。", filingMatches);
   }
 
   if (metricMatches.length > 0 && !isMetricConceptQuestion(normalized)) {
-    return toolRoute("financial_metric_mock", buildMetricArgs(normalized), "命中财务指标查询诉求。", metricMatches);
+    const toolName = options.preferMcpTools ? "get_financial_metrics" : "financial_metric_mock";
+    return toolRoute(toolName, buildMetricArgs(normalized, options.preferMcpTools), "命中财务指标查询诉求。", metricMatches);
+  }
+
+  if (marketDataMatches.length > 0 && options.preferMcpTools) {
+    return toolRoute(
+      "get_market_data",
+      buildMarketDataArgs(normalized),
+      "命中行情查询诉求，通过 MCP get_market_data 获取。",
+      marketDataMatches
+    );
   }
 
   if (options.enableModelRouter && options.llmClient) {
@@ -84,9 +99,10 @@ export async function routeIntent(message: string, options: IntentRouterOptions 
     }
 
     if (modelRoute.intent === "tool") {
+      const toolName = options.preferMcpTools ? "get_financial_metrics" : "financial_metric_mock";
       return toolRoute(
-        "financial_metric_mock",
-        buildMetricArgs(normalized),
+        toolName,
+        buildMetricArgs(normalized, options.preferMcpTools),
         modelRoute.reason ?? "模型结构化判断为工具查询。",
         ["model_router"]
       );
@@ -192,28 +208,63 @@ function toolRoute(
 }
 
 /**
- * 从文本中提取 mock 工具需要的公告检索参数。
+ * 从文本中提取公告检索参数；MCP 模式使用 companyId，REST 模式使用 ticker。
  *
  * @param message 用户输入。
- * @returns filing_search_mock 参数。
+ * @param preferMcpTools 是否生成 MCP tool 参数。
+ * @returns filing_search_mock 或 search_filings 参数。
  */
-function buildFilingArgs(message: string): Record<string, unknown> {
+function buildFilingArgs(message: string, preferMcpTools = false): Record<string, unknown> {
+  const ticker = extractTicker(message);
+
+  if (preferMcpTools) {
+    return {
+      companyId: ticker,
+      query: message,
+      topK: 5
+    };
+  }
+
   return {
-    ticker: extractTicker(message),
+    ticker,
     query: message
   };
 }
 
 /**
- * 从文本中提取 mock 财务指标参数，Week 1 固定查净利润和 ROE。
+ * 从文本中提取财务指标参数，固定查净利润和 ROE；MCP 模式使用 companyId。
  *
  * @param message 用户输入。
- * @returns financial_metric_mock 参数。
+ * @param preferMcpTools 是否生成 MCP tool 参数。
+ * @returns financial_metric_mock 或 get_financial_metrics 参数。
  */
-function buildMetricArgs(message: string): Record<string, unknown> {
+function buildMetricArgs(message: string, preferMcpTools = false): Record<string, unknown> {
+  const ticker = extractTicker(message);
+
+  if (preferMcpTools) {
+    return {
+      companyId: ticker,
+      metrics: ["net_profit", "roe"]
+    };
+  }
+
+  return {
+    ticker,
+    metrics: ["net_profit", "roe"]
+  };
+}
+
+/**
+ * 从文本中提取行情参数，供 MCP get_market_data 使用。
+ *
+ * @param message 用户输入。
+ * @returns get_market_data 参数。
+ */
+function buildMarketDataArgs(message: string): Record<string, unknown> {
   return {
     ticker: extractTicker(message),
-    metrics: ["net_profit", "roe"]
+    range: "1d",
+    fields: ["summary"]
   };
 }
 

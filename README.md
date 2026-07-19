@@ -162,7 +162,29 @@ stdio 的 stdout 专用于 MCP 协议帧，通常应由 MCP client 作为子进�
 pnpm --filter @aiagent/mcp test
 ```
 
-当前公告、指标和行情数据均为本地 mock；RAG 检索与 citation 生成会真实执行，但不持久化，也不包含远程部署、鉴权、多租户或 Agent client 接入。工具失败同时使用 MCP `isError` 和结构化 error envelope，不向 client 泄漏 raw exception。实现取舍与 MCP/REST 对比见 ``。
+### MCP Client 接入 Agent
+
+`packages/mcp` 同时提供 client adapter 和 combined registry，让 Agent 在不改动 UI 的情况下调用 MCP tools：
+
+```bash
+# 直接体验 MCP client 发现、调用和 fallback
+pnpm --filter @aiagent/mcp test
+```
+
+或运行 Agent MCP path 验证：
+
+```bash
+pnpm --filter @aiagent/agent test
+```
+
+关键接口：
+
+- `createMcpStdioClient()`：stdio MCP client，暴露 `listTools()` / `callTool()` / `close()`。
+- `createMcpToolRegistry(client)`：把 MCP tools 包装成 `ToolRegistry` 可执行的工具。
+- `createCombinedToolRegistry()`：同时注册 REST/mock tools 和 MCP tools；MCP server 不可用时 fallback 到 REST tools。
+- `AgentConfig.preferMcpTools`：true 时 Agent 优先选择 `search_filings` / `get_financial_metrics`。
+
+当前公告、指标和行情数据均为本地 mock；RAG 检索与 citation 生成会真实执行，但不持久化，也不包含远程部署、鉴权、多租户或长连接生产化治理。工具失败同时使用 MCP `isError` 和结构化 error envelope，不向 client 泄漏 raw exception。实现取舍与 MCP/REST 对比见 ``。
 
 ## Week 2 RAG Package Foundation
 

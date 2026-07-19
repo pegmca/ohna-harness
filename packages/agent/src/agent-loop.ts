@@ -31,7 +31,8 @@ export function createAgent(config: AgentConfig = {}): Agent {
     createIntentRouter({
       llmClient: config.llmClient,
       enableModelRouter: config.enableModelRouter,
-      traceRecorder: config.traceRecorder
+      traceRecorder: config.traceRecorder,
+      preferMcpTools: config.preferMcpTools
     });
 
   return {
@@ -53,7 +54,12 @@ export async function runAgent(request: AgentRequest, config: AgentConfig = {}):
   const trace = config.traceRecorder ?? createInMemoryTraceRecorder();
   const router =
     config.router ??
-    createIntentRouter({ llmClient: config.llmClient, enableModelRouter: config.enableModelRouter, traceRecorder: trace });
+    createIntentRouter({
+      llmClient: config.llmClient,
+      enableModelRouter: config.enableModelRouter,
+      traceRecorder: trace,
+      preferMcpTools: config.preferMcpTools
+    });
   const steps: AgentStep[] = [];
   const maxSteps = normalizeMaxSteps(request.maxSteps);
   const message = request.message.trim();
@@ -607,6 +613,33 @@ function formatToolAnswer(toolName: string, result: unknown): string {
     if (isRecord(first)) {
       return `已调用 filing_search_mock。${String(result.ticker)} ${String(first.title)}：${String(first.snippet)} 数据来源：mock。`;
     }
+  }
+
+  // MCP tools 返回 `{ ok: true, data: {...} }` envelope，需要解包 data 后格式化。
+  const data = isRecord(result) && result.ok === true && isRecord(result.data) ? result.data : undefined;
+
+  if (toolName === "get_financial_metrics" && data && Array.isArray(data.metrics)) {
+    const metrics = data.metrics as Array<Record<string, unknown>>;
+    const netProfit = metrics.find((item) => item.metric === "net_profit");
+    const roe = metrics.find((item) => item.metric === "roe");
+    const period = netProfit?.period ?? roe?.period ?? "";
+
+    return `已通过 MCP 调用 get_financial_metrics。${String(data.companyId)} ${String(period)} 净利润为 ${String(netProfit?.value)} ${String(netProfit?.unit)}，ROE 为 ${String(roe?.value)}%。数据来源：mock。`;
+  }
+
+  if (toolName === "search_filings" && data && Array.isArray(data.snippets)) {
+    const snippets = data.snippets as Array<Record<string, unknown>>;
+    const first = snippets[0];
+
+    if (isRecord(first)) {
+      return `已通过 MCP 调用 search_filings。${String(data.companyId)}：${String(first.text)} 数据来源：mock_rag_runtime。`;
+    }
+  }
+
+  if (toolName === "get_market_data" && data) {
+    const summary = isRecord(data.summary) ? data.summary : undefined;
+
+    return `已通过 MCP 调用 get_market_data。${String(data.ticker)} 最新价 ${String(summary?.lastPrice)}，涨跌幅 ${String(summary?.changePercent)}%。数据来源：mock。`;
   }
 
   return `已调用 ${toolName}，返回结果：${JSON.stringify(result)}`;

@@ -101,6 +101,8 @@ export type TraceEventDto =
   | TraceWorkflowNodeEventDto
   | TraceModelCallEventDto
   | TraceToolCallEventDto
+  | TraceMcpToolDiscoveredEventDto
+  | TraceMcpToolCallEventDto
   | TraceFinalResponseEventDto;
 
 export interface TraceEventBaseDto {
@@ -212,6 +214,25 @@ export interface TraceModelCallEventDto extends TraceEventBaseDto {
 
 export interface TraceToolCallEventDto extends TraceEventBaseDto {
   type: "tool_call";
+  toolName: string;
+  args: Record<string, unknown>;
+  result?: unknown;
+  durationMs: number;
+  ok: boolean;
+  error?: TraceErrorDto;
+}
+
+export interface TraceMcpToolDiscoveredEventDto extends TraceEventBaseDto {
+  type: "mcp_tool_discovered";
+  serverName: string;
+  toolNames: string[];
+  ok: boolean;
+  durationMs: number;
+  error?: TraceErrorDto;
+}
+
+export interface TraceMcpToolCallEventDto extends TraceEventBaseDto {
+  type: "mcp_tool_call";
   toolName: string;
   args: Record<string, unknown>;
   result?: unknown;

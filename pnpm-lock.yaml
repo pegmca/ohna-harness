@@ -88,6 +88,9 @@ importers:
 
   packages/agent:
     dependencies:
+      '@aiagent/mcp':
+        specifier: workspace:*
+        version: link:../mcp
       '@aiagent/tools':
         specifier: workspace:*
         version: link:../tools
@@ -121,6 +124,9 @@ importers:
       '@aiagent/tools':
         specifier: workspace:^
         version: link:../tools
+      '@aiagent/trace':
+        specifier: workspace:^
+        version: link:../trace
       '@modelcontextprotocol/sdk':
         specifier: ^1.29.0
         version: 1.29.0(zod@4.4.3)

@@ -1000,7 +1000,10 @@ function RunDetails(props: {
   run: AgentRunResponseDto;
 }) {
   const { run } = props;
-  const toolEvents = run.trace.events.filter((event) => event.type === "tool_call");
+  // MCP 调用与本地 registry 调用共享消息内工具列表，但保留各自 trace 类型便于辨识边界。
+  const toolEvents = run.trace.events.filter(
+    (event) => event.type === "tool_call" || event.type === "mcp_tool_call"
+  );
   const approvalRequests = getApprovalRequests(run);
 
   return (
@@ -1543,6 +1546,10 @@ function formatEventTitle(event: TraceEventDto): string {
       return `Model Call: ${event.purpose}`;
     case "tool_call":
       return `Tool Call: ${event.toolName}`;
+    case "mcp_tool_discovered":
+      return `MCP Discovery: ${event.serverName}`;
+    case "mcp_tool_call":
+      return `MCP Tool Call: ${event.toolName}`;
     case "final_response":
       return "Final Response";
   }
@@ -1592,6 +1599,12 @@ function formatEventSummary(event: TraceEventDto): string {
       return event.ok ? `${event.model} responded` : event.error?.message ?? "model failed";
     case "tool_call":
       return event.ok ? "工具成功返回结构化结果。" : event.error?.message ?? "工具调用失败。";
+    case "mcp_tool_discovered":
+      return event.ok
+        ? `发现 ${event.toolNames.length} 个 MCP 工具：${event.toolNames.join("、")}`
+        : event.error?.message ?? "MCP 工具发现失败。";
+    case "mcp_tool_call":
+      return event.ok ? "MCP 工具成功返回结构化结果。" : event.error?.message ?? "MCP 工具调用失败。";
     case "final_response":
       return event.answerPreview;
   }

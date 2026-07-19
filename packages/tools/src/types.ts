@@ -49,6 +49,11 @@ export interface Tool<TInput, TOutput> {
   inputSchema: z.ZodType<TInput>;
   outputSchema: z.ZodType<TOutput>;
   /**
+   * trace 中使用的工具调用事件类型；MCP tool wrapper 可设置为 `mcp_tool_call`，
+   * 使 REST/registry tool call 与 MCP tool call 在 timeline 中可区分。
+   */
+  traceEventType?: "tool_call" | "mcp_tool_call";
+  /**
    * 对单次工具输入做权限判断；用于 SQL 只读校验、导出动作确认等敏感边界。
    *
    * @param input 已通过 inputSchema 校验的工具参数。

@@ -95,6 +95,8 @@ export interface AgentConfig {
   traceRecorder?: TraceRecorder;
   router?: AgentRouter;
   enableModelRouter?: boolean;
+  /** true 时 intent router 优先选择 MCP tool 名称（search_filings / get_financial_metrics）。 */
+  preferMcpTools?: boolean;
 }
 
 export interface Agent {

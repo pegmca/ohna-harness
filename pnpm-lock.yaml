@@ -115,6 +115,9 @@ importers:
       '@aiagent/types':
         specifier: workspace:^
         version: link:../types
+      '@types/node':
+        specifier: ^22.10.5
+        version: 22.20.0
 
   packages/filings:
     dependencies:

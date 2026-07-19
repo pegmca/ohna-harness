@@ -11,5 +11,13 @@ export default defineConfig({
         changeOrigin: true
       }
     }
+  },
+  preview: {
+    host: "0.0.0.0",
+    proxy: {
+      "/api": "http://localhost:3001",
+      "/health": "http://localhost:3001",
+      "/ready": "http://localhost:3001"
+    }
   }
 });

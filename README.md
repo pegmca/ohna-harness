@@ -83,6 +83,51 @@ curl -X POST http://localhost:3001/api/agent/run \
   -d '{"message":"帮我查询 000001.SZ 最近一期净利润和 ROE。","reportMode":false}'
 ```
 
+## Docker Compose 一键 Demo
+
+只需 Docker Engine 与 Docker Compose v2；默认 mock 模式不需要 Node、pnpm 或真实 API key：
+
+```bash
+git clone <repository-url>
+cd aiagent
+cp .env.example .env
+docker compose up -d --build
+docker compose ps
+```
+
+打开 `http://localhost:8080`。Web 仅对宿主机暴露 `8080`（可用 `AIAGENT_WEB_PORT` 修改），API 的 `3001` 只在 Compose 网络内暴露，由 Nginx 将浏览器 `/api/*` 请求代理到 `api:3001`。这样浏览器不需要解析 Compose 服务名。当前 demo 数据、trace、workflow 与 artifact 都在 API 进程内存中；容器重启后会清空，仓库没有必要的持久化 volume。
+
+验证 Web/API 探针和核心流程：
+
+```bash
+curl --fail http://localhost:8080/health
+curl --fail http://localhost:8080/ready
+pnpm smoke:compose
+```
+
+`/health` 只表示对应进程存活；Web 暴露的 `/ready` 会代理 API readiness。mock 模式检查本地 runtime，real 模式还会验证 provider 配置是否完整；依赖配置未就绪时返回 HTTP 503，Compose 不会把 API 标为 healthy。`pnpm smoke:compose` 验证页面入口、普通 Chat、自然语言触发 Report Mode、workflow 和 HTML artifact/PDF queued 状态；该命令需要宿主机 Node，产品启动本身不需要。
+
+接入真实 OpenAI-compatible provider 时，在 `.env` 中设置：
+
+```dotenv
+AIAGENT_PROVIDER_MODE=real
+AIAGENT_LLM_API_KEY=replace-with-provider-key
+AIAGENT_LLM_BASE_URL=https://api.openai.com/v1
+AIAGENT_LLM_MODEL=replace-with-model-name
+```
+
+然后重新执行 `docker compose up -d --build`。密钥只作为运行时环境变量注入 API，不进入 build context 或镜像层。镜像使用 lockfile 固定依赖；API 以 Node `node` 用户运行，Web 使用 unprivileged Nginx 用户运行。
+
+排错与停止：
+
+```bash
+docker compose logs --tail=200 api web
+docker compose ps
+docker compose down
+```
+
+如果 real 模式的 API 长期 `unhealthy`，先查看 `/ready` 或 API 日志，并核对 key/model/base URL；端口冲突时修改 `.env` 中的 `AIAGENT_WEB_PORT`。要清理镜像可额外执行 `docker compose down --rmi local`；当前 Compose 不创建数据卷。
+
 ## LLM Client
 
 `packages/agent` 导出统一 LLM Client，当前支持 OpenAI compatible `/chat/completions`。公开 contract 放在 `packages/types/src/llm.ts`，实现放在 `packages/agent/src/llm-client.ts`，`packages/agent/src/index.ts` 只保留 package 入口导出。

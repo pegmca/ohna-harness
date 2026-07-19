@@ -2,6 +2,17 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createApiServer } from "../dist/index.js";
 
+test("health and readiness distinguish liveness from dependency readiness", async () => {
+  const app = createApiServer({ readiness: async () => ({ ok: false, dependency: "test-provider", message: "not configured" }) });
+  const health = await app.inject({ method: "GET", url: "/health" });
+  const ready = await app.inject({ method: "GET", url: "/ready" });
+  assert.equal(health.statusCode, 200);
+  assert.equal(health.json().ok, true);
+  assert.equal(ready.statusCode, 503);
+  assert.equal(ready.json().dependency, "test-provider");
+  await app.close();
+});
+
 test("POST /api/agent/run returns structured agent response", async () => {
   const app = createApiServer();
   const response = await app.inject({

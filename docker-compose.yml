@@ -1,0 +1,39 @@
+services:
+  api:
+    build:
+      context: .
+      target: api
+    environment:
+      HOST: 0.0.0.0
+      PORT: 3001
+      AIAGENT_PROVIDER_MODE: ${AIAGENT_PROVIDER_MODE:-mock}
+      AIAGENT_LLM_PROVIDER: ${AIAGENT_LLM_PROVIDER:-openai-compatible}
+      AIAGENT_LLM_API_KEY: ${AIAGENT_LLM_API_KEY:-}
+      AIAGENT_LLM_BASE_URL: ${AIAGENT_LLM_BASE_URL:-https://api.openai.com/v1}
+      AIAGENT_LLM_MODEL: ${AIAGENT_LLM_MODEL:-}
+      AIAGENT_LLM_TIMEOUT_MS: ${AIAGENT_LLM_TIMEOUT_MS:-30000}
+    expose:
+      - "3001"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3001/ready').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+    restart: unless-stopped
+  web:
+    build:
+      context: .
+      target: web
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "${AIAGENT_WEB_PORT:-8080}:8080"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8080/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 3s
+    restart: unless-stopped

@@ -1,5 +1,6 @@
 import { runAgent } from "@aiagent/agent";
 import type { AgentResponse, AgentStep } from "@aiagent/agent";
+import type { LlmClient } from "@aiagent/types";
 import { createDataSourceRuntime } from "@aiagent/rag";
 import { runReportWorkflow } from "@aiagent/report";
 import type { ReportWorkflowResult } from "@aiagent/report";
@@ -60,12 +61,17 @@ const startReportWorkflowRequestSchema = z.object({
 
 const DEFAULT_CONVERSATION_ID = "week1-local-session";
 
+export interface ApiServerOptions {
+  llmClient?: LlmClient;
+  readiness?: () => Promise<{ ok: boolean; dependency: string; message?: string }>;
+}
+
 /**
  * 创建 Week 1 最小 HTTP API，只承载请求校验和 Agent DTO 映射。
  *
  * @returns 已注册路由的 Fastify 实例。
  */
-export function createApiServer(): FastifyInstance {
+export function createApiServer(options: ApiServerOptions = {}): FastifyInstance {
   const app = Fastify({
     logger: true
   });
@@ -85,6 +91,15 @@ export function createApiServer(): FastifyInstance {
     ok: true,
     service: "@aiagent/api"
   }));
+
+  /** readiness 会检查启动模式所需依赖；失败返回 503，避免流量进入不可服务实例。 */
+  app.get("/ready", async (_request, reply) => {
+    const state = options.readiness
+      ? await options.readiness()
+      : { ok: true, dependency: "mock-runtime" };
+    if (!state.ok) reply.code(503);
+    return { ...state, service: "@aiagent/api" };
+  });
 
   /** 按对外 requestId 返回完整脱敏 trace；当前仅保存在 API 进程内存。 */
   app.get<{ Params: { requestId: string } }>("/api/traces/:requestId", async (request, reply): Promise<ApiResult<TraceDto>> => {
@@ -362,7 +377,7 @@ export function createApiServer(): FastifyInstance {
         message,
         reportMode: parsed.data.reportMode,
         reportTriggerSource: parsed.data.reportTriggerSource
-      }, { traceRecorder: trace });
+      }, { traceRecorder: trace, llmClient: options.llmClient });
       traceStore.save(agentResponse.trace);
       const responseDto = redactSensitiveValue(toAgentRunResponseDto(agentResponse, parsed.data, requestId));
       registerTraceApprovals(responseDto.trace, pendingApprovals);

@@ -9,6 +9,7 @@
     "test": "pnpm -r --if-present test",
     "typecheck": "pnpm -r typecheck",
     "eval": "pnpm --filter @aiagent/eval eval",
+    "smoke:compose": "node test/smoke-compose.mjs",
     "eval:update-baseline": "pnpm --filter @aiagent/eval eval:update-baseline"
   },
   "devDependencies": {

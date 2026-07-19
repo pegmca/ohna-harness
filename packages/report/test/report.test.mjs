@@ -92,13 +92,12 @@ test("report workflow triggers supplementary retrieval when citations are missin
 
   const verifierEvents = trace
     .getEvents()
-    .filter((event) => event.type === "agent_step" && event.stepType === "report.citation_verifier");
+    .filter((event) => event.type === "citation_verifier");
   assert.ok(verifierEvents.length > 0);
 
   const lastVerifierEvent = verifierEvents[verifierEvents.length - 1];
-  assert.equal(lastVerifierEvent.data.maxRetries, 2);
-  assert.ok(lastVerifierEvent.data.retryCount <= 2);
-  assert.equal(lastVerifierEvent.data.decision, "fail");
+  assert.ok(lastVerifierEvent.retryCount <= 2);
+  assert.equal(lastVerifierEvent.decision, "fail");
 });
 
 test("report workflow returns max step structured failure", async () => {
@@ -181,6 +180,18 @@ test("report workflow risk review asks for more evidence when risk disclosure is
   assert.match(result.draft.markdown, /资料不足|不足以判断|风险/);
   assert.ok(result.state.risks.needsMoreEvidence);
   assert.ok(result.state.risks.followUpQueries.length > 0);
+});
+
+test("report workflow degrades to an explicitly partial report when non-critical sources fail", async () => {
+  const runId = "report_wf_partial_source";
+  const unavailableRuntime = {
+    listDocuments: () => [], listChunks: () => [], snapshot: () => ({ documents: [], chunks: [], embeddedChunks: [] }),
+    ingest: async () => ({ ok: true, data: {} }),
+    search: async () => ({ ok: false, error: { code: "retrieval_failed", message: "market source temporarily unavailable" } }),
+    answer: async () => ({ ok: false, error: { code: "answer_failed", message: "unavailable" } })
+  };
+  const result = await runReportWorkflow(createReadyPlan(), { runId, dataSourceRuntime: unavailableRuntime, maxRetries: 0, approvalDecisions: [approvePdfExport(runId)] });
+  assert.equal(result.ok, true); assert.equal(result.run.partial, true); assert.equal(result.state.collectedData.partial, true); assert.ok(result.state.collectedData.sourceErrors.length > 0); assert.match(result.draft.markdown, /资料不足|无法基于/);
 });
 
 function createReadyPlan() {

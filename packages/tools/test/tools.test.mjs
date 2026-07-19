@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createInMemoryTraceRecorder } from "@aiagent/trace";
-import { createDefaultToolRegistry, getToolRegistrySummary, isReadonlySql } from "../dist/index.js";
+import { z } from "zod";
+import { createDefaultToolRegistry, getToolRegistrySummary, isReadonlySql, ToolRegistry } from "../dist/index.js";
 
 test("default registry exposes and executes the week 1 mock tools", async () => {
   const registry = createDefaultToolRegistry();
@@ -142,4 +143,25 @@ test("trace recorder redacts sensitive fields from tool args", async () => {
   assert.equal(event.requestId, "req_redaction_test");
   assert.equal(event.args.apiKey, "[redacted]");
   assert.equal(event.args.nested.token, "[redacted]");
+});
+
+test("temporary tool failure retries without real waiting", async () => {
+  let calls = 0;
+  const delays = [];
+  const registry = new ToolRegistry().register({ name: "flaky", description: "test", inputSchema: z.object({}), outputSchema: z.object({ value: z.number() }), execute: () => { calls += 1; if (calls === 1) throw Object.assign(new Error("temporary"), { retryable: true }); return { value: 7 }; } });
+  const result = await registry.execute("flaky", {}, { sleep: async (delay) => { delays.push(delay); }, retry: { jitterRatio: 0 } });
+  assert.equal(result.ok, true); assert.equal(result.attempts, 2); assert.deepEqual(delays, [100]);
+});
+
+test("side effect tool is not retried without idempotency guarantee", async () => {
+  let calls = 0;
+  const registry = new ToolRegistry().register({ name: "write", description: "test", hasSideEffects: true, inputSchema: z.object({}), outputSchema: z.object({}), execute: () => { calls += 1; throw Object.assign(new Error("temporary"), { retryable: true }); } });
+  const result = await registry.execute("write", {}, { sleep: async () => undefined });
+  assert.equal(result.ok, false); assert.equal(calls, 1); assert.equal(result.attempts, 1);
+});
+
+test("slow tool is bounded by timeout", async () => {
+  const registry = new ToolRegistry().register({ name: "slow", description: "test", inputSchema: z.object({}), outputSchema: z.object({}), execute: () => new Promise(() => undefined) });
+  const result = await registry.execute("slow", {}, { timeoutMs: 1, retry: { maxAttempts: 1 } });
+  assert.equal(result.ok, false); assert.equal(result.error.code, "timeout");
 });

@@ -8,7 +8,11 @@ export type ToolErrorCode =
   | "execution_error"
   | "output_validation_error"
   | "permission_required"
-  | "permission_denied";
+  | "permission_denied"
+  | "timeout"
+  | "cancelled"
+  | "deadline_exceeded"
+  | "retry_exhausted";
 
 export interface ToolError {
   code: ToolErrorCode;
@@ -19,6 +23,20 @@ export interface ToolError {
 export interface ToolExecutionContext {
   trace?: TraceRecorder;
   approvalDecisions?: ToolApprovalDecisionDto[];
+  signal?: AbortSignal;
+  timeoutMs?: number;
+  deadlineAtMs?: number;
+  retry?: Partial<ToolRetryPolicy>;
+  idempotencyKey?: string;
+  now?: () => number;
+  sleep?: (delayMs: number, signal?: AbortSignal) => Promise<void>;
+}
+
+export interface ToolRetryPolicy {
+  maxAttempts: number;
+  baseDelayMs: number;
+  maxDelayMs: number;
+  jitterRatio: number;
 }
 
 export interface ToolExecutionSuccess<TOutput> {
@@ -27,6 +45,7 @@ export interface ToolExecutionSuccess<TOutput> {
   args: Record<string, unknown>;
   result: TOutput;
   durationMs: number;
+  attempts: number;
   traceId?: string;
 }
 
@@ -37,6 +56,7 @@ export interface ToolExecutionFailure {
   error: ToolError;
   approvalRequest?: ToolApprovalRequestDto;
   durationMs: number;
+  attempts: number;
   traceId?: string;
 }
 
@@ -53,6 +73,10 @@ export interface Tool<TInput, TOutput> {
    * 使 REST/registry tool call 与 MCP tool call 在 timeline 中可区分。
    */
   traceEventType?: "tool_call" | "mcp_tool_call";
+  /** 工具是否有副作用；有副作用工具只有同时声明幂等且提供 idempotency key 才可重试。 */
+  hasSideEffects?: boolean;
+  /** 声明 execute 在相同幂等键下可安全重放。 */
+  idempotent?: boolean;
   /**
    * 对单次工具输入做权限判断；用于 SQL 只读校验、导出动作确认等敏感边界。
    *

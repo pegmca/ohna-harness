@@ -3,6 +3,7 @@ import { createInMemoryTraceRecorder, type TraceRecorder } from "@aiagent/trace"
 import type { LlmClient, LlmError, ReportPlanDto } from "@aiagent/types";
 import { createIntentRouter } from "./intent-router.js";
 import { createReportActivation, createReportPlan } from "./report-planner.js";
+import { chatWithReliability } from "./reliability.js";
 import type {
   Agent,
   AgentConfig,
@@ -63,6 +64,7 @@ export async function runAgent(request: AgentRequest, config: AgentConfig = {}):
   const steps: AgentStep[] = [];
   const maxSteps = normalizeMaxSteps(request.maxSteps);
   const message = request.message.trim();
+  const deadlineAtMs = request.deadlineMs === undefined ? undefined : Date.now() + Math.max(0, request.deadlineMs);
 
   recordTrace(trace, {
     type: "request_received",
@@ -80,6 +82,9 @@ export async function runAgent(request: AgentRequest, config: AgentConfig = {}):
       message: "Message is required."
     });
   }
+
+  const initialTermination = ensureRunActive(request.signal, deadlineAtMs);
+  if (initialTermination) return finish(trace, steps, "chat", initialTermination.message, false, initialTermination);
 
   const initialBudget = ensureStepBudget(steps, maxSteps, trace);
 
@@ -135,16 +140,18 @@ export async function runAgent(request: AgentRequest, config: AgentConfig = {}):
   if (budgetAfterRoute) {
     return finish(trace, steps, route.intent, budgetAfterRoute.message, false, budgetAfterRoute);
   }
+  const routeTermination = ensureRunActive(request.signal, deadlineAtMs);
+  if (routeTermination) return finish(trace, steps, route.intent, routeTermination.message, false, routeTermination);
 
   if (route.intent === "report_skill") {
     return runReportSkillPath(trace, steps, maxSteps, route, request);
   }
 
   if (route.intent === "tool") {
-    return runToolPath(trace, steps, maxSteps, route, toolRegistry);
+    return runToolPath(trace, steps, maxSteps, route, toolRegistry, request.signal, deadlineAtMs);
   }
 
-  return runChatPath(trace, steps, maxSteps, route, message, config.llmClient);
+  return runChatPath(trace, steps, maxSteps, route, message, config.llmClient, config, request.signal, deadlineAtMs);
 }
 
 /**
@@ -261,7 +268,9 @@ async function runToolPath(
   steps: AgentStep[],
   maxSteps: number,
   route: AgentRoute,
-  toolRegistry: NonNullable<AgentConfig["toolRegistry"]>
+  toolRegistry: NonNullable<AgentConfig["toolRegistry"]>,
+  signal?: AbortSignal,
+  deadlineAtMs?: number
 ): Promise<AgentResponse> {
   const tool = route.tool;
 
@@ -299,7 +308,7 @@ async function runToolPath(
 
   try {
     toolResult = await runStep(steps, trace, maxSteps, "call_tool", async () => {
-      const result = await toolRegistry.execute(tool.toolName, tool.args, { trace });
+      const result = await toolRegistry.execute(tool.toolName, tool.args, { trace, signal, deadlineAtMs });
 
       if (!result.ok) {
         throw {
@@ -349,7 +358,10 @@ async function runChatPath(
   maxSteps: number,
   route: AgentRoute,
   message: string,
-  llmClient?: LlmClient
+  llmClient?: LlmClient,
+  config: AgentConfig = {},
+  signal?: AbortSignal,
+  deadlineAtMs?: number
 ): Promise<AgentResponse> {
   const budget = ensureStepBudget(steps, maxSteps, trace);
 
@@ -382,7 +394,7 @@ async function runChatPath(
         };
       }
 
-      const result = await llmClient.chat({
+      const reliable = await chatWithReliability({
         messages: [
           {
             role: "system",
@@ -394,7 +406,8 @@ async function runChatPath(
           }
         ],
         temperature: 0.2
-      });
+      }, { primary: { name: "primary", client: llmClient, capabilities: { structuredOutput: true, toolCalling: true } }, fallbacks: config.modelFallbacks, requiredCapabilities: config.requiredModelCapabilities, retry: config.modelRetry, deadlineAtMs, signal, trace });
+      const result = reliable.ok ? { ok: true as const, data: reliable.data } : { ok: false as const, error: reliable.error };
       const durationMs = elapsedMs(startedAt);
 
       recordTrace(trace, {
@@ -429,6 +442,13 @@ async function runChatPath(
     const agentError = toAgentError(error, "model_error", "模型回答失败，请稍后重试。");
     return finish(trace, steps, route.intent, agentError.message, false, agentError);
   }
+}
+
+/** 在 Agent 步骤边界检查取消和总 deadline，返回稳定错误而非继续执行。 */
+function ensureRunActive(signal: AbortSignal | undefined, deadlineAtMs: number | undefined): AgentError | undefined {
+  if (signal?.aborted) return { code: "cancelled", message: "Agent 运行已取消。", details: { terminationReason: "cancelled" } };
+  if (deadlineAtMs !== undefined && Date.now() >= deadlineAtMs) return { code: "deadline_exceeded", message: "Agent 运行超过总 deadline。", details: { terminationReason: "deadline_exceeded" } };
+  return undefined;
 }
 
 /**

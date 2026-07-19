@@ -21,6 +21,8 @@ export { createAgent, runAgent } from "./agent-loop.js";
 export { createIntentRouter, routeIntent } from "./intent-router.js";
 export { createLlmClient, createLlmClientFromEnv } from "./llm-client.js";
 export { createReportActivation, createReportPlan, isNaturalLanguageReportRequest } from "./report-planner.js";
+export { chatWithReliability, isRetryableModelError } from "./reliability.js";
+export type { ModelCandidate, ModelCapabilities, ModelRetryPolicy, ReliableModelOptions, ReliableModelResult } from "./reliability.js";
 
 export type {
   Agent,

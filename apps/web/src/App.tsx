@@ -1143,6 +1143,10 @@ function ReportWorkflowPanel(props: { workflow: ReportWorkflowResponseDto }) {
         <div className="run-identifiers"><span>workflowRunId: {run.runId}</span></div>
         <StatusBadge tone={run.status === "succeeded" ? "success" : run.status === "paused" ? "info" : "danger"}>{run.status}</StatusBadge>
       </div>
+      {run.partial ? (
+        <p className="workflow-recovery"><AlertTriangle className="icon-size" />部分数据源暂时不可用，已基于现有证据生成降级报告。请展开恢复详情核对数据缺口。</p>
+      ) : null}
+      {run.recovery && run.recovery.length > 0 ? <JsonDetails title="恢复与降级详情" value={run.recovery} /> : null}
       <div className="workflow-nodes">
         {displayNodes.map((node, index) => (
           <article className="workflow-node" key={node.nodeId}>

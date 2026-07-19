@@ -189,6 +189,10 @@ export type WorkflowErrorCode =
   | "invalid_node_input"
   | "invalid_node_output"
   | "node_execution_failed"
+  | "node_timeout"
+  | "workflow_deadline_exceeded"
+  | "workflow_cancelled"
+  | "retry_exhausted"
   | "max_steps_exceeded"
   | "approval_required"
   | "approval_rejected";
@@ -240,6 +244,10 @@ export interface TraceModelCallEvent extends TraceEventBase {
   purpose: string;
   durationMs: number;
   ok: boolean;
+  attempt?: number;
+  modelAttempt?: number;
+  fallbackIndex?: number;
+  fallbackReason?: string;
   usage?: {
     promptTokens?: number;
     completionTokens?: number;
@@ -255,6 +263,7 @@ export interface TraceToolCallEvent extends TraceEventBase {
   result?: unknown;
   durationMs: number;
   ok: boolean;
+  attempts?: number;
   error?: TraceError;
 }
 
@@ -274,6 +283,7 @@ export interface TraceMcpToolCallEvent extends TraceEventBase {
   result?: unknown;
   durationMs: number;
   ok: boolean;
+  attempts?: number;
   error?: TraceError;
 }
 

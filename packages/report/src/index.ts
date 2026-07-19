@@ -82,6 +82,8 @@ export const reportDataCollectorOutputSchema = z.object({
   ),
   evidence: z.array(reportEvidenceItemSchema),
   retrievalTraces: z.array(z.any()).optional()
+  , partial: z.boolean().default(false)
+  , sourceErrors: z.array(z.object({ query: z.string(), code: z.string(), message: z.string() })).default([])
 });
 
 export const reportAnalyzerInputSchema = z.object({
@@ -212,6 +214,9 @@ export interface RunReportWorkflowOptions {
   trace?: TraceRecorder;
   documents?: ReportWorkflowDemoDocument[];
   approvalDecisions?: ToolApprovalDecisionDto[];
+  deadlineMs?: number;
+  signal?: AbortSignal;
+  dataSourceRuntime?: DataSourceRuntime;
 }
 
 export interface ReportWorkflowResultOk {
@@ -272,7 +277,7 @@ export async function runReportWorkflow(
   const initialState: ReportWorkflowState = {
     plan,
     documents: options.documents ?? [],
-    dataSourceRuntime: createDataSourceRuntime(),
+    dataSourceRuntime: options.dataSourceRuntime ?? createDataSourceRuntime(),
     followUpQueries: [],
     verifierRetryCount: 0
   };
@@ -321,6 +326,8 @@ export async function runReportWorkflow(
     maxSteps: options.maxSteps ?? DEFAULT_MAX_STEPS,
     trace: options.trace,
     approvalDecisions: options.approvalDecisions
+    , deadlineMs: options.deadlineMs
+    , signal: options.signal
   });
 
   if (!result.ok) {
@@ -352,7 +359,7 @@ export async function runReportWorkflow(
 
   return {
     ok: true,
-    run: result.run,
+    run: result.state.collectedData?.partial ? { ...result.run, partial: true, recovery: [...(result.run.recovery ?? []), { nodeId: "data_collector", action: "partial", attempts: 1, reason: "One or more non-critical data sources failed." }] } : result.run,
     state: result.state,
     draft: result.state.draft,
     export: result.state.export
@@ -433,11 +440,13 @@ function createDataCollectorNode(maxRetries: number): WorkflowNodeDefinition<Rep
 
       const evidence: ReportEvidenceItem[] = [];
       const retrievalTraces: unknown[] = [];
+      const sourceErrors: Array<{ query: string; code: string; message: string }> = [];
 
       for (const query of queries) {
         const searchResult = await runtime.search(query, { topK: 3, mode: "hybrid" });
 
         if (!searchResult.ok) {
+          sourceErrors.push({ query, code: searchResult.error.code, message: searchResult.error.message });
           continue;
         }
 
@@ -459,7 +468,9 @@ function createDataCollectorNode(maxRetries: number): WorkflowNodeDefinition<Rep
         filings,
         financialMetrics,
         evidence,
-        retrievalTraces
+        retrievalTraces,
+        partial: sourceErrors.length > 0,
+        sourceErrors
       };
     },
     applyOutput: (state, output) => ({
@@ -480,6 +491,8 @@ function createDataCollectorNode(maxRetries: number): WorkflowNodeDefinition<Rep
       metricCount: output.financialMetrics.length,
       evidenceCount: output.evidence.length,
       retrievalTraceCount: output.retrievalTraces?.length ?? 0
+      , partial: output.partial
+      , sourceErrorCount: output.sourceErrors.length
     })
   };
 }
@@ -1035,7 +1048,9 @@ function mergeCollectedData(
     filings: [...new Set([...existing.filings, ...latest.filings])],
     financialMetrics: deduplicateMetrics([...existing.financialMetrics, ...latest.financialMetrics]),
     evidence: [...existing.evidence, ...newEvidence],
-    retrievalTraces: [...(existing.retrievalTraces ?? []), ...(latest.retrievalTraces ?? [])]
+    retrievalTraces: [...(existing.retrievalTraces ?? []), ...(latest.retrievalTraces ?? [])],
+    partial: existing.partial || latest.partial,
+    sourceErrors: [...existing.sourceErrors, ...latest.sourceErrors]
   };
 }
 

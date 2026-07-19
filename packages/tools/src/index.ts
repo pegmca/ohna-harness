@@ -7,6 +7,7 @@ export type {
   ToolExecutionResult,
   ToolExecutionSuccess,
   ToolRegistrySummary,
+  ToolRetryPolicy,
 } from "./types.js";
 
 export { ToolRegistry } from "./registry.js";

@@ -346,6 +346,7 @@ Report Workflow 当前节点输出：
 - Analyzer：从 evidence 生成 thesis、findings、结构化 claims 和 metric requirements。每个 claim 都记录 `evidenceIds` 和 `citationIds`。
 - Risk Checker：输出 risk level、risk items 和 passed 状态；当 `reportType` 为 `risk_review` 且风险披露不足时，输出 `needsMoreEvidence` 和 follow-up queries。
 - Citation Verifier：检查每个 claim 是否有 citation 支撑、required metric 是否齐全。决策类型为 `pass | needs_more_evidence | needs_metric | retry_tool | fail`；缺证据时生成 follow-up queries，并通过 `decideNext` 跳回 Data Collector 做补充检索，受 `maxRetries` 限制。
+- Runtime reliability：模型仅对 timeout/network/429/5xx 做最多 3 次指数退避重试，并按 structured output/tool calling 能力选择 fallback；工具默认 10 秒单次 timeout，有副作用工具只有声明幂等且传入 idempotency key 才会重试；Workflow 同时受节点 timeout、总 deadline 与 `maxSteps` 约束，非关键来源失败可生成带 `partial`/`sourceErrors` 的降级报告。
 - Report Writer：生成 Markdown 和最小 HTML 草稿；证据不足时保留“资料不足说明”，不编造结论。
 - PDF Exporter：审批通过后返回 `placeholder` 导出结构，不生成真实 PDF；未审批时 workflow 暂停，拒绝时不产生 export。
 

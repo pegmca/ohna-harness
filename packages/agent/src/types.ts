@@ -2,6 +2,7 @@ import type { LlmClient } from "@aiagent/types";
 import type { ReportPlanDto } from "@aiagent/types";
 import type { ToolRegistry } from "@aiagent/tools";
 import type { Trace, TraceRecorder } from "@aiagent/trace";
+import type { ModelCandidate, ModelCapabilities, ModelRetryPolicy } from "./reliability.js";
 
 export type AgentIntent = "chat" | "tool" | "report_skill";
 
@@ -29,6 +30,10 @@ export type AgentErrorCode =
   | "output_validation_error"
   | "permission_required"
   | "permission_denied"
+  | "timeout"
+  | "cancelled"
+  | "deadline_exceeded"
+  | "retry_exhausted"
   | "router_error";
 
 export interface AgentError {
@@ -51,6 +56,8 @@ export interface AgentRequest {
   reportMode?: boolean;
   reportTriggerSource?: "toggle" | "button" | "natural_language";
   maxSteps?: number;
+  deadlineMs?: number;
+  signal?: AbortSignal;
 }
 
 export interface AgentResponse {
@@ -97,6 +104,9 @@ export interface AgentConfig {
   enableModelRouter?: boolean;
   /** true 时 intent router 优先选择 MCP tool 名称（search_filings / get_financial_metrics）。 */
   preferMcpTools?: boolean;
+  modelFallbacks?: ModelCandidate[];
+  requiredModelCapabilities?: Partial<ModelCapabilities>;
+  modelRetry?: Partial<ModelRetryPolicy>;
 }
 
 export interface Agent {

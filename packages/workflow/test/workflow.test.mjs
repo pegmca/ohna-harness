@@ -94,6 +94,22 @@ test("max steps returns structured failure before executing the next node", asyn
   assert.equal(result.run.nodes[1].status, "failed");
 });
 
+test("workflow retries a transient node and records recovery without real waiting", async () => {
+  let calls = 0;
+  const result = await runSequentialWorkflow({ workflowName: "retry", initialState: { value: 0 }, sleep: async () => undefined, nodes: [{ nodeId: "flaky", type: "test", title: "Flaky", inputSchema: z.object({}), outputSchema: z.object({ value: z.number() }), buildInput: () => ({}), recovery: { maxAttempts: 2, isRetryable: () => true }, execute: () => { calls += 1; if (calls === 1) throw new Error("temporary"); return { value: 1 }; }, applyOutput: (state, output) => ({ ...state, value: output.value }) }] });
+  assert.equal(result.ok, true); assert.equal(calls, 2); assert.equal(result.run.recovery[0].action, "retried");
+});
+
+test("workflow deadline terminates with structured partial state", async () => {
+  const result = await runSequentialWorkflow({ workflowName: "deadline", initialState: { value: 4 }, deadlineAtMs: 10, now: () => 10, nodes: [{ nodeId: "never", type: "test", title: "Never", inputSchema: z.object({}), outputSchema: z.object({}), buildInput: () => ({}), execute: () => ({}), applyOutput: (state) => state }] });
+  assert.equal(result.ok, false); assert.equal(result.error.code, "workflow_deadline_exceeded"); assert.equal(result.state.value, 4);
+});
+
+test("non-critical node can be skipped and workflow returns partial success", async () => {
+  const result = await runSequentialWorkflow({ workflowName: "partial", initialState: { value: 1 }, nodes: [{ nodeId: "optional", type: "test", title: "Optional", inputSchema: z.object({}), outputSchema: z.object({}), buildInput: () => ({}), recovery: { critical: false, onFailure: "partial" }, execute: () => { throw new Error("source unavailable"); }, applyOutput: (state) => state }, { nodeId: "finish", type: "test", title: "Finish", inputSchema: z.object({}), outputSchema: z.object({}), buildInput: () => ({}), execute: () => ({}), applyOutput: (state) => ({ ...state, done: true }) }] });
+  assert.equal(result.ok, true); assert.equal(result.run.partial, true); assert.equal(result.state.done, true); assert.equal(result.run.nodes[0].status, "skipped");
+});
+
 test("decideNext can loop back to an earlier node with max steps protection", async () => {
   const trace = createInMemoryTraceRecorder("trace_workflow_loop");
   const result = await runSequentialWorkflow({

@@ -1,7 +1,13 @@
 import type { TraceMcpToolCallEvent, TraceToolCallEvent } from "@aiagent/trace";
 import type { ToolApprovalDecisionDto, ToolApprovalRequestDto, ToolPermissionLevelDto } from "@aiagent/types";
 import type { ToolRegistry } from "./registry.js";
-import type { ToolExecutionContext, ToolExecutionResult } from "./types.js";
+import type { Tool, ToolError, ToolExecutionContext, ToolExecutionResult, ToolRetryPolicy } from "./types.js";
+
+const DEFAULT_TOOL_TIMEOUT_MS = 10_000;
+const DEFAULT_RETRY_POLICY: ToolRetryPolicy = { maxAttempts: 3, baseDelayMs: 100, maxDelayMs: 2_000, jitterRatio: 0.2 };
+type ToolExecutionDraft<TOutput> =
+  | Omit<Extract<ToolExecutionResult<TOutput>, { ok: true }>, "attempts">
+  | Omit<Extract<ToolExecutionResult<TOutput>, { ok: false }>, "attempts">;
 
 /**
  * 执行工具的共享入口，保证 Agent、脚本和测试看到相同的错误与 trace 行为。
@@ -121,8 +127,21 @@ export async function executeTool(
     recordApprovalTrace(context, permission.request, "approved", permission.decision.reviewerNote);
   }
 
-  try {
-    const rawOutput = await tool.execute(parsedInput.data);
+  const retryPolicy = { ...DEFAULT_RETRY_POLICY, ...context.retry };
+  const mayRetry = !tool.hasSideEffects || (tool.idempotent === true && Boolean(context.idempotencyKey));
+  let attempts = 0;
+
+  while (attempts < (mayRetry ? retryPolicy.maxAttempts : 1)) {
+    attempts += 1;
+    const preflightError = getPreflightError(context);
+    if (preflightError) {
+      return finishToolExecution(context, name, normalizedArgs, startedAt, tool.traceEventType, {
+        ok: false, toolName: name, args: normalizedArgs, durationMs: 0, traceId: context.trace?.traceId, error: preflightError
+      }, attempts);
+    }
+
+    try {
+    const rawOutput = await executeWithTimeout(tool, parsedInput.data, context);
     const parsedOutput = tool.outputSchema.safeParse(rawOutput);
 
     if (!parsedOutput.success) {
@@ -139,7 +158,7 @@ export async function executeTool(
             issues: parsedOutput.error.issues
           }
         }
-      });
+      }, attempts);
     }
 
     return finishToolExecution(context, name, normalizedArgs, startedAt, tool?.traceEventType, {
@@ -149,8 +168,18 @@ export async function executeTool(
       result: parsedOutput.data,
       durationMs: 0,
       traceId: context.trace?.traceId
-    });
+    }, attempts);
   } catch (error) {
+    const structured = toToolExecutionError(error);
+    if (attempts < retryPolicy.maxAttempts && mayRetry && isRetryableToolError(structured)) {
+      const delayMs = calculateBackoff(attempts, retryPolicy);
+      try { await (context.sleep ?? defaultSleep)(delayMs, context.signal); }
+      catch (sleepError) {
+        const cancelled = toToolExecutionError(sleepError);
+        return finishToolExecution(context, name, normalizedArgs, startedAt, tool.traceEventType, { ok: false, toolName: name, args: normalizedArgs, durationMs: 0, traceId: context.trace?.traceId, error: cancelled }, attempts);
+      }
+      continue;
+    }
     return finishToolExecution(context, name, normalizedArgs, startedAt, tool?.traceEventType, {
       ok: false,
       toolName: name,
@@ -158,12 +187,50 @@ export async function executeTool(
       durationMs: 0,
       traceId: context.trace?.traceId,
       error: {
-        code: "execution_error",
-        message: error instanceof Error ? error.message : "Tool execution failed"
+        ...structured,
+        details: { ...structured.details, attempts, retryable: isRetryableToolError(structured), retryExhausted: attempts >= retryPolicy.maxAttempts }
       }
-    });
+    }, attempts);
   }
+  }
+
+  throw new Error("Unreachable tool retry state");
 }
+
+/** 在单次 timeout 与总 deadline 中取更小预算，并把取消转换为稳定错误。 */
+async function executeWithTimeout<TInput, TOutput>(tool: Tool<TInput, TOutput>, input: TInput, context: ToolExecutionContext): Promise<TOutput> {
+  const now = context.now ?? Date.now;
+  const remaining = context.deadlineAtMs === undefined ? Number.POSITIVE_INFINITY : context.deadlineAtMs - now();
+  const timeoutMs = Math.min(context.timeoutMs ?? DEFAULT_TOOL_TIMEOUT_MS, remaining);
+  if (timeoutMs <= 0) throw Object.assign(new Error("Tool deadline exceeded."), { code: "deadline_exceeded" });
+  if (context.signal?.aborted) throw Object.assign(new Error("Tool execution cancelled."), { code: "cancelled" });
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(Object.assign(new Error(`Tool timed out after ${timeoutMs}ms.`), { code: "timeout" })), timeoutMs); });
+  const cancelled = context.signal ? new Promise<never>((_, reject) => context.signal?.addEventListener("abort", () => reject(Object.assign(new Error("Tool execution cancelled."), { code: "cancelled" })), { once: true })) : undefined;
+  try { return await Promise.race([tool.execute(input), timeout, ...(cancelled ? [cancelled] : [])]); }
+  finally { if (timer) clearTimeout(timer); }
+}
+
+/** 在真正调用工具前检查取消与总 deadline。 */
+function getPreflightError(context: ToolExecutionContext): ToolError | undefined {
+  if (context.signal?.aborted) return { code: "cancelled", message: "Tool execution cancelled." };
+  if (context.deadlineAtMs !== undefined && (context.now ?? Date.now)() >= context.deadlineAtMs) return { code: "deadline_exceeded", message: "Tool deadline exceeded." };
+  return undefined;
+}
+
+/** 将工具抛出的未知异常收敛为稳定错误 DTO。 */
+function toToolExecutionError(error: unknown): ToolError {
+  const code = error && typeof error === "object" && "code" in error ? String(error.code) : "execution_error";
+  if (code === "timeout" || code === "cancelled" || code === "deadline_exceeded") return { code, message: error instanceof Error ? error.message : code };
+  return { code: "execution_error", message: error instanceof Error ? error.message : "Tool execution failed", details: error && typeof error === "object" && "retryable" in error ? { retryable: error.retryable === true } : undefined };
+}
+
+/** 只有明确临时错误才允许进入重试。 */
+function isRetryableToolError(error: ToolError): boolean { return error.code === "timeout" || error.code === "deadline_exceeded" || error.details?.retryable === true; }
+/** 计算工具调用的有界指数退避。 */
+function calculateBackoff(attempt: number, policy: ToolRetryPolicy): number { const base = Math.min(policy.maxDelayMs, policy.baseDelayMs * 2 ** (attempt - 1)); return Math.max(0, Math.round(base * (1 + (Math.random() * 2 - 1) * policy.jitterRatio))); }
+/** 默认 sleeper 允许 AbortSignal 中断等待。 */
+function defaultSleep(delayMs: number, signal?: AbortSignal): Promise<void> { return new Promise((resolve, reject) => { const timer = setTimeout(resolve, delayMs); signal?.addEventListener("abort", () => { clearTimeout(timer); reject(Object.assign(new Error("Tool execution cancelled."), { code: "cancelled" })); }, { once: true }); }); }
 
 /**
  * 在工具真实执行前集中判断权限，确保 Agent、Workflow 和测试都经过同一个 approval gate。
@@ -328,12 +395,14 @@ function finishToolExecution<TOutput>(
   args: Record<string, unknown>,
   startedAt: number,
   traceEventType: "tool_call" | "mcp_tool_call" | undefined,
-  result: ToolExecutionResult<TOutput>
+  result: ToolExecutionDraft<TOutput>,
+  attempts = 1
 ): ToolExecutionResult<TOutput> {
   const durationMs = Math.round((performance.now() - startedAt) * 100) / 100;
   const completedResult = {
     ...result,
-    durationMs
+    durationMs,
+    attempts
   };
 
   if (context.trace) {
@@ -376,6 +445,7 @@ function toTraceToolCallEvent(
     result: result.ok ? result.result : undefined,
     durationMs: result.durationMs,
     ok: result.ok,
+    attempts: result.attempts,
     error: result.ok ? undefined : result.error,
     createdAt: new Date().toISOString()
   };

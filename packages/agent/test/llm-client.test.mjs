@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createInMemoryTraceRecorder } from "@aiagent/trace";
-import { createLlmClient } from "../dist/index.js";
+import { chatWithReliability, createLlmClient } from "../dist/index.js";
 
 test("chat sends an OpenAI compatible request and returns normalized content", async () => {
   const seen = {};
@@ -39,6 +39,33 @@ test("chat sends an OpenAI compatible request and returns normalized content", a
   assert.equal(seen.headers.Authorization, "Bearer test-key");
   assert.equal(seen.body.model, "test-model");
   assert.deepEqual(seen.body.messages, [{ role: "user", content: "Explain ROE." }]);
+});
+
+test("reliable model retries transient errors then uses compatible fallback", async () => {
+  let primaryCalls = 0;
+  const client = (handler) => ({ chat: handler, streamChat: handler, jsonChat: handler, toolChat: handler });
+  const result = await chatWithReliability({ messages: [{ role: "user", content: "test" }] }, {
+    primary: { name: "primary", capabilities: { structuredOutput: true, toolCalling: true }, client: client(async () => { primaryCalls += 1; return { ok: false, error: { code: "provider_error", message: "busy", details: { status: 503 } } }; }) },
+    fallbacks: [{ name: "fallback", capabilities: { structuredOutput: true, toolCalling: true }, client: client(async () => ({ ok: true, data: { content: "degraded", model: "fallback" } })) }],
+    requiredCapabilities: { structuredOutput: true }, retry: { maxAttempts: 2, jitterRatio: 0 }, sleep: async () => undefined
+  });
+  assert.equal(result.ok, true); assert.equal(primaryCalls, 2); assert.equal(result.degraded, true); assert.equal(result.attempts, 3); assert.match(result.fallbackReason, /provider_error/);
+});
+
+test("permanent model errors do not retry", async () => {
+  let calls = 0;
+  const handler = async () => { calls += 1; return { ok: false, error: { code: "configuration_error", message: "bad key" } }; };
+  const client = { chat: handler, streamChat: handler, jsonChat: handler, toolChat: handler };
+  const result = await chatWithReliability({ messages: [] }, { primary: { name: "primary", capabilities: { structuredOutput: true, toolCalling: true }, client }, sleep: async () => undefined });
+  assert.equal(result.ok, false); assert.equal(calls, 1);
+});
+
+test("reliable model returns structured retry exhaustion", async () => {
+  let calls = 0;
+  const handler = async () => { calls += 1; return { ok: false, error: { code: "network_error", message: "offline" } }; };
+  const client = { chat: handler, streamChat: handler, jsonChat: handler, toolChat: handler };
+  const result = await chatWithReliability({ messages: [] }, { primary: { name: "primary", capabilities: { structuredOutput: true, toolCalling: true }, client }, retry: { maxAttempts: 2 }, sleep: async () => undefined });
+  assert.equal(result.ok, false); assert.equal(calls, 2); assert.equal(result.error.details.retryExhausted, true); assert.equal(result.attempts, 2);
 });
 
 test("jsonChat returns structured parse errors instead of throwing", async () => {

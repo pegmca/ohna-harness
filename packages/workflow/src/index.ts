@@ -19,6 +19,17 @@ export interface WorkflowNodeExecutionContext<TState extends WorkflowState> {
   state: TState;
   trace?: TraceRecorder;
   executedSteps: number;
+  signal?: AbortSignal;
+  deadlineAtMs?: number;
+}
+
+export interface WorkflowNodeRecoveryPolicy {
+  critical?: boolean;
+  onFailure?: "stop" | "skip" | "partial";
+  timeoutMs?: number;
+  maxAttempts?: number;
+  baseDelayMs?: number;
+  isRetryable?: (error: unknown) => boolean;
 }
 
 export interface WorkflowNodeDefinition<TInput, TOutput, TState extends WorkflowState = WorkflowState> {
@@ -27,6 +38,7 @@ export interface WorkflowNodeDefinition<TInput, TOutput, TState extends Workflow
   title: string;
   inputSchema: z.ZodType<TInput>;
   outputSchema: z.ZodType<TOutput>;
+  recovery?: WorkflowNodeRecoveryPolicy;
   /**
    * 从当前 workflow state 构造节点输入，所有输入都会继续经过 inputSchema 校验。
    *
@@ -84,6 +96,11 @@ export interface RunSequentialWorkflowInput<TState extends WorkflowState> {
   maxSteps?: number;
   trace?: TraceRecorder;
   approvalDecisions?: ToolApprovalDecisionDto[];
+  deadlineMs?: number;
+  deadlineAtMs?: number;
+  signal?: AbortSignal;
+  now?: () => number;
+  sleep?: (delayMs: number, signal?: AbortSignal) => Promise<void>;
 }
 
 export type WorkflowRunResult<TState extends WorkflowState = WorkflowState> =
@@ -140,6 +157,9 @@ export async function runSequentialWorkflow<TState extends WorkflowState>(
   const edges = createSequentialEdges(input.nodes);
   let state = { ...input.initialState } as TState;
   let executedSteps = 0;
+  const now = input.now ?? Date.now;
+  const deadlineAtMs = input.deadlineAtMs ?? (input.deadlineMs === undefined ? undefined : now() + input.deadlineMs);
+  const recovery: NonNullable<WorkflowRunDto["recovery"]> = [];
 
   if (input.nodes.length === 0) {
     const error: WorkflowErrorDto = {
@@ -171,6 +191,13 @@ export async function runSequentialWorkflow<TState extends WorkflowState>(
 
   while (nodeIndex >= 0 && nodeIndex < input.nodes.length) {
     const definition = input.nodes[nodeIndex];
+    const terminationError = getWorkflowTerminationError(input.signal, deadlineAtMs, now, definition.nodeId);
+    if (terminationError) {
+      nodes[nodeIndex] = failPendingNode(nodes[nodeIndex], terminationError);
+      events.push(createWorkflowEvent("workflow_failed", definition.nodeId, { terminationReason: terminationError.code }, terminationError));
+      recordWorkflowTrace(input.trace, runId, definition, nodes[nodeIndex], "failed", terminationError);
+      return { ok: false, state, error: terminationError, run: buildRunDto({ runId, workflowName: input.workflowName, status: "failed", startedAt, startedAtMs, maxSteps, executedSteps, nodes, edges, events, error: terminationError, recovery }) };
+    }
     const budgetError = ensureStepBudget(executedSteps, maxSteps, definition.nodeId);
 
     if (budgetError) {
@@ -206,6 +233,7 @@ export async function runSequentialWorkflow<TState extends WorkflowState>(
       state,
       trace: input.trace,
       executedSteps
+      , signal: input.signal, deadlineAtMs
     });
 
     if (approvalRequest) {
@@ -339,14 +367,28 @@ export async function runSequentialWorkflow<TState extends WorkflowState>(
     recordWorkflowTrace(input.trace, runId, definition, nodes[nodeIndex], "running");
 
     try {
-      const rawOutput = await definition.execute(parsedInput.data, {
+      const policy = definition.recovery ?? {};
+      const maxAttempts = Math.max(1, policy.maxAttempts ?? 1);
+      let rawOutput: unknown;
+      let attempt = 0;
+      while (attempt < maxAttempts) {
+        attempt += 1;
+        try {
+          rawOutput = await executeWorkflowNode(definition, parsedInput.data, {
         runId,
         nodeId: definition.nodeId,
         nodeType: definition.type,
         state,
         trace: input.trace,
-        executedSteps
-      });
+        executedSteps, signal: input.signal, deadlineAtMs
+      }, policy.timeoutMs, deadlineAtMs, now);
+          break;
+        } catch (error) {
+          if (attempt >= maxAttempts || !policy.isRetryable?.(error)) throw Object.assign(error instanceof Error ? error : new Error("Workflow node failed."), { workflowAttempts: attempt });
+          recovery.push({ nodeId: definition.nodeId, action: "retried", attempts: attempt, reason: error instanceof Error ? error.message : "retryable_error" });
+          await (input.sleep ?? defaultWorkflowSleep)((policy.baseDelayMs ?? 100) * 2 ** (attempt - 1), input.signal);
+        }
+      }
       const parsedOutput = definition.outputSchema.safeParse(rawOutput);
 
       if (!parsedOutput.success) {
@@ -413,11 +455,22 @@ export async function runSequentialWorkflow<TState extends WorkflowState>(
 
       nodeIndex += 1;
     } catch (caught) {
+      const policy = definition.recovery ?? {};
+      const recoveryAction = policy.critical === false ? (policy.onFailure ?? "partial") : "stop";
       const error: WorkflowErrorDto = {
-        code: "node_execution_failed",
+        code: isRuntimeCode(caught, "node_timeout") ? "node_timeout" : isRuntimeCode(caught, "workflow_cancelled") ? "workflow_cancelled" : isRuntimeCode(caught, "workflow_deadline_exceeded") ? "workflow_deadline_exceeded" : "node_execution_failed",
         message: caught instanceof Error ? caught.message : `Workflow node failed: ${definition.nodeId}`,
-        nodeId: definition.nodeId
+        nodeId: definition.nodeId,
+        details: { attempts: getWorkflowAttempts(caught), recoveryAction }
       };
+      if (recoveryAction === "skip" || recoveryAction === "partial") {
+        nodes[nodeIndex] = { ...failRunningNode(nodes[nodeIndex], nodeStartedAt, nodeStartedAtMs, error), status: "skipped" };
+        recovery.push({ nodeId: definition.nodeId, action: recoveryAction === "skip" ? "skipped" : "partial", attempts: getWorkflowAttempts(caught), reason: error.message });
+        events.push(createWorkflowEvent("node_failed", definition.nodeId, { recoveryAction }, error));
+        recordWorkflowTrace(input.trace, runId, definition, nodes[nodeIndex], "failed", error);
+        nodeIndex += 1;
+        continue;
+      }
       nodes[nodeIndex] = failRunningNode(nodes[nodeIndex], nodeStartedAt, nodeStartedAtMs, error);
       events.push(createWorkflowEvent("node_failed", definition.nodeId, undefined, error));
       recordWorkflowTrace(input.trace, runId, definition, nodes[nodeIndex], "failed", error);
@@ -457,10 +510,32 @@ export async function runSequentialWorkflow<TState extends WorkflowState>(
       executedSteps,
       nodes,
       edges,
-      events
+      events,
+      partial: recovery.some((item) => item.action === "partial" || item.action === "skipped"), recovery
     })
   };
 }
+
+/** 在单节点 timeout 与 workflow deadline 的更小预算内执行节点。 */
+async function executeWorkflowNode<TState extends WorkflowState>(definition: AnyWorkflowNodeDefinition<TState>, nodeInput: unknown, context: WorkflowNodeExecutionContext<TState>, timeoutMs: number | undefined, deadlineAtMs: number | undefined, now: () => number): Promise<unknown> {
+  const remaining = deadlineAtMs === undefined ? Number.POSITIVE_INFINITY : deadlineAtMs - now();
+  const budget = Math.min(timeoutMs ?? Number.POSITIVE_INFINITY, remaining);
+  if (budget <= 0) throw Object.assign(new Error("Workflow deadline exceeded."), { code: "workflow_deadline_exceeded" });
+  if (context.signal?.aborted) throw Object.assign(new Error("Workflow cancelled."), { code: "workflow_cancelled" });
+  if (!Number.isFinite(budget)) return definition.execute(nodeInput, context);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadlineDominates = remaining <= (timeoutMs ?? Number.POSITIVE_INFINITY);
+  try { return await Promise.race([definition.execute(nodeInput, context), new Promise<never>((_, reject) => { timer = setTimeout(() => reject(Object.assign(new Error(deadlineDominates ? "Workflow deadline exceeded." : `Workflow node timed out after ${budget}ms.`), { code: deadlineDominates ? "workflow_deadline_exceeded" : "node_timeout" })), budget); })]); }
+  finally { if (timer) clearTimeout(timer); }
+}
+/** 在节点开始前生成取消或 deadline 的结构化终止错误。 */
+function getWorkflowTerminationError(signal: AbortSignal | undefined, deadlineAtMs: number | undefined, now: () => number, nodeId: string): WorkflowErrorDto | undefined { if (signal?.aborted) return { code: "workflow_cancelled", message: "Workflow cancelled.", nodeId }; if (deadlineAtMs !== undefined && now() >= deadlineAtMs) return { code: "workflow_deadline_exceeded", message: "Workflow deadline exceeded.", nodeId }; return undefined; }
+/** 判断未知异常是否带指定 runtime code。 */
+function isRuntimeCode(error: unknown, code: string): boolean { return Boolean(error && typeof error === "object" && "code" in error && error.code === code); }
+/** 从重试包装异常中读取尝试次数。 */
+function getWorkflowAttempts(error: unknown): number { return error && typeof error === "object" && "workflowAttempts" in error && typeof error.workflowAttempts === "number" ? error.workflowAttempts : 1; }
+/** 默认 workflow sleeper 支持取消，测试可注入即时实现。 */
+function defaultWorkflowSleep(delayMs: number, signal?: AbortSignal): Promise<void> { return new Promise((resolve, reject) => { const timer = setTimeout(resolve, delayMs); signal?.addEventListener("abort", () => { clearTimeout(timer); reject(Object.assign(new Error("Workflow cancelled."), { code: "workflow_cancelled" })); }, { once: true }); }); }
 
 /**
  * 将节点定义初始化为 pending DTO，runtime 后续只更新 DTO 状态。
@@ -784,6 +859,8 @@ function buildRunDto(input: {
   events: WorkflowEventDto[];
   approvalRequest?: ToolApprovalRequestDto;
   error?: WorkflowErrorDto;
+  partial?: boolean;
+  recovery?: WorkflowRunDto["recovery"];
 }): WorkflowRunDto {
   return {
     runId: input.runId,
@@ -798,7 +875,9 @@ function buildRunDto(input: {
     edges: input.edges,
     events: input.events,
     approvalRequest: input.approvalRequest,
-    error: input.error
+    error: input.error,
+    partial: input.partial,
+    recovery: input.recovery
   };
 }
 

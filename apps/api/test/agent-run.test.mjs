@@ -70,6 +70,36 @@ test("POST /api/agent/run forwards report activation DTOs and returns report pla
   await app.close();
 });
 
+test("report workflow routes expose nodes, preview artifact and traceable citations", async () => {
+  const app = createApiServer();
+  const agentResponse = await app.inject({ method: "POST", url: "/api/agent/run", payload: {
+    message: "基于最近两年公告和财务数据，为 000001.SZ 生成研究简报 PDF。",
+    reportMode: true
+  }});
+  const plan = agentResponse.json().data.reportPlan;
+  const startResponse = await app.inject({ method: "POST", url: "/api/report-workflows", payload: { plan } });
+  const started = startResponse.json();
+
+  assert.equal(startResponse.statusCode, 200);
+  assert.equal(started.ok, true);
+  assert.deepEqual(started.data.run.nodes.map((node) => node.nodeId), [
+    "data_collector", "analyzer", "risk_checker", "citation_verifier", "report_writer", "pdf_exporter"
+  ]);
+  assert.equal(started.data.run.status, "paused");
+  assert.equal(started.data.artifact.status, "html_preview_only");
+  assert.equal(started.data.artifact.pdfExport.status, "queued");
+  assert.match(started.data.artifact.markdown, /核心结论/);
+  assert.equal(started.data.artifact.citations.length > 0, true);
+  assert.equal(typeof started.data.artifact.citations[0].documentId, "string");
+  assert.equal(typeof started.data.artifact.citations[0].chunkId, "string");
+
+  const runResponse = await app.inject({ method: "GET", url: `/api/report-workflows/${started.data.run.runId}` });
+  const artifactResponse = await app.inject({ method: "GET", url: `/api/report-artifacts/${started.data.artifact.artifactId}` });
+  assert.equal(runResponse.json().data.run.runId, started.data.run.runId);
+  assert.equal(artifactResponse.json().data.artifactId, started.data.artifact.artifactId);
+  await app.close();
+});
+
 test("POST /api/agent/run rejects empty messages with ApiResult failure", async () => {
   const app = createApiServer();
   const response = await app.inject({

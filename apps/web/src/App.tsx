@@ -10,6 +10,8 @@ import type {
   RagAnswerResponseDto,
   RagChunkDto,
   RagSearchResponseDto,
+  ReportArtifactDto,
+  ReportWorkflowResponseDto,
   ReportTriggerSourceDto,
   RetrievalResultDto,
   ToolApprovalDecisionDto,
@@ -238,6 +240,10 @@ export function App() {
       }
 
       const run = result.data;
+      if (run.reportPlan?.status === "ready") {
+        const workflowResult = await startReportWorkflow(run.reportPlan);
+        if (workflowResult.ok) run.reportWorkflow = workflowResult.data;
+      }
       replaceMessage(submittedConversationId, pendingMessageId, {
         content: run.answer,
         status: run.ok ? "complete" : "failed",
@@ -1031,6 +1037,7 @@ function RunDetails(props: {
         </div>
         {run.error ? <ErrorBlock error={run.error} /> : null}
         {run.reportPlan ? <ReportPlanPanel plan={run.reportPlan} /> : null}
+        {run.reportWorkflow ? <ReportWorkflowPanel workflow={run.reportWorkflow} /> : null}
         <ApprovalRequestsPanel
           approvalStatusById={props.approvalStatusById}
           onApprovalDecision={props.onApprovalDecision}
@@ -1089,6 +1096,72 @@ function ReportPlanPanel(props: { plan: NonNullable<AgentRunResponseDto["reportP
         ) : null}
       </div>
     </section>
+  );
+}
+
+/** 展示完整研报节点链路、artifact 预览和可追溯引用；运行逻辑始终留在 API/package。 */
+function ReportWorkflowPanel(props: { workflow: ReportWorkflowResponseDto }) {
+  const { artifact, run } = props.workflow;
+  const displayNodes = [
+    { nodeId: "activation", title: "Activation", status: "succeeded", durationMs: 0 },
+    { nodeId: "planner", title: "Planner", status: "succeeded", durationMs: 0 },
+    ...run.nodes
+  ];
+
+  return (
+    <section className="details-section report-workflow-section">
+      <h3><Activity className="icon-size" />Report workflow</h3>
+      <div className="workflow-header">
+        <div className="run-identifiers"><span>workflowRunId: {run.runId}</span></div>
+        <StatusBadge tone={run.status === "succeeded" ? "success" : run.status === "paused" ? "info" : "danger"}>{run.status}</StatusBadge>
+      </div>
+      <div className="workflow-nodes">
+        {displayNodes.map((node, index) => (
+          <article className="workflow-node" key={node.nodeId}>
+            <span className="workflow-index">{index + 1}</span>
+            <div>
+              <strong>{node.title}</strong>
+              <small>{node.nodeId} · {node.durationMs} ms</small>
+              {"inputSummary" in node && node.inputSummary ? <JsonDetails title="input summary" value={node.inputSummary} /> : null}
+              {"outputSummary" in node && node.outputSummary ? <JsonDetails title="output summary" value={node.outputSummary} /> : null}
+              {"error" in node && node.error ? <span className="workflow-error">{node.error.code}: {node.error.message}</span> : null}
+            </div>
+            <StatusBadge tone={node.status === "succeeded" ? "success" : node.status === "paused" ? "info" : node.status === "failed" ? "danger" : "neutral"}>{node.status}</StatusBadge>
+          </article>
+        ))}
+      </div>
+      {artifact ? <ReportArtifactPreview artifact={artifact} /> : <p className="muted-row">Planner 尚未产出可预览报告。</p>}
+    </section>
+  );
+}
+
+/** 渲染 HTML/Markdown artifact 与 citation verifier 结果，并明确 PDF 只是占位状态。 */
+function ReportArtifactPreview(props: { artifact: ReportArtifactDto }) {
+  const { artifact } = props;
+  return (
+    <div className="report-artifact">
+      <div className="artifact-heading">
+        <div><span className="md-label">Report preview</span><strong>{artifact.title}</strong></div>
+        <div className="summary-badges">
+          <StatusBadge tone="info">{artifact.status}</StatusBadge>
+          <StatusBadge tone={artifact.citationVerification.verified ? "success" : "danger"}>
+            citations {artifact.citationVerification.decision}
+          </StatusBadge>
+          <StatusBadge tone="info">PDF {artifact.pdfExport.status}</StatusBadge>
+        </div>
+      </div>
+      <iframe className="report-html-preview" sandbox="" srcDoc={artifact.html} title="HTML report preview" />
+      <details className="markdown-preview"><summary>Markdown source</summary><pre>{artifact.markdown}</pre></details>
+      <p className="pdf-placeholder"><AlertTriangle className="icon-size" />{artifact.pdfExport.message}</p>
+      <div className="citation-list">
+        {artifact.citations.map((citation, index) => (
+          <article className="citation-row" key={citation.id}>
+            <strong>[{index + 1}]</strong>
+            <div><span>{citation.quote}</span><small>{citation.source} / document {citation.documentId ?? "unknown"} / chunk {citation.chunkId ?? citation.chunkIndex ?? "unknown"}</small><small>supports: {citation.supportsFinding}</small></div>
+          </article>
+        ))}
+      </div>
+    </div>
   );
 }
 
@@ -1515,7 +1588,16 @@ function getApprovalRequests(run: AgentRunResponseDto): ToolApprovalRequestDto[]
     });
   }
 
+  const workflowApproval = run.reportWorkflow?.run.approvalRequest;
+  if (workflowApproval) requests.set(workflowApproval.approvalId, workflowApproval);
+
   return [...requests.values()];
+}
+
+/** 启动 Report Workflow，前端仅提交 planner DTO。 */
+async function startReportWorkflow(plan: NonNullable<AgentRunResponseDto["reportPlan"]>): Promise<ApiResult<ReportWorkflowResponseDto>> {
+  const response = await fetch("/api/report-workflows", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ plan }) });
+  return parseApiResult(response);
 }
 
 /**

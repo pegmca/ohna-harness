@@ -126,7 +126,11 @@ export const reportCitationVerifierOutputSchema = z.object({
       source: z.string(),
       quote: z.string(),
       supportsFinding: z.string(),
-      claimId: z.string().optional()
+      claimId: z.string().optional(),
+      documentId: z.string().optional(),
+      chunkId: z.string().optional(),
+      chunkIndex: z.number().optional(),
+      heading: z.string().optional()
     })
   ),
   missingCitationFindings: z.array(z.string()),
@@ -669,7 +673,11 @@ function createCitationVerifierNode(maxRetries: number): WorkflowNodeDefinition<
                 source: evidence.source,
                 quote: evidence.quote,
                 supportsFinding: claim.text,
-                claimId: claim.id
+                claimId: claim.id,
+                documentId: evidence.citation?.documentId,
+                chunkId: evidence.citation?.chunkId,
+                chunkIndex: evidence.citation?.chunkIndex,
+                heading: evidence.citation?.heading
               });
             }
           }

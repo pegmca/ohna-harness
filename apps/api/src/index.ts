@@ -1,6 +1,8 @@
 import { runAgent } from "@aiagent/agent";
 import type { AgentResponse, AgentStep } from "@aiagent/agent";
 import { createDataSourceRuntime } from "@aiagent/rag";
+import { runReportWorkflow } from "@aiagent/report";
+import type { ReportWorkflowResult } from "@aiagent/report";
 import type { RagStructuredError } from "@aiagent/rag";
 import type {
   AgentRunRequestDto,
@@ -13,6 +15,9 @@ import type {
   DataSourceIngestResponseDto,
   RagAnswerResponseDto,
   RagSearchResponseDto,
+  ReportArtifactDto,
+  ReportPlanDto,
+  ReportWorkflowResponseDto,
   ToolApprovalDecisionDto
 } from "@aiagent/types";
 import Fastify, { type FastifyInstance } from "fastify";
@@ -43,6 +48,9 @@ const approvalDecisionRequestSchema = z.object({
   decision: z.enum(["approved", "rejected"]),
   reviewerNote: z.string().max(240).optional()
 });
+const startReportWorkflowRequestSchema = z.object({
+  plan: z.custom<ReportPlanDto>((value) => typeof value === "object" && value !== null)
+});
 
 const DEFAULT_CONVERSATION_ID = "week1-local-session";
 
@@ -57,6 +65,8 @@ export function createApiServer(): FastifyInstance {
   });
   const dataSourceRuntime = createDataSourceRuntime();
   const approvalDecisions = new Map<string, ToolApprovalDecisionDto>();
+  const workflowRuns = new Map<string, ReportWorkflowResponseDto>();
+  const reportArtifacts = new Map<string, ReportArtifactDto>();
 
   /**
    * 健康检查接口只暴露 API 服务存活状态，供本地 dev server、脚本和部署探针快速验证。
@@ -244,6 +254,44 @@ export function createApiServer(): FastifyInstance {
     };
   });
 
+  /** 启动报告 workflow；API 仅负责生命周期与 DTO 投影，节点逻辑留在 report package。 */
+  app.post("/api/report-workflows", async (request, reply): Promise<ApiResult<ReportWorkflowResponseDto>> => {
+    const requestId = createRequestId();
+    const parsed = startReportWorkflowRequestSchema.safeParse(request.body);
+    if (!parsed.success) {
+      reply.code(400);
+      return fail(toApiError("validation_failed", "Report workflow 请求格式不正确。", requestId), requestId);
+    }
+
+    const result = await runReportWorkflow(parsed.data.plan, { documents: createReportDemoDocuments() });
+    const response = toReportWorkflowResponseDto(result);
+    workflowRuns.set(response.run.runId, response);
+    if (response.artifact) reportArtifacts.set(response.artifact.artifactId, response.artifact);
+    return { ok: true, data: response, requestId };
+  });
+
+  /** 读取进程内 workflow 快照；本阶段明确不提供持久化 artifact store。 */
+  app.get<{ Params: { runId: string } }>("/api/report-workflows/:runId", async (request, reply): Promise<ApiResult<ReportWorkflowResponseDto>> => {
+    const requestId = createRequestId();
+    const value = workflowRuns.get(request.params.runId);
+    if (!value) {
+      reply.code(404);
+      return fail(toApiError("not_found", "Report workflow run 不存在。", requestId), requestId);
+    }
+    return { ok: true, data: value, requestId };
+  });
+
+  /** 读取可预览报告 artifact，响应不暴露 report runtime 内部 state。 */
+  app.get<{ Params: { artifactId: string } }>("/api/report-artifacts/:artifactId", async (request, reply): Promise<ApiResult<ReportArtifactDto>> => {
+    const requestId = createRequestId();
+    const value = reportArtifacts.get(request.params.artifactId);
+    if (!value) {
+      reply.code(404);
+      return fail(toApiError("not_found", "Report artifact 不存在。", requestId), requestId);
+    }
+    return { ok: true, data: value, requestId };
+  });
+
   /**
    * Agent run 接口负责把前端研究问题转交给 agent package，API 层只做请求校验和 DTO 映射。
    *
@@ -294,6 +342,44 @@ export function createApiServer(): FastifyInstance {
   });
 
   return app;
+}
+
+/** 将 report package 结果收窄为 Web 稳定 DTO，并明确 PDF 尚未实现。 */
+function toReportWorkflowResponseDto(result: ReportWorkflowResult): ReportWorkflowResponseDto {
+  const draft = result.state.draft;
+  const citations = result.state.citations;
+  const artifact: ReportArtifactDto | undefined = draft && citations ? {
+    artifactId: `artifact_${result.run.runId}`,
+    workflowRunId: result.run.runId,
+    status: "html_preview_only",
+    title: draft.title,
+    markdown: draft.markdown,
+    html: draft.html,
+    citations: citations.citations,
+    citationVerification: {
+      decision: citations.decision,
+      verified: citations.verified,
+      missingClaims: citations.missingClaims,
+      missingMetrics: citations.missingMetrics
+    },
+    pdfExport: {
+      status: result.state.export ? "not_implemented" : "queued",
+      fileName: result.state.export?.fileName,
+      message: result.state.export?.message ?? "PDF Exporter 等待人工批准；当前仅提供 HTML/Markdown 预览。"
+    },
+    createdAt: new Date().toISOString()
+  } : undefined;
+  return { run: result.run, artifact };
+}
+
+/** Demo 文档只位于 API adapter，用于 Week 3 可重复演示；真实数据入口仍是 RAG ingestion。 */
+function createReportDemoDocuments() {
+  return [{
+    source: "demo://000001-sz-annual-report",
+    fileName: "000001-SZ-annual-report.md",
+    contentType: "text/markdown",
+    content: "# 盈利能力\n000001.SZ 最近两年营业收入保持增长，净利润同比改善，ROE 为 12.4%。\n\n# 资产质量与风险\n不良贷款率保持稳定，拨备覆盖率处于安全水平；宏观利率变化和信用成本仍是主要风险。\n\n# 现金流\n经营性现金流改善，但市场波动可能影响短期表现。"
+  }];
 }
 
 /**

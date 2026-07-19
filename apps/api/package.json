@@ -15,11 +15,12 @@
     "dev": "tsx watch src/server.ts",
     "build": "tsc -b",
     "test": "pnpm build && node --test test/*.test.mjs",
-    "typecheck": "pnpm --filter @aiagent/agent build && tsc -p tsconfig.json --pretty false --noEmit"
+    "typecheck": "pnpm --filter @aiagent/agent build && pnpm --filter @aiagent/report build && tsc -p tsconfig.json --pretty false --noEmit"
   },
   "dependencies": {
     "@aiagent/agent": "workspace:*",
     "@aiagent/rag": "workspace:*",
+    "@aiagent/report": "workspace:*",
     "@aiagent/types": "workspace:*",
     "fastify": "^5.6.2",
     "zod": "^4.4.3"

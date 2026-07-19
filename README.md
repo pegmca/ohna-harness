@@ -349,6 +349,14 @@ Report Workflow 当前节点输出：
 
 Approval trace 使用 `approval` event 记录 `requested`、`approved`、`rejected`，只保存 `inputPreview` 和 reviewer note，不记录完整敏感 payload。
 
+### Week 3 Demo
+
+运行 `pnpm dev`，打开 Web 后开启 Report Mode、点击“生成研报”，或输入 `基于最近两年公告和财务数据，为 000001.SZ 生成研究简报 PDF`。
+
+在 assistant 消息中展开 `Run details`，可检查 Activation、Planner、Data Collector、Analyzer、Risk Checker、Citation Verifier、Report Writer、PDF Exporter 的状态、耗时、输入/输出摘要和 workflow run id。下方提供 Markdown/HTML 预览，引用显示 source、documentId、chunkId 与所支持的 finding。
+
+Report HTTP 边界包括 `POST /api/report-workflows`、`GET /api/report-workflows/:runId` 和 `GET /api/report-artifacts/:artifactId`。快照只保存在 API 进程内。PDF Exporter 当前不生成 PDF：审批前明确为 `queued`，artifact 为 `html_preview_only`。Week 3 复盘材料为 ``、`` 和 ``。
+
 可调用验证入口：
 
 ```bash

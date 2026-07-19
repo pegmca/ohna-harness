@@ -46,6 +46,7 @@ textarea:disabled {
   grid-template-columns: 280px minmax(0, 1fr);
   background: var(--md-color-canvas);
   color: var(--md-color-text-primary);
+  overflow-x: hidden;
 }
 
 .conversation-sidebar {
@@ -241,6 +242,8 @@ textarea:disabled {
   min-width: 0;
   height: 100vh;
   background: var(--md-color-canvas);
+  max-width: 100vw;
+  overflow-x: hidden;
 }
 
 .chat-main {
@@ -438,6 +441,7 @@ textarea:disabled {
   border-radius: var(--md-radius-lg);
   background: var(--md-color-surface);
   padding: var(--md-space-4);
+  overflow: hidden;
 }
 
 .is-user .message-content {
@@ -458,8 +462,11 @@ textarea:disabled {
 }
 
 .message-text {
+  max-width: 100%;
   margin: 0;
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
   color: inherit;
   line-height: 1.65;
 }
@@ -928,6 +935,28 @@ textarea:disabled {
   padding-top: var(--md-space-2);
 }
 
+.workflow-header,
+.artifact-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--md-space-3); }
+.workflow-nodes { display: grid; margin-top: var(--md-space-3); border: 1px solid var(--md-color-border-subtle); border-radius: var(--md-radius-lg); overflow: hidden; }
+.workflow-node { display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; gap: var(--md-space-3); align-items: start; padding: var(--md-space-3); background: var(--md-color-surface); }
+.workflow-node + .workflow-node { border-top: 1px solid var(--md-color-border-subtle); }
+.workflow-node > div { display: grid; min-width: 0; gap: var(--md-space-1); }
+.workflow-node small { color: var(--md-color-text-muted); overflow-wrap: anywhere; }
+.workflow-index { display: grid; place-items: center; width: 24px; height: 24px; border-radius: var(--md-radius-full); background: var(--md-color-muted); color: var(--md-color-text-secondary); font-family: var(--md-font-mono); font-size: var(--md-text-code-size); }
+.workflow-error { color: var(--md-color-danger); font-size: var(--md-text-body-sm-size); }
+.report-artifact { display: grid; gap: var(--md-space-3); margin-top: var(--md-space-4); padding-top: var(--md-space-4); border-top: 1px solid var(--md-color-border-subtle); }
+.artifact-heading > div:first-child { display: grid; gap: var(--md-space-1); }
+.report-html-preview { width: 100%; min-height: 360px; border: 1px solid var(--md-color-border); border-radius: var(--md-radius-lg); background: #fff; }
+.report-html-preview { display: block; min-width: 0; }
+.report-artifact,
+.report-workflow-section,
+.run-details-body,
+.citation-row > div { min-width: 0; max-width: 100%; }
+.markdown-preview { border: 1px solid var(--md-color-border-subtle); border-radius: var(--md-radius-md); padding: var(--md-space-3); }
+.markdown-preview summary { cursor: pointer; color: var(--md-color-text-secondary); }
+.markdown-preview pre { max-width: 100%; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--md-color-text-secondary); font-family: var(--md-font-mono); font-size: var(--md-text-code-size); }
+.pdf-placeholder { display: flex; align-items: flex-start; gap: var(--md-space-2); margin: 0; border-left: 3px solid var(--md-color-warning); padding: var(--md-space-3); background: color-mix(in srgb, var(--md-color-warning) 10%, transparent); color: var(--md-color-text-secondary); font-size: var(--md-text-body-sm-size); }
+
 .trace-index {
   display: grid;
   width: 24px;
@@ -1029,6 +1058,11 @@ textarea:disabled {
 }
 
 @media (max-width: 760px) {
+  .workflow-header,
+  .artifact-heading { align-items: stretch; flex-direction: column; }
+  .workflow-node { grid-template-columns: 24px minmax(0, 1fr); }
+  .workflow-node > .status-badge { grid-column: 2; justify-self: start; }
+  .report-html-preview { min-height: 300px; }
   .agent-app-shell {
     grid-template-columns: 1fr;
   }

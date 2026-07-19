@@ -265,7 +265,55 @@ export interface AgentRunResponseDto {
   steps: AgentStepDto[];
   trace: TraceDto;
   reportPlan?: ReportPlanDto;
+  reportWorkflow?: ReportWorkflowResponseDto;
   error?: ApiError;
+}
+
+export type ReportArtifactStatusDto = "html_preview_only";
+export type ReportPdfExportStatusDto = "queued" | "not_implemented";
+
+export interface ReportCitationDto {
+  id: string;
+  claimId?: string;
+  supportsFinding: string;
+  quote: string;
+  source: string;
+  documentId?: string;
+  chunkId?: string;
+  chunkIndex?: number;
+  heading?: string;
+}
+
+/** Web 只消费报告 artifact DTO，不依赖 report package 的内部 workflow state。 */
+export interface ReportArtifactDto {
+  artifactId: string;
+  workflowRunId: string;
+  status: ReportArtifactStatusDto;
+  title: string;
+  markdown: string;
+  html: string;
+  citations: ReportCitationDto[];
+  citationVerification: {
+    decision: "pass" | "needs_more_evidence" | "needs_metric" | "retry_tool" | "fail";
+    verified: boolean;
+    missingClaims: string[];
+    missingMetrics: string[];
+  };
+  pdfExport: {
+    status: ReportPdfExportStatusDto;
+    fileName?: string;
+    message: string;
+  };
+  createdAt: ISODateTimeString;
+}
+
+export interface ReportWorkflowResponseDto {
+  run: WorkflowRunDto;
+  artifact?: ReportArtifactDto;
+}
+
+export interface StartReportWorkflowRequestDto {
+  plan: ReportPlanDto;
 }
 
 export type ReportTriggerSourceDto = "toggle" | "button" | "natural_language";

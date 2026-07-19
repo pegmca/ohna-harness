@@ -15,6 +15,7 @@
   "references": [
     { "path": "../../packages/types" },
     { "path": "../../packages/rag" },
+    { "path": "../../packages/report" },
     { "path": "../../packages/agent" }
   ]
 }

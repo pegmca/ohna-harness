@@ -13,11 +13,14 @@
   },
   "scripts": {
     "build": "tsc -b",
-    "test": "pnpm build && node --test test/eval.test.mjs",
+    "test": "pnpm build && node --test test/*.test.mjs",
+    "eval": "pnpm build && node dist/cli.js",
+    "eval:update-baseline": "pnpm build && node dist/cli.js --update-baseline",
     "typecheck": "pnpm --filter @aiagent/rag build && pnpm --filter @aiagent/types build && tsc -p tsconfig.json --pretty false --noEmit"
   },
   "dependencies": {
     "@aiagent/rag": "workspace:^",
-    "@aiagent/types": "workspace:^"
+    "@aiagent/types": "workspace:^",
+    "@types/node": "^22.10.5"
   }
 }

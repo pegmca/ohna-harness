@@ -1,0 +1,28 @@
+{
+  "schemaVersion": "1.0.0",
+  "datasetVersion": "financial-research-v1.0.0",
+  "createdAt": "2026-07-19T10:21:51.178Z",
+  "config": {
+    "seed": 20260719,
+    "strategy": "deterministic_fixture",
+    "thresholds": {
+      "successRate": 0.8,
+      "citationCoverage": 0.85,
+      "financialAccuracy": 0.8,
+      "sourceGroundedness": 0.85,
+      "workflowCompletion": 0.9,
+      "maxP95LatencyIncreaseMs": 50
+    }
+  },
+  "metrics": {
+    "citationCoverage": 0.935,
+    "financialAccuracy": 0.968,
+    "sourceGroundedness": 0.968,
+    "successRate": 0.903,
+    "workflowCompletion": 0.984,
+    "reportSectionCoverage": 0.968,
+    "exportStatusRate": 1,
+    "averageLatencyMs": 22.839,
+    "p95LatencyMs": 45
+  }
+}

@@ -1,0 +1,1522 @@
+{
+  "schemaVersion": "1.0.0",
+  "datasetVersion": "financial-research-v1.0.0",
+  "run": {
+    "id": "eval-financial-research-v1.0.0-seed-20260719",
+    "startedAt": "2026-07-19T10:22:34.970Z",
+    "seed": 20260719,
+    "strategy": "deterministic_fixture",
+    "llmJudge": false
+  },
+  "metrics": {
+    "citationCoverage": 0.935,
+    "financialAccuracy": 0.968,
+    "sourceGroundedness": 0.968,
+    "successRate": 0.903,
+    "workflowCompletion": 0.984,
+    "reportSectionCoverage": 0.968,
+    "exportStatusRate": 1,
+    "averageLatencyMs": 22.839,
+    "p95LatencyMs": 45
+  },
+  "results": [
+    {
+      "caseId": "rag-001",
+      "mode": "rag",
+      "query": "平安银行不良率",
+      "passed": true,
+      "metrics": {
+        "citationCoverage": 1,
+        "financialAccuracy": 1,
+        "sourceGroundedness": 1,
+        "successRate": 1,
+        "workflowCompletion": 1,
+        "reportSectionCoverage": 1,
+        "exportStatusRate": 1
+      },
+      "latencyMs": 18,
+      "traceId": "trace-rag-001",
+      "requestId": "req-rag-001",
+      "evidence": {
+        "answer": "2024年不良率1.05%。",
+        "citations": [
+          {
+            "source": "annual",
+            "quote": "2024年不良率1.05%"
+          }
+        ],
+        "retrievedChunks": [
+          {
+            "id": "c001",
+            "source": "annual",
+            "text": "2024年不良率1.05%"
+          }
+        ],
+        "workflow": [],
+        "sections": [],
+        "ok": true,
+        "latencyMs": 18,
+        "traceId": "trace-rag-001",
+        "requestId": "req-rag-001"
+      },
+      "failures": []
+    },
+    {
+      "caseId": "rag-002",
+      "mode": "rag",
+      "query": "平安银行净利润",
+      "passed": true,
+      "metrics": {
+        "citationCoverage": 1,
+        "financialAccuracy": 1,
+        "sourceGroundedness": 1,
+        "successRate": 1,
+        "workflowCompletion": 1,
+        "reportSectionCoverage": 1,
+        "exportStatusRate": 1
+      },
+      "latencyMs": 20,
+      "traceId": "trace-rag-002",
+      "requestId": "req-rag-002",
+      "evidence": {
+        "answer": "2024年净利润397亿元人民币。",
+        "citations": [
+          {
+            "source": "annual",
+            "quote": "2024年净利润397亿元人民币"
+          }
+        ],
+        "retrievedChunks": [
+          {
+            "id": "c002",
+            "source": "annual",
+            "text": "2024年净利润397亿元人民币"
+          }
+        ],
+        "workflow": [],
+        "sections": [],
+        "ok": true,
+        "latencyMs": 20,
+        "traceId": "trace-rag-002",
+        "requestId": "req-rag-002"
+      },
+      "failures": []
+    },
+    {
+      "caseId": "rag-003",
+      "mode": "rag",
+      "query": "宁德时代营收",
+      "passed": true,
+      "metrics": {
+        "citationCoverage": 1,
+        "financialAccuracy": 1,
+        "sourceGroundedness": 1,
+        "successRate": 1,
+        "workflowCompletion": 1,
+        "reportSectionCoverage": 1,
+        "exportStatusRate": 1
+      },
+      "latencyMs": 21,
+      "traceId": "trace-rag-003",
+      "requestId": "req-rag-003",
+      "evidence": {
+        "answer": "2024年前三季度营收2590亿元人民币。",
+        "citations": [
+          {
+            "source": "q3",
+            "quote": "2024年前三季度营收2590亿元人民币"
+          }
+        ],
+        "retrievedChunks": [
+          {
+            "id": "c003",
+            "source": "q3",
+            "text": "2024年前三季度营收2590亿元人民币"
+          }
+        ],
+        "workflow": [],
+        "sections": [],
+        "ok": true,
+        "latencyMs": 21,
+        "traceId": "trace-rag-003",
+        "requestId": "req-rag-003"
+      },
+      "failures": []
+    },
+    {
+      "caseId": "rag-004",
+      "mode": "rag",
+      "query": "宁德时代毛利率",
+      "passed": true,
+      "metrics": {
+        "citationCoverage": 1,
+        "financialAccuracy": 1,
+        "sourceGroundedness": 1,
+        "successRate": 1,
+        "workflowCompletion": 1,
+        "reportSectionCoverage": 1,
+        "exportStatusRate": 1
+      },
+      "latencyMs": 19,
+      "traceId": "trace-rag-004",
+      "requestId": "req-rag-004",
+      "evidence": {
+        "answer": "2024年前三季度毛利率25.1%。",
+        "citations": [
+          {
+            "source": "q3",
+            "quote": "2024年前三季度毛利率25.1%"
+          }
+        ],
+        "retrievedChunks": [
+          {
+            "id": "c004",
+            "source": "q3",
+            "text": "2024年前三季度毛利率25.1%"
+          }
+        ],
+        "workflow": [],
+        "sections": [],
+        "ok": true,
+        "latencyMs": 19,
+        "traceId": "trace-rag-004",
+        "requestId": "req-rag-004"
+      },
+      "failures": []
+    },
+    {
+      "caseId": "rag-005",
+      "mode": "rag",
+      "query": "招商银行拨备覆盖率",
+      "passed": true,
+      "metrics": {
+        "citationCoverage": 1,
+        "financialAccuracy": 1,
+        "sourceGroundedness": 1,
+        "successRate": 1,
+        "workflowCompletion": 1,
+        "reportSectionCoverage": 1,
+        "exportStatusRate": 1
+      },
+      "latencyMs": 22,
+      "traceId": "trace-rag-005",
+      "requestId": "req-rag-005",
+      "evidence": {
+        "answer": "2024年一季度拨备覆盖率450%。",
+        "citations": [
+          {
+            "source": "announcement",
+            "quote": "2024年一季度拨备覆盖率450%"
+          }
+        ],
+        "retrievedChunks": [
+          {
+            "id": "c005",
+            "source": "announcement",
+            "text": "2024年一季度拨备覆盖率450%"
+          }
+        ],
+        "workflow": [],
+        "sections": [],
+        "ok": true,
+        "latencyMs": 22,
+        "traceId": "trace-rag-005",
+        "requestId": "req-rag-005"
+      },
+      "failures": []
+    },
+    {
+      "caseId": "rag-006",
+      "mode": "rag",
+      "query": "新能源汽车销量",
+      "passed": true,
+      "metrics": {
+        "citationCoverage": 1,
+        "financialAccuracy": 1,
+        "sourceGroundedness": 1,
+        "successRate": 1,
+        "workflowCompletion": 1,
+        "reportSectionCoverage": 1,
+        "exportStatusRate": 1
+      },
+      "latencyMs": 24,
+      "traceId": "trace-rag-006",
+      "requestId": "req-rag-006",
+      "evidence": {
+        "answer": "2024年销量预计1700万辆。",
+        "citations": [
+          {
+            "source": "industry",
+            "quote": "2024年销量预计1700万辆"
+          }
+        ],
+        "retrievedChunks": [
+          {
+            "id": "c006",
+            "source": "industry",
+            "text": "2024年销量预计1700万辆"
+          }
+        ],
+        "workflow": [],
+        "sections": [],
+        "ok": true,
+        "latencyMs": 24,
+        "traceId": "trace-rag-006",
+        "requestId": "req-rag-006"
+      },
+      "failures": []
+    },
+    {
+      "caseId": "rag-007",
+      "mode": "rag",
+      "query": "新能源汽车风险",
+      "passed": true,
+      "metrics": {
+        "citationCoverage": 1,
+        "financialAccuracy": 1,
+        "sourceGroundedness": 1,
+        "successRate": 1,
+        "workflowCompletion": 1,
+        "reportSectionCoverage": 1,
+        "exportStatusRate": 1
+      },
+      "latencyMs": 26,
+      "traceId": "trace-rag-007",
+      "requestId": "req-rag-007",
+      "evidence": {
+        "answer": "风险包括原材料波动与供应链扰动。",
+        "citations": [
+          {
+            "source": "industry",
+            "quote": "原材料价格波动、供应链扰动"
+          }
+        ],
+        "retrievedChunks": [
+          {
+            "id": "c007",
+            "source": "industry",
+            "text": "原材料价格波动、供应链扰动"
+          }
+        ],
+        "workflow": [],
+        "sections": [],
+        "ok": true,
+        "latencyMs": 26,
+        "traceId": "trace-rag-007",
+        "requestId": "req-rag-007"
+      },
+      "failures": []
+    },
+    {
+      "caseId": "rag-008",
+      "mode": "rag",
+      "query": "平安银行资本充足率",
+      "passed": true,
+      "metrics": {
+        "citationCoverage": 1,
+        "financialAccuracy": 1,
+        "sourceGroundedness": 1,
+        "successRate": 1,
+        "workflowCompletion": 1,
+        "reportSectionCoverage": 1,
+        "exportStatusRate": 1
+      },
+      "latencyMs": 20,
+      "traceId": "trace-rag-008",
+      "requestId": "req-rag-008",
+      "evidence": {
+        "answer": "2024年资本充足率13.5%。",
+        "citations": [
+          {
+            "source": "annual",
+            "quote": "2024年资本充足率13.5%"
+          }
+        ],
+        "retrievedChunks": [
+          {
+            "id": "c008",
+            "source": "annual",
+            "text": "2024年资本充足率13.5%"
+          }
+        ],
+        "workflow": [],
+        "sections": [],
+        "ok": true,
+        "latencyMs": 20,
+        "traceId": "trace-rag-008",
+        "requestId": "req-rag-008"
+      },
+      "failures": []
+    },
+    {
+      "caseId": "rag-009",
+      "mode": "rag",
+      "query": "平安银行ROE",
+      "passed": true,
+      "metrics": {
+        "citationCoverage": 1,
+        "financialAccuracy": 1,
+        "sourceGroundedness": 1,
+        "successRate": 1,
+        "workflowCompletion": 1,
+        "reportSectionCoverage": 1,
+        "exportStatusRate": 1
+      },
+      "latencyMs": 23,
+      "traceId": "trace-rag-009",
+      "requestId": "req-rag-009",
+      "evidence": {
+        "answer": "2024年ROE为10.5%。",
+        "citations": [
+          {
+            "source": "annual",
+            "quote": "2024年ROE为10.5%"
+          }
+        ],
+        "retrievedChunks": [
+          {
+            "id": "c009",
+            "source": "annual",
+            "text": "2024年ROE为10.5%"
+          }
+        ],
+        "workflow": [],
+        "sections": [],
+        "ok": true,
+        "latencyMs": 23,
+        "traceId": "trace-rag-009",
+        "requestId": "req-rag-009"
+      },
+      "failures": []
+    },
+    {
+      "caseId": "rag-010",
+      "mode": "rag",
+      "query": "宁德时代研发费用",
+      "passed": true,
+      "metrics": {
+        "citationCoverage": 1,
+        "financialAccuracy": 1,
+        "sourceGroundedness": 1,
+        "successRate": 1,
+        "workflowCompletion": 1,
+        "reportSectionCoverage": 1,
+        "exportStatusRate": 1
+      },
+      "latencyMs": 21,
+      "traceId": "trace-rag-010",
+      "requestId": "req-rag-010",
+      "evidence": {
+        "answer": "2024年前三季度研发费用180亿元人民币。",
+        "citations": [
+          {
+            "source": "q3",
+            "quote": "2024年前三季度研发费用180亿元人民币"
+          }
+        ],
+        "retrievedChunks": [
+          {
+            "id": "c010",
+            "source": "q3",
+            "text": "2024年前三季度研发费用180亿元人民币"
+          }
+        ],
+        "workflow": [],
+        "sections": [],
+        "ok": true,
+        "latencyMs": 21,
+        "traceId": "trace-rag-010",
+        "requestId": "req-rag-010"
+      },
+      "failures": []
+    },
+    {
+      "caseId": "rag-011",
+      "mode": "rag",
+      "query": "宁德时代海外收入占比",
+      "passed": true,
+      "metrics": {
+        "citationCoverage": 1,
+        "financialAccuracy": 1,
+        "sourceGroundedness": 1,
+        "successRate": 1,
+        "workflowCompletion": 1,
+        "reportSectionCoverage": 1,
+        "exportStatusRate": 1
+      },
+      "latencyMs": 19,
+      "traceId": "trace-rag-011",
+      "requestId": "req-rag-011",
+      "evidence": {
+        "answer": "2024年前三季度海外收入占比35%。",
+        "citations": [
+          {
+            "source": "q3",
+            "quote": "2024年前三季度海外收入占比35%"
+          }
+        ],
+        "retrievedChunks": [
+          {
+            "id": "c011",
+            "source": "q3",
+            "text": "2024年前三季度海外收入占比35%"
+          }
+        ],
+        "workflow": [],
+        "sections": [],
+        "ok": true,
+        "latencyMs": 19,
+        "traceId": "trace-rag-011",
+        "requestId": "req-rag-011"
+      },
+      "failures": []
+    },
+    {
+      "caseId": "rag-012",
+      "mode": "rag",
+      "query": "招商银行关注类贷款",
+      "passed": true,
+      "metrics": {
+        "citationCoverage": 1,
+        "financialAccuracy": 1,
+        "sourceGroundedness": 1,
+        "successRate": 1,
+        "workflowCompletion": 1,
+        "reportSectionCoverage": 1,
+        "exportStatusRate": 1
+      },
+      "latencyMs": 22,
+      "traceId": "trace-rag-012",
+      "requestId": "req-rag-012",
+      "evidence": {
+        "answer": "2024年一季度关注类贷款1.2%。",
+        "citations": [
+          {
+            "source": "announcement",
+            "quote": "2024年一季度关注类贷款1.2%"
+          }
+        ],
+        "retrievedChunks": [
+          {
+            "id": "c012",
+            "source": "announcement",
+            "text": "2024年一季度关注类贷款1.2%"
+          }
+        ],
+        "workflow": [],
+        "sections": [],
+        "ok": true,
+        "latencyMs": 22,
+        "traceId": "trace-rag-012",
+        "requestId": "req-rag-012"
+      },
+      "failures": []
+    },
+    {
+      "caseId": "rag-013",
+      "mode": "rag",
+      "query": "中国新能源渗透率",
+      "passed": true,
+      "metrics": {
+        "citationCoverage": 1,
+        "financialAccuracy": 1,
+        "sourceGroundedness": 1,
+        "successRate": 1,
+        "workflowCompletion": 1,
+        "reportSectionCoverage": 1,
+        "exportStatusRate": 1
+      },
+      "latencyMs": 25,
+      "traceId": "trace-rag-013",
+      "requestId": "req-rag-013",
+      "evidence": {
+        "answer": "2024年中国新能源渗透率40%。",
+        "citations": [
+          {
+            "source": "industry",
+            "quote": "2024年中国新能源渗透率40%"
+          }
+        ],
+        "retrievedChunks": [
+          {
+            "id": "c013",
+            "source": "industry",
+            "text": "2024年中国新能源渗透率40%"
+          }
+        ],
+        "workflow": [],
+        "sections": [],
+        "ok": true,
+        "latencyMs": 25,
+        "traceId": "trace-rag-013",
+        "requestId": "req-rag-013"
+      },
+      "failures": []
+    },
+    {
+      "caseId": "rag-014",
+      "mode": "rag",
+      "query": "宁德时代市占率",
+      "passed": true,
+      "metrics": {
+        "citationCoverage": 1,
+        "financialAccuracy": 1,
+        "sourceGroundedness": 1,
+        "successRate": 1,
+        "workflowCompletion": 1,
+        "reportSectionCoverage": 1,
+        "exportStatusRate": 1
+      },
+      "latencyMs": 23,
+      "traceId": "trace-rag-014",
+      "requestId": "req-rag-014",
+      "evidence": {
+        "answer": "2024年上半年市占率37%。",
+        "citations": [
+          {
+            "source": "q3",
+            "quote": "2024年上半年市占率37%"
+          }
+        ],
+        "retrievedChunks": [
+          {
+            "id": "c014",
+            "source": "q3",
+            "text": "2024年上半年市占率37%"
+          }
+        ],
+        "workflow": [],
+        "sections": [],
+        "ok": true,
+        "latencyMs": 23,
+        "traceId": "trace-rag-014",
+        "requestId": "req-rag-014"
+      },
+      "failures": []
+    },
+    {
+      "caseId": "rag-015",
+      "mode": "rag",
+      "query": "平安银行分红",
+      "passed": true,
+      "metrics": {
+        "citationCoverage": 1,
+        "financialAccuracy": 1,
+        "sourceGroundedness": 1,
+        "successRate": 1,
+        "workflowCompletion": 1,
+        "reportSectionCoverage": 1,
+        "exportStatusRate": 1
+      },
+      "latencyMs": 18,
+      "traceId": "trace-rag-015",
+      "requestId": "req-rag-015",
+      "evidence": {
+        "answer": "2024年股利0.5元/股人民币。",
+        "citations": [
+          {
+            "source": "annual",
+            "quote": "2024年股利0.5元/股人民币"
+          }
+        ],
+        "retrievedChunks": [
+          {
+            "id": "c015",
+            "source": "annual",
+            "text": "2024年股利0.5元/股人民币"
+          }
+        ],
+        "workflow": [],
+        "sections": [],
+        "ok": true,
+        "latencyMs": 18,
+        "traceId": "trace-rag-015",
+        "requestId": "req-rag-015"
+      },
+      "failures": []
+    },
+    {
+      "caseId": "chat-001",
+      "mode": "chat",
+      "query": "解释ROE",
+      "passed": true,
+      "metrics": {
+        "citationCoverage": 1,
+        "financialAccuracy": 1,
+        "sourceGroundedness": 1,
+        "successRate": 1,
+        "workflowCompletion": 1,
+        "reportSectionCoverage": 1,
+        "exportStatusRate": 1
+      },
+      "latencyMs": 8,
+      "traceId": "trace-chat-001",
+      "requestId": "req-chat-001",
+      "evidence": {
+        "answer": "ROE衡量净利润相对净资产的回报。",
+        "citations": [],
+        "retrievedChunks": [],
+        "workflow": [],
+        "sections": [],
+        "ok": true,
+        "latencyMs": 8,
+        "traceId": "trace-chat-001",
+        "requestId": "req-chat-001"
+      },
+      "failures": []
+    },
+    {
+      "caseId": "chat-002",
+      "mode": "chat",
+      "query": "解释净息差",
+      "passed": true,
+      "metrics": {
+        "citationCoverage": 1,
+        "financialAccuracy": 1,
+        "sourceGroundedness": 1,
+        "successRate": 1,
+        "workflowCompletion": 1,
+        "reportSectionCoverage": 1,
+        "exportStatusRate": 1
+      },
+      "latencyMs": 7,
+      "traceId": "trace-chat-002",
+      "requestId": "req-chat-002",
+      "evidence": {
+        "answer": "净息差衡量生息资产的利差收益。",
+        "citations": [],
+        "retrievedChunks": [],
+        "workflow": [],
+        "sections": [],
+        "ok": true,
+        "latencyMs": 7,
+        "traceId": "trace-chat-002",
+        "requestId": "req-chat-002"
+      },
+      "failures": []
+    },
+    {
+      "caseId": "chat-003",
+      "mode": "chat",
+      "query": "解释拨备覆盖率",
+      "passed": true,
+      "metrics": {
+        "citationCoverage": 1,
+        "financialAccuracy": 1,
+        "sourceGroundedness": 1,
+        "successRate": 1,
+        "workflowCompletion": 1,
+        "reportSectionCoverage": 1,
+        "exportStatusRate": 1
+      },
+      "latencyMs": 9,
+      "traceId": "trace-chat-003",
+      "requestId": "req-chat-003",
+      "evidence": {
+        "answer": "拨备覆盖率衡量贷款损失准备对不良贷款的覆盖。",
+        "citations": [],
+        "retrievedChunks": [],
+        "workflow": [],
+        "sections": [],
+        "ok": true,
+        "latencyMs": 9,
+        "traceId": "trace-chat-003",
+        "requestId": "req-chat-003"
+      },
+      "failures": []
+    },
+    {
+      "caseId": "chat-004",
+      "mode": "chat",
+      "query": "什么是同比",
+      "passed": true,
+      "metrics": {
+        "citationCoverage": 1,
+        "financialAccuracy": 1,
+        "sourceGroundedness": 1,
+        "successRate": 1,
+        "workflowCompletion": 1,
+        "reportSectionCoverage": 1,
+        "exportStatusRate": 1
+      },
+      "latencyMs": 6,
+      "traceId": "trace-chat-004",
+      "requestId": "req-chat-004",
+      "evidence": {
+        "answer": "同比比较本期与上年同期。",
+        "citations": [],
+        "retrievedChunks": [],
+        "workflow": [],
+        "sections": [],
+        "ok": true,
+        "latencyMs": 6,
+        "traceId": "trace-chat-004",
+        "requestId": "req-chat-004"
+      },
+      "failures": []
+    },
+    {
+      "caseId": "chat-005",
+      "mode": "chat",
+      "query": "什么是环比",
+      "passed": true,
+      "metrics": {
+        "citationCoverage": 1,
+        "financialAccuracy": 1,
+        "sourceGroundedness": 1,
+        "successRate": 1,
+        "workflowCompletion": 1,
+        "reportSectionCoverage": 1,
+        "exportStatusRate": 1
+      },
+      "latencyMs": 7,
+      "traceId": "trace-chat-005",
+      "requestId": "req-chat-005",
+      "evidence": {
+        "answer": "环比比较本期与相邻上一期。",
+        "citations": [],
+        "retrievedChunks": [],
+        "workflow": [],
+        "sections": [],
+        "ok": true,
+        "latencyMs": 7,
+        "traceId": "trace-chat-005",
+        "requestId": "req-chat-005"
+      },
+      "failures": []
+    },
+    {
+      "caseId": "report-001",
+      "mode": "report",
+      "query": "生成银行研报",
+      "passed": true,
+      "metrics": {
+        "citationCoverage": 1,
+        "financialAccuracy": 1,
+        "sourceGroundedness": 1,
+        "successRate": 1,
+        "workflowCompletion": 1,
+        "reportSectionCoverage": 1,
+        "exportStatusRate": 1
+      },
+      "latencyMs": 42,
+      "traceId": "trace-report-001",
+      "requestId": "req-report-001",
+      "evidence": {
+        "answer": "银行研究报告已生成。",
+        "citations": [
+          {
+            "source": "annual",
+            "quote": "资产质量稳定"
+          }
+        ],
+        "retrievedChunks": [
+          {
+            "id": "rc1",
+            "source": "annual",
+            "text": "资产质量稳定"
+          }
+        ],
+        "workflow": [
+          "collector",
+          "analyzer",
+          "risk_checker",
+          "citation_verifier",
+          "writer",
+          "pdf_exporter"
+        ],
+        "sections": [
+          "摘要",
+          "核心指标",
+          "风险",
+          "引用"
+        ],
+        "exportStatus": "placeholder",
+        "ok": true,
+        "latencyMs": 42,
+        "traceId": "trace-report-001",
+        "requestId": "req-report-001"
+      },
+      "failures": []
+    },
+    {
+      "caseId": "report-002",
+      "mode": "report",
+      "query": "生成新能源研报",
+      "passed": true,
+      "metrics": {
+        "citationCoverage": 1,
+        "financialAccuracy": 1,
+        "sourceGroundedness": 1,
+        "successRate": 1,
+        "workflowCompletion": 1,
+        "reportSectionCoverage": 1,
+        "exportStatusRate": 1
+      },
+      "latencyMs": 45,
+      "traceId": "trace-report-002",
+      "requestId": "req-report-002",
+      "evidence": {
+        "answer": "新能源研究报告已生成。",
+        "citations": [
+          {
+            "source": "industry",
+            "quote": "行业竞争加剧"
+          }
+        ],
+        "retrievedChunks": [
+          {
+            "id": "rc2",
+            "source": "industry",
+            "text": "行业竞争加剧"
+          }
+        ],
+        "workflow": [
+          "collector",
+          "analyzer",
+          "risk_checker",
+          "citation_verifier",
+          "writer",
+          "pdf_exporter"
+        ],
+        "sections": [
+          "摘要",
+          "核心指标",
+          "风险",
+          "引用"
+        ],
+        "exportStatus": "placeholder",
+        "ok": true,
+        "latencyMs": 45,
+        "traceId": "trace-report-002",
+        "requestId": "req-report-002"
+      },
+      "failures": []
+    },
+    {
+      "caseId": "report-003",
+      "mode": "report",
+      "query": "生成电池公司研报",
+      "passed": true,
+      "metrics": {
+        "citationCoverage": 1,
+        "financialAccuracy": 1,
+        "sourceGroundedness": 1,
+        "successRate": 1,
+        "workflowCompletion": 1,
+        "reportSectionCoverage": 1,
+        "exportStatusRate": 1
+      },
+      "latencyMs": 44,
+      "traceId": "trace-report-003",
+      "requestId": "req-report-003",
+      "evidence": {
+        "answer": "电池公司研究报告已生成。",
+        "citations": [
+          {
+            "source": "q3",
+            "quote": "毛利率25.1%"
+          }
+        ],
+        "retrievedChunks": [
+          {
+            "id": "rc3",
+            "source": "q3",
+            "text": "毛利率25.1%"
+          }
+        ],
+        "workflow": [
+          "collector",
+          "analyzer",
+          "risk_checker",
+          "citation_verifier",
+          "writer",
+          "pdf_exporter"
+        ],
+        "sections": [
+          "摘要",
+          "核心指标",
+          "风险",
+          "引用"
+        ],
+        "exportStatus": "placeholder",
+        "ok": true,
+        "latencyMs": 44,
+        "traceId": "trace-report-003",
+        "requestId": "req-report-003"
+      },
+      "failures": []
+    },
+    {
+      "caseId": "report-004",
+      "mode": "report",
+      "query": "生成资产质量研报",
+      "passed": true,
+      "metrics": {
+        "citationCoverage": 1,
+        "financialAccuracy": 1,
+        "sourceGroundedness": 1,
+        "successRate": 1,
+        "workflowCompletion": 1,
+        "reportSectionCoverage": 1,
+        "exportStatusRate": 1
+      },
+      "latencyMs": 43,
+      "traceId": "trace-report-004",
+      "requestId": "req-report-004",
+      "evidence": {
+        "answer": "资产质量研究报告已生成。",
+        "citations": [
+          {
+            "source": "announcement",
+            "quote": "风险总体可控"
+          }
+        ],
+        "retrievedChunks": [
+          {
+            "id": "rc4",
+            "source": "announcement",
+            "text": "风险总体可控"
+          }
+        ],
+        "workflow": [
+          "collector",
+          "analyzer",
+          "risk_checker",
+          "citation_verifier",
+          "writer",
+          "pdf_exporter"
+        ],
+        "sections": [
+          "摘要",
+          "核心指标",
+          "风险",
+          "引用"
+        ],
+        "exportStatus": "placeholder",
+        "ok": true,
+        "latencyMs": 43,
+        "traceId": "trace-report-004",
+        "requestId": "req-report-004"
+      },
+      "failures": []
+    },
+    {
+      "caseId": "report-005",
+      "mode": "report",
+      "query": "生成对比研报",
+      "passed": true,
+      "metrics": {
+        "citationCoverage": 1,
+        "financialAccuracy": 1,
+        "sourceGroundedness": 1,
+        "successRate": 1,
+        "workflowCompletion": 1,
+        "reportSectionCoverage": 1,
+        "exportStatusRate": 1
+      },
+      "latencyMs": 48,
+      "traceId": "trace-report-005",
+      "requestId": "req-report-005",
+      "evidence": {
+        "answer": "对比研究报告已生成。",
+        "citations": [
+          {
+            "source": "annual",
+            "quote": "净利润397亿元"
+          },
+          {
+            "source": "q3",
+            "quote": "净利润360亿元"
+          }
+        ],
+        "retrievedChunks": [
+          {
+            "id": "rc5",
+            "source": "annual",
+            "text": "净利润397亿元"
+          },
+          {
+            "id": "rc6",
+            "source": "q3",
+            "text": "净利润360亿元"
+          }
+        ],
+        "workflow": [
+          "collector",
+          "analyzer",
+          "risk_checker",
+          "citation_verifier",
+          "writer",
+          "pdf_exporter"
+        ],
+        "sections": [
+          "摘要",
+          "核心指标",
+          "风险",
+          "引用"
+        ],
+        "exportStatus": "placeholder",
+        "ok": true,
+        "latencyMs": 48,
+        "traceId": "trace-report-005",
+        "requestId": "req-report-005"
+      },
+      "failures": []
+    },
+    {
+      "caseId": "rag-016",
+      "mode": "rag",
+      "query": "平安银行净息差",
+      "passed": true,
+      "metrics": {
+        "citationCoverage": 1,
+        "financialAccuracy": 1,
+        "sourceGroundedness": 1,
+        "successRate": 1,
+        "workflowCompletion": 1,
+        "reportSectionCoverage": 1,
+        "exportStatusRate": 1
+      },
+      "latencyMs": 20,
+      "traceId": "trace-rag-016",
+      "requestId": "req-rag-016",
+      "evidence": {
+        "answer": "2024年净息差2.31%。",
+        "citations": [
+          {
+            "source": "annual",
+            "quote": "2024年净息差2.31%"
+          }
+        ],
+        "retrievedChunks": [
+          {
+            "id": "c016",
+            "source": "annual",
+            "text": "2024年净息差2.31%"
+          }
+        ],
+        "workflow": [],
+        "sections": [],
+        "ok": true,
+        "latencyMs": 20,
+        "traceId": "trace-rag-016",
+        "requestId": "req-rag-016"
+      },
+      "failures": []
+    },
+    {
+      "caseId": "rag-017",
+      "mode": "rag",
+      "query": "宁德时代产能",
+      "passed": true,
+      "metrics": {
+        "citationCoverage": 1,
+        "financialAccuracy": 1,
+        "sourceGroundedness": 1,
+        "successRate": 1,
+        "workflowCompletion": 1,
+        "reportSectionCoverage": 1,
+        "exportStatusRate": 1
+      },
+      "latencyMs": 22,
+      "traceId": "trace-rag-017",
+      "requestId": "req-rag-017",
+      "evidence": {
+        "answer": "2024年总产能超过500GWh。",
+        "citations": [
+          {
+            "source": "q3",
+            "quote": "2024年总产能超过500GWh"
+          }
+        ],
+        "retrievedChunks": [
+          {
+            "id": "c017",
+            "source": "q3",
+            "text": "2024年总产能超过500GWh"
+          }
+        ],
+        "workflow": [],
+        "sections": [],
+        "ok": true,
+        "latencyMs": 22,
+        "traceId": "trace-rag-017",
+        "requestId": "req-rag-017"
+      },
+      "failures": []
+    },
+    {
+      "caseId": "rag-018",
+      "mode": "rag",
+      "query": "招商银行房地产不良率",
+      "passed": true,
+      "metrics": {
+        "citationCoverage": 1,
+        "financialAccuracy": 1,
+        "sourceGroundedness": 1,
+        "successRate": 1,
+        "workflowCompletion": 1,
+        "reportSectionCoverage": 1,
+        "exportStatusRate": 1
+      },
+      "latencyMs": 23,
+      "traceId": "trace-rag-018",
+      "requestId": "req-rag-018",
+      "evidence": {
+        "answer": "2024年一季度房地产不良率3.85%。",
+        "citations": [
+          {
+            "source": "announcement",
+            "quote": "2024年一季度房地产不良率3.85%"
+          }
+        ],
+        "retrievedChunks": [
+          {
+            "id": "c018",
+            "source": "announcement",
+            "text": "2024年一季度房地产不良率3.85%"
+          }
+        ],
+        "workflow": [],
+        "sections": [],
+        "ok": true,
+        "latencyMs": 23,
+        "traceId": "trace-rag-018",
+        "requestId": "req-rag-018"
+      },
+      "failures": []
+    },
+    {
+      "caseId": "fail-001",
+      "mode": "failure",
+      "query": "不存在公司的收入",
+      "passed": false,
+      "metrics": {
+        "citationCoverage": 0,
+        "financialAccuracy": 0,
+        "sourceGroundedness": 1,
+        "successRate": 1,
+        "workflowCompletion": 1,
+        "reportSectionCoverage": 1,
+        "exportStatusRate": 1
+      },
+      "latencyMs": 16,
+      "traceId": "trace-fail-001",
+      "requestId": "req-fail-001",
+      "evidence": {
+        "answer": "2024年收入100亿元。",
+        "citations": [],
+        "retrievedChunks": [],
+        "workflow": [],
+        "sections": [],
+        "ok": true,
+        "latencyMs": 16,
+        "traceId": "trace-fail-001",
+        "requestId": "req-fail-001"
+      },
+      "failures": [
+        "citationCoverage=0",
+        "financialAccuracy=0"
+      ],
+      "rootCause": "财务事实的数值、单位、币种、期间或来源未同时满足。",
+      "improvement": "增加结构化事实抽取与期间/币种校验，失败时拒答。"
+    },
+    {
+      "caseId": "fail-002",
+      "mode": "failure",
+      "query": "给出无来源结论",
+      "passed": false,
+      "metrics": {
+        "citationCoverage": 1,
+        "financialAccuracy": 1,
+        "sourceGroundedness": 0,
+        "successRate": 1,
+        "workflowCompletion": 1,
+        "reportSectionCoverage": 1,
+        "exportStatusRate": 1
+      },
+      "latencyMs": 15,
+      "traceId": "trace-fail-002",
+      "requestId": "req-fail-002",
+      "evidence": {
+        "answer": "资产质量优秀。",
+        "citations": [
+          {
+            "source": "annual",
+            "quote": "资产质量优秀"
+          }
+        ],
+        "retrievedChunks": [
+          {
+            "id": "fc2",
+            "source": "annual",
+            "text": "资产质量保持稳定"
+          }
+        ],
+        "workflow": [],
+        "sections": [],
+        "ok": true,
+        "latencyMs": 15,
+        "traceId": "trace-fail-002",
+        "requestId": "req-fail-002"
+      },
+      "failures": [
+        "sourceGroundedness=0"
+      ],
+      "rootCause": "引用文本无法在 retrieved chunk 中逐项回溯。",
+      "improvement": "强化 citation verifier，并保留 claim 到 chunk 的映射。"
+    },
+    {
+      "caseId": "fail-003",
+      "mode": "failure",
+      "query": "证据不足时生成研报",
+      "passed": false,
+      "metrics": {
+        "citationCoverage": 0,
+        "financialAccuracy": 1,
+        "sourceGroundedness": 1,
+        "successRate": 0,
+        "workflowCompletion": 0.5,
+        "reportSectionCoverage": 0,
+        "exportStatusRate": 1
+      },
+      "latencyMs": 32,
+      "traceId": "trace-fail-003",
+      "requestId": "req-fail-003",
+      "evidence": {
+        "answer": "证据不足，workflow终止。",
+        "citations": [],
+        "retrievedChunks": [],
+        "workflow": [
+          "collector",
+          "analyzer",
+          "citation_verifier"
+        ],
+        "sections": [],
+        "exportStatus": "blocked",
+        "ok": false,
+        "latencyMs": 32,
+        "traceId": "trace-fail-003",
+        "requestId": "req-fail-003"
+      },
+      "failures": [
+        "citationCoverage=0",
+        "successRate=0",
+        "workflowCompletion=0.5",
+        "reportSectionCoverage=0"
+      ],
+      "rootCause": "Report workflow 在预期节点前终止。",
+      "improvement": "补齐节点重试与结构化 workflow 终止原因。"
+    }
+  ],
+  "failures": [
+    {
+      "caseId": "fail-001",
+      "mode": "failure",
+      "query": "不存在公司的收入",
+      "passed": false,
+      "metrics": {
+        "citationCoverage": 0,
+        "financialAccuracy": 0,
+        "sourceGroundedness": 1,
+        "successRate": 1,
+        "workflowCompletion": 1,
+        "reportSectionCoverage": 1,
+        "exportStatusRate": 1
+      },
+      "latencyMs": 16,
+      "traceId": "trace-fail-001",
+      "requestId": "req-fail-001",
+      "evidence": {
+        "answer": "2024年收入100亿元。",
+        "citations": [],
+        "retrievedChunks": [],
+        "workflow": [],
+        "sections": [],
+        "ok": true,
+        "latencyMs": 16,
+        "traceId": "trace-fail-001",
+        "requestId": "req-fail-001"
+      },
+      "failures": [
+        "citationCoverage=0",
+        "financialAccuracy=0"
+      ],
+      "rootCause": "财务事实的数值、单位、币种、期间或来源未同时满足。",
+      "improvement": "增加结构化事实抽取与期间/币种校验，失败时拒答。"
+    },
+    {
+      "caseId": "fail-002",
+      "mode": "failure",
+      "query": "给出无来源结论",
+      "passed": false,
+      "metrics": {
+        "citationCoverage": 1,
+        "financialAccuracy": 1,
+        "sourceGroundedness": 0,
+        "successRate": 1,
+        "workflowCompletion": 1,
+        "reportSectionCoverage": 1,
+        "exportStatusRate": 1
+      },
+      "latencyMs": 15,
+      "traceId": "trace-fail-002",
+      "requestId": "req-fail-002",
+      "evidence": {
+        "answer": "资产质量优秀。",
+        "citations": [
+          {
+            "source": "annual",
+            "quote": "资产质量优秀"
+          }
+        ],
+        "retrievedChunks": [
+          {
+            "id": "fc2",
+            "source": "annual",
+            "text": "资产质量保持稳定"
+          }
+        ],
+        "workflow": [],
+        "sections": [],
+        "ok": true,
+        "latencyMs": 15,
+        "traceId": "trace-fail-002",
+        "requestId": "req-fail-002"
+      },
+      "failures": [
+        "sourceGroundedness=0"
+      ],
+      "rootCause": "引用文本无法在 retrieved chunk 中逐项回溯。",
+      "improvement": "强化 citation verifier，并保留 claim 到 chunk 的映射。"
+    },
+    {
+      "caseId": "fail-003",
+      "mode": "failure",
+      "query": "证据不足时生成研报",
+      "passed": false,
+      "metrics": {
+        "citationCoverage": 0,
+        "financialAccuracy": 1,
+        "sourceGroundedness": 1,
+        "successRate": 0,
+        "workflowCompletion": 0.5,
+        "reportSectionCoverage": 0,
+        "exportStatusRate": 1
+      },
+      "latencyMs": 32,
+      "traceId": "trace-fail-003",
+      "requestId": "req-fail-003",
+      "evidence": {
+        "answer": "证据不足，workflow终止。",
+        "citations": [],
+        "retrievedChunks": [],
+        "workflow": [
+          "collector",
+          "analyzer",
+          "citation_verifier"
+        ],
+        "sections": [],
+        "exportStatus": "blocked",
+        "ok": false,
+        "latencyMs": 32,
+        "traceId": "trace-fail-003",
+        "requestId": "req-fail-003"
+      },
+      "failures": [
+        "citationCoverage=0",
+        "successRate=0",
+        "workflowCompletion=0.5",
+        "reportSectionCoverage=0"
+      ],
+      "rootCause": "Report workflow 在预期节点前终止。",
+      "improvement": "补齐节点重试与结构化 workflow 终止原因。"
+    }
+  ],
+  "baseline": {
+    "schemaVersion": "1.0.0",
+    "datasetVersion": "financial-research-v1.0.0",
+    "createdAt": "2026-07-19T10:21:51.178Z",
+    "config": {
+      "seed": 20260719,
+      "strategy": "deterministic_fixture",
+      "thresholds": {
+        "successRate": 0.8,
+        "citationCoverage": 0.85,
+        "financialAccuracy": 0.8,
+        "sourceGroundedness": 0.85,
+        "workflowCompletion": 0.9,
+        "maxP95LatencyIncreaseMs": 50
+      }
+    },
+    "metrics": {
+      "citationCoverage": 0.935,
+      "financialAccuracy": 0.968,
+      "sourceGroundedness": 0.968,
+      "successRate": 0.903,
+      "workflowCompletion": 0.984,
+      "reportSectionCoverage": 0.968,
+      "exportStatusRate": 1,
+      "averageLatencyMs": 22.839,
+      "p95LatencyMs": 45
+    }
+  },
+  "diff": [
+    {
+      "metric": "citationCoverage",
+      "current": 0.935,
+      "baseline": 0.935,
+      "delta": 0
+    },
+    {
+      "metric": "financialAccuracy",
+      "current": 0.968,
+      "baseline": 0.968,
+      "delta": 0
+    },
+    {
+      "metric": "sourceGroundedness",
+      "current": 0.968,
+      "baseline": 0.968,
+      "delta": 0
+    },
+    {
+      "metric": "successRate",
+      "current": 0.903,
+      "baseline": 0.903,
+      "delta": 0
+    },
+    {
+      "metric": "workflowCompletion",
+      "current": 0.984,
+      "baseline": 0.984,
+      "delta": 0
+    },
+    {
+      "metric": "reportSectionCoverage",
+      "current": 0.968,
+      "baseline": 0.968,
+      "delta": 0
+    },
+    {
+      "metric": "exportStatusRate",
+      "current": 1,
+      "baseline": 1,
+      "delta": 0
+    },
+    {
+      "metric": "averageLatencyMs",
+      "current": 22.839,
+      "baseline": 22.839,
+      "delta": 0
+    },
+    {
+      "metric": "p95LatencyMs",
+      "current": 45,
+      "baseline": 45,
+      "delta": 0
+    }
+  ],
+  "regressionReasons": []
+}

@@ -7,7 +7,9 @@
     "dev": "concurrently -n api,web -c blue,green \"pnpm --filter @aiagent/api dev\" \"pnpm --filter @aiagent/web dev\"",
     "build": "pnpm -r build",
     "test": "pnpm -r --if-present test",
-    "typecheck": "pnpm -r typecheck"
+    "typecheck": "pnpm -r typecheck",
+    "eval": "pnpm --filter @aiagent/eval eval",
+    "eval:update-baseline": "pnpm --filter @aiagent/eval eval:update-baseline"
   },
   "devDependencies": {
     "@types/node": "^22.10.5",

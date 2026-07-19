@@ -30,6 +30,7 @@ export type {
 };
 
 export { createRagEvalReport, runRagEval, computeRagMetrics, RAG_EVAL_CASES, DEMO_DOCUMENTS, createDemoRagRuntime };
+export * from "./automation.js";
 
 export interface EvalRunnerInput {
   case: EvalCase;

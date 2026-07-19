@@ -401,6 +401,28 @@ pnpm --filter @aiagent/workflow test
 pnpm --filter @aiagent/report test
 ```
 
+## 自动化 Eval 基线
+
+`datasets/eval-financial-v1.json` 是版本 `financial-research-v1.0.0` 的固定评测集，共 31 条：18 条 RAG、5 条 Chat、5 条 Report Mode、3 条失败路径。默认 runner 使用 seed `20260719` 和确定性 fixture，不读取 API key，也未使用 LLM-as-judge。
+
+```bash
+# 运行回归，生成 docs/eval/latest-report.json 和 latest-report.md
+pnpm eval
+
+# 只有此显式命令会更新 docs/eval/baseline-v1.json
+pnpm eval:update-baseline
+```
+
+当前 baseline：citation coverage `0.935`、financial accuracy `0.968`、source groundedness `0.968`、成功率 `0.903`、workflow 完成度 `0.984`、平均延迟 `22.839ms`、P95 `45ms`。成功率、引用覆盖、财务准确性、来源 groundedness、workflow 完成度分别不得低于 `0.80/0.85/0.80/0.85/0.90`；任一质量指标低于 baseline，或 P95 比 baseline 增加超过 `50ms`，命令以非零状态退出。
+
+三个固定失败案例用于展示诊断而不是伪造满分：
+
+- `fail-001`：答案缺少人民币币种且无来源，财务数值、单位、币种、期间、来源的联合校验失败；改进方向是结构化事实校验和证据不足拒答。
+- `fail-002`：citation quote 与 retrieved chunk 不一致，无法 grounded 回溯；改进方向是 claim-to-chunk 映射和 Citation Verifier。
+- `fail-003`：证据不足导致 Report workflow 在 Verifier 后终止，缺少 writer/export 前置节点；改进方向是有限重试和结构化终止原因。
+
+机器报告、Markdown 逐条结果和 baseline diff 位于 `docs/eval/`。确定性检查适合 CI 和教学，但不能识别所有语义等价表达；真实模型或人工校准应作为后续补充，不能替代这些硬约束。
+
 根目录脚本会通过 workspace 执行各应用和 package 的对应命令。`pnpm dev` 会同时启动 `apps/api` 和 `apps/web`；web 的 Vite dev server 会把 `/api` 代理到 `http://localhost:3001`。如果 `5173` 被占用，Vite 会自动选择下一个可用端口。
 
 ## 学习路线

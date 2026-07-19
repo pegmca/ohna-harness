@@ -7,6 +7,8 @@ import type {
   DataSourceDocumentsResponseDto,
   DataSourceIngestResponseDto,
   IngestedFilingDocumentDto,
+  ProductArchitectureDto,
+  ProductEvalReportDto,
   RagAnswerResponseDto,
   RagChunkDto,
   RagSearchResponseDto,
@@ -35,15 +37,17 @@ import {
   Send,
   ShieldCheck,
   Sparkles,
+  Network,
+  BarChart3,
   User,
   Wrench,
   X
 } from "lucide-react";
-import { type FormEvent, type ReactNode, useMemo, useState } from "react";
+import { type FormEvent, type ReactNode, useEffect, useMemo, useState } from "react";
 
 type MessageRole = "user" | "assistant";
 type MessageStatus = "complete" | "pending" | "failed";
-type WorkspaceView = "chat" | "data-sources";
+type WorkspaceView = "chat" | "data-sources" | "workflow" | "citations" | "eval" | "architecture";
 
 interface UiMessage {
   id: string;
@@ -392,8 +396,10 @@ export function App() {
             reportMode={activeConversation?.reportMode ?? false}
           />
         </section>
-      ) : (
+      ) : workspaceView === "data-sources" ? (
         <DataSourcesWorkspace onMenuClick={() => setIsSidebarOpen(true)} />
+      ) : (
+        <ProductWorkspace latestRun={latestRun} onMenuClick={() => setIsSidebarOpen(true)} view={workspaceView} />
       )}
     </main>
   );
@@ -448,7 +454,7 @@ function ConversationSidebar(props: ConversationSidebarProps) {
             type="button"
           >
             <Bot className="icon-size" />
-            <span>Agent Chat</span>
+            <span>Immersive</span>
           </button>
           <button
             className={props.workspaceView === "data-sources" ? "is-active" : ""}
@@ -457,6 +463,18 @@ function ConversationSidebar(props: ConversationSidebarProps) {
           >
             <Database className="icon-size" />
             <span>Data Sources</span>
+          </button>
+          <button className={props.workspaceView === "workflow" ? "is-active" : ""} onClick={() => props.onSelectView("workflow")} type="button">
+            <Activity className="icon-size" /><span>Report Workflow</span>
+          </button>
+          <button className={props.workspaceView === "citations" ? "is-active" : ""} onClick={() => props.onSelectView("citations")} type="button">
+            <ShieldCheck className="icon-size" /><span>Citation Checker</span>
+          </button>
+          <button className={props.workspaceView === "eval" ? "is-active" : ""} onClick={() => props.onSelectView("eval")} type="button">
+            <BarChart3 className="icon-size" /><span>Eval Report</span>
+          </button>
+          <button className={props.workspaceView === "architecture" ? "is-active" : ""} onClick={() => props.onSelectView("architecture")} type="button">
+            <Network className="icon-size" /><span>Architecture</span>
           </button>
         </nav>
 
@@ -488,6 +506,68 @@ function ConversationSidebar(props: ConversationSidebarProps) {
     </>
   );
 }
+
+/** 展示 Workflow、Citation、Eval 与 Architecture 产品视图；所有内容均来自 API DTO 或当前 Agent run。 */
+function ProductWorkspace(props: { latestRun?: AgentRunResponseDto; onMenuClick: () => void; view: Exclude<WorkspaceView, "chat" | "data-sources"> }) {
+  const [evalReport, setEvalReport] = useState<ProductEvalReportDto>();
+  const [architecture, setArchitecture] = useState<ProductArchitectureDto>();
+  const [error, setError] = useState<string>();
+  const workflow = props.latestRun?.reportWorkflow;
+  const artifact = workflow?.artifact;
+
+  useEffect(() => {
+    let active = true;
+    if (props.view === "eval") void fetchProductEval().then((result) => active && (result.ok ? setEvalReport(result.data) : setError(formatApiError(result.error))));
+    if (props.view === "architecture") void fetchProductArchitecture().then((result) => active && (result.ok ? setArchitecture(result.data) : setError(formatApiError(result.error))));
+    return () => { active = false; };
+  }, [props.view]);
+
+  const title = props.view === "workflow" ? "Report Workflow" : props.view === "citations" ? "Citation Checker" : props.view === "eval" ? "Eval Report" : "Architecture";
+  return (
+    <section className="data-sources-main product-main" aria-label={title}>
+      <header className="data-header"><div className="header-title-group">
+        <button className="icon-button mobile-only" onClick={props.onMenuClick} type="button" aria-label="打开导航"><Menu className="icon-size" /></button>
+        <div><p className="md-label">Immersive Product</p><h2 className="chat-title">{title}</h2></div>
+      </div>{props.view === "eval" && evalReport ? <StatusBadge tone="info">DEMO DATA · {evalReport.datasetVersion}</StatusBadge> : null}</header>
+      <div className="product-content">
+        {error ? <ErrorBlock error={{ code: "internal_error", message: error }} /> : null}
+        {props.view === "workflow" ? workflow ? <ReportWorkflowPanel workflow={workflow} /> : <ProductEmpty text="先在 Immersive 中开启 Report Mode 或用自然语言生成报告；这里将展示同一次真实 run 的节点输入、输出、耗时和错误。" /> : null}
+        {props.view === "citations" ? artifact ? <CitationChecker artifact={artifact} /> : <ProductEmpty text="当前没有报告引用。完成一次 Report Workflow 后，可从关键结论回溯 document、chunk 和 source。" /> : null}
+        {props.view === "eval" ? evalReport ? <EvalReportView report={evalReport} /> : <LoadingBlock /> : null}
+        {props.view === "architecture" ? architecture ? <ArchitectureView value={architecture} /> : <LoadingBlock /> : null}
+      </div>
+    </section>
+  );
+}
+
+/** @param props 空状态说明。 @returns 可解释空状态。 */
+function ProductEmpty(props: { text: string }) { return <div className="product-empty"><FileText /><h3>暂无当前运行数据</h3><p>{props.text}</p></div>; }
+/** @returns 产品视图加载状态。 */
+function LoadingBlock() { return <div className="product-empty"><Loader2 className="spin" /><p>正在读取 API DTO…</p></div>; }
+
+/** 关键结论—来源映射；missing claims 独立使用警示状态。 */
+function CitationChecker(props: { artifact: ReportArtifactDto }) {
+  return <div className="product-stack"><section className="data-panel"><div className="panel-heading"><h3><ShieldCheck className="icon-size" />Coverage</h3><StatusBadge tone={props.artifact.citationVerification.verified ? "success" : "danger"}>{props.artifact.citationVerification.decision}</StatusBadge></div>
+    <p className="muted-row">{props.artifact.citations.length} 条已映射引用 · {props.artifact.citationVerification.missingClaims.length} 条未覆盖结论</p></section>
+    {props.artifact.citations.map((citation, index) => <article className="data-panel citation-map" key={citation.id}><strong>[{index + 1}] {citation.supportsFinding}</strong><span>{citation.quote}</span><small>source {citation.source}</small><small>document {citation.documentId ?? "unknown"} · chunk {citation.chunkId ?? citation.chunkIndex ?? "unknown"}</small></article>)}
+    {props.artifact.citationVerification.missingClaims.map((claim) => <article className="data-panel uncovered" key={claim}><AlertTriangle className="icon-size" /><strong>未覆盖结论</strong><span>{claim}</span></article>)}</div>;
+}
+
+/** 展示版本化 eval 当前值、baseline 和至少三个失败案例。 */
+function EvalReportView(props: { report: ProductEvalReportDto }) {
+  const primary = ["citationCoverage", "financialAccuracy", "sourceGroundedness", "successRate"];
+  return <div className="product-stack"><div className="metric-grid">{primary.map((key) => <article className="metric-card" key={key}><span>{key}</span><strong>{formatMetric(props.report.metrics[key])}</strong><small>baseline {formatMetric(props.report.baseline[key])}</small></article>)}</div>
+    <section className="data-panel"><div className="panel-heading"><h3>Failure cases</h3><StatusBadge tone="danger">{props.report.failures.length}</StatusBadge></div><div className="data-list">{props.report.failures.map((failure) => <article className="data-row" key={failure.caseId}><strong>{failure.caseId} · {failure.query}</strong><span>{failure.rootCause}</span><small>{failure.improvement}</small><small>{failure.requestId} / {failure.traceId}</small></article>)}</div></section></div>;
+}
+
+/** 使用节点与边列表展示真实包责任和依赖方向，移动端无需横向图布。 */
+function ArchitectureView(props: { value: ProductArchitectureDto }) {
+  return <div className="architecture-grid"><section className="data-panel"><div className="panel-heading"><h3>Package boundaries</h3></div>{props.value.nodes.map((node) => <article className="architecture-node" key={node.id}><strong>{node.label}</strong><span>{node.responsibility}</span></article>)}</section>
+    <section className="data-panel"><div className="panel-heading"><h3>Dependency flow</h3></div>{props.value.edges.map((edge, index) => <article className="architecture-edge" key={`${edge.from}-${edge.to}-${index}`}><code>{edge.from}</code><span>→ {edge.label} →</span><code>{edge.to}</code></article>)}</section></div>;
+}
+
+/** @param value 指标值。 @returns 评分显示；延迟保留毫秒。 */
+function formatMetric(value: number | undefined): string { return value === undefined ? "—" : value <= 1 ? `${(value * 100).toFixed(1)}%` : `${value.toFixed(1)} ms`; }
 
 /**
  * Data Sources 页面通过 HTTP API 演示 ingestion、chunk、retrieval 和 citation answer 数据流。
@@ -1170,9 +1250,16 @@ function ReportWorkflowPanel(props: { workflow: ReportWorkflowResponseDto }) {
   );
 }
 
-/** 渲染 HTML/Markdown artifact 与 citation verifier 结果，并明确 PDF 只是占位状态。 */
+/** 渲染报告 artifact，并通过 API 执行审批后的 PDF 生成与下载。 */
 function ReportArtifactPreview(props: { artifact: ReportArtifactDto }) {
-  const { artifact } = props;
+  const [artifact, setArtifact] = useState(props.artifact);
+  const [exportError, setExportError] = useState<string>();
+  useEffect(() => setArtifact(props.artifact), [props.artifact]);
+  async function handlePdfExport(): Promise<void> {
+    setExportError(undefined);
+    const result = await exportReportPdf(artifact.artifactId);
+    if (result.ok) setArtifact(result.data); else setExportError(formatApiError(result.error));
+  }
   return (
     <div className="report-artifact">
       <div className="artifact-heading">
@@ -1187,7 +1274,10 @@ function ReportArtifactPreview(props: { artifact: ReportArtifactDto }) {
       </div>
       <iframe className="report-html-preview" sandbox="" srcDoc={artifact.html} title="HTML report preview" />
       <details className="markdown-preview"><summary>Markdown source</summary><pre>{artifact.markdown}</pre></details>
-      <p className="pdf-placeholder"><AlertTriangle className="icon-size" />{artifact.pdfExport.message}</p>
+      <div className="artifact-actions"><p className="pdf-placeholder"><AlertTriangle className="icon-size" />{artifact.pdfExport.message}</p>
+        {artifact.pdfExport.status === "ready" && artifact.pdfExport.downloadUrl ? <a className="secondary-button" href={artifact.pdfExport.downloadUrl}><FileText className="icon-size" />Download PDF</a> : <button className="secondary-button" onClick={() => void handlePdfExport()} type="button"><FilePlus2 className="icon-size" />Generate PDF</button>}
+      </div>
+      {exportError ? <ErrorBlock error={{ code: "forbidden", message: exportError }} /> : null}
       <div className="citation-list">
         {artifact.citations.map((citation, index) => (
           <article className="citation-row" key={citation.id}>
@@ -1451,6 +1541,16 @@ async function submitApprovalDecision(decision: ToolApprovalDecisionDto): Promis
 
   return parseApiResult(response);
 }
+
+/** @param artifactId 服务端稳定 artifact ID。 @returns 更新后的真实 PDF 状态。 */
+async function exportReportPdf(artifactId: string): Promise<ApiResult<ReportArtifactDto>> {
+  return parseApiResult(await fetch(`/api/report-artifacts/${encodeURIComponent(artifactId)}/pdf`, { method: "POST" }));
+}
+
+/** @returns 版本化 eval 展示 DTO。 */
+async function fetchProductEval(): Promise<ApiResult<ProductEvalReportDto>> { return parseApiResult(await fetch("/api/product/eval-report")); }
+/** @returns 当前 package 架构展示 DTO。 */
+async function fetchProductArchitecture(): Promise<ApiResult<ProductArchitectureDto>> { return parseApiResult(await fetch("/api/product/architecture")); }
 
 /**
  * 调用 Data Sources ingestion API。

@@ -57,7 +57,7 @@
 - `packages/rag`：RAG 运行时边界，负责 chunking、embedding 抽象、检索、引用和 grounded answer 的稳定类型入口。
 - `packages/eval`：RAG 评测边界，负责 eval case、metrics、runner 输入和报告输出结构。
 - `packages/workflow`：通用顺序 workflow runtime，负责节点 schema 校验、状态流转、max steps、结构化错误和节点 trace。
-- `packages/report`：研报领域节点边界，负责 mock Data Collector、Analyzer、Risk Checker、Citation Verifier、Report Writer 和 PDF Exporter 占位。
+- `packages/report`：研报领域节点边界，负责 Data Collector、Analyzer、Risk Checker、Citation Verifier、Report Writer 和真实 PDF renderer。
 - `packages/tools`：工具注册与工具调用边界，后续承载外部数据和函数工具。
 - `packages/trace`：运行轨迹边界，后续承载事件记录、时间线和调试视图。
 
@@ -105,7 +105,7 @@ curl --fail http://localhost:8080/ready
 pnpm smoke:compose
 ```
 
-`/health` 只表示对应进程存活；Web 暴露的 `/ready` 会代理 API readiness。mock 模式检查本地 runtime，real 模式还会验证 provider 配置是否完整；依赖配置未就绪时返回 HTTP 503，Compose 不会把 API 标为 healthy。`pnpm smoke:compose` 验证页面入口、普通 Chat、自然语言触发 Report Mode、workflow 和 HTML artifact/PDF queued 状态；该命令需要宿主机 Node，产品启动本身不需要。
+`/health` 只表示对应进程存活；Web 暴露的 `/ready` 会代理 API readiness。mock 模式检查本地 runtime，real 模式还会验证 provider 配置是否完整；依赖配置未就绪时返回 HTTP 503，Compose 不会把 API 标为 healthy。`pnpm smoke:compose` 验证页面入口、普通 Chat、自然语言触发 Report Mode 和 workflow；该命令需要宿主机 Node，产品启动本身不需要。
 
 接入真实 OpenAI-compatible provider 时，在 `.env` 中设置：
 
@@ -387,9 +387,9 @@ pnpm --filter @aiagent/tools test
 Week 3-016 新增两个 package：
 
 - `@aiagent/workflow`：通用节点执行器。每个节点必须声明 `inputSchema` 和 `outputSchema`，runtime 在节点执行前后用 zod 校验，节点异常、输入错误、输出错误和 max steps 超限都会转换成 `WorkflowErrorDto`。Week 3-017 为其增加 `decideNext` 能力，支持节点执行成功后跳转到指定节点，从而实现 verifier loop 等有限循环。Week 3-018 增加 `createApprovalRequest()`，敏感节点未批准前返回 `paused`，拒绝后返回 `rejected`。
-- `@aiagent/report`：研报领域 workflow 节点实现。`runReportWorkflow(plan, options)` 从 `ReportPlanDto` 创建 workflow run，依次执行 Data Collector、Analyzer、Risk Checker、Citation Verifier、Report Writer 和 PDF Exporter 占位节点；PDF Exporter 被视为敏感导出动作，需要 `approvalDecisions` 中包含批准 decision 后才会执行。
+- `@aiagent/report`：研报领域 workflow 节点实现。`runReportWorkflow(plan, options)` 从 `ReportPlanDto` 创建 workflow run，依次执行 Data Collector、Analyzer、Risk Checker、Citation Verifier、Report Writer 和 PDF Exporter；`renderResearchReportPdf()` 生成合法 PDF 二进制。导出是敏感动作，API 在审批通过后才允许生成。
 
-Workflow DTO 放在 `packages/types`：`WorkflowRunDto`、`WorkflowNodeDto`、`WorkflowNodeStatusDto`、`WorkflowEdgeDto`、`WorkflowEventDto`、`WorkflowErrorDto`、`ToolApprovalRequestDto` 和 `ToolApprovalDecisionDto`。第一版不做复杂 DAG、持久化 store、真实 PDF 生成或 MCP 工具调用；approval queue 也是进程内 demo，不是多用户权限系统。
+Workflow DTO 放在 `packages/types`：`WorkflowRunDto`、`WorkflowNodeDto`、`WorkflowNodeStatusDto`、`WorkflowEdgeDto`、`WorkflowEventDto`、`WorkflowErrorDto`、`ToolApprovalRequestDto` 和 `ToolApprovalDecisionDto`。第一版不做复杂 DAG 或持久化 store；approval queue 与 PDF artifact 都是进程内 demo，不是多用户权限系统。
 
 Report Workflow 当前节点输出：
 
@@ -399,7 +399,7 @@ Report Workflow 当前节点输出：
 - Citation Verifier：检查每个 claim 是否有 citation 支撑、required metric 是否齐全。决策类型为 `pass | needs_more_evidence | needs_metric | retry_tool | fail`；缺证据时生成 follow-up queries，并通过 `decideNext` 跳回 Data Collector 做补充检索，受 `maxRetries` 限制。
 - Runtime reliability：模型仅对 timeout/network/429/5xx 做最多 3 次指数退避重试，并按 structured output/tool calling 能力选择 fallback；工具默认 10 秒单次 timeout，有副作用工具只有声明幂等且传入 idempotency key 才会重试；Workflow 同时受节点 timeout、总 deadline 与 `maxSteps` 约束，非关键来源失败可生成带 `partial`/`sourceErrors` 的降级报告。
 - Report Writer：生成 Markdown 和最小 HTML 草稿；证据不足时保留“资料不足说明”，不编造结论。
-- PDF Exporter：审批通过后返回 `placeholder` 导出结构，不生成真实 PDF；未审批时 workflow 暂停，拒绝时不产生 export。
+- PDF Exporter：未审批时 workflow 暂停；批准后由 artifact API 生成真实 `application/pdf`，失败标为 `pdf_failed` 且可安全重试，拒绝时不产生 PDF。
 
 Approval trace 使用 `approval` event 记录 `requested`、`approved`、`rejected`，只保存 `inputPreview` 和 reviewer note，不记录完整敏感 payload。
 
@@ -409,7 +409,7 @@ Approval trace 使用 `approval` event 记录 `requested`、`approved`、`reject
 
 在 assistant 消息中展开 `Run details`，可检查 Activation、Planner、Data Collector、Analyzer、Risk Checker、Citation Verifier、Report Writer、PDF Exporter 的状态、耗时、输入/输出摘要和 workflow run id。下方提供 Markdown/HTML 预览，引用显示 source、documentId、chunkId 与所支持的 finding。
 
-Report HTTP 边界包括 `POST /api/report-workflows`、`GET /api/report-workflows/:runId` 和 `GET /api/report-artifacts/:artifactId`。快照只保存在 API 进程内。PDF Exporter 当前不生成 PDF：审批前明确为 `queued`，artifact 为 `html_preview_only`。Week 3 复盘材料为 ``、`` 和 ``。
+Report HTTP 边界包括 `POST /api/report-workflows`、`GET /api/report-workflows/:runId`、`GET /api/report-artifacts/:artifactId`、`POST /api/report-artifacts/:artifactId/pdf` 和 `GET /api/report-artifacts/:artifactId/download`。审批前 artifact 为 `html_preview_only` / `queued`；批准并生成后为 `pdf_ready`，下载端点只按内存 artifact ID 查找，绝不接受文件路径。快照和 PDF 均随 API 进程重启清除。
 
 可调用验证入口：
 

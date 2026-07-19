@@ -338,8 +338,8 @@ export interface AgentRunResponseDto {
   error?: ApiError;
 }
 
-export type ReportArtifactStatusDto = "html_preview_only";
-export type ReportPdfExportStatusDto = "queued" | "not_implemented";
+export type ReportArtifactStatusDto = "html_preview_only" | "pdf_ready" | "pdf_failed";
+export type ReportPdfExportStatusDto = "queued" | "ready" | "failed";
 
 export interface ReportCitationDto {
   id: string;
@@ -356,6 +356,7 @@ export interface ReportCitationDto {
 /** Web 只消费报告 artifact DTO，不依赖 report package 的内部 workflow state。 */
 export interface ReportArtifactDto {
   artifactId: string;
+  reportId: string;
   workflowRunId: string;
   status: ReportArtifactStatusDto;
   title: string;
@@ -372,8 +373,36 @@ export interface ReportArtifactDto {
     status: ReportPdfExportStatusDto;
     fileName?: string;
     message: string;
+    generatedAt?: ISODateTimeString;
+    downloadUrl?: string;
+    error?: ApiError;
   };
   createdAt: ISODateTimeString;
+}
+
+/** Eval 展示 DTO 来自版本化 baseline/current 报告，而不是由浏览器计算。 */
+export interface ProductEvalReportDto {
+  datasetVersion: string;
+  caseCount: number;
+  generatedAt: ISODateTimeString;
+  metrics: Record<string, number>;
+  baseline: Record<string, number>;
+  failures: Array<{
+    caseId: string;
+    query: string;
+    rootCause: string;
+    improvement: string;
+    traceId: string;
+    requestId: string;
+  }>;
+  demoData: true;
+}
+
+/** 产品架构 DTO 让 Web 展示与仓库真实 package 边界保持同步。 */
+export interface ProductArchitectureDto {
+  nodes: Array<{ id: string; label: string; responsibility: string }>;
+  edges: Array<{ from: string; to: string; label: string }>;
+  demoData: false;
 }
 
 export interface ReportWorkflowResponseDto {

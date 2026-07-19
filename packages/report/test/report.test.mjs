@@ -16,6 +16,7 @@ import {
   reportRiskCheckerOutputSchema,
   reportWriterInputSchema,
   reportWriterOutputSchema,
+  renderResearchReportPdf,
   runReportWorkflow
 } from "../dist/index.js";
 
@@ -48,7 +49,7 @@ test("report workflow nodes declare input and output schemas", () => {
   }
 });
 
-test("report workflow executes a ready plan to draft and PDF placeholder", async () => {
+test("report workflow executes a ready plan to completed PDF export boundary", async () => {
   const trace = createInMemoryTraceRecorder("trace_report_workflow_happy");
   const runId = "report_wf_test_happy";
   const result = await runReportWorkflow(createReadyPlan(), {
@@ -62,10 +63,19 @@ test("report workflow executes a ready plan to draft and PDF placeholder", async
   assert.equal(result.run.status, "succeeded");
   assert.equal(result.run.executedSteps, 6);
   assert.match(result.draft.markdown, /000001\.SZ/);
-  assert.equal(result.export.status, "placeholder");
+  assert.equal(result.export.status, "completed");
   assert.equal(result.run.nodes.every((node) => node.status === "succeeded"), true);
   assert.equal(trace.getEvents().filter((event) => event.type === "workflow_node").length, 12);
   assert.equal(trace.getEvents().some((event) => event.type === "approval" && event.status === "approved"), true);
+});
+
+test("PDF renderer returns a legal multi-section artifact with citations", () => {
+  const bytes = renderResearchReportPdf({ title: "000001.SZ Research Brief", generatedAt: "2026-07-19T00:00:00.000Z", markdown: "# Core Findings\nROE 10.5%\n# Risks\nCredit cost", citations: [{ id: "c1", source: "annual-report.pdf", quote: "ROE was 10.5%." }] });
+  const text = new TextDecoder().decode(bytes);
+  assert.match(text, /^%PDF-1\.4/);
+  assert.match(text, /Core Findings/);
+  assert.match(text, /annual-report\.pdf/);
+  assert.match(text, /%%EOF\n$/);
 });
 
 test("report workflow triggers supplementary retrieval when citations are missing", async () => {

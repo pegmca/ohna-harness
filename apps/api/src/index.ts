@@ -2,7 +2,7 @@ import { runAgent } from "@aiagent/agent";
 import type { AgentResponse, AgentStep } from "@aiagent/agent";
 import type { LlmClient } from "@aiagent/types";
 import { createDataSourceRuntime } from "@aiagent/rag";
-import { runReportWorkflow } from "@aiagent/report";
+import { renderResearchReportPdf, runReportWorkflow } from "@aiagent/report";
 import type { ReportWorkflowResult } from "@aiagent/report";
 import type { RagStructuredError } from "@aiagent/rag";
 import { createInMemoryTraceRecorder, createInMemoryTraceStore, redactSensitiveValue } from "@aiagent/trace";
@@ -20,6 +20,8 @@ import type {
   ReportArtifactDto,
   ReportPlanDto,
   ReportWorkflowResponseDto,
+  ProductArchitectureDto,
+  ProductEvalReportDto,
   ToolApprovalDecisionDto
   , TraceDto
 } from "@aiagent/types";
@@ -80,6 +82,7 @@ export function createApiServer(options: ApiServerOptions = {}): FastifyInstance
   const pendingApprovals = new Map<string, import("@aiagent/types").ToolApprovalRequestDto>();
   const workflowRuns = new Map<string, ReportWorkflowResponseDto>();
   const reportArtifacts = new Map<string, ReportArtifactDto>();
+  const reportPdfFiles = new Map<string, Uint8Array>();
   const traceStore = createInMemoryTraceStore();
 
   /**
@@ -344,6 +347,79 @@ export function createApiServer(options: ApiServerOptions = {}): FastifyInstance
     return { ok: true, data: value, requestId };
   });
 
+  /** 审批后生成真实 PDF；只按 artifact ID 访问内存对象，不接受客户端文件路径。 */
+  app.post<{ Params: { artifactId: string } }>("/api/report-artifacts/:artifactId/pdf", async (request, reply): Promise<ApiResult<ReportArtifactDto>> => {
+    const requestId = createRequestId();
+    const artifact = reportArtifacts.get(request.params.artifactId);
+    if (!artifact) {
+      reply.code(404);
+      return fail(toApiError("not_found", "Report artifact 不存在。", requestId), requestId);
+    }
+    const approvalId = `approval_${artifact.workflowRunId}_pdf_exporter`;
+    if (approvalDecisions.get(approvalId)?.decision !== "approved") {
+      reply.code(403);
+      return fail(toApiError("forbidden", "PDF 导出需要先批准对应 workflow 的 exporter。", requestId, { approvalId }), requestId);
+    }
+    try {
+      const bytes = renderResearchReportPdf({ title: artifact.title, generatedAt: artifact.createdAt, markdown: artifact.markdown, citations: artifact.citations });
+      reportPdfFiles.set(artifact.artifactId, bytes);
+      const updated: ReportArtifactDto = {
+        ...artifact,
+        status: "pdf_ready",
+        pdfExport: {
+          status: "ready",
+          fileName: artifact.pdfExport.fileName ?? `${artifact.artifactId}.pdf`,
+          message: "真实 PDF 已生成并通过 artifact ID 提供下载。",
+          generatedAt: new Date().toISOString(),
+          downloadUrl: `/api/report-artifacts/${encodeURIComponent(artifact.artifactId)}/download`
+        }
+      };
+      reportArtifacts.set(updated.artifactId, updated);
+      return { ok: true, data: updated, requestId };
+    } catch {
+      const error = toApiError("internal_error", "PDF 生成失败，可安全重试。", requestId);
+      const updated: ReportArtifactDto = { ...artifact, status: "pdf_failed", pdfExport: { status: "failed", fileName: artifact.pdfExport.fileName, message: error.message, error } };
+      reportArtifacts.set(updated.artifactId, updated);
+      reply.code(500);
+      return fail(error, requestId);
+    }
+  });
+
+  /** 下载只查找已生成的内存 artifact，永不拼接或读取用户提供的路径。 */
+  app.get<{ Params: { artifactId: string } }>("/api/report-artifacts/:artifactId/download", async (request, reply) => {
+    const artifact = reportArtifacts.get(request.params.artifactId);
+    const bytes = reportPdfFiles.get(request.params.artifactId);
+    if (!artifact || artifact.status !== "pdf_ready" || !bytes) {
+      reply.code(404);
+      return fail(toApiError("not_found", "PDF 不存在、尚未完成或已随进程重启清除。", createRequestId()), createRequestId());
+    }
+    reply.header("content-type", "application/pdf");
+    reply.header("content-disposition", `attachment; filename="${sanitizeDownloadFileName(artifact.pdfExport.fileName ?? `${artifact.artifactId}.pdf`)}"`);
+    return reply.send(Buffer.from(bytes));
+  });
+
+  /** Eval 产品页使用版本化 baseline 的确定性证据投影，并明确标注 demo dataset。 */
+  app.get("/api/product/eval-report", async (): Promise<ApiResult<ProductEvalReportDto>> => {
+    const requestId = createRequestId();
+    const data: ProductEvalReportDto = {
+      datasetVersion: "financial-research-v1.0.0", caseCount: 31, generatedAt: "2026-07-19T00:00:00.000Z",
+      metrics: { citationCoverage: 0.935, financialAccuracy: 0.968, sourceGroundedness: 0.968, successRate: 0.903, averageLatencyMs: 22.839, p95LatencyMs: 45 },
+      baseline: { citationCoverage: 0.935, financialAccuracy: 0.968, sourceGroundedness: 0.968, successRate: 0.903, averageLatencyMs: 22.839, p95LatencyMs: 45 },
+      failures: [
+        { caseId: "fail-001", query: "财务事实约束失败", rootCause: "数值、单位、币种、期间或来源未同时满足。", improvement: "增加结构化事实与期间校验。", traceId: "trace-fail-001", requestId: "request-fail-001" },
+        { caseId: "fail-002", query: "引用 grounded 检查失败", rootCause: "引用文本无法在 retrieved chunk 中回溯。", improvement: "强化 citation verifier。", traceId: "trace-fail-002", requestId: "request-fail-002" },
+        { caseId: "fail-003", query: "Report workflow 提前终止", rootCause: "workflow 在预期节点前终止。", improvement: "补齐节点重试与终止原因。", traceId: "trace-fail-003", requestId: "request-fail-003" }
+      ], demoData: true
+    };
+    return { ok: true, data, requestId };
+  });
+
+  /** 架构产品页的关系来自当前 workspace package 边界。 */
+  app.get("/api/product/architecture", async (): Promise<ApiResult<ProductArchitectureDto>> => {
+    const requestId = createRequestId();
+    return { ok: true, requestId, data: createProductArchitectureDto() };
+  });
+
   /**
    * Agent run 接口负责把前端研究问题转交给 agent package，API 层只做请求校验和 DTO 映射。
    *
@@ -413,12 +489,13 @@ function registerTraceApprovals(trace: TraceDto, pendingApprovals: Map<string, i
   }
 }
 
-/** 将 report package 结果收窄为 Web 稳定 DTO，并明确 PDF 尚未实现。 */
+/** 将 report package 结果收窄为 Web 稳定 DTO；PDF 在审批后的独立 artifact 边界生成。 */
 function toReportWorkflowResponseDto(result: ReportWorkflowResult): ReportWorkflowResponseDto {
   const draft = result.state.draft;
   const citations = result.state.citations;
   const artifact: ReportArtifactDto | undefined = draft && citations ? {
     artifactId: `artifact_${result.run.runId}`,
+    reportId: result.state.plan.planId,
     workflowRunId: result.run.runId,
     status: "html_preview_only",
     title: draft.title,
@@ -432,13 +509,41 @@ function toReportWorkflowResponseDto(result: ReportWorkflowResult): ReportWorkfl
       missingMetrics: citations.missingMetrics
     },
     pdfExport: {
-      status: result.state.export ? "not_implemented" : "queued",
+      status: "queued",
       fileName: result.state.export?.fileName,
-      message: result.state.export?.message ?? "PDF Exporter 等待人工批准；当前仅提供 HTML/Markdown 预览。"
+      message: result.state.export?.message ?? "PDF Exporter 等待人工批准；批准后可安全重试生成。"
     },
     createdAt: new Date().toISOString()
   } : undefined;
   return { run: result.run, artifact };
+}
+
+/** @param fileName artifact 中的展示文件名。 @returns 不含控制字符和路径分隔符的下载名。 */
+function sanitizeDownloadFileName(fileName: string): string {
+  return fileName.replace(/[\\/\r\n"\x00-\x1F]/g, "_").slice(0, 120) || "immersive-report.pdf";
+}
+
+/** @returns 与仓库真实依赖方向一致的架构展示 DTO。 */
+function createProductArchitectureDto(): ProductArchitectureDto {
+  const nodes = [
+    { id: "web", label: "apps/web", responsibility: "React 产品视图，只消费 HTTP DTO" },
+    { id: "api", label: "apps/api", responsibility: "校验、生命周期、artifact store 与结构化错误" },
+    { id: "agent", label: "packages/agent", responsibility: "intent routing、agent loop 与 report planner" },
+    { id: "report", label: "packages/report", responsibility: "研报节点、writer 与 PDF renderer" },
+    { id: "workflow", label: "packages/workflow", responsibility: "有限状态机、重试与审批" },
+    { id: "rag", label: "packages/rag", responsibility: "ingestion、chunk、retrieval 与 citation" },
+    { id: "tools", label: "packages/tools + mcp", responsibility: "工具 schema、权限和执行通道" },
+    { id: "trace", label: "packages/trace", responsibility: "跨边界事件与运行指标" },
+    { id: "types", label: "packages/types", responsibility: "小型稳定共享 DTO" }
+  ];
+  const edges = [
+    { from: "web", to: "api", label: "HTTP DTO" }, { from: "api", to: "agent", label: "run" },
+    { from: "api", to: "report", label: "workflow/export" }, { from: "agent", to: "tools", label: "tool calls" },
+    { from: "report", to: "workflow", label: "runtime" }, { from: "report", to: "rag", label: "evidence" },
+    { from: "agent", to: "trace", label: "events" }, { from: "report", to: "trace", label: "events" },
+    { from: "web", to: "types", label: "contracts" }, { from: "api", to: "types", label: "contracts" }
+  ];
+  return { nodes, edges, demoData: false };
 }
 
 /** Demo 文档只位于 API adapter，用于 Week 3 可重复演示；真实数据入口仍是 RAG ingestion。 */

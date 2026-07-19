@@ -109,6 +109,7 @@ test("report workflow routes expose nodes, preview artifact and traceable citati
   ]);
   assert.equal(started.data.run.status, "paused");
   assert.equal(started.data.artifact.status, "html_preview_only");
+  assert.equal(started.data.artifact.reportId, plan.planId);
   assert.equal(started.data.artifact.pdfExport.status, "queued");
   assert.match(started.data.artifact.markdown, /核心结论/);
   assert.equal(started.data.artifact.citations.length > 0, true);
@@ -126,6 +127,27 @@ test("report workflow routes expose nodes, preview artifact and traceable citati
   const artifactResponse = await app.inject({ method: "GET", url: `/api/report-artifacts/${started.data.artifact.artifactId}` });
   assert.equal(runResponse.json().data.run.runId, started.data.run.runId);
   assert.equal(artifactResponse.json().data.artifactId, started.data.artifact.artifactId);
+  const approval = started.data.run.approvalRequest;
+  const forbiddenExport = await app.inject({ method: "POST", url: `/api/report-artifacts/${started.data.artifact.artifactId}/pdf` });
+  assert.equal(forbiddenExport.statusCode, 403);
+  const approvalResponse = await app.inject({ method: "POST", url: "/api/approvals/decision", payload: { approvalId: approval.approvalId, decision: "approved", requestId: approval.requestId, inputDigest: approval.inputDigest } });
+  assert.equal(approvalResponse.statusCode, 200);
+  const exportResponse = await app.inject({ method: "POST", url: `/api/report-artifacts/${started.data.artifact.artifactId}/pdf` });
+  assert.equal(exportResponse.statusCode, 200);
+  assert.equal(exportResponse.json().data.status, "pdf_ready");
+  const downloadResponse = await app.inject({ method: "GET", url: exportResponse.json().data.pdfExport.downloadUrl });
+  assert.equal(downloadResponse.headers["content-type"], "application/pdf");
+  assert.match(downloadResponse.rawPayload.toString("utf8"), /^%PDF-1\.4/);
+  await app.close();
+});
+
+test("product showcase endpoints expose eval evidence and package architecture", async () => {
+  const app = createApiServer();
+  const evalResponse = await app.inject({ method: "GET", url: "/api/product/eval-report" });
+  const architectureResponse = await app.inject({ method: "GET", url: "/api/product/architecture" });
+  assert.equal(evalResponse.json().data.failures.length, 3);
+  assert.equal(evalResponse.json().data.demoData, true);
+  assert.equal(architectureResponse.json().data.nodes.some((node) => node.label === "packages/report"), true);
   await app.close();
 });
 

@@ -32,6 +32,7 @@ export type TraceEventType =
   | "intent_routed"
   | "agent_step"
   | "approval"
+  | "security"
   | "retrieval"
   | "report_skill_activation"
   | "report_plan"
@@ -94,6 +95,19 @@ export interface TraceApprovalEvent extends TraceEventBase {
   reason: string;
   inputPreview: unknown;
   reviewerNote?: string;
+  inputDigest?: string;
+  reasonCode?: string;
+}
+
+export type SecurityDecision = "allow" | "downrank" | "require_confirmation" | "block";
+
+export interface TraceSecurityEvent extends TraceEventBase {
+  type: "security";
+  category: "prompt_injection" | "tool_permission" | "sql_readonly" | "pii_redaction";
+  decision: SecurityDecision;
+  reasonCode: string;
+  sourceType?: string;
+  redactionCount?: number;
 }
 
 export interface TraceRetrievalScoreSummary {
@@ -299,6 +313,7 @@ export type TraceEvent =
   | TraceIntentRoutedEvent
   | TraceAgentStepEvent
   | TraceApprovalEvent
+  | TraceSecurityEvent
   | TraceRetrievalEvent
   | TraceReportSkillActivationEvent
   | TraceReportPlanEvent
@@ -499,7 +514,7 @@ function sanitizeValue(value: unknown): unknown {
   }
 
   if (typeof value === "string") {
-    return truncate(redactText(value));
+    return truncate(redactSensitiveText(value));
   }
 
   if (!value || typeof value !== "object") {
@@ -521,10 +536,25 @@ function truncate(value: string): string {
   return value.length <= MAX_TRACE_STRING_LENGTH ? value : `${value.slice(0, MAX_TRACE_STRING_LENGTH)}…[truncated]`;
 }
 
-function redactText(value: string): string {
+export function redactSensitiveText(value: string): string {
   return value
     .replace(/Bearer\s+[A-Za-z0-9._~+\/-]+/gi, "Bearer [redacted]")
-    .replace(/\b(?:sk|api)[-_][A-Za-z0-9_-]{12,}\b/gi, "[redacted]");
+    .replace(/\b(?:sk[-_][A-Za-z0-9_-]{12,}|api[-_]?key[-_][A-Za-z0-9_-]{12,})\b/gi, "[redacted]")
+    .replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, "[redacted:email]")
+    .replace(/(?<!\d)(?:\+?86[- ]?)?1[3-9]\d{9}(?!\d)(?!\s*(?:CNY|RMB|元|万元|亿元|%|股))/g, "[redacted:phone]")
+    .replace(/(?<![A-Z0-9])\d{17}[0-9Xx](?![A-Z0-9])/g, "[redacted:id]")
+    .replace(/(?<!\d)(?:\d[ -]?){15,18}\d(?!\d)/g, "[redacted:account]");
+}
+
+/**
+ * 在日志、API 错误和报告输出边界复用与 trace 相同的递归脱敏策略。
+ *
+ * @template TValue 输入值类型。
+ * @param value 可能包含 PII 或 secret 的值。
+ * @returns 深拷贝后的脱敏值。
+ */
+export function redactSensitiveValue<TValue>(value: TValue): TValue {
+  return sanitizeValue(value) as TValue;
 }
 
 /**

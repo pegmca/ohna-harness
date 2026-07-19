@@ -98,12 +98,29 @@ export interface ToolApprovalRequestDto {
   reason: string;
   inputPreview: unknown;
   permissionLevel: ToolPermissionLevelDto;
+  /** 绑定原始请求和规范化输入，防止旧审批被挪用到另一笔调用。 */
+  requestId?: string;
+  inputDigest?: string;
+  reasonCode?: string;
 }
 
 export interface ToolApprovalDecisionDto {
   approvalId: string;
   decision: ToolApprovalDecisionValueDto;
   reviewerNote?: string;
+  requestId?: string;
+  inputDigest?: string;
+}
+
+export type SecurityDecisionDto = "allow" | "downrank" | "require_confirmation" | "block";
+
+export interface TraceSecurityEventDto extends TraceEventBaseDto {
+  type: "security";
+  category: "prompt_injection" | "tool_permission" | "sql_readonly" | "pii_redaction";
+  decision: SecurityDecisionDto;
+  reasonCode: string;
+  sourceType?: string;
+  redactionCount?: number;
 }
 
 export type TraceEventDto =
@@ -111,6 +128,7 @@ export type TraceEventDto =
   | TraceIntentRoutedEventDto
   | TraceAgentStepEventDto
   | TraceApprovalEventDto
+  | TraceSecurityEventDto
   | TraceRetrievalEventDto
   | TraceReportSkillActivationEventDto
   | TraceReportPlanEventDto
@@ -166,6 +184,8 @@ export interface TraceApprovalEventDto extends TraceEventBaseDto {
   reason: string;
   inputPreview: unknown;
   reviewerNote?: string;
+  inputDigest?: string;
+  reasonCode?: string;
 }
 
 export interface TraceRetrievalScoreSummaryDto {

@@ -23,6 +23,8 @@ export interface ToolError {
 export interface ToolExecutionContext {
   trace?: TraceRecorder;
   approvalDecisions?: ToolApprovalDecisionDto[];
+  /** 调用方本次显式授予的最小工具集合；未列入即默认拒绝。 */
+  allowedTools?: readonly string[];
   signal?: AbortSignal;
   timeoutMs?: number;
   deadlineAtMs?: number;
@@ -87,6 +89,7 @@ export interface Tool<TInput, TOutput> {
     permissionLevel: ToolPermissionLevelDto;
     reason: string;
     inputPreview?: unknown;
+    reasonCode?: string;
   };
   /**
    * 执行工具真实逻辑，入参已经由 executor 使用 zod 校验。

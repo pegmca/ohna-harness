@@ -33,3 +33,11 @@ test("stores and retrieves a trace by requestId without sharing mutation", () =>
   found.events.push({});
   assert.equal(store.getByRequestId("req_3").events.length, 0);
 });
+
+test("redacts PII classes from nested trace payloads", () => {
+  const recorder = createInMemoryTraceRecorder("trace_pii", "req_pii");
+  recorder.record(base(recorder, "final_response", "pii", { answerPreview: "a@example.com 13812345678 11010519491231002X 6222 0201 2345 6789 012", ok: true }));
+  const serialized = JSON.stringify(recorder.getTrace());
+  for (const secret of ["a@example.com", "13812345678", "11010519491231002X", "6222 0201 2345 6789 012"]) assert.equal(serialized.includes(secret), false);
+  assert.match(serialized, /redacted:email/);
+});

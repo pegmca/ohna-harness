@@ -134,6 +134,12 @@ SQL readonly 第一版是启发式白名单：只允许 `SELECT` / `WITH` 开头
 
 工具执行可注入 `@aiagent/trace` 的 `TraceRecorder`。每次调用会写入 `tool_call` 事件，包含工具名、参数、结果、耗时和结构化错误；trace 写入失败不会打断工具主流程。
 
+## Security Hardening
+
+Week 4 的基础安全边界已加入不可信 context 隔离、组合式 prompt injection policy、请求级 tool allowlist、审批 request/input 绑定、严格 SQL readonly gate 和统一 PII redactor。安全决策以 `security` trace event 记录 `decision` 与稳定 `reasonCode`，可通过 `GET /api/traces/:requestId` 回放；UI 只展示可理解状态，不展示检测规则正文。
+
+SQL gate 只允许单条 `SELECT/WITH` 并拒绝注释、危险关键词和常见绕过。部署时仍必须使用真正的数据库只读账号，移除写入、DDL、文件、扩展和跨库权限；代码校验不能替代数据库授权。完整信任边界、PII 保留策略和残余风险见 `docs/SECURITY_THREAT_MODEL.md`。
+
 可调用验证入口：
 
 ```bash

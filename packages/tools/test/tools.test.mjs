@@ -67,6 +67,8 @@ test("readonly sql requires approval and executes after approval decision", asyn
         {
           approvalId: pending.approvalRequest.approvalId,
           decision: "approved",
+          requestId: pending.approvalRequest.requestId,
+          inputDigest: pending.approvalRequest.inputDigest,
           reviewerNote: "test approval"
         }
       ]
@@ -76,6 +78,27 @@ test("readonly sql requires approval and executes after approval decision", asyn
   assert.equal(approved.ok, true);
   assert.equal(approved.result.rowCount, 1);
   assert.equal(trace.getEvents().some((event) => event.type === "approval" && event.status === "approved"), true);
+});
+
+test("request allowlist and approval binding reject privilege escalation", async () => {
+  const registry = createDefaultToolRegistry();
+  const denied = await registry.execute("market_data_mock", { ticker: "000001.SZ" }, { allowedTools: ["calculator"] });
+  assert.equal(denied.ok, false);
+  assert.equal(denied.error.details.reasonCode, "SEC_TOOL_NOT_ALLOWLISTED");
+
+  const trace = createInMemoryTraceRecorder("trace_forged", "req_forged");
+  const pending = await registry.execute("sql_query_mock", { query: "SELECT * FROM metrics" }, { trace });
+  const forged = await registry.execute("sql_query_mock", { query: "SELECT * FROM metrics" }, { trace, approvalDecisions: [{ approvalId: pending.approvalRequest.approvalId, decision: "approved", requestId: "req_other", inputDigest: pending.approvalRequest.inputDigest }] });
+  assert.equal(forged.ok, false);
+  assert.equal(forged.error.code, "permission_required");
+});
+
+test("readonly SQL rejects multiple statements, comments and dangerous read primitives", () => {
+  assert.equal(isReadonlySql("SELECT ';' AS value"), true);
+  assert.equal(isReadonlySql("SELECT * FROM filings; DROP TABLE filings"), false);
+  assert.equal(isReadonlySql("SELECT * FROM filings /* harmless-looking */"), false);
+  assert.equal(isReadonlySql("WITH x AS (DELETE FROM filings RETURNING *) SELECT * FROM x"), false);
+  assert.equal(isReadonlySql("SELECT pg_read_file('/etc/passwd')"), false);
 });
 
 test("sql write operations are blocked by readonly validator", async () => {

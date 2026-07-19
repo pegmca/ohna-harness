@@ -308,7 +308,7 @@ async function runToolPath(
 
   try {
     toolResult = await runStep(steps, trace, maxSteps, "call_tool", async () => {
-      const result = await toolRegistry.execute(tool.toolName, tool.args, { trace, signal, deadlineAtMs });
+      const result = await toolRegistry.execute(tool.toolName, tool.args, { trace, signal, deadlineAtMs, allowedTools: [tool.toolName] });
 
       if (!result.ok) {
         throw {

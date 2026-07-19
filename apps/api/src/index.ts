@@ -4,7 +4,7 @@ import { createDataSourceRuntime } from "@aiagent/rag";
 import { runReportWorkflow } from "@aiagent/report";
 import type { ReportWorkflowResult } from "@aiagent/report";
 import type { RagStructuredError } from "@aiagent/rag";
-import { createInMemoryTraceRecorder, createInMemoryTraceStore } from "@aiagent/trace";
+import { createInMemoryTraceRecorder, createInMemoryTraceStore, redactSensitiveValue } from "@aiagent/trace";
 import type {
   AgentRunRequestDto,
   AgentRunResponseDto,
@@ -48,7 +48,9 @@ const ragAnswerRequestSchema = z.object({
 const approvalDecisionRequestSchema = z.object({
   approvalId: z.string().min(1),
   decision: z.enum(["approved", "rejected"]),
-  reviewerNote: z.string().max(240).optional()
+  reviewerNote: z.string().max(240).optional(),
+  requestId: z.string().min(1).optional(),
+  inputDigest: z.string().min(1).optional()
 });
 const startReportWorkflowRequestSchema = z.object({
   plan: z.custom<ReportPlanDto>((value) => typeof value === "object" && value !== null),
@@ -69,6 +71,7 @@ export function createApiServer(): FastifyInstance {
   });
   const dataSourceRuntime = createDataSourceRuntime();
   const approvalDecisions = new Map<string, ToolApprovalDecisionDto>();
+  const pendingApprovals = new Map<string, import("@aiagent/types").ToolApprovalRequestDto>();
   const workflowRuns = new Map<string, ReportWorkflowResponseDto>();
   const reportArtifacts = new Map<string, ReportArtifactDto>();
   const traceStore = createInMemoryTraceStore();
@@ -256,12 +259,21 @@ export function createApiServer(): FastifyInstance {
       return fail(error, requestId);
     }
 
+    const pending = pendingApprovals.get(parsed.data.approvalId.trim());
+    if (!pending || (pending.requestId && parsed.data.requestId !== pending.requestId) || (pending.inputDigest && parsed.data.inputDigest !== pending.inputDigest)) {
+      reply.code(403);
+      return fail(toApiError("forbidden", "Approval request 不存在、已处理或与原请求不匹配。", requestId, { reasonCode: "SEC_APPROVAL_BINDING_MISMATCH" }), requestId);
+    }
+
     const decision: ToolApprovalDecisionDto = {
       approvalId: parsed.data.approvalId.trim(),
       decision: parsed.data.decision,
-      reviewerNote: parsed.data.reviewerNote?.trim()
+      reviewerNote: parsed.data.reviewerNote?.trim(),
+      requestId: parsed.data.requestId,
+      inputDigest: parsed.data.inputDigest
     };
     approvalDecisions.set(decision.approvalId, decision);
+    pendingApprovals.delete(decision.approvalId);
 
     return {
       ok: true,
@@ -288,7 +300,8 @@ export function createApiServer(): FastifyInstance {
     );
     const result = await runReportWorkflow(parsed.data.plan, { documents: createReportDemoDocuments(), trace });
     traceStore.save(trace.getTrace());
-    const response = toReportWorkflowResponseDto(result);
+    const response = redactSensitiveValue(toReportWorkflowResponseDto(result));
+    if (response.run.approvalRequest) pendingApprovals.set(response.run.approvalRequest.approvalId, response.run.approvalRequest);
     workflowRuns.set(response.run.runId, response);
     if (response.artifact) reportArtifacts.set(response.artifact.artifactId, response.artifact);
     return { ok: true, data: response, requestId: trace.requestId };
@@ -351,7 +364,8 @@ export function createApiServer(): FastifyInstance {
         reportTriggerSource: parsed.data.reportTriggerSource
       }, { traceRecorder: trace });
       traceStore.save(agentResponse.trace);
-      const responseDto = toAgentRunResponseDto(agentResponse, parsed.data, requestId);
+      const responseDto = redactSensitiveValue(toAgentRunResponseDto(agentResponse, parsed.data, requestId));
+      registerTraceApprovals(responseDto.trace, pendingApprovals);
 
       return {
         ok: true,
@@ -368,6 +382,20 @@ export function createApiServer(): FastifyInstance {
   });
 
   return app;
+}
+
+/**
+ * 从服务端生成的 trace 登记待审批请求，API 不接受模型自行构造的 approval id。
+ *
+ * @param trace 已脱敏 trace DTO。
+ * @param pendingApprovals 当前进程待审批表。
+ * @returns 无返回值。
+ */
+function registerTraceApprovals(trace: TraceDto, pendingApprovals: Map<string, import("@aiagent/types").ToolApprovalRequestDto>): void {
+  for (const event of trace.events) {
+    if (event.type !== "approval" || event.status !== "requested") continue;
+    pendingApprovals.set(event.approvalId, { approvalId: event.approvalId, traceId: event.traceId, requestId: event.requestId, toolName: event.toolName, reason: event.reason, reasonCode: event.reasonCode, inputPreview: event.inputPreview, inputDigest: event.inputDigest, permissionLevel: "needs_approval" });
+  }
 }
 
 /** 将 report package 结果收窄为 Web 稳定 DTO，并明确 PDF 尚未实现。 */
@@ -506,7 +534,7 @@ function toApiError(
     code,
     message,
     requestId,
-    details
+    details: details ? redactSensitiveValue(details) : undefined
   };
 }
 

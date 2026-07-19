@@ -14,7 +14,7 @@ export const sqlQueryMockOutputSchema = z.object({
 export type SqlQueryMockInput = z.infer<typeof sqlQueryMockInputSchema>;
 export type SqlQueryMockOutput = z.infer<typeof sqlQueryMockOutputSchema>;
 
-const SQL_WRITE_KEYWORDS = /\b(insert|update|delete|drop|alter|truncate|create|replace|merge|grant|revoke|vacuum|attach|detach)\b/i;
+const SQL_FORBIDDEN_KEYWORDS = /\b(insert|update|delete|drop|alter|truncate|create|replace|merge|grant|revoke|vacuum|attach|detach|copy|call|execute|exec|pragma|set|use|into|outfile|load_file|pg_read_file|dblink)\b/i;
 
 export const sqlQueryMockTool: Tool<SqlQueryMockInput, SqlQueryMockOutput> = {
   name: "sql_query_mock",
@@ -39,7 +39,8 @@ export const sqlQueryMockTool: Tool<SqlQueryMockInput, SqlQueryMockOutput> = {
       inputPreview: {
         queryPreview: input.query.replace(/\s+/g, " ").trim().slice(0, 120),
         readonly
-      }
+      },
+      reasonCode: readonly ? "SEC_SQL_APPROVAL_REQUIRED" : "SEC_SQL_READONLY_VIOLATION"
     };
   },
   /**
@@ -71,12 +72,25 @@ export const sqlQueryMockTool: Tool<SqlQueryMockInput, SqlQueryMockOutput> = {
  * @returns 是否允许进入审批流程。
  */
 export function isReadonlySql(query: string): boolean {
-  const normalized = query.trim().replace(/;+\s*$/, "");
-  const withoutComments = normalized.replace(/--.*$/gm, "").replace(/\/\*[\s\S]*?\*\//g, " ");
-
-  if (!/^(select|with)\b/i.test(withoutComments.trim())) {
-    return false;
-  }
-
-  return !SQL_WRITE_KEYWORDS.test(withoutComments);
+  const normalized = query.trim();
+  if (!normalized || /--|\/\*|\*\//.test(normalized)) return false;
+  const statements = splitSqlStatements(normalized);
+  if (statements.length !== 1) return false;
+  const statement = statements[0]?.trim() ?? "";
+  if (!/^(select|with)\b/i.test(statement)) return false;
+  if (SQL_FORBIDDEN_KEYWORDS.test(maskSqlLiterals(statement))) return false;
+  return hasBalancedSqlSyntax(statement);
 }
+
+/** @param sql SQL 原文。 @returns 忽略字符串内分号后的非空语句。 */
+function splitSqlStatements(sql: string): string[] {
+  const statements: string[] = []; let current = ""; let quote: "'" | '"' | undefined;
+  for (let index = 0; index < sql.length; index += 1) { const char = sql[index]; const next = sql[index + 1]; if (quote) { current += char; if (char === quote && next === quote) { current += next; index += 1; } else if (char === quote) quote = undefined; continue; } if (char === "'" || char === '"') { quote = char; current += char; } else if (char === ";") { if (current.trim()) statements.push(current); current = ""; } else current += char; }
+  if (quote) return []; if (current.trim()) statements.push(current); return statements;
+}
+
+/** @param sql 单条 SQL。 @returns 将字符串字面量替换为空串后的文本。 */
+function maskSqlLiterals(sql: string): string { return sql.replace(/'(?:''|[^'])*'/g, "''").replace(/"(?:""|[^"])*"/g, '""'); }
+
+/** @param sql 单条 SQL。 @returns 括号是否闭合。 */
+function hasBalancedSqlSyntax(sql: string): boolean { let depth = 0; for (const char of maskSqlLiterals(sql)) { if (char === "(") depth += 1; if (char === ")") depth -= 1; if (depth < 0) return false; } return depth === 0; }

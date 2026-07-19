@@ -22,6 +22,8 @@ export { createIntentRouter, routeIntent } from "./intent-router.js";
 export { createLlmClient, createLlmClientFromEnv } from "./llm-client.js";
 export { createReportActivation, createReportPlan, isNaturalLanguageReportRequest } from "./report-planner.js";
 export { chatWithReliability, isRetryableModelError } from "./reliability.js";
+export { assembleUntrustedContext, assessPromptInjection } from "./security.js";
+export type { InjectionAssessment, InjectionDecision, UntrustedContent, UntrustedContentSource } from "./security.js";
 export type { ModelCandidate, ModelCapabilities, ModelRetryPolicy, ReliableModelOptions, ReliableModelResult } from "./reliability.js";
 
 export type {

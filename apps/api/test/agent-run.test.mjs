@@ -31,12 +31,16 @@ test("POST /api/agent/run returns structured agent response", async () => {
 
 test("POST /api/approvals/decision records approval decisions", async () => {
   const app = createApiServer();
+  const pendingResponse = await app.inject({ method: "POST", url: "/api/agent/run", payload: { message: "执行 SQL: SELECT * FROM metrics", reportMode: false } });
+  const pending = pendingResponse.json().data.trace.events.find((event) => event.type === "approval" && event.status === "requested");
   const response = await app.inject({
     method: "POST",
     url: "/api/approvals/decision",
     payload: {
-      approvalId: "approval_demo",
+      approvalId: pending.approvalId,
       decision: "approved",
+      requestId: pending.requestId,
+      inputDigest: pending.inputDigest,
       reviewerNote: "manual test"
     }
   });
@@ -44,7 +48,7 @@ test("POST /api/approvals/decision records approval decisions", async () => {
   assert.equal(response.statusCode, 200);
   const body = response.json();
   assert.equal(body.ok, true);
-  assert.equal(body.data.approvalId, "approval_demo");
+  assert.equal(body.data.approvalId, pending.approvalId);
   assert.equal(body.data.decision, "approved");
 
   await app.close();

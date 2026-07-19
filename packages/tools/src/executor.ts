@@ -42,6 +42,14 @@ export async function executeTool(
     });
   }
 
+  if (context.allowedTools && !context.allowedTools.includes(name)) {
+    recordSecurityTrace(context, "block", "SEC_TOOL_NOT_ALLOWLISTED");
+    return finishToolExecution(context, name, normalizedArgs, startedAt, tool.traceEventType, {
+      ok: false, toolName: name, args: normalizedArgs, durationMs: 0, traceId: context.trace?.traceId,
+      error: { code: "permission_denied", message: "Tool is not allowed for this request.", details: { reasonCode: "SEC_TOOL_NOT_ALLOWLISTED" } }
+    });
+  }
+
   const parsedInput = tool.inputSchema.safeParse(args);
 
   if (!parsedInput.success) {
@@ -64,6 +72,7 @@ export async function executeTool(
   const permission = evaluateToolPermission(tool, parsedInput.data, name, normalizedArgs, context);
 
   if (permission.decision?.decision === "rejected") {
+    recordSecurityTrace(context, "block", "SEC_TOOL_APPROVAL_REJECTED");
     recordApprovalTrace(context, permission.request, "rejected", permission.decision.reviewerNote);
     return finishToolExecution(context, name, normalizedArgs, startedAt, tool?.traceEventType, {
       ok: false,
@@ -84,6 +93,7 @@ export async function executeTool(
   }
 
   if (permission.level === "blocked") {
+    recordSecurityTrace(context, "block", permission.request.reasonCode ?? "SEC_TOOL_BLOCKED");
     recordApprovalTrace(context, permission.request, "rejected", "blocked_by_policy");
     return finishToolExecution(context, name, normalizedArgs, startedAt, tool?.traceEventType, {
       ok: false,
@@ -104,6 +114,7 @@ export async function executeTool(
   }
 
   if (permission.level === "needs_approval" && permission.decision?.decision !== "approved") {
+    recordSecurityTrace(context, "require_confirmation", permission.request.reasonCode ?? "SEC_TOOL_APPROVAL_REQUIRED");
     recordApprovalTrace(context, permission.request, "requested");
     return finishToolExecution(context, name, normalizedArgs, startedAt, tool?.traceEventType, {
       ok: false,
@@ -124,6 +135,7 @@ export async function executeTool(
   }
 
   if (permission.decision?.decision === "approved") {
+    recordSecurityTrace(context, "allow", "SEC_TOOL_APPROVAL_VERIFIED");
     recordApprovalTrace(context, permission.request, "approved", permission.decision.reviewerNote);
   }
 
@@ -257,16 +269,21 @@ function evaluateToolPermission(
   const level = evaluated?.permissionLevel ?? tool.permissionLevel ?? "safe";
   const reason = evaluated?.reason ?? defaultPermissionReason(level, toolName);
   const inputPreview = evaluated?.inputPreview ?? createInputPreview(normalizedArgs);
-  const approvalId = createApprovalId(context.trace?.traceId ?? "trace_local", toolName, inputPreview);
+  const requestId = context.trace?.requestId ?? "request_local";
+  const inputDigest = createInputDigest(toolName, parsedInput);
+  const approvalId = createApprovalId(context.trace?.traceId ?? "trace_local", toolName, inputDigest);
   const request: ToolApprovalRequestDto = {
     approvalId,
     traceId: context.trace?.traceId ?? "trace_local",
     toolName,
     reason,
     inputPreview,
-    permissionLevel: level
+    permissionLevel: level,
+    requestId,
+    inputDigest,
+    reasonCode: evaluated?.reasonCode ?? (level === "blocked" ? "SEC_TOOL_BLOCKED" : level === "needs_approval" ? "SEC_TOOL_APPROVAL_REQUIRED" : "SEC_TOOL_ALLOWED")
   };
-  const decision = context.approvalDecisions?.find((item) => item.approvalId === approvalId);
+  const decision = context.approvalDecisions?.find((item) => item.approvalId === approvalId && item.requestId === requestId && item.inputDigest === inputDigest);
 
   return {
     level,
@@ -330,8 +347,8 @@ function createInputPreview(args: Record<string, unknown>): Record<string, unkno
  * @param inputPreview 输入摘要。
  * @returns approval id。
  */
-function createApprovalId(traceId: string, toolName: string, inputPreview: unknown): string {
-  const serialized = JSON.stringify(inputPreview);
+function createApprovalId(traceId: string, toolName: string, inputDigest: string): string {
+  const serialized = inputDigest;
   let hash = 0;
 
   for (let index = 0; index < serialized.length; index += 1) {
@@ -339,6 +356,20 @@ function createApprovalId(traceId: string, toolName: string, inputPreview: unkno
   }
 
   return `approval_${traceId}_${toolName}_${hash.toString(36)}`;
+}
+
+/** @param toolName 工具名。 @param input 已校验输入。 @returns 不保存原文的稳定绑定摘要。 */
+function createInputDigest(toolName: string, input: unknown): string {
+  const serialized = `${toolName}:${stableSerialize(input)}`; let hash = 2166136261;
+  for (let index = 0; index < serialized.length; index += 1) { hash ^= serialized.charCodeAt(index); hash = Math.imul(hash, 16777619); }
+  return `input_${(hash >>> 0).toString(16).padStart(8, "0")}`;
+}
+
+/** @param value 待规范化值。 @returns key 顺序稳定的 JSON 文本。 */
+function stableSerialize(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableSerialize).join(",")}]`;
+  if (value && typeof value === "object") return `{${Object.entries(value as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b)).map(([key, child]) => `${JSON.stringify(key)}:${stableSerialize(child)}`).join(",")}}`;
+  return JSON.stringify(value);
 }
 
 /**
@@ -371,11 +402,19 @@ function recordApprovalTrace(
       reason: request.reason,
       inputPreview: request.inputPreview,
       reviewerNote,
+      inputDigest: request.inputDigest,
+      reasonCode: request.reasonCode,
       createdAt: new Date().toISOString()
     });
   } catch {
     // trace 是旁路观测能力，权限判断结果不能依赖 trace 成功写入。
   }
+}
+
+/** @param context 执行上下文。 @param decision 安全决策。 @param reasonCode 稳定原因码。 */
+function recordSecurityTrace(context: ToolExecutionContext, decision: "allow" | "require_confirmation" | "block", reasonCode: string): void {
+  try { context.trace?.record({ type: "security", id: `${context.trace.traceId}_tool_security_${Date.now().toString(36)}`, traceId: context.trace.traceId, requestId: context.trace.requestId, category: reasonCode.startsWith("SEC_SQL") ? "sql_readonly" : "tool_permission", decision, reasonCode, createdAt: new Date().toISOString() }); }
+  catch { /* 安全判断不依赖旁路 trace 成功。 */ }
 }
 
 /**

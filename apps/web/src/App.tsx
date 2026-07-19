@@ -318,9 +318,10 @@ export function App() {
    * @returns 请求完成 Promise。
    */
   async function handleApprovalDecision(
-    approvalId: string,
+    approvalRequest: ToolApprovalRequestDto,
     decision: ToolApprovalDecisionDto["decision"]
   ): Promise<void> {
+    const approvalId = approvalRequest.approvalId;
     setApprovalStatusById((current) => ({
       ...current,
       [approvalId]: "submitting"
@@ -329,6 +330,8 @@ export function App() {
     const result = await submitApprovalDecision({
       approvalId,
       decision,
+      requestId: approvalRequest.requestId,
+      inputDigest: approvalRequest.inputDigest,
       reviewerNote: decision === "approved" ? "Approved from Immersive UI." : "Rejected from Immersive UI."
     });
 
@@ -835,7 +838,7 @@ interface ChatTimelineProps {
   approvalStatusById: Record<string, string>;
   isSubmitting: boolean;
   messages: UiMessage[];
-  onApprovalDecision: (approvalId: string, decision: ToolApprovalDecisionDto["decision"]) => Promise<void>;
+  onApprovalDecision: (request: ToolApprovalRequestDto, decision: ToolApprovalDecisionDto["decision"]) => Promise<void>;
   onUsePrompt: (prompt: string) => void;
 }
 
@@ -884,7 +887,7 @@ function ChatTimeline(props: ChatTimelineProps) {
 function ChatMessage(props: {
   approvalStatusById: Record<string, string>;
   message: UiMessage;
-  onApprovalDecision: (approvalId: string, decision: ToolApprovalDecisionDto["decision"]) => Promise<void>;
+  onApprovalDecision: (request: ToolApprovalRequestDto, decision: ToolApprovalDecisionDto["decision"]) => Promise<void>;
 }) {
   const { message } = props;
   const isUser = message.role === "user";
@@ -1005,7 +1008,7 @@ function StarterPrompts(props: {
  */
 function RunDetails(props: {
   approvalStatusById: Record<string, string>;
-  onApprovalDecision: (approvalId: string, decision: ToolApprovalDecisionDto["decision"]) => Promise<void>;
+  onApprovalDecision: (request: ToolApprovalRequestDto, decision: ToolApprovalDecisionDto["decision"]) => Promise<void>;
   reportMode: boolean;
   run: AgentRunResponseDto;
 }) {
@@ -1205,7 +1208,7 @@ function ReportArtifactPreview(props: { artifact: ReportArtifactDto }) {
  */
 function ApprovalRequestsPanel(props: {
   approvalStatusById: Record<string, string>;
-  onApprovalDecision: (approvalId: string, decision: ToolApprovalDecisionDto["decision"]) => Promise<void>;
+  onApprovalDecision: (request: ToolApprovalRequestDto, decision: ToolApprovalDecisionDto["decision"]) => Promise<void>;
   requests: ToolApprovalRequestDto[];
 }) {
   return (
@@ -1235,7 +1238,7 @@ function ApprovalRequestsPanel(props: {
                 <button
                   className="secondary-button"
                   disabled={disabled}
-                  onClick={() => void props.onApprovalDecision(request.approvalId, "approved")}
+                  onClick={() => void props.onApprovalDecision(request, "approved")}
                   type="button"
                 >
                   <ShieldCheck className="icon-size" />
@@ -1244,7 +1247,7 @@ function ApprovalRequestsPanel(props: {
                 <button
                   className="secondary-button danger-action"
                   disabled={disabled}
-                  onClick={() => void props.onApprovalDecision(request.approvalId, "rejected")}
+                  onClick={() => void props.onApprovalDecision(request, "rejected")}
                   type="button"
                 >
                   <X className="icon-size" />
@@ -1618,7 +1621,10 @@ function getApprovalRequests(run: AgentRunResponseDto): ToolApprovalRequestDto[]
       toolName: event.toolName,
       reason: event.reason,
       inputPreview: event.inputPreview,
-      permissionLevel: "needs_approval"
+      permissionLevel: "needs_approval",
+      requestId: event.requestId,
+      inputDigest: event.inputDigest,
+      reasonCode: event.reasonCode
     });
   }
 
@@ -1655,6 +1661,8 @@ function formatEventTitle(event: TraceEventDto): string {
       return `Agent Step: ${event.stepType}`;
     case "approval":
       return `Approval: ${event.status}`;
+    case "security":
+      return `Security: ${event.decision}`;
     case "retrieval":
       return `Retrieval: ${event.mode}`;
     case "report_skill_activation":
@@ -1710,6 +1718,8 @@ function formatEventSummary(event: TraceEventDto): string {
       return `${event.status} with ${event.error?.code ?? "no_error"}`;
     case "approval":
       return `${event.toolName}: ${event.reason}`;
+    case "security":
+      return `${event.category}: ${event.reasonCode}`;
     case "retrieval":
       return event.ok
         ? `${event.chunkIds.length} chunks retrieved, topK=${event.topK}`

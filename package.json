@@ -7,15 +7,24 @@
     "dev": "concurrently -n api,web -c blue,green \"pnpm --filter @aiagent/api dev\" \"pnpm --filter @aiagent/web dev\"",
     "build": "pnpm -r build",
     "test": "pnpm -r --if-present test",
+    "lint": "eslint apps packages --max-warnings 100",
+    "architecture:check": "depcruise apps packages --config .dependency-cruiser.cjs",
     "typecheck": "pnpm -r typecheck",
     "eval": "pnpm --filter @aiagent/eval eval",
     "smoke:compose": "node test/smoke-compose.mjs",
     "eval:update-baseline": "pnpm --filter @aiagent/eval eval:update-baseline"
   },
   "devDependencies": {
+    "@eslint/js": "^9.39.5",
     "@types/node": "^22.10.5",
     "concurrently": "^10.0.3",
+    "dependency-cruiser": "^18.1.0",
+    "eslint": "^9.39.5",
+    "eslint-plugin-jsx-a11y": "^6.10.2",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "globals": "^17.7.0",
     "tsx": "^4.22.4",
-    "typescript": "^5.7.2"
+    "typescript": "^5.7.2",
+    "typescript-eslint": "^8.65.0"
   }
 }

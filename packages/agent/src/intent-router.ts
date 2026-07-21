@@ -77,11 +77,12 @@ export async function routeIntent(message: string, options: IntentRouterOptions 
     return toolRoute(toolName, buildMetricArgs(normalized, options.preferMcpTools), "命中财务指标查询诉求。", metricMatches);
   }
 
-  if (marketDataMatches.length > 0 && options.preferMcpTools) {
+  if (marketDataMatches.length > 0) {
+    const useMcpTool = options.preferMcpTools === true;
     return toolRoute(
-      "get_market_data",
-      buildMarketDataArgs(normalized),
-      "命中行情查询诉求，通过 MCP get_market_data 获取。",
+      useMcpTool ? "get_market_data" : "market_data_mock",
+      buildMarketDataArgs(normalized, useMcpTool),
+      useMcpTool ? "命中行情查询诉求，通过 MCP get_market_data 获取。" : "命中行情查询诉求，通过本地 mock 行情工具获取。",
       marketDataMatches
     );
   }
@@ -255,17 +256,18 @@ function buildMetricArgs(message: string, preferMcpTools = false): Record<string
 }
 
 /**
- * 从文本中提取行情参数，供 MCP get_market_data 使用。
+ * 从文本中提取行情参数；本地工具只接收 ticker，MCP 工具额外接收区间与字段。
  *
  * @param message 用户输入。
- * @returns get_market_data 参数。
+ * @param preferMcpTools 是否生成 MCP tool 参数。
+ * @returns market_data_mock 或 get_market_data 参数。
  */
-function buildMarketDataArgs(message: string): Record<string, unknown> {
-  return {
-    ticker: extractTicker(message),
-    range: "1d",
-    fields: ["summary"]
-  };
+function buildMarketDataArgs(message: string, preferMcpTools = false): Record<string, unknown> {
+  const ticker = extractTicker(message);
+
+  return preferMcpTools
+    ? { ticker, range: "3m", fields: ["summary", "ohlcv"] }
+    : { ticker };
 }
 
 /**

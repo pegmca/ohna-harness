@@ -1,5 +1,7 @@
 # Immersive Product Design
 
+> 2026-07 工作台更新：界面采用 Kimi 式左侧会话导航、中央 Agent Chat 和按需右侧运行详情面板；支持浅色、深色与跟随系统主题。工具、检索、行情和 workflow 过程由 SSE 实时进入 assistant 消息，点击步骤后在右侧查看结构化详情。行情详情使用明确标记的 Mock OHLCV 与 A 股红涨绿跌 K 线。
+
 ## 产品定位
 
 Immersive 是面向股票研究、公告分析、财务指标查询和研报生成 Workflow 的金融研究 Agent 工作台。界面应像研究员每天使用的专业工具，而不是营销官网、聊天玩具或通用后台模板。

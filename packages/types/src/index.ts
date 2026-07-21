@@ -13,6 +13,7 @@ export type ApiErrorCode =
   | "agent_failed"
   | "tool_failed"
   | "trace_failed"
+  | "request_cancelled"
   | "internal_error";
 
 export interface ApiError {
@@ -336,6 +337,103 @@ export interface AgentRunResponseDto {
   reportPlan?: ReportPlanDto;
   reportWorkflow?: ReportWorkflowResponseDto;
   error?: ApiError;
+}
+
+/** 异步研究任务的生命周期状态，供 HTTP snapshot 与 SSE 共同使用。 */
+export type AgentRunStatusDto = "queued" | "running" | "waiting_approval" | "succeeded" | "failed" | "cancelled";
+
+/** 创建异步 Agent run 后立即返回的定位信息。 */
+export interface AgentRunAcceptedDto {
+  runId: string;
+  requestId: string;
+  conversationId: string;
+  status: AgentRunStatusDto;
+  eventsUrl: string;
+  snapshotUrl: string;
+}
+
+/** SSE 使用的稳定事件 envelope；sequence 同时作为 SSE id 支持断线重放。 */
+export type AgentRunStreamEventDto =
+  | {
+      eventId: string;
+      sequence: number;
+      runId: string;
+      requestId: string;
+      traceId: string;
+      conversationId: string;
+      createdAt: ISODateTimeString;
+      type: "run_status";
+      status: AgentRunStatusDto;
+      message: string;
+    }
+  | {
+      eventId: string;
+      sequence: number;
+      runId: string;
+      requestId: string;
+      traceId: string;
+      conversationId: string;
+      createdAt: ISODateTimeString;
+      type: "trace_event";
+      event: TraceEventDto;
+    }
+  | {
+      eventId: string;
+      sequence: number;
+      runId: string;
+      requestId: string;
+      traceId: string;
+      conversationId: string;
+      createdAt: ISODateTimeString;
+      type: "run_result";
+      result: AgentRunResponseDto;
+    }
+  | {
+      eventId: string;
+      sequence: number;
+      runId: string;
+      requestId: string;
+      traceId: string;
+      conversationId: string;
+      createdAt: ISODateTimeString;
+      type: "run_error";
+      error: ApiError;
+    };
+
+/** 供刷新和 SSE 断线恢复使用的 run 快照。 */
+export interface AgentRunSnapshotDto {
+  runId: string;
+  requestId: string;
+  conversationId: string;
+  status: AgentRunStatusDto;
+  createdAt: ISODateTimeString;
+  updatedAt: ISODateTimeString;
+  events: AgentRunStreamEventDto[];
+  result?: AgentRunResponseDto;
+  error?: ApiError;
+}
+
+/** 单根 K 线的稳定行情传输结构。 */
+export interface MarketBarDto {
+  time: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+}
+
+/** 行情时序 contract 与 provider 解耦，UI 不依赖具体工具实现。 */
+export interface MarketSeriesDto {
+  ticker: string;
+  exchange: string;
+  currency: string;
+  timezone: string;
+  interval: "1d";
+  range: "3m";
+  source: "mock";
+  asOf: ISODateTimeString;
+  bars: MarketBarDto[];
 }
 
 export type ReportArtifactStatusDto = "html_preview_only" | "pdf_ready" | "pdf_failed";

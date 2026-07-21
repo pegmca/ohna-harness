@@ -5,10 +5,14 @@ import { createDataSourceRuntime } from "@aiagent/rag";
 import { renderResearchReportPdf, runReportWorkflow } from "@aiagent/report";
 import type { ReportWorkflowResult } from "@aiagent/report";
 import type { RagStructuredError } from "@aiagent/rag";
-import { createInMemoryTraceRecorder, createInMemoryTraceStore, redactSensitiveValue } from "@aiagent/trace";
+import { createInMemoryTraceRecorder, createInMemoryTraceStore, createObservableTraceRecorder, redactSensitiveValue } from "@aiagent/trace";
 import type {
+  AgentRunAcceptedDto,
   AgentRunRequestDto,
   AgentRunResponseDto,
+  AgentRunSnapshotDto,
+  AgentRunStatusDto,
+  AgentRunStreamEventDto,
   AgentStepDto,
   ApiError,
   ApiResult,
@@ -22,8 +26,8 @@ import type {
   ReportWorkflowResponseDto,
   ProductArchitectureDto,
   ProductEvalReportDto,
-  ToolApprovalDecisionDto
-  , TraceDto
+  ToolApprovalDecisionDto,
+  TraceDto
 } from "@aiagent/types";
 import Fastify, { type FastifyInstance } from "fastify";
 import { z } from "zod";
@@ -63,6 +67,27 @@ const startReportWorkflowRequestSchema = z.object({
 
 const DEFAULT_CONVERSATION_ID = "week1-local-session";
 
+interface AsyncAgentRun {
+  runId: string;
+  requestId: string;
+  traceId: string;
+  conversationId: string;
+  status: AgentRunStatusDto;
+  createdAt: string;
+  updatedAt: string;
+  events: AgentRunStreamEventDto[];
+  result?: AgentRunResponseDto;
+  error?: ApiError;
+  abortController: AbortController;
+  subscribers: Set<(event: AgentRunStreamEventDto) => void>;
+}
+
+type AgentRunEventPayload =
+  | { type: "run_status"; status: AgentRunStatusDto; message: string }
+  | { type: "trace_event"; event: TraceDto["events"][number] }
+  | { type: "run_result"; result: AgentRunResponseDto }
+  | { type: "run_error"; error: ApiError };
+
 export interface ApiServerOptions {
   llmClient?: LlmClient;
   readiness?: () => Promise<{ ok: boolean; dependency: string; message?: string }>;
@@ -84,6 +109,99 @@ export function createApiServer(options: ApiServerOptions = {}): FastifyInstance
   const reportArtifacts = new Map<string, ReportArtifactDto>();
   const reportPdfFiles = new Map<string, Uint8Array>();
   const traceStore = createInMemoryTraceStore();
+  const agentRuns = new Map<string, AsyncAgentRun>();
+
+  /**
+   * 向 run 的内存缓冲与实时订阅者同时发布事件，确保重放和直播使用同一序列。
+   *
+   * @param run 当前异步 run。
+   * @param event 不含 envelope 的事件数据。
+   * @returns 完整 SSE 事件。
+   */
+  function publishRunEvent(
+    run: AsyncAgentRun,
+    event: AgentRunEventPayload
+  ): AgentRunStreamEventDto {
+    const sequence = run.events.length + 1;
+    const value = redactSensitiveValue({
+      ...event,
+      eventId: `${run.runId}_${sequence}`,
+      sequence,
+      runId: run.runId,
+      requestId: run.requestId,
+      traceId: run.traceId,
+      conversationId: run.conversationId,
+      createdAt: new Date().toISOString()
+    }) as AgentRunStreamEventDto;
+    run.events.push(value);
+    run.updatedAt = value.createdAt;
+    for (const subscriber of run.subscribers) subscriber(value);
+    return value;
+  }
+
+  /**
+   * 后台执行完整 Agent 与 Report Workflow，使浏览器只负责消费事件而不承担运行时编排。
+   *
+   * @param run 已创建的异步 run。
+   * @param requestDto 经校验的请求 DTO。
+   * @returns 执行完成 Promise。
+   */
+  async function executeAsyncAgentRun(run: AsyncAgentRun, requestDto: AgentRunRequestDto): Promise<void> {
+    run.status = "running";
+    publishRunEvent(run, { type: "run_status", status: "running", message: "Agent 已开始分析研究任务。" });
+    const trace = createObservableTraceRecorder(run.traceId, run.requestId);
+    const unsubscribe = trace.subscribe((event) => {
+      publishRunEvent(run, { type: "trace_event", event });
+    });
+
+    try {
+      const agentResponse = await runAgent({
+        message: requestDto.message.trim(),
+        reportMode: requestDto.reportMode,
+        reportTriggerSource: requestDto.reportTriggerSource,
+        signal: run.abortController.signal
+      }, { traceRecorder: trace, llmClient: options.llmClient });
+      let reportWorkflow: ReportWorkflowResponseDto | undefined;
+
+      if (agentResponse.reportPlan?.status === "ready" && !run.abortController.signal.aborted) {
+        const workflowResult = await runReportWorkflow(agentResponse.reportPlan, {
+          documents: createReportDemoDocuments(),
+          trace,
+          signal: run.abortController.signal
+        });
+        const workflowResponse = redactSensitiveValue(toReportWorkflowResponseDto(workflowResult));
+        reportWorkflow = workflowResponse;
+        workflowRuns.set(workflowResponse.run.runId, workflowResponse);
+        if (workflowResponse.run.approvalRequest) {
+          pendingApprovals.set(workflowResponse.run.approvalRequest.approvalId, workflowResponse.run.approvalRequest);
+        }
+        if (workflowResponse.artifact) reportArtifacts.set(workflowResponse.artifact.artifactId, workflowResponse.artifact);
+      }
+
+      agentResponse.trace = trace.getTrace();
+      traceStore.save(agentResponse.trace);
+      const responseDto = redactSensitiveValue({
+        ...toAgentRunResponseDto(agentResponse, requestDto, run.requestId),
+        reportWorkflow
+      });
+      registerTraceApprovals(responseDto.trace, pendingApprovals);
+      run.result = responseDto;
+      run.status = run.abortController.signal.aborted ? "cancelled" : responseDto.ok ? "succeeded" : "failed";
+      publishRunEvent(run, { type: "run_result", result: responseDto });
+    } catch (error) {
+      const apiError = toApiError(
+        run.abortController.signal.aborted ? "request_cancelled" : "internal_error",
+        run.abortController.signal.aborted ? "Agent run 已取消。" : "Agent 服务暂时不可用，请稍后重试。",
+        run.requestId,
+        { cause: error instanceof Error ? error.message : "unknown" }
+      );
+      run.status = run.abortController.signal.aborted ? "cancelled" : "failed";
+      run.error = apiError;
+      publishRunEvent(run, { type: "run_error", error: apiError });
+    } finally {
+      unsubscribe();
+    }
+  }
 
   /**
    * 健康检查接口只暴露 API 服务存活状态，供本地 dev server、脚本和部署探针快速验证。
@@ -113,6 +231,115 @@ export function createApiServer(options: ApiServerOptions = {}): FastifyInstance
       return fail(toApiError("not_found", "Trace 不存在或已随进程重启清除。", lookupRequestId), lookupRequestId);
     }
     return { ok: true, data: trace, requestId: lookupRequestId };
+  });
+
+  /** 创建异步研究 run；真实执行在响应返回后开始。 */
+  app.post("/api/runs", async (request, reply): Promise<ApiResult<AgentRunAcceptedDto>> => {
+    const requestId = createRequestId();
+    const parsed = agentRunRequestSchema.safeParse(request.body);
+    if (!parsed.success || !parsed.data.message.trim()) {
+      reply.code(400);
+      return fail(toApiError("validation_failed", "请输入有效的研究问题。", requestId, {
+        issues: parsed.success ? undefined : parsed.error.issues
+      }), requestId);
+    }
+
+    const runId = `run_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+    const traceId = `trace_${runId}`;
+    const conversationId = parsed.data.conversationId ?? DEFAULT_CONVERSATION_ID;
+    const createdAt = new Date().toISOString();
+    const run: AsyncAgentRun = {
+      runId,
+      requestId,
+      traceId,
+      conversationId,
+      status: "queued",
+      createdAt,
+      updatedAt: createdAt,
+      events: [],
+      abortController: new AbortController(),
+      subscribers: new Set()
+    };
+    agentRuns.set(runId, run);
+    publishRunEvent(run, { type: "run_status", status: "queued", message: "研究任务已进入队列。" });
+    queueMicrotask(() => void executeAsyncAgentRun(run, parsed.data));
+    reply.code(202);
+    return {
+      ok: true,
+      requestId,
+      data: {
+        runId,
+        requestId,
+        conversationId,
+        status: "queued",
+        eventsUrl: `/api/runs/${runId}/events`,
+        snapshotUrl: `/api/runs/${runId}`
+      }
+    };
+  });
+
+  /** 返回当前 run 快照，供刷新恢复和非流式诊断使用。 */
+  app.get<{ Params: { runId: string } }>("/api/runs/:runId", async (request, reply): Promise<ApiResult<AgentRunSnapshotDto>> => {
+    const lookupRequestId = createRequestId();
+    const run = agentRuns.get(request.params.runId);
+    if (!run) {
+      reply.code(404);
+      return fail(toApiError("not_found", "Agent run 不存在或已过期。", lookupRequestId), lookupRequestId);
+    }
+    return { ok: true, requestId: lookupRequestId, data: toAgentRunSnapshot(run) };
+  });
+
+  /** 显式取消 run；浏览器断开 SSE 不会隐式终止后台任务。 */
+  app.delete<{ Params: { runId: string } }>("/api/runs/:runId", async (request, reply): Promise<ApiResult<AgentRunSnapshotDto>> => {
+    const lookupRequestId = createRequestId();
+    const run = agentRuns.get(request.params.runId);
+    if (!run) {
+      reply.code(404);
+      return fail(toApiError("not_found", "Agent run 不存在或已过期。", lookupRequestId), lookupRequestId);
+    }
+    if (run.status === "queued" || run.status === "running" || run.status === "waiting_approval") {
+      run.abortController.abort();
+      run.status = "cancelled";
+      publishRunEvent(run, { type: "run_status", status: "cancelled", message: "用户已请求取消研究任务。" });
+    }
+    return { ok: true, requestId: lookupRequestId, data: toAgentRunSnapshot(run) };
+  });
+
+  /** 以 SSE 重放历史事件并继续推送新增事件。 */
+  app.get<{ Params: { runId: string } }>("/api/runs/:runId/events", async (request, reply) => {
+    const run = agentRuns.get(request.params.runId);
+    if (!run) {
+      reply.code(404);
+      return fail(toApiError("not_found", "Agent run 不存在或已过期。", createRequestId()), createRequestId());
+    }
+
+    reply.hijack();
+    reply.raw.writeHead(200, {
+      "content-type": "text/event-stream; charset=utf-8",
+      "cache-control": "no-cache, no-transform",
+      connection: "keep-alive",
+      "x-accel-buffering": "no"
+    });
+    const header = request.headers["last-event-id"];
+    const lastEventId = Number(Array.isArray(header) ? header[0] : header ?? 0);
+    const heartbeat = setInterval(() => reply.raw.write(": heartbeat\n\n"), 15_000);
+    const writeEvent = (event: AgentRunStreamEventDto): void => {
+      reply.raw.write(`id: ${event.sequence}\nevent: run_event\ndata: ${JSON.stringify(event)}\n\n`);
+      if (event.type === "run_result" || event.type === "run_error") {
+        clearInterval(heartbeat);
+        run.subscribers.delete(writeEvent);
+        reply.raw.end();
+      }
+    };
+    for (const event of run.events) {
+      if (event.sequence > lastEventId) writeEvent(event);
+    }
+    if (run.result || run.error) return;
+    run.subscribers.add(writeEvent);
+    request.raw.on("close", () => {
+      clearInterval(heartbeat);
+      run.subscribers.delete(writeEvent);
+    });
   });
 
   /**
@@ -617,6 +844,26 @@ function toAgentStepDto(step: AgentStep): AgentStepDto {
           }
         }
       : undefined
+  };
+}
+
+/**
+ * 从内部 run 移除 AbortController 与订阅者，返回浏览器可安全消费的快照。
+ *
+ * @param run API 进程内异步 run。
+ * @returns 稳定 run snapshot DTO。
+ */
+function toAgentRunSnapshot(run: AsyncAgentRun): AgentRunSnapshotDto {
+  return {
+    runId: run.runId,
+    requestId: run.requestId,
+    conversationId: run.conversationId,
+    status: run.status,
+    createdAt: run.createdAt,
+    updatedAt: run.updatedAt,
+    events: [...run.events],
+    result: run.result,
+    error: run.error
   };
 }
 

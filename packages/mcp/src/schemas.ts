@@ -49,7 +49,7 @@ export const financialMetricsInputSchema = z.object({
 export const marketDataInputSchema = z.object({
   ticker: z.string().min(1),
   range: z.string().min(1).default("1d"),
-  fields: z.array(z.enum(["prices", "returns", "volume", "summary"])).min(1).default(["summary"])
+  fields: z.array(z.enum(["prices", "returns", "volume", "summary", "ohlcv"])).min(1).default(["summary"])
 });
 
 /** 所有 MCP tool 共享稳定错误结构，避免调用方解析原始异常文本。 */
@@ -100,6 +100,11 @@ export const marketDataOutputSchema = z.object({
     returns: z.number().optional(),
     volume: z.number().optional(),
     summary: z.object({ lastPrice: z.number(), changePercent: z.number() }).optional(),
+    series: z.object({
+      ticker: z.string(), exchange: z.string(), currency: z.string(), timezone: z.string(),
+      interval: z.literal("1d"), range: z.literal("3m"), source: z.literal("mock"), asOf: z.string(),
+      bars: z.array(z.object({ time: z.string(), open: z.number(), high: z.number(), low: z.number(), close: z.number(), volume: z.number() }))
+    }).optional(),
     source: z.literal("mock")
   }).optional(),
   error: mcpErrorSchema.optional()

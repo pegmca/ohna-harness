@@ -1,30 +1,24 @@
 # DESIGN.md
 
 ---
-version: alpha
-name: Meridian
-description: A quiet, precise, data-first design system for professional AI workspaces and research tools.
-theme: dark-first
+version: beta
+name: Immersive Workbench
+description: A Kimi-inspired, quiet and data-first dual-theme system for the Immersive financial research workspace.
+theme: adaptive-light-dark
 css: system.css
 colors:
-  canvas: "#161E17"
-  surface: "#1B241D"
-  elevated: "#202B23"
-  muted: "#2C3A32"
-  border-subtle: "rgba(255, 244, 225, 0.10)"
-  border: "rgba(255, 244, 225, 0.18)"
-  border-strong: "#428475"
-  text-primary: "#FFF4E1"
-  text-secondary: "rgba(255, 244, 225, 0.78)"
-  text-muted: "rgba(255, 244, 225, 0.56)"
-  text-disabled: "rgba(255, 244, 225, 0.36)"
-  primary: "#89D7B7"
-  primary-hover: "#A6E6CC"
-  primary-pressed: "#428475"
-  success: "#89D7B7"
-  warning: "#D9A441"
-  danger: "#D36A5F"
-  info: "#428475"
+  light-canvas: "#FBFAF9"
+  light-surface: "#FFFFFF"
+  light-secondary: "#F5F5F5"
+  light-text-primary: "rgba(0, 0, 0, 0.90)"
+  dark-canvas: "#181817"
+  dark-surface: "#121212"
+  dark-secondary: "#1F1F1F"
+  dark-text-primary: "rgba(255, 255, 255, 0.84)"
+  primary-light: "#428475"
+  primary-dark: "#89D7B7"
+  market-up: "#FF3849"
+  market-down: "#16C456"
 typography:
   ui:
     fontFamily: "Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
@@ -86,13 +80,13 @@ motion:
 
 ## Purpose
 
-Meridian is a generic visual system for building serious AI products, research tools, dashboards, consoles, and other dense information surfaces. It gives AI coding agents a stable design language instead of asking them to "make it beautiful" from scratch.
+Immersive Workbench is a focused visual system for serious AI research tools and dense information surfaces. It gives AI coding agents a stable design language instead of asking them to "make it beautiful" from scratch.
 
 The system is intentionally product-neutral. Product goals, workflows, domain entities, and screen-specific requirements should live in separate product documents such as `docs/IMMERSIVE_PRODUCT_DESIGN.md`.
 
 ## Design Philosophy
 
-The interface should recede and the information should carry the attention. Meridian uses a near-black green canvas, neutral dark surfaces, crisp low-contrast borders, restrained green accent color, and stable layout rhythm. It is optimized for scanning, comparison, debugging, and long working sessions.
+The interface should recede and the information should carry the attention. Immersive follows Kimi's calm workspace hierarchy while retaining the project's original green identity: warm near-white or neutral near-black canvas, low-contrast fills, restrained green actions, generous conversation whitespace, and on-demand execution details. It is optimized for scanning, comparison, research, and long working sessions.
 
 Keywords:
 
@@ -131,35 +125,27 @@ When using Stitch, v0, or similar tools, use this document as the design-system 
 
 ### Color
 
-Meridian is dark-first. The base experience should read as a deep dark interface, not as an all-green page. The left rail, panels, cards, and inputs should stay in near-neutral dark surface tiers. Green is the product accent for actions, focus, selected states, and status highlights. Depth comes from surface tiers and borders, not from decorative shadows.
+Immersive supports light, dark, and system preferences. Both modes use the same semantic roles. Brand green is reserved for actions, focus, and selected states; financial red and green still use dedicated market tokens and must be paired with text or symbols. Depth comes from surface tiers and separators, not decorative shadows.
 
-| Token | Hex | Role |
-| --- | --- | --- |
-| `canvas` | `#161E17` | App background and outer viewport |
-| `surface` | `#1B241D` | Panels, cards, inputs, list rows |
-| `elevated` | `#202B23` | Active tabs, hover surfaces, popovers |
-| `muted` | `#2C3A32` | Subtle fills and inactive controls |
-| `border-subtle` | `rgba(255, 244, 225, 0.10)` | Quiet separators |
-| `border` | `rgba(255, 244, 225, 0.18)` | Default component outline |
-| `border-strong` | `#428475` | Focused structures and emphasized dividers |
-| `text-primary` | `#FFF4E1` | Primary readable text |
-| `text-secondary` | `rgba(255, 244, 225, 0.78)` | Supporting copy |
-| `text-muted` | `rgba(255, 244, 225, 0.56)` | Metadata and captions |
-| `text-disabled` | `rgba(255, 244, 225, 0.36)` | Disabled copy |
-| `primary` | `#89D7B7` | Primary action, focus, current state |
-| `primary-hover` | `#A6E6CC` | Hover state for primary actions |
-| `primary-pressed` | `#428475` | Pressed state for primary actions |
-| `success` | `#89D7B7` | Completed, positive, available |
-| `warning` | `#D9A441` | Caution, incomplete, needs review |
-| `danger` | `#D36A5F` | Error, destructive, failed |
-| `info` | `#428475` | Neutral informational highlight |
+| Token | Light | Dark | Role |
+| --- | --- | --- | --- |
+| `canvas` | `#FBFAF9` | `#181817` | App background |
+| `surface` | `#FFFFFF` | `#121212` | Panels and inputs |
+| `elevated` | `#F5F5F5` | `#1F1F1F` | Hover and secondary surfaces |
+| `muted` | `#EEEEEE` | `#292929` | Inactive controls |
+| `border-subtle` | `rgba(0,0,0,.08)` | `rgba(255,255,255,.08)` | Quiet separators |
+| `border` | `rgba(0,0,0,.13)` | `rgba(255,255,255,.12)` | Default outlines |
+| `text-primary` | `rgba(0,0,0,.90)` | `rgba(255,255,255,.84)` | Primary text |
+| `text-secondary` | `rgba(0,0,0,.60)` | `rgba(255,255,255,.56)` | Supporting text |
+| `primary` | `#428475` | `#89D7B7` | Action, focus and selection |
+| `market-up` | `#FF3849` | `#FF4756` | A-share price increase |
+| `market-down` | `#16C456` | `#16C456` | A-share price decrease |
 
 Rules:
 
-- `#161E17` is the dominant canvas, and `#1B241D` / `#202B23` are the main large-surface colors. Do not use `#428475` or `#89D7B7` as large page backgrounds.
+- Warm white and neutral black surfaces carry the layout; do not use brand green as a large page background.
 - Primary green is for action, focus, selected state, and key icons. Do not flood the screen with it.
-- `#428475` is a secondary accent for pressed states, emphasized borders, and compact informational states, not a sidebar or panel fill.
-- Warm text `#FFF4E1` should provide readability and contrast; use opacity variants for secondary text rather than introducing gray-blue copy.
+- Use semantic opacity tiers for secondary text instead of ad hoc gray values.
 - Signal colors must be paired with text or icon labels. Never rely on color alone.
 - Use darker soft backgrounds for error and warning states so text remains readable.
 - JSON, logs, traces, and evidence panels should use calmer surfaces than primary content.
@@ -209,7 +195,7 @@ Rules:
 
 ### Shape
 
-Meridian uses precise, restrained geometry.
+Immersive Workbench uses precise, restrained geometry.
 
 | Token | Value | Use |
 | --- | --- | --- |
@@ -239,7 +225,7 @@ Do not animate layout dimensions for routine hover states.
 
 ## Layout Language
 
-Meridian favors workbench layouts:
+Immersive Workbench favors workbench layouts:
 
 ```text
 Top bar:
@@ -256,6 +242,7 @@ Desktop patterns:
 
 - Two-column workbench: main content with right inspector.
 - Three-column workbench: navigation, primary document/task, inspector.
+- Execution inspectors that contain charts or traces consume the remaining desktop width up to `1120px`, after reserving `280px` for navigation and at least `640px` for primary content. Below that viable split width, use an `88vw` right overlay.
 - Dense dashboard: metric strip, table/list, detail drawer.
 - Console: command input, result stream, structured diagnostics.
 
@@ -386,7 +373,7 @@ Use this when asking an AI coding agent to implement or refine UI:
 ```text
 Read DESIGN.md first, then read the product-specific design document and relevant implementation task card.
 
-Use the Meridian visual system:
+Use the Immersive Workbench visual system:
 - Dark-first professional workbench
 - Data-first hierarchy
 - Stable panels, borders, and compact controls

@@ -40,6 +40,34 @@ test("POST /api/agent/run returns structured agent response", async () => {
   await app.close();
 });
 
+test("POST /api/runs exposes ordered live-run events and terminal snapshot", async () => {
+  const app = createApiServer();
+  const acceptedResponse = await app.inject({
+    method: "POST",
+    url: "/api/runs",
+    payload: { message: "查询 000001.SZ 的行情", conversationId: "conversation_sse" }
+  });
+  assert.equal(acceptedResponse.statusCode, 202);
+  const accepted = acceptedResponse.json().data;
+  let snapshot;
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const response = await app.inject({ method: "GET", url: accepted.snapshotUrl });
+    snapshot = response.json().data;
+    if (["succeeded", "failed", "cancelled"].includes(snapshot.status)) break;
+  }
+
+  assert.equal(snapshot.status, "succeeded");
+  assert.equal(snapshot.conversationId, "conversation_sse");
+  assert.equal(snapshot.events[0].type, "run_status");
+  assert.deepEqual(snapshot.events.map((event) => event.sequence), snapshot.events.map((_, index) => index + 1));
+  assert.equal(snapshot.events.some((event) => event.type === "trace_event"), true);
+  assert.equal(snapshot.events.at(-1).type, "run_result");
+  const marketEvent = snapshot.events.find((event) => event.type === "trace_event" && event.event.type === "tool_call");
+  assert.equal(marketEvent.event.result.series.bars.length, 60);
+  await app.close();
+});
+
 test("POST /api/approvals/decision records approval decisions", async () => {
   const app = createApiServer();
   const pendingResponse = await app.inject({ method: "POST", url: "/api/agent/run", payload: { message: "执行 SQL: SELECT * FROM metrics", reportMode: false } });

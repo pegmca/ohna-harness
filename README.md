@@ -50,7 +50,7 @@
 本仓库已经初始化为 pnpm workspace monorepo：
 
 - `apps/web`：Vite + React + TypeScript Web 应用入口，负责承载 Immersive 产品界面，只通过 HTTP API 调用 Agent。
-- `apps/api`：Fastify HTTP adapter，当前暴露 `POST /api/agent/run` 和 `/health`，负责请求校验、DTO 映射和结构化响应。
+- `apps/api`：Fastify HTTP adapter，负责请求校验、异步 Run 生命周期、SSE 事件投影和结构化响应。
 - `packages/agent`：Agent 能力边界，后续承载意图识别、循环调度和模型交互。
 - `packages/types`：前后端共享类型边界，承载 API contract、DTO、结构化错误和稳定枚举。
 - `packages/filings`：公告/财报 ingestion 边界，负责文件来源、document metadata 和原始文本来源信息。
@@ -63,24 +63,28 @@
 
 `packages/*` 作为独立 workspace package 构建和类型检查。`apps/web` 保持前端应用边界，不直接依赖 `agent`、`tools`、`trace` 这些核心运行时包；当前通过 `apps/api` 接入 Agent。
 
-设计文档拆分为两层：根目录 `DESIGN.md` 是通用 Meridian 视觉系统，定义设计 token、组件视觉语言和 AI 前端生成约束；`system.css` 是对应的 CSS token / utility 参考实现；`docs/IMMERSIVE_PRODUCT_DESIGN.md` 承载 Immersive 金融研究 Agent 的产品体验、信息架构和页面模块。
+设计文档拆分为两层：根目录 `DESIGN.md` 是 Kimi 风格、支持明暗主题的 Workbench 视觉系统，定义 design token、组件视觉语言和 AI 前端生成约束；`system.css` 是唯一 token / utility 参考实现；`docs/IMMERSIVE_PRODUCT_DESIGN.md` 承载金融研究 Agent 的产品体验、信息架构和页面模块。代码边界和 AI Coding 约束分别见 `ARCHITECTURE.md` 与 `docs/AI_CODING.md`。
 
 ## Immersive Playground
 
-Immersive Playground 已从 Week 1 最小 Chat 形态演进到 Week 3 Report Skill Planner：
+Immersive Playground 已演进为带实时执行过程的研究 Workbench：
 
 - 页面采用 Agent Chat 布局：左侧本地会话列表，中间对话流，底部 composer，顶部提供 Report Mode 开关和生成研报按钮。
-- 每次提交调用 `POST /api/agent/run`，请求体为 `AgentRunRequestDto`：`message`、`reportMode`、可选 `reportTriggerSource` 和可选 `conversationId`。
-- API 返回 `ApiResult<AgentRunResponseDto>`，包含 `answer`、`intent`、`steps`、`trace`、`requestId`、可选 `reportPlan` 和结构化错误。
-- run state、工具调用和 trace 作为 assistant 消息内的可展开派生内容展示，不再使用独立右侧调试栏。
-- `reportMode`、生成研报按钮和自然语言报告/PDF 请求会进入同一个 Report Skill activation 边界，生成结构化 `ReportPlanDto`。Agent Chat 当前只返回 plan；package 层已经提供可独立测试的 mock Report Workflow runtime。
+- 每次提交先调用 `POST /api/runs` 获得 `runId`，再订阅 `GET /api/runs/:runId/events`；事件按递增 id 输出状态、脱敏 trace、最终结果或结构化错误。
+- `GET /api/runs/:runId` 提供可恢复快照，`DELETE /api/runs/:runId` 取消尚未结束的运行。第一版实时范围是过程事件，最终回答作为终态事件一次提交。
+- run state、工具调用和 trace 从 assistant 消息进入右侧详情面板；桌面端压缩主区，移动端覆盖显示，不设置常驻调试侧栏。
+- 行情工具返回稳定的 60 根 mock OHLCV，详情面板使用 A 股红涨绿跌 K 线；图表按 lightweight-charts 要求保留 TradingView attribution。
+- `/`、`/data-sources`、`/workflow`、`/citations`、`/eval`、`/architecture`、`/settings` 均为可刷新路由；设置页支持浅色、深色和跟随系统。
 
 本地 API 验证：
 
 ```bash
-curl -X POST http://localhost:3001/api/agent/run \
+curl -X POST http://localhost:3001/api/runs \
   -H "content-type: application/json" \
-  -d '{"message":"帮我查询 000001.SZ 最近一期净利润和 ROE。","reportMode":false}'
+  -d '{"message":"查询 000001.SZ 的行情。","reportMode":false}'
+
+# 使用上一步返回的 runId
+curl -N http://localhost:3001/api/runs/<runId>/events
 ```
 
 ## Docker Compose 一键 Demo

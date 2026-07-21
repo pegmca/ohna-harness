@@ -149,6 +149,7 @@ export function createMcpFinancialToolRuntime(): McpFinancialToolRuntime {
       }
       const output = result.result as {
         asOf: string; currency: string; lastPrice: number; changePercent: number; source: "mock";
+        series: import("@aiagent/types").MarketSeriesDto;
       };
       const requested = new Set(input.fields);
       return {
@@ -162,6 +163,7 @@ export function createMcpFinancialToolRuntime(): McpFinancialToolRuntime {
           ...(requested.has("returns") ? { returns: output.changePercent } : {}),
           ...(requested.has("volume") ? { volume: 102400000 } : {}),
           ...(requested.has("summary") ? { summary: { lastPrice: output.lastPrice, changePercent: output.changePercent } } : {}),
+          ...(requested.has("ohlcv") ? { series: output.series } : {}),
           source: output.source
         }
       };

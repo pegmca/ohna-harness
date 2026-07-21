@@ -1,7 +1,10 @@
 import type { TraceMcpToolCallEvent, TraceToolCallEvent } from "@aiagent/trace";
 import type { ToolApprovalDecisionDto, ToolApprovalRequestDto, ToolPermissionLevelDto } from "@aiagent/types";
-import type { ToolRegistry } from "./registry.js";
 import type { Tool, ToolError, ToolExecutionContext, ToolExecutionResult, ToolRetryPolicy } from "./types.js";
+
+interface ToolLookup {
+  get(name: string): Tool<unknown, unknown> | undefined;
+}
 
 const DEFAULT_TOOL_TIMEOUT_MS = 10_000;
 const DEFAULT_RETRY_POLICY: ToolRetryPolicy = { maxAttempts: 3, baseDelayMs: 100, maxDelayMs: 2_000, jitterRatio: 0.2 };
@@ -19,7 +22,7 @@ type ToolExecutionDraft<TOutput> =
  * @returns 结构化执行结果。
  */
 export async function executeTool(
-  registry: ToolRegistry,
+  registry: ToolLookup,
   name: string,
   args: unknown,
   context: ToolExecutionContext = {}
@@ -255,7 +258,7 @@ function defaultSleep(delayMs: number, signal?: AbortSignal): Promise<void> { re
  * @returns 权限判断、审批请求和已有审批决定。
  */
 function evaluateToolPermission(
-  tool: NonNullable<ReturnType<ToolRegistry["get"]>>,
+  tool: Tool<unknown, unknown>,
   parsedInput: unknown,
   toolName: string,
   normalizedArgs: Record<string, unknown>,

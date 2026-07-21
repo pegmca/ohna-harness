@@ -646,6 +646,13 @@ function formatToolAnswer(toolName: string, result: unknown): string {
     }
   }
 
+  if (toolName === "market_data_mock" && isRecord(result)) {
+    const bars = isRecord(result.series) && Array.isArray(result.series.bars) ? result.series.bars : [];
+    const barCount = bars.length;
+
+    return `已调用 market_data_mock。${String(result.ticker)} 最新价 ${String(result.lastPrice)} 元，涨跌幅 ${String(result.changePercent)}%，已生成 ${barCount} 根日 K 数据，可在运行详情中查看。数据来源：mock。`;
+  }
+
   // MCP tools 返回 `{ ok: true, data: {...} }` envelope，需要解包 data 后格式化。
   const data = isRecord(result) && result.ok === true && isRecord(result.data) ? result.data : undefined;
 

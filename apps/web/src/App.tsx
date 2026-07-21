@@ -1,6 +1,8 @@
 import * as Switch from "@radix-ui/react-switch";
 import type {
+  AgentRunAcceptedDto,
   AgentRunResponseDto,
+  AgentRunStreamEventDto,
   ApiError,
   ApiResult,
   DataSourceChunksResponseDto,
@@ -36,18 +38,21 @@ import {
   Search,
   Send,
   ShieldCheck,
-  Sparkles,
   Network,
   BarChart3,
   User,
   Wrench,
+  Settings,
   X
 } from "lucide-react";
 import { type FormEvent, type ReactNode, useEffect, useMemo, useState } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
+import { SettingsPage } from "./features/settings/SettingsPage";
+import { findMarketSeries, MarketCandlestickChart } from "./features/market-data/MarketCandlestickChart";
 
 type MessageRole = "user" | "assistant";
 type MessageStatus = "complete" | "pending" | "failed";
-type WorkspaceView = "chat" | "data-sources" | "workflow" | "citations" | "eval" | "architecture";
+type WorkspaceView = "chat" | "data-sources" | "workflow" | "citations" | "eval" | "architecture" | "settings";
 
 interface UiMessage {
   id: string;
@@ -57,6 +62,7 @@ interface UiMessage {
   status: MessageStatus;
   ok?: boolean;
   run?: AgentRunResponseDto;
+  streamEvents?: AgentRunStreamEventDto[];
 }
 
 interface LocalConversation {
@@ -67,6 +73,11 @@ interface LocalConversation {
   messages: UiMessage[];
   latestRun?: AgentRunResponseDto;
   reportMode: boolean;
+}
+
+interface SelectedRunDetail {
+  run?: AgentRunResponseDto;
+  event?: AgentRunStreamEventDto;
 }
 
 type TraceEventDto = AgentRunResponseDto["trace"]["events"][number];
@@ -93,14 +104,17 @@ const demoDataSourceContent = `# 资产质量
  * @returns Week 1 Agent Chat 产品页面。
  */
 export function App() {
+  const location = useLocation();
+  const navigate = useNavigate();
   const [conversations, setConversations] = useState<LocalConversation[]>(() => [createConversation()]);
   const [activeConversationId, setActiveConversationId] = useState(() => conversations[0]?.id ?? "");
   const [input, setInput] = useState(demoPrompts[1]);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [composerError, setComposerError] = useState<string | undefined>();
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
-  const [workspaceView, setWorkspaceView] = useState<WorkspaceView>("chat");
+  const workspaceView = getWorkspaceView(location.pathname);
   const [approvalStatusById, setApprovalStatusById] = useState<Record<string, string>>({});
+  const [selectedRunDetail, setSelectedRunDetail] = useState<SelectedRunDetail>();
 
   const activeConversation = useMemo(
     () => conversations.find((conversation) => conversation.id === activeConversationId) ?? conversations[0],
@@ -211,7 +225,8 @@ export function App() {
       role: "assistant",
       content: "Agent 正在分析问题、路由意图并准备回答。",
       createdAt: now,
-      status: "pending"
+      status: "pending",
+      streamEvents: []
     };
 
     updateConversation(submittedConversationId, (current) => ({
@@ -229,7 +244,18 @@ export function App() {
         trimmed,
         submittedReportMode || triggerSource === "button",
         submittedConversationId,
-        triggerSource
+        triggerSource,
+        (event) => {
+          replaceMessage(submittedConversationId, pendingMessageId, {
+            content: formatRunProgress(event)
+          });
+          updateConversation(submittedConversationId, (current) => ({
+            ...current,
+            messages: current.messages.map((item) => item.id === pendingMessageId
+              ? { ...item, streamEvents: [...(item.streamEvents ?? []), event] }
+              : item)
+          }));
+        }
       );
 
       if (!result.ok) {
@@ -244,19 +270,12 @@ export function App() {
       }
 
       const run = result.data;
-      if (run.reportPlan?.status === "ready") {
-        const workflowResult = await startReportWorkflow(run.reportPlan, run.requestId, run.traceId);
-        if (workflowResult.ok) {
-          run.reportWorkflow = workflowResult.data;
-          const traceResult = await fetchTrace(run.requestId);
-          if (traceResult.ok) run.trace = traceResult.data;
-        }
-      }
       replaceMessage(submittedConversationId, pendingMessageId, {
         content: run.answer,
         status: run.ok ? "complete" : "failed",
         ok: run.ok,
-        run
+        run,
+        streamEvents: undefined
       });
       updateConversation(submittedConversationId, (current) => ({
         ...current,
@@ -350,7 +369,7 @@ export function App() {
   }
 
   return (
-    <main className="agent-app-shell">
+    <main className={`agent-app-shell ${selectedRunDetail ? "has-detail-panel" : ""}`}>
       <ConversationSidebar
         activeConversationId={activeConversation?.id}
         conversations={conversations}
@@ -359,7 +378,7 @@ export function App() {
         onNewConversation={handleNewConversation}
         onSelectConversation={handleSelectConversation}
         onSelectView={(view) => {
-          setWorkspaceView(view);
+          navigate(getWorkspacePath(view));
           setIsSidebarOpen(false);
         }}
         workspaceView={workspaceView}
@@ -382,6 +401,7 @@ export function App() {
             isSubmitting={isSubmitting}
             messages={activeConversation?.messages ?? []}
             onApprovalDecision={handleApprovalDecision}
+            onOpenRunDetail={setSelectedRunDetail}
             onUsePrompt={setInput}
           />
 
@@ -398,9 +418,17 @@ export function App() {
         </section>
       ) : workspaceView === "data-sources" ? (
         <DataSourcesWorkspace onMenuClick={() => setIsSidebarOpen(true)} />
+      ) : workspaceView === "settings" ? (
+        <SettingsPage onMenuClick={() => setIsSidebarOpen(true)} />
       ) : (
         <ProductWorkspace latestRun={latestRun} onMenuClick={() => setIsSidebarOpen(true)} view={workspaceView} />
       )}
+      <RunDetailPanel
+        approvalStatusById={approvalStatusById}
+        detail={selectedRunDetail}
+        onApprovalDecision={handleApprovalDecision}
+        onClose={() => setSelectedRunDetail(undefined)}
+      />
     </main>
   );
 }
@@ -433,10 +461,7 @@ function ConversationSidebar(props: ConversationSidebarProps) {
       />
       <aside className={`conversation-sidebar ${props.isOpen ? "is-open" : ""}`} aria-label="会话列表">
         <div className="sidebar-header">
-          <div>
-            <p className="md-label">Immersive</p>
-            <h1 className="sidebar-title">Agent Chat</h1>
-          </div>
+          <h1 className="sidebar-title"><span className="brand-mark sidebar-brand-mark" aria-hidden="true" /><span>Immersive</span></h1>
           <button className="icon-button mobile-only" onClick={props.onClose} type="button" aria-label="关闭">
             <X className="icon-size" />
           </button>
@@ -499,7 +524,9 @@ function ConversationSidebar(props: ConversationSidebarProps) {
         </div>
 
         <footer className="sidebar-footer">
-          <span>Local session</span>
+          <button className={props.workspaceView === "settings" ? "is-active" : ""} onClick={() => props.onSelectView("settings")} type="button">
+            <Settings className="icon-size" /><span>Settings</span>
+          </button>
           <span>{props.conversations.length} chats</span>
         </footer>
       </aside>
@@ -508,7 +535,7 @@ function ConversationSidebar(props: ConversationSidebarProps) {
 }
 
 /** 展示 Workflow、Citation、Eval 与 Architecture 产品视图；所有内容均来自 API DTO 或当前 Agent run。 */
-function ProductWorkspace(props: { latestRun?: AgentRunResponseDto; onMenuClick: () => void; view: Exclude<WorkspaceView, "chat" | "data-sources"> }) {
+function ProductWorkspace(props: { latestRun?: AgentRunResponseDto; onMenuClick: () => void; view: Exclude<WorkspaceView, "chat" | "data-sources" | "settings"> }) {
   const [evalReport, setEvalReport] = useState<ProductEvalReportDto>();
   const [architecture, setArchitecture] = useState<ProductArchitectureDto>();
   const [error, setError] = useState<string>();
@@ -896,7 +923,7 @@ function ChatHeader(props: ChatHeaderProps) {
           <FilePlus2 className="icon-size" />
           <span>生成研报</span>
         </button>
-        <label className="report-switch">
+        <div className="report-switch">
           <span>Report Mode</span>
           <Switch.Root
             checked={props.reportMode}
@@ -905,7 +932,7 @@ function ChatHeader(props: ChatHeaderProps) {
           >
             <Switch.Thumb className="switch-thumb" />
           </Switch.Root>
-        </label>
+        </div>
         <StatusBadge tone={props.isSubmitting ? "info" : props.latestRun?.ok === false ? "danger" : "success"}>
           {props.isSubmitting ? "running" : formatRunStatus(props.latestRun)}
         </StatusBadge>
@@ -919,6 +946,7 @@ interface ChatTimelineProps {
   isSubmitting: boolean;
   messages: UiMessage[];
   onApprovalDecision: (request: ToolApprovalRequestDto, decision: ToolApprovalDecisionDto["decision"]) => Promise<void>;
+  onOpenRunDetail: (detail: SelectedRunDetail) => void;
   onUsePrompt: (prompt: string) => void;
 }
 
@@ -933,7 +961,7 @@ function ChatTimeline(props: ChatTimelineProps) {
     return (
       <section className="chat-timeline empty-timeline" aria-label="消息列表">
         <div className="empty-state">
-          <Sparkles className="empty-icon" />
+          <span className="empty-brand-logo" aria-hidden="true"><span className="brand-mark empty-brand-mark" /></span>
           <h2>从一个金融研究问题开始</h2>
           <p>回答会保留真实 Agent run、工具调用和 trace，可在 assistant 消息内展开查看。</p>
           <StarterPrompts disabled={props.isSubmitting} onUsePrompt={props.onUsePrompt} />
@@ -951,6 +979,7 @@ function ChatTimeline(props: ChatTimelineProps) {
             key={message.id}
             message={message}
             onApprovalDecision={props.onApprovalDecision}
+            onOpenRunDetail={props.onOpenRunDetail}
           />
         ))}
       </div>
@@ -968,6 +997,7 @@ function ChatMessage(props: {
   approvalStatusById: Record<string, string>;
   message: UiMessage;
   onApprovalDecision: (request: ToolApprovalRequestDto, decision: ToolApprovalDecisionDto["decision"]) => Promise<void>;
+  onOpenRunDetail: (detail: SelectedRunDetail) => void;
 }) {
   const { message } = props;
   const isUser = message.role === "user";
@@ -975,7 +1005,7 @@ function ChatMessage(props: {
   return (
     <article className={`chat-message ${isUser ? "is-user" : "is-assistant"}`}>
       <div className="message-avatar" aria-hidden="true">
-        {isUser ? <User className="icon-size" /> : <Bot className="icon-size" />}
+        {isUser ? <User className="icon-size" /> : <span className="brand-mark message-brand-mark" />}
       </div>
       <div className="message-content">
         <div className="message-meta">
@@ -986,15 +1016,21 @@ function ChatMessage(props: {
         </div>
         <p className="message-text">{message.content}</p>
         {message.status === "pending" ? (
-          <div className="message-progress">
+          <div className="message-progress run-progress-list">
             <Loader2 className="icon-size spin" />
-            <span>routing / tool selection / finalizing</span>
+            <div>
+              {(message.streamEvents ?? []).filter((event) => event.type === "trace_event").slice(-4).map((event) => (
+                <button key={event.eventId} onClick={() => props.onOpenRunDetail({ event })} type="button">
+                  <span>{event.type === "trace_event" ? formatEventTitle(event.event) : event.type}</span>
+                  <small>{event.type === "trace_event" ? formatEventSummary(event.event) : ""}</small>
+                </button>
+              ))}
+            </div>
           </div>
         ) : null}
         {message.run ? (
           <RunDetails
-            approvalStatusById={props.approvalStatusById}
-            onApprovalDecision={props.onApprovalDecision}
+            onOpen={() => props.onOpenRunDetail({ run: message.run })}
             reportMode={message.run.intent === "report_skill"}
             run={message.run}
           />
@@ -1087,8 +1123,7 @@ function StarterPrompts(props: {
  * @returns run 详情折叠区。
  */
 function RunDetails(props: {
-  approvalStatusById: Record<string, string>;
-  onApprovalDecision: (request: ToolApprovalRequestDto, decision: ToolApprovalDecisionDto["decision"]) => Promise<void>;
+  onOpen: () => void;
   reportMode: boolean;
   run: AgentRunResponseDto;
 }) {
@@ -1097,14 +1132,13 @@ function RunDetails(props: {
   const toolEvents = run.trace.events.filter(
     (event) => event.type === "tool_call" || event.type === "mcp_tool_call"
   );
-  const approvalRequests = getApprovalRequests(run);
 
   return (
-    <details className="run-details">
-      <summary>
+    <button className="run-details run-details-trigger" onClick={props.onOpen} type="button">
+      <span className="run-details-summary">
         <span className="summary-title">
           <Activity className="icon-size" />
-          Run details
+          查看运行过程
         </span>
         <span className="summary-badges">
           <StatusBadge tone="neutral">{run.intent}</StatusBadge>
@@ -1112,31 +1146,56 @@ function RunDetails(props: {
           <StatusBadge tone={props.reportMode ? "info" : "neutral"}>{props.reportMode ? "report" : "chat"}</StatusBadge>
           <StatusBadge tone="neutral">{run.steps.length} steps</StatusBadge>
           <StatusBadge tone="neutral">{toolEvents.length} tools</StatusBadge>
-          <StatusBadge tone={approvalRequests.length > 0 ? "info" : "neutral"}>{approvalRequests.length} approvals</StatusBadge>
           <StatusBadge tone="neutral">{run.trace.events.length} trace</StatusBadge>
         </span>
         <ChevronDown className="details-chevron" />
-      </summary>
-      <div className="run-details-body">
-        <div className="run-identifiers">
-          <span>requestId: {run.requestId}</span>
-          <span>traceId: {run.traceId}</span>
-        </div>
-        <TraceSummaryPanel summary={run.trace.summary} />
-        {run.error ? <ErrorBlock error={run.error} /> : null}
-        {run.reportPlan ? <ReportPlanPanel plan={run.reportPlan} /> : null}
-        {run.reportWorkflow ? <ReportWorkflowPanel workflow={run.reportWorkflow} /> : null}
-        <ApprovalRequestsPanel
-          approvalStatusById={props.approvalStatusById}
-          onApprovalDecision={props.onApprovalDecision}
-          requests={approvalRequests}
-        />
-        <RunStepsList steps={run.steps} />
-        <ToolCallsList events={toolEvents} />
-        <TraceTimeline events={run.trace.events} />
-        <JsonDetails title="run json" value={run} />
+      </span>
+    </button>
+  );
+}
+
+/**
+ * 在右侧按需展示当前 assistant run 或实时事件，不形成永久调试侧栏。
+ *
+ * @param props 详情状态和审批操作。
+ * @returns 可关闭的运行详情面板。
+ */
+function RunDetailPanel(props: {
+  approvalStatusById: Record<string, string>;
+  detail?: SelectedRunDetail;
+  onApprovalDecision: (request: ToolApprovalRequestDto, decision: ToolApprovalDecisionDto["decision"]) => Promise<void>;
+  onClose: () => void;
+}) {
+  const run = props.detail?.run;
+  const event = props.detail?.event;
+  const toolEvents = run?.trace.events.filter((item) => item.type === "tool_call" || item.type === "mcp_tool_call") ?? [];
+  const approvalRequests = run ? getApprovalRequests(run) : [];
+  const marketSeries = findMarketSeries(event ?? run);
+  return (
+    <aside aria-hidden={!props.detail} aria-label="运行详情" className={`run-detail-panel ${props.detail ? "is-open" : ""}`}>
+      <header className="run-detail-header">
+        <div><p className="md-label">Agent activity</p><h2>{event?.type === "trace_event" ? formatEventTitle(event.event) : "运行过程"}</h2></div>
+        <button className="icon-button" onClick={props.onClose} type="button" aria-label="关闭运行详情"><X className="icon-size" /></button>
+      </header>
+      <div className="run-detail-scroll">
+        {marketSeries ? <MarketCandlestickChart series={marketSeries} /> : null}
+        {event ? <><p className="detail-lead">{formatRunProgress(event)}</p><JsonDetails title="event json" value={event} /></> : null}
+        {run ? (
+          <>
+            <div className="run-identifiers"><span>requestId: {run.requestId}</span><span>traceId: {run.traceId}</span></div>
+            <TraceSummaryPanel summary={run.trace.summary} />
+            {run.error ? <ErrorBlock error={run.error} /> : null}
+            {run.reportPlan ? <ReportPlanPanel plan={run.reportPlan} /> : null}
+            {run.reportWorkflow ? <ReportWorkflowPanel workflow={run.reportWorkflow} /> : null}
+            <ApprovalRequestsPanel approvalStatusById={props.approvalStatusById} onApprovalDecision={props.onApprovalDecision} requests={approvalRequests} />
+            <RunStepsList steps={run.steps} />
+            <ToolCallsList events={toolEvents} />
+            <TraceTimeline events={run.trace.events} />
+            <JsonDetails title="run json" value={run} />
+          </>
+        ) : null}
       </div>
-    </details>
+    </aside>
   );
 }
 
@@ -1490,20 +1549,22 @@ function StatusBadge(props: { children: ReactNode; tone: "danger" | "info" | "ne
 }
 
 /**
- * 调用最小 Agent API 并返回共享 ApiResult。
+ * 创建异步 Agent run 并消费 SSE，过程事件实时回写 assistant 消息。
  *
  * @param message 当前用户输入。
  * @param reportMode Report Mode 占位开关状态。
  * @param conversationId 可选会话标识。
- * @returns API 运行结果。
+ * @param onEvent 实时事件回调。
+ * @returns terminal API 运行结果。
  */
 async function runAgent(
   message: string,
   reportMode: boolean,
   conversationId: string | undefined,
-  reportTriggerSource?: ReportTriggerSourceDto
+  reportTriggerSource?: ReportTriggerSourceDto,
+  onEvent?: (event: AgentRunStreamEventDto) => void
 ): Promise<ApiResult<AgentRunResponseDto>> {
-  const response = await fetch("/api/agent/run", {
+  const response = await fetch("/api/runs", {
     method: "POST",
     headers: {
       "content-type": "application/json"
@@ -1515,13 +1576,87 @@ async function runAgent(
       conversationId
     })
   });
-  const result = await parseApiResult<AgentRunResponseDto>(response);
+  const accepted = await parseApiResult<AgentRunAcceptedDto>(response);
 
-  if (!response.ok && result.ok) {
+  if (!accepted.ok) return accepted;
+  if (!response.ok) {
     throw new Error("API 返回了不一致的成功状态。");
   }
 
-  return result;
+  const streamResponse = await fetch(accepted.data.eventsUrl, {
+    headers: { accept: "text/event-stream" }
+  });
+  if (!streamResponse.ok || !streamResponse.body) {
+    return {
+      ok: false,
+      requestId: accepted.data.requestId,
+      error: {
+        code: "internal_error",
+        message: "无法连接 Agent 实时事件流。",
+        requestId: accepted.data.requestId,
+        details: { status: streamResponse.status }
+      }
+    };
+  }
+
+  const reader = streamResponse.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const chunk = await reader.read();
+    buffer += decoder.decode(chunk.value, { stream: !chunk.done });
+    const frames = buffer.split("\n\n");
+    buffer = frames.pop() ?? "";
+
+    for (const frame of frames) {
+      const data = frame.split("\n").filter((line) => line.startsWith("data: ")).map((line) => line.slice(6)).join("\n");
+      if (!data) continue;
+      const event = JSON.parse(data) as AgentRunStreamEventDto;
+      onEvent?.(event);
+      if (event.type === "run_result") {
+        return { ok: true, data: event.result, requestId: event.requestId };
+      }
+      if (event.type === "run_error") {
+        return { ok: false, error: event.error, requestId: event.requestId };
+      }
+    }
+
+    if (chunk.done) break;
+  }
+
+  return {
+    ok: false,
+    requestId: accepted.data.requestId,
+    error: {
+      code: "internal_error",
+      message: "Agent 事件流在返回最终结果前结束。",
+      requestId: accepted.data.requestId
+    }
+  };
+}
+
+/**
+ * 把实时事件转换为 assistant 消息中的简短进度文案。
+ *
+ * @param event 当前 run event。
+ * @returns 用户可读进度。
+ */
+function formatRunProgress(event: AgentRunStreamEventDto): string {
+  if (event.type === "run_status") return event.message;
+  if (event.type === "run_error") return event.error.message;
+  if (event.type === "run_result") return event.result.answer;
+  const labels: Partial<Record<TraceEventDto["type"], string>> = {
+    request_received: "已接收研究问题，正在分析意图。",
+    intent_routed: "已完成意图识别，正在选择研究路径。",
+    retrieval: "正在检索公告与研究证据。",
+    tool_call: "已调用本地研究工具。",
+    mcp_tool_call: "已通过 MCP 获取结构化数据。",
+    workflow_node: "正在执行研报工作流节点。",
+    citation_verifier: "正在校验结论与引用覆盖。",
+    final_response: "研究过程已完成，正在整理回答。"
+  };
+  return labels[event.event.type] ?? `正在处理 ${event.event.type.replaceAll("_", " ")}。`;
 }
 
 /**
@@ -1732,17 +1867,6 @@ function getApprovalRequests(run: AgentRunResponseDto): ToolApprovalRequestDto[]
   if (workflowApproval) requests.set(workflowApproval.approvalId, workflowApproval);
 
   return [...requests.values()];
-}
-
-/** 启动 Report Workflow，前端仅提交 planner DTO。 */
-async function startReportWorkflow(plan: NonNullable<AgentRunResponseDto["reportPlan"]>, requestId: string, traceId: string): Promise<ApiResult<ReportWorkflowResponseDto>> {
-  const response = await fetch("/api/report-workflows", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ plan, requestId, traceId }) });
-  return parseApiResult(response);
-}
-
-/** 按 requestId 刷新 workflow 续写后的完整 trace。 */
-async function fetchTrace(requestId: string): Promise<ApiResult<AgentRunResponseDto["trace"]>> {
-  return parseApiResult(await fetch(`/api/traces/${encodeURIComponent(requestId)}`));
 }
 
 /**
@@ -1990,4 +2114,33 @@ function createUiId(prefix: string): string {
   }
 
   return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+/**
+ * 将浏览器路径解析为稳定工作区，未知路径安全回退到聊天首页。
+ *
+ * @param pathname 当前 URL pathname。
+ * @returns 对应工作区。
+ */
+function getWorkspaceView(pathname: string): WorkspaceView {
+  const routes: Record<string, WorkspaceView> = {
+    "/": "chat",
+    "/data-sources": "data-sources",
+    "/workflow": "workflow",
+    "/citations": "citations",
+    "/eval": "eval",
+    "/architecture": "architecture",
+    "/settings": "settings"
+  };
+  return routes[pathname] ?? "chat";
+}
+
+/**
+ * 将工作区转换为可分享的产品路由。
+ *
+ * @param view 工作区。
+ * @returns URL pathname。
+ */
+function getWorkspacePath(view: WorkspaceView): string {
+  return view === "chat" ? "/" : `/${view}`;
 }

@@ -349,6 +349,16 @@ export interface TraceRecorder {
   getTrace(): Trace;
 }
 
+export interface ObservableTraceRecorder extends TraceRecorder {
+  /**
+   * 订阅已经脱敏的新增事件，供 SSE 等投影消费。
+   *
+   * @param listener 事件监听函数。
+   * @returns 取消订阅函数。
+   */
+  subscribe(listener: (event: TraceEvent) => void): () => void;
+}
+
 export interface TraceStore {
   save(trace: Trace): void;
   getByRequestId(requestId: string): Trace | undefined;
@@ -420,6 +430,39 @@ export function createInMemoryTraceRecorder(traceId = createTraceId(), requestId
     record,
     getEvents,
     getTrace
+  };
+}
+
+/**
+ * 创建可观察的内存 trace recorder，让实时传输和最终 trace 共享同一事件来源。
+ *
+ * @param traceId trace 标识。
+ * @param requestId 请求标识。
+ * @param initialEvents 可选历史事件。
+ * @param initialStartedAt 可选开始时间。
+ * @returns 支持订阅的 recorder。
+ */
+export function createObservableTraceRecorder(
+  traceId = createTraceId(),
+  requestId = createRequestId(),
+  initialEvents: readonly TraceEvent[] = [],
+  initialStartedAt?: string
+): ObservableTraceRecorder {
+  const base = createInMemoryTraceRecorder(traceId, requestId, initialEvents, initialStartedAt);
+  const listeners = new Set<(event: TraceEvent) => void>();
+
+  return {
+    ...base,
+    record(event) {
+      base.record(event);
+      const sanitized = base.getEvents().at(-1);
+      if (!sanitized) return;
+      for (const listener of listeners) listener(sanitized);
+    },
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    }
   };
 }
 

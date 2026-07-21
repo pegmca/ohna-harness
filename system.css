@@ -95,6 +95,71 @@
   --md-container-pad: clamp(16px, 3vw, 32px);
 }
 
+/* Kimi-inspired semantic palette. Theme values stay centralized so product CSS never hard-codes surfaces. */
+:root,
+:root[data-theme="light"] {
+  --md-color-canvas: #fbfaf9;
+  --md-color-surface: #ffffff;
+  --md-color-elevated: #f5f5f5;
+  --md-color-muted: #eeeeee;
+  --md-color-overlay: rgba(0, 0, 0, 0.6);
+  --md-color-border-subtle: rgba(0, 0, 0, 0.08);
+  --md-color-border: rgba(0, 0, 0, 0.13);
+  --md-color-border-strong: #428475;
+  --md-color-text-primary: rgba(0, 0, 0, 0.9);
+  --md-color-text-secondary: rgba(0, 0, 0, 0.6);
+  --md-color-text-muted: rgba(0, 0, 0, 0.45);
+  --md-color-text-disabled: rgba(0, 0, 0, 0.3);
+  --md-color-text-inverse: #ffffff;
+  --md-color-primary: #428475;
+  --md-color-primary-hover: #356f63;
+  --md-color-primary-pressed: #2d5f55;
+  --md-color-primary-soft: rgba(66, 132, 117, 0.12);
+  --md-color-success: #16c456;
+  --md-color-success-soft: rgba(22, 196, 86, 0.1);
+  --md-color-warning: #ff9500;
+  --md-color-warning-soft: rgba(255, 149, 0, 0.1);
+  --md-color-danger: #ff3849;
+  --md-color-danger-soft: rgba(255, 56, 73, 0.1);
+  --md-color-info: #428475;
+  --md-focus-ring: 0 0 0 3px rgba(66, 132, 117, 0.22);
+  --md-color-info-soft: rgba(66, 132, 117, 0.12);
+  --md-market-up: #ff3849;
+  --md-market-down: #16c456;
+  --md-shadow-popover: 0 12px 36px rgba(0, 0, 0, 0.12), 0 1px 0 rgba(255, 255, 255, 0.7) inset;
+}
+
+:root[data-theme="dark"] {
+  --md-color-canvas: #181817;
+  --md-color-surface: #121212;
+  --md-color-elevated: #1f1f1f;
+  --md-color-muted: #292929;
+  --md-color-overlay: rgba(0, 0, 0, 0.6);
+  --md-color-border-subtle: rgba(255, 255, 255, 0.08);
+  --md-color-border: rgba(255, 255, 255, 0.12);
+  --md-color-border-strong: #89d7b7;
+  --md-color-text-primary: rgba(255, 255, 255, 0.84);
+  --md-color-text-secondary: rgba(255, 255, 255, 0.56);
+  --md-color-text-muted: rgba(255, 255, 255, 0.42);
+  --md-color-text-disabled: rgba(255, 255, 255, 0.26);
+  --md-color-text-inverse: #121212;
+  --md-color-primary: #89d7b7;
+  --md-color-primary-hover: #a6e6cc;
+  --md-color-primary-pressed: #6fc5a2;
+  --md-color-primary-soft: rgba(137, 215, 183, 0.14);
+  --md-color-success: #16c456;
+  --md-color-success-soft: rgba(22, 196, 86, 0.1);
+  --md-color-warning: #ff9f0a;
+  --md-color-warning-soft: rgba(255, 159, 10, 0.1);
+  --md-color-danger: #ff4756;
+  --md-color-danger-soft: rgba(255, 71, 86, 0.1);
+  --md-color-info: #89d7b7;
+  --md-focus-ring: 0 0 0 3px rgba(137, 215, 183, 0.26);
+  --md-color-info-soft: rgba(137, 215, 183, 0.14);
+  --md-market-up: #ff4756;
+  --md-market-down: #16c456;
+}
+
 *,
 *::before,
 *::after {
@@ -512,7 +577,7 @@ svg {
 .md-badge-info {
   border-color: color-mix(in srgb, var(--md-color-info) 46%, var(--md-color-border));
   background: var(--md-color-info-soft);
-  color: #bae6fd;
+  color: var(--md-color-primary);
 }
 
 /* Tabs */

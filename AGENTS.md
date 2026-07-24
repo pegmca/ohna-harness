@@ -7,12 +7,11 @@ This repository is an AI Agent learning workspace and product prototype for an i
 Primary planning documents:
 
 - `README.md`
+- `docs/LEARNING_AND_EVOLUTION_ROADMAP.md`
 - `docs/ROADMAP_1_MONTH.md`
 - `docs/BUSINESS_DIRECTION_FINANCIAL_RESEARCH_AGENT.md`
-- `docs/weeks/*.md`
-- `docs/implementation/*.md`
 
-Before implementing a task, read the relevant implementation document under `docs/implementation/` and the files in the affected package or app.
+Before implementing a task, read the relevant roadmap stage, architecture/design documents, and the files in the affected package or app.
 
 ## Repository Structure
 
@@ -20,7 +19,7 @@ Before implementing a task, read the relevant implementation document under `doc
 - `packages/agent`: Agent orchestration boundary, intent routing, loops, and model-facing logic.
 - `packages/tools`: Tool schema, registry, execution, and external data/tool integration boundary.
 - `packages/trace`: Runtime observability events and trace data structures.
-- `docs/implementation`: Small AI Coding task cards with scope, constraints, validation, and completion notes.
+- `docs/LEARNING_AND_EVOLUTION_ROADMAP.md`: Ongoing learning stages, engineering outcomes, and acceptance evidence.
 
 Keep package boundaries explicit. Do not move runtime behavior into `apps/web` when it belongs in a package.
 
@@ -39,7 +38,7 @@ Read `DESIGN.md` in the project root before changing UI.
 
 1. Use the design system stylesheet declared by `DESIGN.md` (`system.css`). This project uses Vite + React, so import it exactly once from the app's global CSS (`apps/web/src/styles.css`).
 2. Use the tokens, utilities, component anatomy, spacing, typography, and states described in `DESIGN.md`; do not invent a separate visual style.
-3. For Immersive UI work, also read `docs/IMMERSIVE_PRODUCT_DESIGN.md` and the relevant `docs/implementation/*.md` task card.
+3. For Immersive UI work, also read `docs/IMMERSIVE_PRODUCT_DESIGN.md` and the relevant stage in `docs/LEARNING_AND_EVOLUTION_ROADMAP.md`.
 4. The current product direction is Agent Chat: left conversation list, centered conversation timeline, bottom composer. `Run State`, tool calls, and trace details should be assistant-message-derived expandable content, not a permanent right sidebar.
 5. If existing components or styles conflict with `DESIGN.md`, explain the conflict and choose the option that keeps the interface most consistent with the design system.
 6. If `html/preview.html` exists, read it as a visual reference and match its structure, spacing, and component styling where it does not conflict with `DESIGN.md`.
@@ -70,17 +69,17 @@ Update related docs in the same task when the change affects any of these:
 - Directory structure or package responsibility.
 - Setup, scripts, environment variables, or validation commands.
 - Agent loop, intent routing, tool schema, trace event, RAG, workflow, report, or eval behavior.
-- Acceptance criteria in `docs/implementation/*.md`.
+- Acceptance evidence or stage outcomes in `docs/LEARNING_AND_EVOLUTION_ROADMAP.md`.
 
 If no documentation update is needed, state that explicitly in the final response with the reason.
 
-For feature work, keep `notes/` usable as staged technical learning notes for understanding the Agent project. If the relevant task card, weekly plan, or roadmap names a `notes/*.md` deliverable, create or update that file in the same task. If the work changes core agent, tool, RAG, eval, workflow, report, trace, or public API behavior, also create or update the matching weekly note in `notes/` and explain the stage's technical focus, core concepts, implementation flow, tradeoffs, validation, and learning checkpoints.
+For feature work, keep `notes/` usable as staged technical learning notes for understanding the Agent project. If the relevant roadmap stage names a `notes/*.md` deliverable, create or update that file in the same task. If the work changes core agent, tool, RAG, eval, workflow, report, trace, or public API behavior, also create or update the matching topic note in `notes/` and explain the technical focus, core concepts, implementation flow, tradeoffs, validation, and learning checkpoints.
 
 ## AI Coding Workflow
 
 For implementation tasks:
 
-1. Read the relevant task card and nearby code first.
+1. Read the relevant roadmap stage and nearby code first.
 2. Make a narrow, working change.
 3. Run validation.
 4. Check documentation impact.

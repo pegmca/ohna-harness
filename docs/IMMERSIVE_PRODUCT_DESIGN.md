@@ -49,9 +49,9 @@ Immersive 是面向股票研究、公告分析、财务指标查询和研报生�
 
 当前设计债务：
 
-- `App.tsx` 仍承载多个业务组件，后续页面继续增长时应拆分到 `apps/web/src/components`。
+- App 入口已改为 React Router lazy feature 边界，HTTP/SSE 已进入 `shared/api`；Workbench 内的业务视图仍需继续按 `chat`、`run-details`、`data-sources` 和 `report` 拆细。
 - 本地会话刷新后丢失，符合 Week 1 约束；后续真实产品需要服务端持久化。
-- Report Mode 当前仍是 UI/API 占位信号，尚未启动完整 Workflow。
+- Report Mode 现在通过 canonical Run 触发完整 Workflow，不再由浏览器调用独立 Workflow API。
 - 工具调用和 trace 已有摘要和二级 JSON 折叠，后续应补充金融引用、证据质量和风险提示。
 
 ## 技术约束

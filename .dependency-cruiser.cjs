@@ -21,6 +21,16 @@ module.exports = {
       comment: "Runtime packages 不得反向依赖应用 adapter。",
       from: { path: "^packages/" },
       to: { path: "^apps/" }
+    },
+    {
+      name: "web-feature-public-entrypoints-only",
+      severity: "error",
+      comment: "跨 feature 只能使用其 index.ts 公共入口，避免读取内部 ui/model/api。",
+      from: { path: "^apps/web/src/features/([^/]+)/" },
+      to: {
+        path: "^apps/web/src/features/([^/]+)/(?!index\\.ts$)",
+        pathNot: "^apps/web/src/features/$1/"
+      }
     }
   ],
   options: {

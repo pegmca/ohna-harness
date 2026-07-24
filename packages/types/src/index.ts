@@ -353,6 +353,15 @@ export interface TraceFinalResponseEventDto extends TraceEventBaseDto {
   error?: TraceErrorDto;
 }
 
+/** 创建研究 Run 的请求；显式模式与触发入口分离，避免 UI 泄漏 Agent 路由细节。 */
+export interface AgentRunCreateRequestDto {
+  message: string;
+  conversationId: string;
+  mode: "auto" | "report";
+  source: "composer" | "report_button";
+}
+
+/** Agent runtime 内部兼容请求；浏览器创建新 Run 时使用 AgentRunCreateRequestDto。 */
 export interface AgentRunRequestDto {
   message: string;
   reportMode?: boolean;
@@ -360,7 +369,15 @@ export interface AgentRunRequestDto {
   conversationId?: string;
 }
 
+/** 绑定到 URL 中 run 与 approval 资源的最小人工审批输入。 */
+export interface RunApprovalDecisionRequestDto {
+  decision: "approved" | "rejected";
+  reviewerNote?: string;
+  inputDigest: string;
+}
+
 export interface AgentRunResponseDto {
+  runId: string;
   conversationId: string;
   requestId: string;
   traceId: string;

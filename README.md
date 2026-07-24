@@ -73,7 +73,7 @@ PostgreSQL 的本地连接、现有身份表、migration 规则、备份恢复�
 Immersive Playground 已演进为带实时执行过程的研究 Workbench：
 
 - 页面采用 Agent Chat 布局：左侧本地会话列表，中间对话流，底部 composer，顶部提供 Report Mode 开关和生成研报按钮。
-- 每次提交先调用 `POST /api/runs` 获得 `runId`，再订阅 `GET /api/runs/:runId/events`；事件按递增 id 输出状态、脱敏 trace、最终结果或结构化错误。
+- 每次提交先调用 `POST /api/runs` 获得 `runId`，请求字段为 `message`、`conversationId`、`mode: auto | report` 和 `source: composer | report_button`；再订阅 `GET /api/runs/:runId/events`。
 - `GET /api/runs/:runId` 提供可恢复快照，`DELETE /api/runs/:runId` 取消尚未结束的运行。第一版实时范围是过程事件，最终回答作为终态事件一次提交。
 - run state、工具调用和 trace 从 assistant 消息进入右侧详情面板；桌面端压缩主区，移动端覆盖显示，不设置常驻调试侧栏。
 - 行情工具返回稳定的 60 根 mock OHLCV，详情面板使用 A 股红涨绿跌 K 线；图表按 lightweight-charts 要求保留 TradingView attribution。
@@ -89,7 +89,7 @@ curl -c /tmp/aiagent-cookie.txt -X POST http://localhost:3001/api/identity/boots
 curl -X POST http://localhost:3001/api/runs \
   -b /tmp/aiagent-cookie.txt \
   -H "content-type: application/json" \
-  -d '{"message":"查询 000001.SZ 的行情。","reportMode":false}'
+  -d '{"message":"查询 000001.SZ 的行情。","conversationId":"readme-demo","mode":"auto","source":"composer"}'
 
 # 使用上一步返回的 runId
 curl -N -b /tmp/aiagent-cookie.txt http://localhost:3001/api/runs/<runId>/events
@@ -382,7 +382,7 @@ Week 2-014 完成 RAG eval 闭环：30 条 QA case、eval runner、四个指标�
 Intent Router 第一版采用可审查规则优先：
 
 - 自然语言 report skill 触发不只看单一关键词，必须同时具备报告交付诉求和数据需求信号，例如 ticker、公告、财务数据、年报或风险等。
-- 显式 `reportMode` 开关会以 `toggle` 来源进入 `report_skill`；Web 生成研报按钮会以 `button` 来源进入同一 activation 边界；自然语言触发来源为 `natural_language`。
+- `mode: "report"` 会显式进入 report skill；`source` 区分 composer 与生成研报按钮，自然语言仍可在 `mode: "auto"` 下由 Agent 路由。
 - 年报、公告、披露、检索、资产质量等公告文本诉求路由到 `filing_search_mock`。
 - 营收、净利润、ROE、毛利率、现金流、最近一期、同比等财务指标查询路由到 `financial_metric_mock`。
 - “解释 ROE 是什么”这类概念问题保留在 `chat` 路径，不调用工具。
@@ -432,7 +432,7 @@ Approval trace 使用 `approval` event 记录 `requested`、`approved`、`reject
 
 在 assistant 消息中展开 `Run details`，可检查 Activation、Planner、Data Collector、Analyzer、Risk Checker、Citation Verifier、Report Writer、PDF Exporter 的状态、耗时、输入/输出摘要和 workflow run id。下方提供 Markdown/HTML 预览，引用显示 source、documentId、chunkId 与所支持的 finding。
 
-Report HTTP 边界包括 `POST /api/report-workflows`、`GET /api/report-workflows/:runId`、`GET /api/report-artifacts/:artifactId`、`POST /api/report-artifacts/:artifactId/pdf` 和 `GET /api/report-artifacts/:artifactId/download`。审批前 artifact 为 `html_preview_only` / `queued`；批准并生成后为 `pdf_ready`，下载端点只按内存 artifact ID 查找，绝不接受文件路径。快照和 PDF 均随 API 进程重启清除。
+Report Workflow 由 canonical Run application service 内部启动，不再暴露浏览器手动编排入口。artifact 使用 `GET /api/report-artifacts/:artifactId`、`POST /api/report-artifacts/:artifactId/pdf` 和下载接口；审批使用 `POST /api/runs/:runId/approvals/:approvalId/decision`。
 
 可调用验证入口：
 

@@ -17,6 +17,21 @@ async function requestJson(path, init) {
   return body;
 }
 
+/** 创建异步 Run 并轮询其终态快照。 */
+async function runResearch(request) {
+  const accepted = await requestJson("/api/runs", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(request)
+  });
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    const snapshot = await requestJson(accepted.data.snapshotUrl);
+    if (["succeeded", "failed", "cancelled"].includes(snapshot.data.status)) return snapshot.data;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error("Compose Run did not reach a terminal state.");
+}
+
 const health = await requestJson("/health");
 assert.equal(health.ok, true);
 const ready = await requestJson("/ready");
@@ -31,31 +46,26 @@ assert.equal(bootstrapResponse.ok, true);
 sessionCookie = bootstrapResponse.headers.getSetCookie()[0]?.split(";")[0];
 assert.ok(sessionCookie, "Identity bootstrap did not set a session cookie.");
 
-const chat = await requestJson("/api/agent/run", {
-  method: "POST",
-  headers: { "content-type": "application/json" },
-  body: JSON.stringify({ message: "帮我查询 000001.SZ 最近一期净利润和 ROE。", reportMode: false })
+const chat = await runResearch({
+  message: "帮我查询 000001.SZ 最近一期净利润和 ROE。",
+  conversationId: "compose-chat",
+  mode: "auto",
+  source: "composer"
 });
-assert.equal(chat.ok, true);
-assert.equal(chat.data.intent, "tool");
+assert.equal(chat.result.intent, "tool");
 
-const report = await requestJson("/api/agent/run", {
-  method: "POST",
-  headers: { "content-type": "application/json" },
-  body: JSON.stringify({ message: "基于最近两年公告和财务数据，为 000001.SZ 生成研究简报 PDF。", reportMode: false })
+const report = await runResearch({
+  message: "基于最近两年公告和财务数据，为 000001.SZ 生成研究简报 PDF。",
+  conversationId: "compose-report",
+  mode: "auto",
+  source: "composer"
 });
-assert.equal(report.data.intent, "report_skill");
-assert.equal(report.data.reportPlan.triggerSource, "natural_language");
+assert.equal(report.result.intent, "report_skill");
+assert.equal(report.result.reportPlan.triggerSource, "natural_language");
+assert.equal(report.result.reportWorkflow.run.status, "paused");
+assert.equal(report.result.reportWorkflow.artifact.status, "html_preview_only");
 
-const workflow = await requestJson("/api/report-workflows", {
-  method: "POST",
-  headers: { "content-type": "application/json" },
-  body: JSON.stringify({ plan: report.data.reportPlan, requestId: report.data.requestId, traceId: report.data.traceId })
-});
-assert.equal(workflow.data.run.status, "paused");
-assert.equal(workflow.data.artifact.status, "html_preview_only");
-assert.equal(workflow.data.artifact.pdfExport.status, "queued");
-
-const artifact = await requestJson(`/api/report-artifacts/${workflow.data.artifact.artifactId}`);
-assert.equal(artifact.data.artifactId, workflow.data.artifact.artifactId);
+const artifactId = report.result.reportWorkflow.artifact.artifactId;
+const artifact = await requestJson(`/api/report-artifacts/${artifactId}`);
+assert.equal(artifact.data.artifactId, artifactId);
 console.log("Compose smoke passed: web, readiness, chat, natural-language report, and artifact status.");

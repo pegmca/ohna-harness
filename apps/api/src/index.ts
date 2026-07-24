@@ -1,5 +1,3 @@
-import { runAgent } from "@aiagent/agent";
-import type { AgentResponse, AgentStep } from "@aiagent/agent";
 import {
   createIdentityService,
   createInMemoryIdentityRepository,
@@ -8,18 +6,14 @@ import {
 } from "@aiagent/identity";
 import type { LlmClient } from "@aiagent/types";
 import { createDataSourceRuntime } from "@aiagent/rag";
-import { renderResearchReportPdf, runReportWorkflow } from "@aiagent/report";
-import type { ReportWorkflowResult } from "@aiagent/report";
+import { renderResearchReportPdf } from "@aiagent/report";
 import type { RagStructuredError } from "@aiagent/rag";
-import { createInMemoryTraceRecorder, createInMemoryTraceStore, createObservableTraceRecorder, redactSensitiveValue } from "@aiagent/trace";
+import { createInMemoryTraceStore, redactSensitiveValue } from "@aiagent/trace";
 import type {
   AgentRunAcceptedDto,
-  AgentRunRequestDto,
-  AgentRunResponseDto,
+  AgentRunCreateRequestDto,
   AgentRunSnapshotDto,
-  AgentRunStatusDto,
   AgentRunStreamEventDto,
-  AgentStepDto,
   ApiError,
   ApiResult,
   DataSourceChunksResponseDto,
@@ -32,7 +26,6 @@ import type {
   RagAnswerResponseDto,
   RagSearchResponseDto,
   ReportArtifactDto,
-  ReportPlanDto,
   ReportWorkflowResponseDto,
   ProductArchitectureDto,
   ProductEvalReportDto,
@@ -41,12 +34,19 @@ import type {
 } from "@aiagent/types";
 import Fastify, { type FastifyInstance } from "fastify";
 import { z } from "zod";
+import {
+  createInMemoryExecutionRegistry,
+  createInMemoryRunEventBus,
+  createInMemoryRunStore,
+  createMicrotaskRunScheduler
+} from "./adapters/in-memory-run-runtime.js";
+import { createRunApplicationService } from "./application/run-service.js";
 
 const agentRunRequestSchema = z.object({
   message: z.string(),
-  reportMode: z.boolean().optional(),
-  reportTriggerSource: z.enum(["toggle", "button", "natural_language"]).optional(),
-  conversationId: z.string().min(1).optional()
+  conversationId: z.string().min(1),
+  mode: z.enum(["auto", "report"]),
+  source: z.enum(["composer", "report_button"])
 });
 const identityBootstrapSchema = z.object({
   visitorId: z.string().min(8).max(256).regex(/^[A-Za-z0-9_-]+$/),
@@ -67,41 +67,10 @@ const ragAnswerRequestSchema = z.object({
   topK: z.number().int().positive().optional()
 });
 const approvalDecisionRequestSchema = z.object({
-  approvalId: z.string().min(1),
   decision: z.enum(["approved", "rejected"]),
   reviewerNote: z.string().max(240).optional(),
-  requestId: z.string().min(1).optional(),
-  inputDigest: z.string().min(1).optional()
+  inputDigest: z.string().min(1)
 });
-const startReportWorkflowRequestSchema = z.object({
-  plan: z.custom<ReportPlanDto>((value) => typeof value === "object" && value !== null),
-  requestId: z.string().min(1).optional(),
-  traceId: z.string().min(1).optional()
-});
-
-const DEFAULT_CONVERSATION_ID = "week1-local-session";
-
-interface AsyncAgentRun {
-  runId: string;
-  requestId: string;
-  traceId: string;
-  conversationId: string;
-  status: AgentRunStatusDto;
-  createdAt: string;
-  updatedAt: string;
-  events: AgentRunStreamEventDto[];
-  result?: AgentRunResponseDto;
-  error?: ApiError;
-  abortController: AbortController;
-  subscribers: Set<(event: AgentRunStreamEventDto) => void>;
-}
-
-type AgentRunEventPayload =
-  | { type: "run_status"; status: AgentRunStatusDto; message: string }
-  | { type: "trace_event"; event: TraceDto["events"][number] }
-  | { type: "run_result"; result: AgentRunResponseDto }
-  | { type: "run_error"; error: ApiError };
-
 export interface ApiServerOptions {
   llmClient?: LlmClient;
   readiness?: () => Promise<{ ok: boolean; dependency: string; message?: string }>;
@@ -125,11 +94,29 @@ export function createApiServer(options: ApiServerOptions = {}): FastifyInstance
   const dataSourceRuntime = createDataSourceRuntime();
   const approvalDecisions = new Map<string, ToolApprovalDecisionDto>();
   const pendingApprovals = new Map<string, import("@aiagent/types").ToolApprovalRequestDto>();
+  const approvalRunIds = new Map<string, string>();
   const workflowRuns = new Map<string, ReportWorkflowResponseDto>();
   const reportArtifacts = new Map<string, ReportArtifactDto>();
   const reportPdfFiles = new Map<string, Uint8Array>();
   const traceStore = createInMemoryTraceStore();
-  const agentRuns = new Map<string, AsyncAgentRun>();
+  const runStore = createInMemoryRunStore();
+  const runEventBus = createInMemoryRunEventBus();
+  const runService = createRunApplicationService({
+    store: runStore,
+    eventBus: runEventBus,
+    executionRegistry: createInMemoryExecutionRegistry(),
+    scheduler: createMicrotaskRunScheduler(),
+    llmClient: options.llmClient,
+    sink: {
+      saveTrace: (trace) => { traceStore.save(trace); },
+      saveWorkflow: (workflow) => { workflowRuns.set(workflow.run.runId, workflow); },
+      saveArtifact: (artifact) => { reportArtifacts.set(artifact.artifactId, artifact); },
+      saveApproval: (approval, runId) => {
+        pendingApprovals.set(approval.approvalId, approval);
+        approvalRunIds.set(approval.approvalId, runId);
+      }
+    }
+  });
   const identityService = options.identityService ?? createIdentityService(
     createInMemoryIdentityRepository(),
     { fingerprintPepper: "test-only-identity-pepper" }
@@ -155,98 +142,6 @@ export function createApiServer(options: ApiServerOptions = {}): FastifyInstance
       reply.code(401).send(fail(toApiError("unauthorized", "身份 session 无效，请重新识别浏览器。", requestId), requestId));
     }
   });
-
-  /**
-   * 向 run 的内存缓冲与实时订阅者同时发布事件，确保重放和直播使用同一序列。
-   *
-   * @param run 当前异步 run。
-   * @param event 不含 envelope 的事件数据。
-   * @returns 完整 SSE 事件。
-   */
-  function publishRunEvent(
-    run: AsyncAgentRun,
-    event: AgentRunEventPayload
-  ): AgentRunStreamEventDto {
-    const sequence = run.events.length + 1;
-    const value = redactSensitiveValue({
-      ...event,
-      eventId: `${run.runId}_${sequence}`,
-      sequence,
-      runId: run.runId,
-      requestId: run.requestId,
-      traceId: run.traceId,
-      conversationId: run.conversationId,
-      createdAt: new Date().toISOString()
-    }) as AgentRunStreamEventDto;
-    run.events.push(value);
-    run.updatedAt = value.createdAt;
-    for (const subscriber of run.subscribers) subscriber(value);
-    return value;
-  }
-
-  /**
-   * 后台执行完整 Agent 与 Report Workflow，使浏览器只负责消费事件而不承担运行时编排。
-   *
-   * @param run 已创建的异步 run。
-   * @param requestDto 经校验的请求 DTO。
-   * @returns 执行完成 Promise。
-   */
-  async function executeAsyncAgentRun(run: AsyncAgentRun, requestDto: AgentRunRequestDto): Promise<void> {
-    run.status = "running";
-    publishRunEvent(run, { type: "run_status", status: "running", message: "Agent 已开始分析研究任务。" });
-    const trace = createObservableTraceRecorder(run.traceId, run.requestId);
-    const unsubscribe = trace.subscribe((event) => {
-      publishRunEvent(run, { type: "trace_event", event });
-    });
-
-    try {
-      const agentResponse = await runAgent({
-        message: requestDto.message.trim(),
-        reportMode: requestDto.reportMode,
-        reportTriggerSource: requestDto.reportTriggerSource,
-        signal: run.abortController.signal
-      }, { traceRecorder: trace, llmClient: options.llmClient });
-      let reportWorkflow: ReportWorkflowResponseDto | undefined;
-
-      if (agentResponse.reportPlan?.status === "ready" && !run.abortController.signal.aborted) {
-        const workflowResult = await runReportWorkflow(agentResponse.reportPlan, {
-          documents: createReportDemoDocuments(),
-          trace,
-          signal: run.abortController.signal
-        });
-        const workflowResponse = redactSensitiveValue(toReportWorkflowResponseDto(workflowResult));
-        reportWorkflow = workflowResponse;
-        workflowRuns.set(workflowResponse.run.runId, workflowResponse);
-        if (workflowResponse.run.approvalRequest) {
-          pendingApprovals.set(workflowResponse.run.approvalRequest.approvalId, workflowResponse.run.approvalRequest);
-        }
-        if (workflowResponse.artifact) reportArtifacts.set(workflowResponse.artifact.artifactId, workflowResponse.artifact);
-      }
-
-      agentResponse.trace = trace.getTrace();
-      traceStore.save(agentResponse.trace);
-      const responseDto = redactSensitiveValue({
-        ...toAgentRunResponseDto(agentResponse, requestDto, run.requestId),
-        reportWorkflow
-      });
-      registerTraceApprovals(responseDto.trace, pendingApprovals);
-      run.result = responseDto;
-      run.status = run.abortController.signal.aborted ? "cancelled" : responseDto.ok ? "succeeded" : "failed";
-      publishRunEvent(run, { type: "run_result", result: responseDto });
-    } catch (error) {
-      const apiError = toApiError(
-        run.abortController.signal.aborted ? "request_cancelled" : "internal_error",
-        run.abortController.signal.aborted ? "Agent run 已取消。" : "Agent 服务暂时不可用，请稍后重试。",
-        run.requestId,
-        { cause: error instanceof Error ? error.message : "unknown" }
-      );
-      run.status = run.abortController.signal.aborted ? "cancelled" : "failed";
-      run.error = apiError;
-      publishRunEvent(run, { type: "run_error", error: apiError });
-    } finally {
-      unsubscribe();
-    }
-  }
 
   /**
    * 健康检查接口只暴露 API 服务存活状态，供本地 dev server、脚本和部署探针快速验证。
@@ -387,71 +282,36 @@ export function createApiServer(options: ApiServerOptions = {}): FastifyInstance
         issues: parsed.success ? undefined : parsed.error.issues
       }), requestId);
     }
-
-    const runId = `run_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
-    const traceId = `trace_${runId}`;
-    const conversationId = parsed.data.conversationId ?? DEFAULT_CONVERSATION_ID;
-    const createdAt = new Date().toISOString();
-    const run: AsyncAgentRun = {
-      runId,
-      requestId,
-      traceId,
-      conversationId,
-      status: "queued",
-      createdAt,
-      updatedAt: createdAt,
-      events: [],
-      abortController: new AbortController(),
-      subscribers: new Set()
-    };
-    agentRuns.set(runId, run);
-    publishRunEvent(run, { type: "run_status", status: "queued", message: "研究任务已进入队列。" });
-    queueMicrotask(() => void executeAsyncAgentRun(run, parsed.data));
+    const accepted = await runService.create(parsed.data satisfies AgentRunCreateRequestDto);
     reply.code(202);
-    return {
-      ok: true,
-      requestId,
-      data: {
-        runId,
-        requestId,
-        conversationId,
-        status: "queued",
-        eventsUrl: `/api/runs/${runId}/events`,
-        snapshotUrl: `/api/runs/${runId}`
-      }
-    };
+    return { ok: true, requestId: accepted.requestId, data: accepted };
   });
 
   /** 返回当前 run 快照，供刷新恢复和非流式诊断使用。 */
   app.get<{ Params: { runId: string } }>("/api/runs/:runId", async (request, reply): Promise<ApiResult<AgentRunSnapshotDto>> => {
     const lookupRequestId = createRequestId();
-    const run = agentRuns.get(request.params.runId);
+    const run = await runService.get(request.params.runId);
     if (!run) {
       reply.code(404);
       return fail(toApiError("not_found", "Agent run 不存在或已过期。", lookupRequestId), lookupRequestId);
     }
-    return { ok: true, requestId: lookupRequestId, data: toAgentRunSnapshot(run) };
+    return { ok: true, requestId: lookupRequestId, data: run };
   });
 
   /** 显式取消 run；浏览器断开 SSE 不会隐式终止后台任务。 */
   app.delete<{ Params: { runId: string } }>("/api/runs/:runId", async (request, reply): Promise<ApiResult<AgentRunSnapshotDto>> => {
     const lookupRequestId = createRequestId();
-    const run = agentRuns.get(request.params.runId);
+    const run = await runService.cancel(request.params.runId);
     if (!run) {
       reply.code(404);
       return fail(toApiError("not_found", "Agent run 不存在或已过期。", lookupRequestId), lookupRequestId);
     }
-    if (run.status === "queued" || run.status === "running" || run.status === "waiting_approval") {
-      run.abortController.abort();
-      run.status = "cancelled";
-      publishRunEvent(run, { type: "run_status", status: "cancelled", message: "用户已请求取消研究任务。" });
-    }
-    return { ok: true, requestId: lookupRequestId, data: toAgentRunSnapshot(run) };
+    return { ok: true, requestId: lookupRequestId, data: run };
   });
 
   /** 以 SSE 重放历史事件并继续推送新增事件。 */
   app.get<{ Params: { runId: string } }>("/api/runs/:runId/events", async (request, reply) => {
-    const run = agentRuns.get(request.params.runId);
+    const run = await runService.get(request.params.runId);
     if (!run) {
       reply.code(404);
       return fail(toApiError("not_found", "Agent run 不存在或已过期。", createRequestId()), createRequestId());
@@ -471,7 +331,6 @@ export function createApiServer(options: ApiServerOptions = {}): FastifyInstance
       reply.raw.write(`id: ${event.sequence}\nevent: run_event\ndata: ${JSON.stringify(event)}\n\n`);
       if (event.type === "run_result" || event.type === "run_error") {
         clearInterval(heartbeat);
-        run.subscribers.delete(writeEvent);
         reply.raw.end();
       }
     };
@@ -479,10 +338,10 @@ export function createApiServer(options: ApiServerOptions = {}): FastifyInstance
       if (event.sequence > lastEventId) writeEvent(event);
     }
     if (run.result || run.error) return;
-    run.subscribers.add(writeEvent);
+    const unsubscribe = runService.subscribe(run.runId, writeEvent);
     request.raw.on("close", () => {
       clearInterval(heartbeat);
-      run.subscribers.delete(writeEvent);
+      unsubscribe();
     });
   });
 
@@ -636,7 +495,9 @@ export function createApiServer(options: ApiServerOptions = {}): FastifyInstance
    * @param reply Fastify 响应对象，用于在请求无效时设置 HTTP 状态码。
    * @returns 成功时返回已记录的 approval decision。
    */
-  app.post("/api/approvals/decision", async (request, reply): Promise<ApiResult<ToolApprovalDecisionDto>> => {
+  app.post<{ Params: { runId: string; approvalId: string } }>(
+    "/api/runs/:runId/approvals/:approvalId/decision",
+    async (request, reply): Promise<ApiResult<ToolApprovalDecisionDto>> => {
     const requestId = createRequestId();
     const parsed = approvalDecisionRequestSchema.safeParse(request.body);
 
@@ -648,52 +509,30 @@ export function createApiServer(options: ApiServerOptions = {}): FastifyInstance
       return fail(error, requestId);
     }
 
-    const pending = pendingApprovals.get(parsed.data.approvalId.trim());
-    if (!pending || (pending.requestId && parsed.data.requestId !== pending.requestId) || (pending.inputDigest && parsed.data.inputDigest !== pending.inputDigest)) {
+    const pending = pendingApprovals.get(request.params.approvalId);
+    const run = await runService.get(request.params.runId);
+    if (!run || !pending || approvalRunIds.get(request.params.approvalId) !== request.params.runId
+      || (pending.inputDigest && parsed.data.inputDigest !== pending.inputDigest)) {
       reply.code(403);
       return fail(toApiError("forbidden", "Approval request 不存在、已处理或与原请求不匹配。", requestId, { reasonCode: "SEC_APPROVAL_BINDING_MISMATCH" }), requestId);
     }
 
     const decision: ToolApprovalDecisionDto = {
-      approvalId: parsed.data.approvalId.trim(),
+      approvalId: request.params.approvalId,
       decision: parsed.data.decision,
       reviewerNote: parsed.data.reviewerNote?.trim(),
-      requestId: parsed.data.requestId,
+      requestId: pending.requestId,
       inputDigest: parsed.data.inputDigest
     };
     approvalDecisions.set(decision.approvalId, decision);
     pendingApprovals.delete(decision.approvalId);
+    approvalRunIds.delete(decision.approvalId);
 
     return {
       ok: true,
       data: decision,
       requestId
     };
-  });
-
-  /** 启动报告 workflow；API 仅负责生命周期与 DTO 投影，节点逻辑留在 report package。 */
-  app.post("/api/report-workflows", async (request, reply): Promise<ApiResult<ReportWorkflowResponseDto>> => {
-    const requestId = createRequestId();
-    const parsed = startReportWorkflowRequestSchema.safeParse(request.body);
-    if (!parsed.success) {
-      reply.code(400);
-      return fail(toApiError("validation_failed", "Report workflow 请求格式不正确。", requestId), requestId);
-    }
-
-    const priorTrace = parsed.data.requestId ? traceStore.getByRequestId(parsed.data.requestId) : undefined;
-    const trace = createInMemoryTraceRecorder(
-      parsed.data.traceId ?? priorTrace?.traceId,
-      parsed.data.requestId ?? requestId,
-      priorTrace?.events,
-      priorTrace?.startedAt
-    );
-    const result = await runReportWorkflow(parsed.data.plan, { documents: createReportDemoDocuments(), trace });
-    traceStore.save(trace.getTrace());
-    const response = redactSensitiveValue(toReportWorkflowResponseDto(result));
-    if (response.run.approvalRequest) pendingApprovals.set(response.run.approvalRequest.approvalId, response.run.approvalRequest);
-    workflowRuns.set(response.run.runId, response);
-    if (response.artifact) reportArtifacts.set(response.artifact.artifactId, response.artifact);
-    return { ok: true, data: response, requestId: trace.requestId };
   });
 
   /** 读取进程内 workflow 快照；本阶段明确不提供持久化 artifact store。 */
@@ -791,102 +630,7 @@ export function createApiServer(options: ApiServerOptions = {}): FastifyInstance
     return { ok: true, requestId, data: createProductArchitectureDto() };
   });
 
-  /**
-   * Agent run 接口负责把前端研究问题转交给 agent package，API 层只做请求校验和 DTO 映射。
-   *
-   * @param request Fastify 请求对象，body 必须符合 AgentRunRequestDto。
-   * @param reply Fastify 响应对象，用于在请求无效或服务异常时设置 HTTP 状态码。
-   * @returns 成功时返回 Agent run 响应、steps 和 trace；失败时返回结构化 ApiResult。
-   */
-  app.post("/api/agent/run", async (request, reply): Promise<ApiResult<AgentRunResponseDto>> => {
-    const requestId = createRequestId();
-    const parsed = agentRunRequestSchema.safeParse(request.body);
-
-    if (!parsed.success) {
-      const error = toApiError("validation_failed", "请求格式不正确，请输入有效的研究问题。", requestId, {
-        issues: parsed.error.issues
-      });
-      reply.code(400);
-      return fail(error, requestId);
-    }
-
-    const message = parsed.data.message.trim();
-
-    if (!message) {
-      const error = toApiError("validation_failed", "请输入需要研究或解释的问题。", requestId);
-      reply.code(400);
-      return fail(error, requestId);
-    }
-
-    try {
-      const trace = createInMemoryTraceRecorder(undefined, requestId);
-      const agentResponse = await runAgent({
-        message,
-        reportMode: parsed.data.reportMode,
-        reportTriggerSource: parsed.data.reportTriggerSource
-      }, { traceRecorder: trace, llmClient: options.llmClient });
-      traceStore.save(agentResponse.trace);
-      const responseDto = redactSensitiveValue(toAgentRunResponseDto(agentResponse, parsed.data, requestId));
-      registerTraceApprovals(responseDto.trace, pendingApprovals);
-
-      return {
-        ok: true,
-        data: responseDto,
-        requestId
-      };
-    } catch (error) {
-      const apiError = toApiError("internal_error", "Agent 服务暂时不可用，请稍后重试。", requestId, {
-        cause: error instanceof Error ? error.message : "unknown"
-      });
-      reply.code(500);
-      return fail(apiError, requestId);
-    }
-  });
-
   return app;
-}
-
-/**
- * 从服务端生成的 trace 登记待审批请求，API 不接受模型自行构造的 approval id。
- *
- * @param trace 已脱敏 trace DTO。
- * @param pendingApprovals 当前进程待审批表。
- * @returns 无返回值。
- */
-function registerTraceApprovals(trace: TraceDto, pendingApprovals: Map<string, import("@aiagent/types").ToolApprovalRequestDto>): void {
-  for (const event of trace.events) {
-    if (event.type !== "approval" || event.status !== "requested") continue;
-    pendingApprovals.set(event.approvalId, { approvalId: event.approvalId, traceId: event.traceId, requestId: event.requestId, toolName: event.toolName, reason: event.reason, reasonCode: event.reasonCode, inputPreview: event.inputPreview, inputDigest: event.inputDigest, permissionLevel: "needs_approval" });
-  }
-}
-
-/** 将 report package 结果收窄为 Web 稳定 DTO；PDF 在审批后的独立 artifact 边界生成。 */
-function toReportWorkflowResponseDto(result: ReportWorkflowResult): ReportWorkflowResponseDto {
-  const draft = result.state.draft;
-  const citations = result.state.citations;
-  const artifact: ReportArtifactDto | undefined = draft && citations ? {
-    artifactId: `artifact_${result.run.runId}`,
-    reportId: result.state.plan.planId,
-    workflowRunId: result.run.runId,
-    status: "html_preview_only",
-    title: draft.title,
-    markdown: draft.markdown,
-    html: draft.html,
-    citations: citations.citations,
-    citationVerification: {
-      decision: citations.decision,
-      verified: citations.verified,
-      missingClaims: citations.missingClaims,
-      missingMetrics: citations.missingMetrics
-    },
-    pdfExport: {
-      status: "queued",
-      fileName: result.state.export?.fileName,
-      message: result.state.export?.message ?? "PDF Exporter 等待人工批准；批准后可安全重试生成。"
-    },
-    createdAt: new Date().toISOString()
-  } : undefined;
-  return { run: result.run, artifact };
 }
 
 /** @param fileName artifact 中的展示文件名。 @returns 不含控制字符和路径分隔符的下载名。 */
@@ -915,100 +659,6 @@ function createProductArchitectureDto(): ProductArchitectureDto {
     { from: "web", to: "types", label: "contracts" }, { from: "api", to: "types", label: "contracts" }
   ];
   return { nodes, edges, demoData: false };
-}
-
-/** Demo 文档只位于 API adapter，用于 Week 3 可重复演示；真实数据入口仍是 RAG ingestion。 */
-function createReportDemoDocuments() {
-  return [{
-    source: "demo://000001-sz-annual-report",
-    fileName: "000001-SZ-annual-report.md",
-    contentType: "text/markdown",
-    content: "# 盈利能力\n000001.SZ 最近两年营业收入保持增长，净利润同比改善，ROE 为 12.4%。\n\n# 资产质量与风险\n不良贷款率保持稳定，拨备覆盖率处于安全水平；宏观利率变化和信用成本仍是主要风险。\n\n# 现金流\n经营性现金流改善，但市场波动可能影响短期表现。"
-  }];
-}
-
-/**
- * 将 AgentResponse 投影为前端稳定 DTO，避免 UI 依赖内部实现细节。
- *
- * @param response Agent 运行结果。
- * @param requestDto API 请求 DTO。
- * @param requestId API 层请求标识。
- * @returns 前端消费的 Agent run 响应 DTO。
- */
-function toAgentRunResponseDto(
-  response: AgentResponse,
-  requestDto: AgentRunRequestDto,
-  requestId: string
-): AgentRunResponseDto {
-  return {
-    conversationId: requestDto.conversationId ?? DEFAULT_CONVERSATION_ID,
-    requestId: response.requestId || requestId,
-    traceId: response.traceId,
-    ok: response.ok,
-    intent: response.intent,
-    answer: response.answer,
-    steps: response.steps.map(toAgentStepDto),
-    trace: response.trace,
-    reportPlan: response.reportPlan,
-    error: response.error
-      ? {
-          code: "agent_failed",
-          message: response.error.message,
-          requestId,
-          details: {
-            agentCode: response.error.code,
-            reportMode: requestDto.reportMode ?? false,
-            ...response.error.details
-          }
-        }
-      : undefined
-  };
-}
-
-/**
- * 收窄 Agent step 字段，保持工具调用面板只消费稳定展示信息。
- *
- * @param step Agent 内部步骤。
- * @returns 前端步骤 DTO。
- */
-function toAgentStepDto(step: AgentStep): AgentStepDto {
-  return {
-    index: step.index,
-    type: step.type,
-    status: step.status,
-    durationMs: step.durationMs,
-    data: step.data,
-    error: step.error
-      ? {
-          code: "agent_failed",
-          message: step.error.message,
-          details: {
-            agentCode: step.error.code,
-            ...step.error.details
-          }
-        }
-      : undefined
-  };
-}
-
-/**
- * 从内部 run 移除 AbortController 与订阅者，返回浏览器可安全消费的快照。
- *
- * @param run API 进程内异步 run。
- * @returns 稳定 run snapshot DTO。
- */
-function toAgentRunSnapshot(run: AsyncAgentRun): AgentRunSnapshotDto {
-  return {
-    runId: run.runId,
-    requestId: run.requestId,
-    conversationId: run.conversationId,
-    status: run.status,
-    createdAt: run.createdAt,
-    updatedAt: run.updatedAt,
-    events: [...run.events],
-    result: run.result,
-    error: run.error
-  };
 }
 
 /**

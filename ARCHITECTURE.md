@@ -43,11 +43,12 @@ The Web is feature-first: `app`, `features`, `entities`, and `shared`. A feature
 ## 5. Runtime View
 
 1. Web creates a run through the API.
-2. API creates a bounded in-memory run and returns its identifiers.
-3. Agent and downstream packages emit one canonical, sanitized event stream.
+2. API route delegates creation to `RunApplicationService`; the current adapter writes a bounded in-memory snapshot.
+3. The application service schedules execution and Agent/Report emit one canonical, sanitized event stream.
 4. Trace storage and SSE subscribers consume the same events.
 5. Web projects events into assistant-message progress and an on-demand detail panel.
-6. A terminal event provides the final structured result. Explicit cancellation propagates through `AbortSignal`.
+6. A terminal event provides the final structured result. Explicit cancellation propagates through an execution registry owned `AbortSignal`.
+7. `RunStore`, `RunEventBus`, and `RunScheduler` are separate ports so persistence and workers can replace process-local adapters independently.
 
 ## 6. Quality Attributes
 

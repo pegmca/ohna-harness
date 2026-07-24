@@ -1,4 +1,7 @@
-import { Monitor, Moon, Sun } from "lucide-react";
+import type { ApiResult, QqBindingChallengeDto, QqBindingStatusDto } from "@aiagent/types";
+import { Copy, Link2, Monitor, Moon, RefreshCw, Sun, Unlink } from "lucide-react";
+import { useEffect, useState } from "react";
+import { useIdentity } from "../../app/identity";
 import { type ThemePreference, useTheme } from "../../app/theme";
 
 const options: Array<{ value: ThemePreference; label: string; description: string; icon: typeof Sun }> = [
@@ -15,6 +18,54 @@ const options: Array<{ value: ThemePreference; label: string; description: strin
  */
 export function SettingsPage(props: { onMenuClick: () => void }) {
   const theme = useTheme();
+  const identity = useIdentity();
+  const [challenge, setChallenge] = useState<QqBindingChallengeDto>();
+  const [bindingStatus, setBindingStatus] = useState<string>();
+  const [actionError, setActionError] = useState<string>();
+
+  useEffect(() => {
+    if (!challenge) return;
+    const timer = window.setInterval(() => {
+      void fetch(`/api/identity/qq-binding-challenges/${encodeURIComponent(challenge.challengeId)}`)
+        .then((response) => response.json() as Promise<ApiResult<QqBindingStatusDto>>)
+        .then(async (result) => {
+          if (!result.ok) {
+            setActionError(result.error.message);
+            return;
+          }
+          setBindingStatus(result.data.status);
+          if (result.data.status === "bound") {
+            window.clearInterval(timer);
+            setChallenge(undefined);
+            await identity.refresh();
+          }
+        });
+    }, 2_000);
+    return () => window.clearInterval(timer);
+  }, [challenge, identity]);
+
+  async function createBinding(): Promise<void> {
+    setActionError(undefined);
+    const response = await fetch("/api/identity/qq-binding-challenges", { method: "POST" });
+    const result = await response.json() as ApiResult<QqBindingChallengeDto>;
+    if (!result.ok) {
+      setActionError(result.error.message);
+      return;
+    }
+    setChallenge(result.data);
+    setBindingStatus("pending");
+  }
+
+  async function unbind(): Promise<void> {
+    setActionError(undefined);
+    const response = await fetch("/api/identity/qq-identity", { method: "DELETE" });
+    const result = await response.json() as ApiResult<unknown>;
+    if (!result.ok) {
+      setActionError(result.error.message);
+      return;
+    }
+    await identity.refresh();
+  }
   return (
     <section className="data-sources-main settings-main" aria-label="Settings">
       <header className="data-header">
@@ -42,6 +93,35 @@ export function SettingsPage(props: { onMenuClick: () => void }) {
               );
             })}
           </div>
+        </section>
+        <section className="settings-card identity-settings-card">
+          <div>
+            <h3>QQ 机器人</h3>
+          </div>
+          <dl className="identity-facts">
+            <div><dt>User ID</dt><dd>{identity.identity.userId}</dd></div>
+            <div><dt>QQ Bot</dt><dd>{identity.identity.qqBot.status}</dd></div>
+            <div><dt>QQ 绑定</dt><dd>{identity.identity.qqIdentity ? `已绑定 · ${identity.identity.qqIdentity.botAccountId}` : "未绑定"}</dd></div>
+          </dl>
+          {identity.identity.qqIdentity ? (
+            <button className="secondary-action" onClick={() => void unbind()} type="button"><Unlink aria-hidden="true" />解除 QQ 绑定</button>
+          ) : challenge ? (
+            <div className="qq-binding-panel">
+              {challenge.botQrUrl ? <img alt="QQ Bot 二维码" className="qq-bot-qr" src={challenge.botQrUrl} /> : <div className="qq-qr-missing">未配置固定二维码 URL</div>}
+              <div>
+                <p>扫描统一 Bot 二维码后，在 QQ 私聊发送：</p>
+                <code>{challenge.command}</code>
+                <p className="settings-helper">状态：{bindingStatus} · {new Date(challenge.expiresAt).toLocaleTimeString()} 前有效</p>
+                <button className="secondary-action" onClick={() => void navigator.clipboard.writeText(challenge.command)} type="button"><Copy aria-hidden="true" />复制命令</button>
+              </div>
+            </div>
+          ) : (
+            <button className="primary-action" disabled={!identity.identity.qqBot.enabled} onClick={() => void createBinding()} type="button">
+              {identity.identity.qqBot.enabled ? <Link2 aria-hidden="true" /> : <RefreshCw aria-hidden="true" />}
+              {identity.identity.qqBot.enabled ? "绑定 QQ" : "QQ Bot 尚未配置"}
+            </button>
+          )}
+          {actionError ? <p className="settings-error" role="alert">{actionError}</p> : null}
         </section>
         <section className="settings-card">
           <div><h3>图表声明</h3><p>金融图表由 TradingView Lightweight Charts™ 提供渲染能力，行情数据由 Immersive 工具层提供。</p></div>

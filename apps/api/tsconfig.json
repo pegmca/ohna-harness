@@ -17,5 +17,8 @@
     { "path": "../../packages/rag" },
     { "path": "../../packages/report" },
     { "path": "../../packages/agent" }
+    ,{ "path": "../../packages/identity" }
+    ,{ "path": "../../packages/database" }
+    ,{ "path": "../../packages/channels" }
   ]
 }

@@ -40,6 +40,140 @@ textarea:disabled {
   cursor: not-allowed;
 }
 
+.identity-gate {
+  display: grid;
+  min-height: 100vh;
+  place-items: center;
+  padding: var(--md-space-6);
+}
+
+.identity-gate-card {
+  width: min(480px, 100%);
+  padding: var(--md-space-8);
+  border: 1px solid var(--md-color-border-subtle);
+  border-radius: var(--md-radius-lg);
+  background: var(--md-color-surface);
+}
+
+.identity-gate-card h1 {
+  margin: var(--md-space-3) 0;
+  font-size: 1.25rem;
+}
+
+.primary-action,
+.secondary-action {
+  display: inline-flex;
+  width: fit-content;
+  align-items: center;
+  gap: var(--md-space-2);
+  border: 1px solid var(--md-color-border);
+  border-radius: var(--md-radius-lg);
+  padding: var(--md-space-2) var(--md-space-4);
+}
+
+.primary-action {
+  border-color: var(--md-color-primary);
+  background: var(--md-color-primary);
+  color: var(--md-color-text-inverse);
+}
+
+.secondary-action {
+  background: var(--md-color-surface);
+  color: var(--md-color-text-primary);
+}
+
+.primary-action:disabled {
+  border-color: var(--md-color-border-subtle);
+  background: var(--md-color-muted);
+  color: var(--md-color-text-disabled);
+}
+
+.primary-action svg,
+.secondary-action svg {
+  width: 16px;
+  height: 16px;
+}
+
+.identity-settings-card {
+  align-items: flex-start;
+}
+
+.identity-facts {
+  display: grid;
+  width: 100%;
+  margin: 0;
+  border-top: 1px solid var(--md-color-border-subtle);
+}
+
+.identity-facts div {
+  display: grid;
+  grid-template-columns: 120px minmax(0, 1fr);
+  gap: var(--md-space-4);
+  padding: var(--md-space-3) 0;
+  border-bottom: 1px solid var(--md-color-border-subtle);
+}
+
+.identity-facts dt {
+  color: var(--md-color-text-secondary);
+}
+
+.identity-facts dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-family: var(--md-font-mono);
+  font-size: 0.75rem;
+}
+
+.qq-binding-panel {
+  display: grid;
+  width: 100%;
+  grid-template-columns: 152px minmax(0, 1fr);
+  gap: var(--md-space-5);
+  align-items: center;
+}
+
+.qq-bot-qr,
+.qq-qr-missing {
+  width: 152px;
+  height: 152px;
+  border: 1px solid var(--md-color-border);
+  border-radius: var(--md-radius-lg);
+  background: var(--md-color-elevated);
+}
+
+.qq-qr-missing {
+  display: grid;
+  place-items: center;
+  padding: var(--md-space-3);
+  color: var(--md-color-text-secondary);
+  text-align: center;
+}
+
+.qq-binding-panel code {
+  display: inline-block;
+  padding: var(--md-space-2) var(--md-space-3);
+  border-radius: var(--md-radius-md);
+  background: var(--md-color-elevated);
+  font-family: var(--md-font-mono);
+}
+
+.settings-helper,
+.settings-error {
+  color: var(--md-color-text-secondary);
+  font-size: 0.8125rem;
+}
+
+.settings-error {
+  color: var(--md-color-danger);
+}
+
+@media (max-width: 560px) {
+  .qq-binding-panel {
+    grid-template-columns: 1fr;
+  }
+}
+
 /* 滚动能力始终保留，只在用户进入对应区域时显示滚动条，减少静态界面噪音。 */
 * {
   scrollbar-color: transparent transparent;

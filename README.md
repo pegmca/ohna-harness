@@ -8,21 +8,18 @@
 .
 ├── docs/
 │   ├── ROADMAP_1_MONTH.md
+│   ├── LEARNING_AND_EVOLUTION_ROADMAP.md
 │   ├── BUSINESS_DIRECTION_FINANCIAL_RESEARCH_AGENT.md
-│   ├── IMMERSIVE_PRODUCT_DESIGN.md
-│   ├── implementation/
-│   │   └── WEEK_1_IMPLEMENTATION.md
-│   └── weeks/
-│       ├── WEEK_1_AGENT_FOUNDATION.md
-│       ├── WEEK_2_RAG_KNOWLEDGE_BASE.md
-│       ├── WEEK_3_AGENTIC_RAG_WORKFLOW_MCP.md
-│       └── WEEK_4_PRODUCTION_AND_INTERVIEW.md
+│   └── IMMERSIVE_PRODUCT_DESIGN.md
 ├── apps/
 │   ├── web/
 │   │   └── src/
 │   └── api/
 ├── packages/
 │   ├── agent/
+│   ├── identity/
+│   ├── database/
+│   ├── channels/
 │   ├── types/
 │   ├── filings/
 │   ├── rag/
@@ -52,6 +49,9 @@
 - `apps/web`：Vite + React + TypeScript Web 应用入口，负责承载 Immersive 产品界面，只通过 HTTP API 调用 Agent。
 - `apps/api`：Fastify HTTP adapter，负责请求校验、异步 Run 生命周期、SSE 事件投影和结构化响应。
 - `packages/agent`：Agent 能力边界，后续承载意图识别、循环调度和模型交互。
+- `packages/identity`：浏览器指纹、稳定 `userId`、session 与 QQ 绑定规则的领域边界。
+- `packages/database`：PostgreSQL 连接池、Drizzle schema、migration 和 repository adapter。
+- `packages/channels`：QQ Bot WebSocket 消息适配、命令处理和 Agent 私聊入口。
 - `packages/types`：前后端共享类型边界，承载 API contract、DTO、结构化错误和稳定枚举。
 - `packages/filings`：公告/财报 ingestion 边界，负责文件来源、document metadata 和原始文本来源信息。
 - `packages/rag`：RAG 运行时边界，负责 chunking、embedding 抽象、检索、引用和 grounded answer 的稳定类型入口。
@@ -64,6 +64,9 @@
 `packages/*` 作为独立 workspace package 构建和类型检查。`apps/web` 保持前端应用边界，不直接依赖 `agent`、`tools`、`trace` 这些核心运行时包；当前通过 `apps/api` 接入 Agent。
 
 设计文档拆分为两层：根目录 `DESIGN.md` 是 Kimi 风格、支持明暗主题的 Workbench 视觉系统，定义 design token、组件视觉语言和 AI 前端生成约束；`system.css` 是唯一 token / utility 参考实现；`docs/IMMERSIVE_PRODUCT_DESIGN.md` 承载金融研究 Agent 的产品体验、信息架构和页面模块。代码边界和 AI Coding 约束分别见 `ARCHITECTURE.md` 与 `docs/AI_CODING.md`。
+
+PostgreSQL 的本地连接、现有身份表、migration 规则、备份恢复以及后续 Conversation、Run
+和 pgvector 持久化规划见 [``]()。
 
 ## Immersive Playground
 
@@ -79,12 +82,17 @@ Immersive Playground 已演进为带实时执行过程的研究 Workbench：
 本地 API 验证：
 
 ```bash
+curl -c /tmp/aiagent-cookie.txt -X POST http://localhost:3001/api/identity/bootstrap \
+  -H "content-type: application/json" \
+  -d '{"visitorId":"local-readme-visitor","fingerprintVersion":"manual-test"}'
+
 curl -X POST http://localhost:3001/api/runs \
+  -b /tmp/aiagent-cookie.txt \
   -H "content-type: application/json" \
   -d '{"message":"查询 000001.SZ 的行情。","reportMode":false}'
 
 # 使用上一步返回的 runId
-curl -N http://localhost:3001/api/runs/<runId>/events
+curl -N -b /tmp/aiagent-cookie.txt http://localhost:3001/api/runs/<runId>/events
 ```
 
 ## Docker Compose 一键 Demo
@@ -99,7 +107,18 @@ docker compose up -d --build
 docker compose ps
 ```
 
-打开 `http://localhost:8080`。Web 仅对宿主机暴露 `8080`（可用 `AIAGENT_WEB_PORT` 修改），API 的 `3001` 只在 Compose 网络内暴露，由 Nginx 将浏览器 `/api/*` 请求代理到 `api:3001`。这样浏览器不需要解析 Compose 服务名。当前 demo 数据、trace、workflow 与 artifact 都在 API 进程内存中；容器重启后会清空，仓库没有必要的持久化 volume。
+打开 `http://localhost:8080`。Web 仅对宿主机暴露 `8080`（可用 `AIAGENT_WEB_PORT` 修改），API 的 `3001` 只在 Compose 网络内暴露，由 Nginx 将浏览器 `/api/*` 请求代理到 `api:3001`。PostgreSQL 只绑定宿主机 `127.0.0.1:5432`，身份、session 和 QQ 绑定保存在 `postgres_data` volume；聊天、RAG、trace、workflow 与 artifact 暂时仍在进程内存中。
+
+本地热更新与断点调试使用“数据库在 Docker、Web/API 在宿主机”的组合：
+
+```bash
+cp .env.example .env
+pnpm db:up
+pnpm db:migrate
+pnpm dev
+```
+
+首次进入时 Web 使用 FingerprintJS 识别或创建 `userId`，API 签发 HttpOnly session。设置页可展示统一 QQ Bot 二维码并生成六位绑定码；QQ 私聊发送 `/bind 123456` 后即可通过同一 `userId` 调用 Agent。配置真实 QQ Bot 需要设置 `QQBOT_ENABLED=true`、`QQBOT_APP_ID`、`QQBOT_APP_SECRET` 和 `QQBOT_PUBLIC_QR_URL`。
 
 验证 Web/API 探针和核心流程：
 
@@ -125,12 +144,12 @@ AIAGENT_LLM_MODEL=replace-with-model-name
 排错与停止：
 
 ```bash
-docker compose logs --tail=200 api web
+docker compose logs --tail=200 api web postgres migrate
 docker compose ps
 docker compose down
 ```
 
-如果 real 模式的 API 长期 `unhealthy`，先查看 `/ready` 或 API 日志，并核对 key/model/base URL；端口冲突时修改 `.env` 中的 `AIAGENT_WEB_PORT`。要清理镜像可额外执行 `docker compose down --rmi local`；当前 Compose 不创建数据卷。
+如果 real 模式的 API 长期 `unhealthy`，先查看 `/ready`、migration 或 API 日志，并核对数据库与 provider 配置；端口冲突时修改 `.env` 中的 `AIAGENT_WEB_PORT` 或 `AIAGENT_POSTGRES_PORT`。普通 `docker compose down` 会保留身份数据；只有显式执行 `docker compose down -v` 才会删除 PostgreSQL volume。
 
 ## LLM Client
 
@@ -483,11 +502,12 @@ pnpm eval:update-baseline
 
 ## 学习路线
 
-你当前是全栈工程师，前端和 TypeScript 能力强，且已经熟练使用 AI Coding，因此主路线采用压缩版：
+原四周从零搭建路线已经完成。后续主路线改为边学习、边改造、边验证：
 
-- 主路线：[1 个月 AI Agent 冲刺路线](docs/ROADMAP_1_MONTH.md)
+- 当前路线：[Immersive 持续学习与演进路线](docs/LEARNING_AND_EVOLUTION_ROADMAP.md)
+- 历史路线：[1 个月 AI Agent 冲刺路线](docs/ROADMAP_1_MONTH.md)
 
-这条路线默认主要使用 AI Coding 完成代码实现。你的训练重点是架构设计、任务拆解、Prompt/Tool schema、代码审查、测试验收、评估指标、trace 分析和表达，而不是手写所有代码。
+当前路线默认主要使用 AI Coding 完成代码实现。训练重点是从真实架构债务、产品摩擦和 eval 失败中选择问题，用官方资料补足原理，再通过窄范围端到端改造、测试、trace 和指标证明优化有效。
 
 最终交付物是当前仓库内的一个完整 monorepo 产品，而不是按学习阶段拆成多个项目。Web 产品放在 `apps/web`，Agent/RAG/Tool/Workflow/Report/Eval/Trace 等能力沉淀到 `packages/*`。每周的页面会渐进累积：Immersive、Data Sources、Report Workflow、Citation Checker、Eval Report，最后在 Week 4 统一包装。
 

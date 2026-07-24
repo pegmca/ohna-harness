@@ -1,4 +1,31 @@
 services:
+  postgres:
+    image: pgvector/pgvector:0.8.5-pg16-bookworm
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-aiagent}
+      POSTGRES_USER: ${POSTGRES_USER:-aiagent}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-aiagent-local}
+    ports:
+      - "127.0.0.1:${AIAGENT_POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-aiagent} -d ${POSTGRES_DB:-aiagent}"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+  migrate:
+    build:
+      context: .
+      target: api
+    command: ["node", "packages/database/dist/migrate.js"]
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-aiagent}:${POSTGRES_PASSWORD:-aiagent-local}@postgres:5432/${POSTGRES_DB:-aiagent}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
   api:
     build:
       context: .
@@ -12,8 +39,21 @@ services:
       AIAGENT_LLM_BASE_URL: ${AIAGENT_LLM_BASE_URL:-https://api.openai.com/v1}
       AIAGENT_LLM_MODEL: ${AIAGENT_LLM_MODEL:-}
       AIAGENT_LLM_TIMEOUT_MS: ${AIAGENT_LLM_TIMEOUT_MS:-30000}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-aiagent}:${POSTGRES_PASSWORD:-aiagent-local}@postgres:5432/${POSTGRES_DB:-aiagent}
+      IDENTITY_FINGERPRINT_PEPPER: ${IDENTITY_FINGERPRINT_PEPPER:-change-me-in-production}
+      IDENTITY_SESSION_TTL_DAYS: ${IDENTITY_SESSION_TTL_DAYS:-30}
+      IDENTITY_COOKIE_SECURE: ${IDENTITY_COOKIE_SECURE:-false}
+      QQBOT_ENABLED: ${QQBOT_ENABLED:-false}
+      QQBOT_APP_ID: ${QQBOT_APP_ID:-}
+      QQBOT_APP_SECRET: ${QQBOT_APP_SECRET:-}
+      QQBOT_PUBLIC_QR_URL: ${QQBOT_PUBLIC_QR_URL:-}
     expose:
       - "3001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3001/ready').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
       interval: 5s
@@ -37,3 +77,5 @@ services:
       retries: 12
       start_period: 3s
     restart: unless-stopped
+volumes:
+  postgres_data:

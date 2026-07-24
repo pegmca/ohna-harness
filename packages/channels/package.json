@@ -1,0 +1,23 @@
+{
+  "name": "@aiagent/channels",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "pnpm --filter @aiagent/identity build && tsc -p tsconfig.json --pretty false --noEmit"
+  },
+  "dependencies": {
+    "@aiagent/agent": "workspace:*",
+    "@aiagent/identity": "workspace:*",
+    "@tencent-connect/qqbot-nodejs": "1.0.4"
+  }
+}

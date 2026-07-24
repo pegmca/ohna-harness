@@ -38,6 +38,8 @@ Immersive 是面向股票研究、公告分析、财务指标查询和研报生�
 
 当前 Week 1 页面已经从“开发调试台”重构为 Agent Chat 基础形态：左侧本地会话列表，中间简洁对话流，底部 composer，运行状态、工具调用和 trace 作为 assistant 消息内的可展开派生信息。
 
+身份入口采用无用户名模式：首次进入由浏览器指纹恢复或创建稳定 `userId`，设置页展示当前 userId、统一 QQ Bot 状态和一次性绑定码。身份初始化失败时阻断工作台并提供重试，避免在未确认 userId 时产生无法归属的运行数据。
+
 优先级：
 
 1. **继续完善金融语义**：在 assistant 消息和 run details 中逐步加入 ticker context、指标摘要、引用/证据列表和风险提示。
@@ -214,7 +216,7 @@ App Shell:
 后续让 Codex 开发 Immersive UI 时，可以使用：
 
 ```text
-请先阅读 README.md、DESIGN.md、docs/IMMERSIVE_PRODUCT_DESIGN.md、相关 docs/implementation 任务卡和 apps/web 当前代码。
+请先阅读 README.md、DESIGN.md、docs/IMMERSIVE_PRODUCT_DESIGN.md、docs/LEARNING_AND_EVOLUTION_ROADMAP.md 的相关阶段和 apps/web 当前代码。
 
 目标：实现/改进一个专业金融研究 Agent Chat 页面，不要做营销 landing page，也不要保留独立右侧调试栏。
 

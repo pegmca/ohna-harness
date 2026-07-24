@@ -1,6 +1,50 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createApiServer } from "../dist/index.js";
+import { createIdentityService, createInMemoryIdentityRepository } from "../../../packages/identity/dist/index.js";
+
+test("browser fingerprint bootstrap creates a session-backed userId", async () => {
+  const app = createApiServer({ requireIdentity: true });
+  const bootstrap = await app.inject({
+    method: "POST",
+    url: "/api/identity/bootstrap",
+    payload: { visitorId: "visitor-api-test-123", fingerprintVersion: "fingerprintjs-v5" }
+  });
+  assert.equal(bootstrap.statusCode, 200);
+  assert.match(bootstrap.headers["set-cookie"], /aiagent_session=/);
+  const cookie = bootstrap.headers["set-cookie"].split(";")[0];
+  const me = await app.inject({ method: "GET", url: "/api/identity/me", headers: { cookie } });
+  assert.equal(me.statusCode, 200);
+  assert.equal(me.json().data.userId, bootstrap.json().data.userId);
+  await app.close();
+});
+
+test("QQ binding challenge links the current browser user", async () => {
+  const identityService = createIdentityService(createInMemoryIdentityRepository(), { fingerprintPepper: "api-binding-test" });
+  const app = createApiServer({ requireIdentity: true, identityService, qqBotEnabled: true, qqBotQrUrl: "https://example.com/qq.png" });
+  const bootstrap = await app.inject({
+    method: "POST",
+    url: "/api/identity/bootstrap",
+    payload: { visitorId: "visitor-binding-test", fingerprintVersion: "fingerprintjs-v5" }
+  });
+  const cookie = bootstrap.headers["set-cookie"].split(";")[0];
+  const challengeResponse = await app.inject({
+    method: "POST",
+    url: "/api/identity/qq-binding-challenges",
+    headers: { cookie }
+  });
+  assert.equal(challengeResponse.statusCode, 200);
+  const challenge = challengeResponse.json().data;
+  const consumed = await identityService.consumeQqBinding(challenge.code, "bot-one", "qq-open-id");
+  assert.equal(consumed.status, "bound");
+  const status = await app.inject({
+    method: "GET",
+    url: `/api/identity/qq-binding-challenges/${challenge.challengeId}`,
+    headers: { cookie }
+  });
+  assert.equal(status.json().data.status, "bound");
+  await app.close();
+});
 
 test("health and readiness distinguish liveness from dependency readiness", async () => {
   const app = createApiServer({ readiness: async () => ({ ok: false, dependency: "test-provider", message: "not configured" }) });

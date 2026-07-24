@@ -5,6 +5,12 @@
   "packageManager": "pnpm@9.15.4",
   "scripts": {
     "dev": "concurrently -n api,web -c blue,green \"pnpm --filter @aiagent/api dev\" \"pnpm --filter @aiagent/web dev\"",
+    "db:up": "docker compose up -d postgres",
+    "db:down": "docker compose stop postgres",
+    "db:logs": "docker compose logs -f postgres",
+    "db:shell": "docker compose exec postgres psql -U aiagent -d aiagent",
+    "db:migrate": "pnpm --filter @aiagent/database build && node --env-file-if-exists=.env packages/database/dist/migrate.js",
+    "db:status": "docker compose ps postgres",
     "build": "pnpm -r build",
     "test": "pnpm -r --if-present test",
     "lint": "eslint apps packages --max-warnings 100",

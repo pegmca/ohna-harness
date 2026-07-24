@@ -9,8 +9,11 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json ./
 COPY apps/api/package.json apps/api/package.json
 COPY apps/web/package.json apps/web/package.json
 COPY packages/agent/package.json packages/agent/package.json
+COPY packages/channels/package.json packages/channels/package.json
+COPY packages/database/package.json packages/database/package.json
 COPY packages/eval/package.json packages/eval/package.json
 COPY packages/filings/package.json packages/filings/package.json
+COPY packages/identity/package.json packages/identity/package.json
 COPY packages/mcp/package.json packages/mcp/package.json
 COPY packages/rag/package.json packages/rag/package.json
 COPY packages/report/package.json packages/report/package.json

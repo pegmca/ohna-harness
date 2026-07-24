@@ -1,5 +1,11 @@
 import { runAgent } from "@aiagent/agent";
 import type { AgentResponse, AgentStep } from "@aiagent/agent";
+import {
+  createIdentityService,
+  createInMemoryIdentityRepository,
+  type IdentityService,
+  type IdentitySnapshot
+} from "@aiagent/identity";
 import type { LlmClient } from "@aiagent/types";
 import { createDataSourceRuntime } from "@aiagent/rag";
 import { renderResearchReportPdf, runReportWorkflow } from "@aiagent/report";
@@ -19,6 +25,10 @@ import type {
   DataSourceChunksResponseDto,
   DataSourceDocumentsResponseDto,
   DataSourceIngestResponseDto,
+  IdentityBootstrapRequestDto,
+  IdentityMeDto,
+  QqBindingChallengeDto,
+  QqBindingStatusDto,
   RagAnswerResponseDto,
   RagSearchResponseDto,
   ReportArtifactDto,
@@ -37,6 +47,10 @@ const agentRunRequestSchema = z.object({
   reportMode: z.boolean().optional(),
   reportTriggerSource: z.enum(["toggle", "button", "natural_language"]).optional(),
   conversationId: z.string().min(1).optional()
+});
+const identityBootstrapSchema = z.object({
+  visitorId: z.string().min(8).max(256).regex(/^[A-Za-z0-9_-]+$/),
+  fingerprintVersion: z.string().min(1).max(40)
 });
 const dataSourceIngestRequestSchema = z.object({
   source: z.string().min(1),
@@ -91,6 +105,12 @@ type AgentRunEventPayload =
 export interface ApiServerOptions {
   llmClient?: LlmClient;
   readiness?: () => Promise<{ ok: boolean; dependency: string; message?: string }>;
+  identityService?: IdentityService;
+  requireIdentity?: boolean;
+  qqBotQrUrl?: string;
+  qqBotEnabled?: boolean;
+  qqBotStatus?: () => IdentityMeDto["qqBot"]["status"];
+  cookieSecure?: boolean;
 }
 
 /**
@@ -110,6 +130,31 @@ export function createApiServer(options: ApiServerOptions = {}): FastifyInstance
   const reportPdfFiles = new Map<string, Uint8Array>();
   const traceStore = createInMemoryTraceStore();
   const agentRuns = new Map<string, AsyncAgentRun>();
+  const identityService = options.identityService ?? createIdentityService(
+    createInMemoryIdentityRepository(),
+    { fingerprintPepper: "test-only-identity-pepper" }
+  );
+  const identityByRequest = new WeakMap<object, IdentitySnapshot>();
+
+  /**
+   * 统一解析 session，使业务 route 只能读取服务端确认的 userId。
+   * 生产 server 开启 requireIdentity；测试可注入身份服务并逐步验证旧 route。
+   */
+  app.addHook("preHandler", async (request, reply) => {
+    const isPublic = request.url === "/health"
+      || request.url === "/ready"
+      || request.url === "/api/identity/bootstrap";
+    if (isPublic) return;
+    const identity = await identityService.authenticate(readCookie(request.headers.cookie, "aiagent_session"));
+    if (identity) {
+      identityByRequest.set(request, identity);
+      return;
+    }
+    if (options.requireIdentity || request.url.startsWith("/api/identity/")) {
+      const requestId = createRequestId();
+      reply.code(401).send(fail(toApiError("unauthorized", "身份 session 无效，请重新识别浏览器。", requestId), requestId));
+    }
+  });
 
   /**
    * 向 run 的内存缓冲与实时订阅者同时发布事件，确保重放和直播使用同一序列。
@@ -220,6 +265,105 @@ export function createApiServer(options: ApiServerOptions = {}): FastifyInstance
       : { ok: true, dependency: "mock-runtime" };
     if (!state.ok) reply.code(503);
     return { ...state, service: "@aiagent/api" };
+  });
+
+  /** 首次访问通过浏览器指纹创建/恢复 userId，并以 HttpOnly cookie 保存 session。 */
+  app.post("/api/identity/bootstrap", async (request, reply): Promise<ApiResult<IdentityMeDto>> => {
+    const requestId = createRequestId();
+    const parsed = identityBootstrapSchema.safeParse(request.body);
+    if (!parsed.success) {
+      reply.code(400);
+      return fail(toApiError("validation_failed", "浏览器指纹格式不正确。", requestId, { issues: parsed.error.issues }), requestId);
+    }
+    const created = await identityService.bootstrap(
+      (parsed.data satisfies IdentityBootstrapRequestDto).visitorId,
+      parsed.data.fingerprintVersion
+    );
+    reply.header("set-cookie", serializeSessionCookie(created.token, created.expiresAt, options.cookieSecure ?? process.env.NODE_ENV === "production"));
+    return { ok: true, requestId, data: toIdentityMeDto(created.snapshot, options) };
+  });
+
+  /** 返回当前 session 对应的稳定 userId 与 QQ 绑定状态。 */
+  app.get("/api/identity/me", async (request, reply): Promise<ApiResult<IdentityMeDto>> => {
+    const requestId = createRequestId();
+    const identity = identityByRequest.get(request);
+    if (!identity) {
+      reply.code(401);
+      return fail(toApiError("unauthorized", "身份 session 无效。", requestId), requestId);
+    }
+    return { ok: true, requestId, data: toIdentityMeDto(identity, options) };
+  });
+
+  /** 为当前 userId 生成 QQ 私聊绑定码。 */
+  app.post("/api/identity/qq-binding-challenges", async (request, reply): Promise<ApiResult<QqBindingChallengeDto>> => {
+    const requestId = createRequestId();
+    const identity = identityByRequest.get(request);
+    if (!identity) {
+      reply.code(401);
+      return fail(toApiError("unauthorized", "身份 session 无效。", requestId), requestId);
+    }
+    if (!options.qqBotEnabled) {
+      reply.code(503);
+      return fail(toApiError("internal_error", "QQ Bot 尚未配置。", requestId, { reasonCode: "qq_bot_not_configured" }), requestId);
+    }
+    if (identity.qqIdentity) {
+      reply.code(409);
+      return fail(toApiError("conflict", "当前 userId 已绑定 QQ。", requestId), requestId);
+    }
+    const challenge = await identityService.createQqBindingChallenge(identity.userId);
+    return {
+      ok: true,
+      requestId,
+      data: {
+        challengeId: challenge.challengeId,
+        code: challenge.code,
+        command: `/bind ${challenge.code}`,
+        expiresAt: challenge.expiresAt,
+        botQrUrl: options.qqBotQrUrl
+      }
+    };
+  });
+
+  /** 供 Settings 轮询 QQ 命令是否已经消费绑定码。 */
+  app.get<{ Params: { challengeId: string } }>("/api/identity/qq-binding-challenges/:challengeId", async (request, reply): Promise<ApiResult<QqBindingStatusDto>> => {
+    const requestId = createRequestId();
+    const identity = identityByRequest.get(request);
+    if (!identity) {
+      reply.code(401);
+      return fail(toApiError("unauthorized", "身份 session 无效。", requestId), requestId);
+    }
+    const status = await identityService.getQqBindingStatus(request.params.challengeId, identity.userId);
+    const qqIdentity = status === "bound" ? await identityService.repository.getQqIdentityByUserId(identity.userId) : undefined;
+    return {
+      ok: true,
+      requestId,
+      data: {
+        challengeId: request.params.challengeId,
+        status,
+        qqIdentity: qqIdentity ? { botAccountId: qqIdentity.botAccountId, boundAt: qqIdentity.boundAt } : undefined
+      }
+    };
+  });
+
+  /** 从当前 Web 身份解除 QQ 绑定。 */
+  app.delete("/api/identity/qq-identity", async (request, reply): Promise<ApiResult<IdentityMeDto>> => {
+    const requestId = createRequestId();
+    const identity = identityByRequest.get(request);
+    if (!identity) {
+      reply.code(401);
+      return fail(toApiError("unauthorized", "身份 session 无效。", requestId), requestId);
+    }
+    await identityService.unbindQq(identity.userId);
+    const user = await identityService.repository.getUser(identity.userId);
+    if (!user) {
+      reply.code(404);
+      return fail(toApiError("not_found", "用户不存在。", requestId), requestId);
+    }
+    return {
+      ok: true,
+      requestId,
+      data: toIdentityMeDto({ userId: user.userId, createdAt: user.createdAt }, options)
+    };
   });
 
   /** 按对外 requestId 返回完整脱敏 trace；当前仅保存在 API 进程内存。 */
@@ -934,4 +1078,53 @@ function toApiErrorFromRagError(error: RagStructuredError, requestId: string): A
  */
 function createRequestId(): string {
   return `api_req_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+/**
+ * 把领域身份映射成不暴露 QQ OpenID 的公共 DTO。
+ *
+ * @param identity 服务端确认的身份。
+ * @param options QQ 渠道展示配置。
+ * @returns Web 可消费的身份 DTO。
+ */
+function toIdentityMeDto(identity: IdentitySnapshot, options: ApiServerOptions): IdentityMeDto {
+  return {
+    userId: identity.userId,
+    createdAt: identity.createdAt,
+    qqIdentity: identity.qqIdentity
+      ? { botAccountId: identity.qqIdentity.botAccountId, boundAt: identity.qqIdentity.boundAt }
+      : undefined,
+    qqBot: {
+      enabled: options.qqBotEnabled ?? false,
+      status: options.qqBotStatus?.() ?? (options.qqBotEnabled ? "stopped" : "disabled")
+    }
+  };
+}
+
+/**
+ * 从 Cookie header 读取指定 cookie，避免将 cookie parser 依赖扩散到 API contract。
+ *
+ * @param header 原始 Cookie header。
+ * @param name cookie 名称。
+ * @returns 解码后的值。
+ */
+function readCookie(header: string | undefined, name: string): string | undefined {
+  if (!header) return undefined;
+  for (const pair of header.split(";")) {
+    const [key, ...value] = pair.trim().split("=");
+    if (key === name) return decodeURIComponent(value.join("="));
+  }
+  return undefined;
+}
+
+/**
+ * 创建安全 session cookie；本地 HTTP 允许非 Secure，生产环境强制 HTTPS。
+ *
+ * @param token 不透明 session token。
+ * @param expiresAt 过期时间。
+ * @returns Set-Cookie header。
+ */
+function serializeSessionCookie(token: string, expiresAt: string, useSecure: boolean): string {
+  const secure = useSecure ? "; Secure" : "";
+  return `aiagent_session=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Expires=${new Date(expiresAt).toUTCString()}${secure}`;
 }

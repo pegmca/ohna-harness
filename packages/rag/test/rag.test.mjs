@@ -957,6 +957,58 @@ test("signed http source is normalized so lineage and DTOs never contain query o
   assert.equal(normalizeRagSourceUri("mock://filings/x.md"), "mock://filings/x.md");
 });
 
+test("non-sensitive query params stay in source identity while sensitive keys are stripped", async () => {
+  const runtime = createDataSourceRuntime();
+  const request = {
+    fileName: "annual-report.md",
+    contentType: "text/markdown",
+    content: "# 资产质量\n公司不良率保持稳定。"
+  };
+  const filingA = await runtime.ingest({ ...request, source: "https://example.com/download?id=filing-A" });
+  const filingB = await runtime.ingest({ ...request, source: "https://example.com/download?id=filing-B" });
+
+  assert.equal(filingA.ok, true);
+  assert.equal(filingB.ok, true);
+
+  // 非敏感标识参数参与 externalId：?id=A 与 ?id=B 是两个不同逻辑文档。
+  const twoDocuments = await runtime.listDocuments();
+  assert.equal(twoDocuments.documents.length, 2);
+  assert.notEqual(filingA.data.document.documentId, filingB.data.document.documentId);
+  assert.ok(twoDocuments.documents.some((document) => document.sourceUri === "https://example.com/download?id=filing-A"));
+  assert.ok(twoDocuments.documents.some((document) => document.sourceUri === "https://example.com/download?id=filing-B"));
+
+  // 同一资源带敏感参数重复 ingest 命中同一 lineage，敏感值不持久化。
+  const signedA = await runtime.ingest({
+    ...request,
+    source: "https://example.com/download?id=filing-A&token=secret123&signature=xyz"
+  });
+  assert.equal(signedA.ok, true);
+  assert.equal(signedA.data.deduplicated, true);
+  assert.equal(signedA.data.document.documentId, filingA.data.document.documentId);
+
+  const documentsPage = await runtime.listDocuments();
+  const chunksPage = await runtime.listChunks();
+  const serialized = JSON.stringify({ documents: documentsPage.documents, chunks: chunksPage.chunks });
+  assert.ok(serialized.includes("id=filing-A"));
+  assert.ok(!serialized.includes("secret123"));
+  assert.ok(!serialized.includes("signature=xyz"));
+  assert.ok(!serialized.includes("token="));
+
+  // fragment 一律剥离；x-amz-/x-goog- 前缀键剥离，其他参数保留并排序。
+  assert.equal(
+    normalizeRagSourceUri("https://example.com/a?z=1&id=filing-A#section"),
+    "https://example.com/a?id=filing-A&z=1"
+  );
+  assert.equal(
+    normalizeRagSourceUri("https://example.com/a?X-Amz-Signature=abc&x-goog-credential=def&id=x"),
+    "https://example.com/a?id=x"
+  );
+  assert.equal(
+    normalizeRagSourceUri("https://example.com/a?b=2&b=1&a=0"),
+    "https://example.com/a?a=0&b=1&b=2"
+  );
+});
+
 /**
  * 创建测试用 embedded chunk，避免每个 vector store 用例重复构造完整 DTO。
  *

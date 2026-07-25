@@ -1991,28 +1991,77 @@ export function isSafeRagSourceUri(source: string): boolean {
   return /^[A-Za-z0-9\-_.:/]+$/.test(value);
 }
 
+/** source URI query 脱敏 denylist：常见凭证/签名/会话键（大小写不敏感匹配）。 */
+const SENSITIVE_SOURCE_QUERY_KEYS = new Set([
+  "token",
+  "api_key",
+  "apikey",
+  "key",
+  "secret",
+  "signature",
+  "sig",
+  "access_token",
+  "refresh_token",
+  "auth",
+  "authorization",
+  "password",
+  "credential",
+  "credentials",
+  "session",
+  "sessionid",
+  "expires",
+  "expire"
+]);
+
+/** 云厂商签名参数前缀（大小写不敏感匹配），如 x-amz-signature、x-goog-credential。 */
+const SENSITIVE_SOURCE_QUERY_PREFIXES = ["x-amz-", "x-goog-"];
+
 /**
- * 规范化 ingest source 为可持久化的脱敏 sourceUri。
+ * 规范化 ingest source 为可持久化的 canonical sourceUri。
  *
- * http(s) URL 只保留 `origin + pathname`，剥离全部 query 和 fragment——
- * 签名 URL 的 token/api_key/signature 等敏感参数不会进入 lineage，也不会出现在
- * shared/demo 列表 DTO 中；同时保证同一文档带不带 token 都命中同一 externalId。
- * 非 URL 逻辑标识已通过 `isSafeRagSourceUri` 白名单，原样返回。
+ * 该函数同时服务两个目标：
+ * - 脱敏：fragment 一律剥离；query 中命中 denylist（token/api_key/signature/session 等
+ *   常见凭证键，以及 `x-amz-`/`x-goog-` 前缀的云签名参数，大小写不敏感）的键值对删除，
+ *   敏感值不会进入 lineage，也不会出现在 shared/demo 列表 DTO 中。
+ * - 资源 identity：未命中 denylist 的参数视为资源标识（如 `?id=filing-A`），
+ *   按键名（同键按值）排序后保留；这样 `?id=A` 与 `?id=B` 是不同逻辑文档，
+ *   而同一资源带不带 token 都命中同一 externalId。
+ *
+ * http(s) URL 返回 `origin + pathname + 规范化 query`；非 URL 逻辑标识已通过
+ * `isSafeRagSourceUri` 白名单，原样返回。
  *
  * @param source 已通过安全校验的 source。
- * @returns 脱敏后的 sourceUri。
+ * @returns 脱敏且保留资源标识参数的 canonical sourceUri。
  */
 export function normalizeRagSourceUri(source: string): string {
   const value = source.trim();
   if (/^https?:\/\//i.test(value)) {
     try {
       const url = new URL(value);
-      return `${url.origin}${url.pathname}`;
+      const kept = [...url.searchParams.entries()]
+        .filter(([key]) => !isSensitiveSourceQueryKey(key))
+        .sort(([leftKey, leftValue], [rightKey, rightValue]) =>
+          leftKey === rightKey ? leftValue.localeCompare(rightValue) : leftKey.localeCompare(rightKey)
+        );
+      const query = kept.map(([key, entryValue]) => `${encodeURIComponent(key)}=${encodeURIComponent(entryValue)}`).join("&");
+      return `${url.origin}${url.pathname}${query ? `?${query}` : ""}`;
     } catch {
       return value;
     }
   }
   return value;
+}
+
+/**
+ * 判断 query 键是否命中脱敏 denylist（大小写不敏感，含云签名前缀）。
+ *
+ * @param key query 参数名。
+ * @returns 敏感键返回 true。
+ */
+function isSensitiveSourceQueryKey(key: string): boolean {
+  const normalized = key.toLowerCase();
+  return SENSITIVE_SOURCE_QUERY_KEYS.has(normalized)
+    || SENSITIVE_SOURCE_QUERY_PREFIXES.some((prefix) => normalized.startsWith(prefix));
 }
 
 /**

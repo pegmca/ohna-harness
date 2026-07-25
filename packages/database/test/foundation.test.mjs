@@ -66,7 +66,8 @@ test("空库 migration 可执行、可幂等，并回滚失败 migration", { ski
       "0040_approval.sql",
       "0050_rag_documents.sql",
       "0060_rag_vectors.sql",
-      "0070_report.sql"
+      "0070_report.sql",
+      "0080_citations.sql"
     ]);
 
     await writeFile(join(fixtureDir, "9999_failure.sql"), "create table rolled_back(id integer); select missing_function();");

@@ -1,4 +1,4 @@
-import type { LlmClient } from "@aiagent/types";
+import type { CitationDto, LlmClient } from "@aiagent/types";
 import type { ReportPlanDto } from "@aiagent/types";
 import type { ToolRegistry } from "@aiagent/tools";
 import type { Trace, TraceRecorder } from "@aiagent/trace";
@@ -64,6 +64,8 @@ export interface AgentResponse {
   ok: boolean;
   intent: AgentIntent;
   answer: string;
+  /** grounded answer 的证据引用；由 API adapter 透传到 run_result 并持久化为 message citations。 */
+  citations?: CitationDto[];
   traceId: string;
   requestId: string;
   trace: Trace;

@@ -30,6 +30,20 @@ import {
 } from "./document-repository.js";
 
 export {
+  canTransitionCitationVerifierStatus
+} from "./citation-repository.js";
+export type {
+  AccessibleCitationSource,
+  CitationRecord,
+  CitationRepository,
+  CitationSourceProjection,
+  CitationVerifierStatus,
+  CitationVerifierUpdateResult,
+  InaccessibleCitationSource,
+  NewCitationInput,
+  UnresolvedCitationSource
+} from "./citation-repository.js";
+export {
   assertValidOwnerScope,
   createInMemoryRagDocumentRepository,
   createPersistentChunkId,

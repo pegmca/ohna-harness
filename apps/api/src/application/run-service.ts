@@ -295,6 +295,7 @@ function toResponseDto(
     ok: response.ok,
     intent: response.intent,
     answer: response.answer,
+    citations: response.citations,
     steps: response.steps.map(toStepDto),
     trace: response.trace,
     tracePersistence: tracePersistenceDegraded

@@ -93,7 +93,8 @@ test("Trace 持久化失败不打断 Agent，并在最终结果留下结构化�
     async initialize() { throw new Error("postgres://user:secret@internal/trace"); },
     async append() { throw new Error("raw database exception"); },
     async finalize() { throw new Error("raw database exception"); },
-    async getByRequestId() { return undefined; }
+    async getByRequestId() { return undefined; },
+    async listEvents() { return undefined; }
   };
   const app = createApiServer({ traceStore: unavailableTraceStore });
   const accepted = (await app.inject({ method: "POST", url: "/api/runs", payload: runRequest })).json().data;

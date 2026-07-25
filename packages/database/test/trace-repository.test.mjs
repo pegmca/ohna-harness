@@ -40,6 +40,10 @@ test("Trace 持久化保证原子 Run 投影、用户隔离、并发 sequence �
       createdAt: `2026-07-25T08:00:0${index}.000Z`, toolName: "search",
       args: {
         authorization: "Bearer raw-session-token",
+        session: "raw-session-field",
+        session_id: "raw-session-id-field",
+        cookie: "aiagent_session=raw-cookie-value",
+        note: "Cookie: aiagent_session=raw-text-cookie; theme=dark",
         email: "owner@example.com",
         document: "x".repeat(900)
       },
@@ -53,7 +57,10 @@ test("Trace 持久化保证原子 Run 投影、用户隔离、并发 sequence �
     const storedPayload = JSON.stringify((await context.pool.query(
       "select payload from trace_events where trace_id=$1 order by sequence", [traceId]
     )).rows);
-    for (const sensitive of ["raw-session-token", "owner@example.com", "x".repeat(600)]) {
+    for (const sensitive of [
+      "raw-session-token", "raw-session-field", "raw-session-id-field", "raw-cookie-value",
+      "raw-text-cookie", "owner@example.com", "x".repeat(600)
+    ]) {
       assert.equal(storedPayload.includes(sensitive), false);
     }
     assert.equal(storedPayload.includes("[truncated]"), true);
@@ -65,6 +72,10 @@ test("Trace 持久化保证原子 Run 投影、用户隔离、并发 sequence �
     );
     assert.deepEqual(runEvents.rows.map((row) => row.id), traceEvents.rows.map((row) => row.id));
     assert.deepEqual(runEvents.rows.map((row) => row.payload.event), traceEvents.rows.map((row) => row.payload));
+    const runPayload = JSON.stringify(runEvents.rows);
+    for (const sensitive of ["raw-session-field", "raw-session-id-field", "raw-cookie-value", "raw-text-cookie"]) {
+      assert.equal(runPayload.includes(sensitive), false);
+    }
 
     const finalTrace = {
       traceId, requestId, startedAt: now, completedAt: "2026-07-25T08:01:00.000Z",
@@ -82,6 +93,10 @@ test("Trace 持久化保证原子 Run 投影、用户隔离、并发 sequence �
     assert.equal(restored.summary.toolCallCount, restored.events.length);
     assert.equal(restored.summary.status, "succeeded");
     assert.equal(await reconnectedStore.getByRequestId(userTwo, requestId), undefined);
+    const incremental = await reconnectedStore.listEvents(userOne, requestId, 5);
+    assert.equal(incremental.length, 3);
+    assert.deepEqual(incremental, restored.events.slice(5));
+    assert.equal(await reconnectedStore.listEvents(userTwo, requestId, 5), undefined);
     await reconnectedPool.end();
 
     const comments = await context.pool.query(

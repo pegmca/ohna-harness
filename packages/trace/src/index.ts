@@ -388,10 +388,18 @@ export interface TraceStore {
    *
    * @param userId 当前用户。
    * @param requestId 对外请求标识。
-   * @param afterSequence 内部增量读取游标。
-   * @returns 用户可见的 Trace。
+   * @returns 用户可见的完整 Trace。
    */
-  getByRequestId(userId: string, requestId: string, afterSequence?: number): Promise<Trace | undefined>;
+  getByRequestId(userId: string, requestId: string): Promise<Trace | undefined>;
+  /**
+   * 增量读取 Trace 事件；分页结果不携带全局 summary，避免部分事件与完整汇总语义混合。
+   *
+   * @param userId 当前用户。
+   * @param requestId 对外请求标识。
+   * @param afterSequence 已消费的 Trace sequence。
+   * @returns 游标后的事件；资源不可见时返回 undefined。
+   */
+  listEvents(userId: string, requestId: string, afterSequence: number): Promise<TraceEvent[] | undefined>;
 }
 
 export interface TracePersistenceContext {
@@ -579,8 +587,8 @@ export function createInMemoryTraceStore(): TraceStore {
       if (!stored || stored.context.userId !== context.userId || stored.context.runId !== context.runId) return;
       stored.trace = sanitizeValue({ ...trace, events: stored.events }) as Trace;
     },
-    /** @param userId 当前用户。 @param requestId 请求标识。 @param afterSequence 事件游标。 @returns Trace。 */
-    async getByRequestId(userId, requestId, afterSequence = 0) {
+    /** @param userId 当前用户。 @param requestId 请求标识。 @returns 完整 Trace。 */
+    async getByRequestId(userId, requestId) {
       const stored = traces.get(requestId);
       if (!stored || stored.context.userId !== userId) return undefined;
       const trace = stored.trace ?? {
@@ -590,7 +598,13 @@ export function createInMemoryTraceStore(): TraceStore {
         summary: summarizeTrace(stored.events, stored.context.startedAt),
         events: stored.events
       };
-      return structuredClone({ ...trace, events: trace.events.slice(afterSequence) });
+      return structuredClone(trace);
+    },
+    /** @param userId 当前用户。 @param requestId 请求标识。 @param afterSequence 事件游标。 @returns 增量事件。 */
+    async listEvents(userId, requestId, afterSequence) {
+      const stored = traces.get(requestId);
+      if (!stored || stored.context.userId !== userId) return undefined;
+      return structuredClone(stored.events.slice(afterSequence));
     }
   };
 }
@@ -675,6 +689,8 @@ function truncate(value: string): string {
 export function redactSensitiveText(value: string): string {
   return value
     .replace(/Bearer\s+[A-Za-z0-9._~+\/-]+/gi, "Bearer [redacted]")
+    .replace(/\b(?:cookie|set-cookie)\s*:\s*[^\r\n]+/gi, "Cookie: [redacted]")
+    .replace(/\b(aiagent_session|session(?:id)?)\s*=\s*[^;\s]+/gi, "$1=[redacted]")
     .replace(/\b(?:sk[-_][A-Za-z0-9_-]{12,}|api[-_]?key[-_][A-Za-z0-9_-]{12,})\b/gi, "[redacted]")
     .replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, "[redacted:email]")
     .replace(/(?<!\d)(?:\+?86[- ]?)?1[3-9]\d{9}(?!\d)(?!\s*(?:CNY|RMB|元|万元|亿元|%|股))/g, "[redacted:phone]")
@@ -700,5 +716,5 @@ export function redactSensitiveValue<TValue>(value: TValue): TValue {
  * @returns 是否应脱敏。
  */
 function isSensitiveKey(key: string): boolean {
-  return /api[-_]?key|authorization|password|secret|(^|[-_])(access[-_]?token|refresh[-_]?token|token)($|[-_])/i.test(key);
+  return /api[-_]?key|authorization|password|secret|session|cookie|(^|[-_])(access[-_]?token|refresh[-_]?token|token)($|[-_])/i.test(key);
 }

@@ -15,10 +15,25 @@ test("aggregates known usage and preserves unknown token state", () => {
 
 test("redacts nested keys, secrets in text and truncates payloads", () => {
   const recorder = createInMemoryTraceRecorder("trace_2", "req_2");
-  recorder.record(base(recorder, "tool_call", "t1", { toolName: "x", args: { authorization: "Bearer abc", note: `Bearer secret-token ${"x".repeat(600)}` }, durationMs: 1, ok: false, error: { code: "timeout", message: "Bearer hidden-token", details: { apiKey: "sk-secretsecretsecret" } } }));
+  recorder.record(base(recorder, "tool_call", "t1", {
+    toolName: "x",
+    args: {
+      authorization: "Bearer abc",
+      session: "raw-session-value",
+      sessionId: "raw-session-id",
+      aiagent_session: "raw-aiagent-session",
+      cookieHeader: "aiagent_session=raw-cookie-session; theme=dark",
+      note: `Cookie: aiagent_session=raw-text-cookie; theme=dark\nBearer secret-token ${"x".repeat(600)}`
+    },
+    durationMs: 1,
+    ok: false,
+    error: { code: "timeout", message: "Bearer hidden-token", details: { apiKey: "sk-secretsecretsecret" } }
+  }));
   const serialized = JSON.stringify(recorder.getTrace());
-  assert.equal(serialized.includes("secret-token"), false);
-  assert.equal(serialized.includes("secretsecretsecret"), false);
+  for (const secret of [
+    "secret-token", "secretsecretsecret", "raw-session-value", "raw-session-id",
+    "raw-aiagent-session", "raw-cookie-session", "raw-text-cookie"
+  ]) assert.equal(serialized.includes(secret), false);
   assert.equal(serialized.includes("[truncated]"), true);
   assert.equal(recorder.getTrace().summary.errorCount, 1);
   assert.equal(recorder.getTrace().events[0].error.stage, "tool_call");
@@ -38,6 +53,29 @@ test("stores and retrieves a trace by requestId without sharing mutation", async
   found.events.push({});
   assert.equal((await store.getByRequestId("user_1", "req_3")).events.length, 0);
   assert.equal(await store.getByRequestId("user_2", "req_3"), undefined);
+});
+
+test("incremental event query keeps partial events separate from the complete trace summary", async () => {
+  const recorder = createInMemoryTraceRecorder("trace_cursor", "req_cursor");
+  const store = createInMemoryTraceStore();
+  const context = {
+    userId: "user_cursor", runId: "run_cursor", conversationId: "conversation_cursor",
+    traceId: recorder.traceId, requestId: recorder.requestId, startedAt: new Date().toISOString()
+  };
+  await store.initialize(context);
+  for (let index = 0; index < 3; index += 1) {
+    const event = base(recorder, "tool_call", `cursor-${index}`, {
+      toolName: "search", args: {}, durationMs: index, ok: true
+    });
+    recorder.record(event);
+    await store.append(context, event);
+  }
+  await store.finalize(context, recorder.getTrace());
+  const complete = await store.getByRequestId(context.userId, context.requestId);
+  const incremental = await store.listEvents(context.userId, context.requestId, 1);
+  assert.equal(complete.summary.toolCallCount, complete.events.length);
+  assert.deepEqual(incremental.map((event) => event.id), ["cursor-1", "cursor-2"]);
+  assert.equal(await store.listEvents("foreign", context.requestId, 1), undefined);
 });
 
 test("redacts PII classes from nested trace payloads", () => {

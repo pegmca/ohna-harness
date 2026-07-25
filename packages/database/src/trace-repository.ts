@@ -119,8 +119,8 @@ class PostgresTraceStore implements TraceStore {
     }
   }
 
-  /** @param userId 当前用户。 @param requestId 请求标识。 @param afterSequence 事件游标。 @returns Trace。 */
-  async getByRequestId(userId: string, requestId: string, afterSequence = 0): Promise<Trace | undefined> {
+  /** @param userId 当前用户。 @param requestId 请求标识。 @returns 完整 Trace。 */
+  async getByRequestId(userId: string, requestId: string): Promise<Trace | undefined> {
     try {
       const traceResult = await this.pool.query<TraceRow>(
         "select * from traces where request_id=$1 and user_id=$2",
@@ -129,8 +129,8 @@ class PostgresTraceStore implements TraceStore {
       const row = traceResult.rows[0];
       if (!row) return undefined;
       const events = await this.pool.query<{ payload: TraceEvent }>(
-        "select payload from trace_events where trace_id=$1 and user_id=$2 and sequence>$3 order by sequence",
-        [row.id, userId, afterSequence]
+        "select payload from trace_events where trace_id=$1 and user_id=$2 order by sequence",
+        [row.id, userId]
       );
       return {
         traceId: row.id, requestId: row.request_id,
@@ -145,6 +145,25 @@ class PostgresTraceStore implements TraceStore {
         },
         events: events.rows.map((item) => item.payload)
       };
+    } catch (cause) {
+      throw mapTraceError(cause);
+    }
+  }
+
+  /** @param userId 当前用户。 @param requestId 请求标识。 @param afterSequence 事件游标。 @returns 增量事件。 */
+  async listEvents(userId: string, requestId: string, afterSequence: number): Promise<TraceEvent[] | undefined> {
+    try {
+      const trace = await this.pool.query<{ id: string }>(
+        "select id from traces where request_id=$1 and user_id=$2",
+        [requestId, userId]
+      );
+      const row = trace.rows[0];
+      if (!row) return undefined;
+      const events = await this.pool.query<{ payload: TraceEvent }>(
+        "select payload from trace_events where trace_id=$1 and user_id=$2 and sequence>$3 order by sequence",
+        [row.id, userId, afterSequence]
+      );
+      return events.rows.map((item) => item.payload);
     } catch (cause) {
       throw mapTraceError(cause);
     }

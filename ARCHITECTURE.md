@@ -61,4 +61,4 @@ The Web is feature-first: `app`, `features`, `entities`, and `shared`. A feature
 
 ## 7. Decisions and Risks
 
-Architecture-significant decisions live in `docs/decisions/`. Run snapshots/events, messages, RAG ingestion lineage, workflows, and artifact metadata are persisted in PostgreSQL; live event subscribers, cancellation controllers, trace, approval, and vector indexes remain process-local. A restart marks only stale non-terminal Runs as an explainable `run_interrupted` failure; automatic execution continuation remains a worker/queue follow-up.
+Architecture-significant decisions live in `docs/decisions/`. Run snapshots/events, Trace summaries/events, messages, RAG ingestion lineage, workflows, artifact metadata, and vector indexes are persisted in PostgreSQL. Only live event subscribers, cancellation controllers, and approval state remain process-local. A restart marks only stale non-terminal Runs as an explainable `run_interrupted` failure; automatic execution continuation remains a worker/queue follow-up.

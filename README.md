@@ -50,7 +50,7 @@
 - `apps/api`：Fastify HTTP adapter，负责请求校验、异步 Run 生命周期、SSE 事件投影和结构化响应。
 - `packages/agent`：Agent 能力边界，后续承载意图识别、循环调度和模型交互。
 - `packages/identity`：浏览器指纹、稳定 `userId`、session 与 QQ 绑定规则的领域边界。
-- `packages/database`：PostgreSQL 连接池、Drizzle schema、migration，以及 Identity、Conversation、Run、Trace、Workflow、Artifact repository adapter。
+- `packages/database`：PostgreSQL 连接池、migration runner，以及 Identity、Conversation、Run、Trace、Approval、RAG、Citation、Workflow、Artifact repository adapter（原生 `pg`，不使用 ORM）。
 - `packages/conversation`：Conversation/Message 领域模型、稳定游标页与 repository port。
 - `packages/channels`：QQ Bot WebSocket 消息适配、命令处理和 Agent 私聊入口。
 - `packages/types`：前后端共享类型边界，承载 API contract、DTO、结构化错误和稳定枚举。
@@ -129,7 +129,7 @@ docker compose up -d --build
 docker compose ps
 ```
 
-打开 `http://localhost:8080`。Web 仅对宿主机暴露 `8080`（可用 `AIAGENT_WEB_PORT` 修改），API 的 `3001` 只在 Compose 网络内暴露，由 Nginx 将浏览器 `/api/*` 请求代理到 `api:3001`。PostgreSQL 只绑定宿主机 `127.0.0.1:5432`；身份、session、Conversation/Message、Run/RunEvent、Trace、Workflow、Artifact metadata 与 RAG 文档 lineage 保存在 `postgres_data` volume，PDF bytes 保存在独立 `artifact_data` volume。Approval 仍按后续任务迁移。
+打开 `http://localhost:8080`。Web 仅对宿主机暴露 `8080`（可用 `AIAGENT_WEB_PORT` 修改），API 的 `3001` 只在 Compose 网络内暴露，由 Nginx 将浏览器 `/api/*` 请求代理到 `api:3001`。PostgreSQL 只绑定宿主机 `127.0.0.1:5432`；身份、session、Conversation/Message、Run/RunEvent、Trace、Approval、Citation、Workflow、Artifact metadata 与 RAG 文档 lineage 保存在 `postgres_data` volume，PDF bytes 保存在独立 `artifact_data` volume。
 
 本地热更新与断点调试使用“数据库在 Docker、Web/API 在宿主机”的组合：
 
@@ -150,7 +150,15 @@ curl --fail http://localhost:8080/ready
 pnpm smoke:compose
 ```
 
-`/health` 只表示对应进程存活；Web 暴露的 `/ready` 会代理 API readiness。mock 模式检查本地 runtime，real 模式还会验证 provider 配置是否完整；依赖配置未就绪时返回 HTTP 503，Compose 不会把 API 标为 healthy。`pnpm smoke:compose` 验证页面入口、普通 Chat、自然语言触发 Report Mode 和 workflow；该命令需要宿主机 Node，产品启动本身不需要。
+`/health` 只表示对应进程存活；Web 暴露的 `/ready` 会代理 API readiness。mock 模式检查本地 runtime，real 模式还会验证 provider 配置是否完整；API readiness 同时验证 PostgreSQL 连通性与 artifact storage 根目录，依赖未就绪时返回 HTTP 503，Compose 不会把 API 标为 healthy。`pnpm smoke:compose` 验证页面入口、普通 Chat、自然语言触发 Report Mode 和 workflow；该命令需要宿主机 Node，产品启动本身不需要。
+
+更深的持久化全链路验证（需要先 `pnpm build` 与 `pnpm db:up`）：
+
+```bash
+node test/verify-runtime-integration.mjs
+```
+
+该脚本在独立测试库上依次验证：bootstrap 身份、创建会话并提交 Run、SSE 断线按 sequence 重连、Message/Run/Trace/Approval/Workflow/Artifact/Citation 读取、文档 ingest 与 hybrid 检索、API 重启后终态与文件仍存在、双用户越权拒绝、并发重复提交幂等与取消竞争单一终态、`pg_dump` 备份恢复到独立空库、PostgreSQL 停止时 readiness 503 且错误不泄漏内部异常、SIGTERM graceful shutdown 把未完成任务标记为 interrupted。
 
 接入真实 OpenAI-compatible provider 时，在 `.env` 中设置：
 
@@ -344,7 +352,7 @@ Week 2-013 已把 RAG ingestion、chunk、retrieval 和 citation answer 接入 H
 当前 runtime 限制：
 
 - 只支持 Markdown/TXT demo 文档；PDF 仍返回结构化未配置错误。
-- Document/chunk/vector、Run 与 Trace 已持久化并按当前 session owner 隔离；keyword candidates 在检索时从可见 chunks 重建。Approval 等其他状态仍按各自后续 PR 迁移。
+- Document/chunk/vector、Run、Trace 与 Approval 已持久化并按当前 session owner 隔离；keyword candidates 在检索时从可见 chunks 重建。
 - answer synthesis 是 deterministic heuristic 摘要，不调用真实 LLM；后续可在同一 RAG 边界内替换为带 context packing 的模型生成。
 
 API 验证：

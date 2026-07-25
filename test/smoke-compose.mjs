@@ -46,9 +46,20 @@ assert.equal(bootstrapResponse.ok, true);
 sessionCookie = bootstrapResponse.headers.getSetCookie()[0]?.split(";")[0];
 assert.ok(sessionCookie, "Identity bootstrap did not set a session cookie.");
 
+// Run 的 conversationId 必须是服务端持久化会话（agent_runs.conversation_id 外键到 conversations），
+// 与 Web 真实路径一致：先建会话再提交 Run。
+async function createConversation(title) {
+  const created = await requestJson("/api/conversations", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ title })
+  });
+  return created.data.conversationId;
+}
+
 const chat = await runResearch({
   message: "帮我查询 000001.SZ 最近一期净利润和 ROE。",
-  conversationId: "compose-chat",
+  conversationId: await createConversation("Compose Smoke Chat"),
   mode: "auto",
   source: "composer"
 });
@@ -56,7 +67,7 @@ assert.equal(chat.result.intent, "tool");
 
 const report = await runResearch({
   message: "基于最近两年公告和财务数据，为 000001.SZ 生成研究简报 PDF。",
-  conversationId: "compose-report",
+  conversationId: await createConversation("Compose Smoke Report"),
   mode: "auto",
   source: "composer"
 });

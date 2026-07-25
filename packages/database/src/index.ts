@@ -38,6 +38,14 @@ import { createPostgresTraceStore } from "./trace-repository.js";
 export { createPostgresTraceStore } from "./trace-repository.js";
 import { createPostgresCitationRepository } from "./citation-repository.js";
 export { createPostgresCitationRepository } from "./citation-repository.js";
+import { createPostgresApprovalDecisionService, type ApprovalDecisionService } from "./approval-decision.js";
+export {
+  createPostgresApprovalDecisionService,
+  type ApprovalDecisionService,
+  type PostgresApprovalDecisionOutcome
+} from "./approval-decision.js";
+import { listPendingMigrations } from "./migrate.js";
+export { listPendingMigrations, runMigrations, MigrationError } from "./migrate.js";
 
 const { Pool } = pg;
 
@@ -52,9 +60,12 @@ export interface DatabaseRuntime {
   artifactRepository: ArtifactRepository;
   runRepository: RunRepository;
   approvalRepository: import("@aiagent/tools").ApprovalRepository;
+  approvalDecisionService: ApprovalDecisionService;
   traceStore: import("@aiagent/trace").TraceStore;
   close(): Promise<void>;
   ping(): Promise<boolean>;
+  /** @returns 未应用的 migration 文件名；非空表示 schema 未就绪，启动必须失败。 */
+  listPendingMigrations(): Promise<string[]>;
 }
 
 /**
@@ -66,6 +77,11 @@ export interface DatabaseRuntime {
 export function createDatabaseRuntime(databaseUrl: string): DatabaseRuntime {
   if (!databaseUrl.trim()) throw new Error("DATABASE_URL is required.");
   const pool = new Pool({ connectionString: databaseUrl, max: 10 });
+  // PostgreSQL 停止或重启时，空闲连接的服务端断开会以 pool 级 error 事件抛出；
+  // 没有监听器会让整个 API 进程崩溃。兜底只记录错误消息，不拼连接串。
+  pool.on("error", (error) => {
+    console.error("PostgreSQL idle client error:", error instanceof Error ? error.message : "unknown error");
+  });
   const conversations = createPostgresConversationRepositories(pool);
   return {
     pool,
@@ -77,8 +93,10 @@ export function createDatabaseRuntime(databaseUrl: string): DatabaseRuntime {
     artifactRepository: createPostgresArtifactRepository(pool),
     runRepository: createPostgresRunRepository(pool),
     approvalRepository: createPostgresApprovalRepository(pool),
+    approvalDecisionService: createPostgresApprovalDecisionService(pool),
     traceStore: createPostgresTraceStore(pool),
     async close() { await pool.end(); },
+    async listPendingMigrations() { return listPendingMigrations(pool); },
     async ping() {
       try {
         await pool.query("select 1");

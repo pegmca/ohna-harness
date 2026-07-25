@@ -15,6 +15,7 @@
     "build": "tsc -b",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "pnpm build && node dist/migrate.js",
+    "test": "pnpm build && node --test test/*.test.mjs",
     "typecheck": "pnpm --filter @aiagent/identity build && tsc -p tsconfig.json --pretty false --noEmit"
   },
   "dependencies": {

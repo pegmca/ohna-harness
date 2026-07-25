@@ -8,6 +8,10 @@ import type {
 } from "@aiagent/identity";
 import { randomUUID } from "node:crypto";
 import pg from "pg";
+export { findMissingColumnComments, type MigrationCommentIssue } from "./migration-lint.js";
+export { RepositoryError, type RepositoryErrorCode } from "./repository-error.js";
+export { isPostgresUniqueViolation, postgresTimestampToIso } from "./postgres.js";
+import { isPostgresUniqueViolation, postgresTimestampToIso } from "./postgres.js";
 
 const { Pool } = pg;
 
@@ -286,6 +290,6 @@ async function findQqWithClient(client: pg.PoolClient, userId: string): Promise<
   const result = await client.query<QqIdentityRow>("select user_id,bot_account_id,qq_open_id,bound_at from qq_identities where user_id=$1", [userId]);
   return result.rows[0] ? mapQq(result.rows[0]) : undefined;
 }
-function toIso(value: Date | string): string { return value instanceof Date ? value.toISOString() : new Date(value).toISOString(); }
-function isUniqueViolation(error: unknown): boolean { return typeof error === "object" && error !== null && "code" in error && error.code === "23505"; }
+function toIso(value: Date | string): string { return postgresTimestampToIso(value); }
+function isUniqueViolation(error: unknown): boolean { return isPostgresUniqueViolation(error); }
 function isTransactionClosed(error: unknown): boolean { return error instanceof Error && error.message.includes("ROLLBACK"); }

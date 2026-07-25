@@ -363,9 +363,6 @@ export async function runSequentialWorkflow<TState extends WorkflowState>(
       startedAt: nodeStartedAt,
       inputSummary
     };
-    events.push(createWorkflowEvent("node_started", definition.nodeId, { nodeType: definition.type, inputSummary }));
-    recordWorkflowTrace(input.trace, runId, definition, nodes[nodeIndex], "running");
-
     try {
       const policy = definition.recovery ?? {};
       const maxAttempts = Math.max(1, policy.maxAttempts ?? 1);
@@ -373,6 +370,12 @@ export async function runSequentialWorkflow<TState extends WorkflowState>(
       let attempt = 0;
       while (attempt < maxAttempts) {
         attempt += 1;
+        events.push(createWorkflowEvent("node_started", definition.nodeId, {
+          nodeType: definition.type,
+          inputSummary,
+          attempt
+        }));
+        recordWorkflowTrace(input.trace, runId, definition, nodes[nodeIndex], "running");
         try {
           rawOutput = await executeWorkflowNode(definition, parsedInput.data, {
         runId,
@@ -385,6 +388,16 @@ export async function runSequentialWorkflow<TState extends WorkflowState>(
           break;
         } catch (error) {
           if (attempt >= maxAttempts || !policy.isRetryable?.(error)) throw Object.assign(error instanceof Error ? error : new Error("Workflow node failed."), { workflowAttempts: attempt });
+          const retryError: WorkflowErrorDto = {
+            code: "node_execution_failed",
+            message: error instanceof Error ? error.message : "Retryable workflow node attempt failed.",
+            nodeId: definition.nodeId,
+            details: { attempt, retryable: true }
+          };
+          events.push(createWorkflowEvent("node_failed", definition.nodeId, {
+            attempt,
+            retryable: true
+          }, retryError));
           recovery.push({ nodeId: definition.nodeId, action: "retried", attempts: attempt, reason: error instanceof Error ? error.message : "retryable_error" });
           await (input.sleep ?? defaultWorkflowSleep)((policy.baseDelayMs ?? 100) * 2 ** (attempt - 1), input.signal);
         }

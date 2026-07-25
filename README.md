@@ -50,7 +50,7 @@
 - `apps/api`：Fastify HTTP adapter，负责请求校验、异步 Run 生命周期、SSE 事件投影和结构化响应。
 - `packages/agent`：Agent 能力边界，后续承载意图识别、循环调度和模型交互。
 - `packages/identity`：浏览器指纹、稳定 `userId`、session 与 QQ 绑定规则的领域边界。
-- `packages/database`：PostgreSQL 连接池、Drizzle schema、migration 和 repository adapter。
+- `packages/database`：PostgreSQL 连接池、Drizzle schema、migration，以及 Identity、Workflow、Artifact repository adapter。
 - `packages/conversation`：Conversation/Message 领域模型、稳定游标页与 repository port。
 - `packages/channels`：QQ Bot WebSocket 消息适配、命令处理和 Agent 私聊入口。
 - `packages/types`：前后端共享类型边界，承载 API contract、DTO、结构化错误和稳定枚举。
@@ -58,7 +58,7 @@
 - `packages/rag`：RAG 运行时边界，负责 chunking、embedding 抽象、检索、引用和 grounded answer 的稳定类型入口。
 - `packages/eval`：RAG 评测边界，负责 eval case、metrics、runner 输入和报告输出结构。
 - `packages/workflow`：通用顺序 workflow runtime，负责节点 schema 校验、状态流转、max steps、结构化错误和节点 trace。
-- `packages/report`：研报领域节点边界，负责 Data Collector、Analyzer、Risk Checker、Citation Verifier、Report Writer 和真实 PDF renderer。
+- `packages/report`：研报领域节点边界，负责节点、真实 PDF renderer、Workflow/Artifact repository port 与本地 ArtifactStorage port。
 - `packages/tools`：工具注册与工具调用边界，后续承载外部数据和函数工具。
 - `packages/trace`：运行轨迹边界，后续承载事件记录、时间线和调试视图。
 
@@ -108,7 +108,7 @@ docker compose up -d --build
 docker compose ps
 ```
 
-打开 `http://localhost:8080`。Web 仅对宿主机暴露 `8080`（可用 `AIAGENT_WEB_PORT` 修改），API 的 `3001` 只在 Compose 网络内暴露，由 Nginx 将浏览器 `/api/*` 请求代理到 `api:3001`。PostgreSQL 只绑定宿主机 `127.0.0.1:5432`，身份、session 和 QQ 绑定保存在 `postgres_data` volume；聊天、RAG、trace、workflow 与 artifact 暂时仍在进程内存中。
+打开 `http://localhost:8080`。Web 仅对宿主机暴露 `8080`（可用 `AIAGENT_WEB_PORT` 修改），API 的 `3001` 只在 Compose 网络内暴露，由 Nginx 将浏览器 `/api/*` 请求代理到 `api:3001`。PostgreSQL 只绑定宿主机 `127.0.0.1:5432`；身份、session、Workflow 和 Artifact metadata 保存在 `postgres_data` volume，PDF bytes 保存在独立 `artifact_data` volume。聊天、RAG、Run 与 trace 仍按各自后续任务迁移。
 
 本地热更新与断点调试使用“数据库在 Docker、Web/API 在宿主机”的组合：
 
@@ -307,6 +307,9 @@ pnpm test
 pnpm build
 ```
 
+GitHub PR 会运行 `.github/workflows/ci.yml`，在独立 PostgreSQL service 上执行根级
+typecheck、test、build 与依赖架构检查；数据库集成测试不会连接开发数据库。
+
 ## Week 2 Citation Answer And Data Sources
 
 Week 2-013 已把 RAG ingestion、chunk、retrieval 和 citation answer 接入 HTTP API 与 Web 页面，形成最小可演示的 Data Sources 工作区：
@@ -413,7 +416,7 @@ Week 3-016 新增两个 package：
 - `@aiagent/workflow`：通用节点执行器。每个节点必须声明 `inputSchema` 和 `outputSchema`，runtime 在节点执行前后用 zod 校验，节点异常、输入错误、输出错误和 max steps 超限都会转换成 `WorkflowErrorDto`。Week 3-017 为其增加 `decideNext` 能力，支持节点执行成功后跳转到指定节点，从而实现 verifier loop 等有限循环。Week 3-018 增加 `createApprovalRequest()`，敏感节点未批准前返回 `paused`，拒绝后返回 `rejected`。
 - `@aiagent/report`：研报领域 workflow 节点实现。`runReportWorkflow(plan, options)` 从 `ReportPlanDto` 创建 workflow run，依次执行 Data Collector、Analyzer、Risk Checker、Citation Verifier、Report Writer 和 PDF Exporter；`renderResearchReportPdf()` 生成合法 PDF 二进制。导出是敏感动作，API 在审批通过后才允许生成。
 
-Workflow DTO 放在 `packages/types`：`WorkflowRunDto`、`WorkflowNodeDto`、`WorkflowNodeStatusDto`、`WorkflowEdgeDto`、`WorkflowEventDto`、`WorkflowErrorDto`、`ToolApprovalRequestDto` 和 `ToolApprovalDecisionDto`。第一版不做复杂 DAG 或持久化 store；approval queue 与 PDF artifact 都是进程内 demo，不是多用户权限系统。
+Workflow DTO 放在 `packages/types`：`WorkflowRunDto`、`WorkflowNodeDto`、`WorkflowNodeStatusDto`、`WorkflowEdgeDto`、`WorkflowEventDto`、`WorkflowErrorDto`、`ToolApprovalRequestDto` 和 `ToolApprovalDecisionDto`。Workflow、节点 attempt 与 Artifact metadata/预览由 PostgreSQL 持久化；PDF bytes 经 `ArtifactStorage` 原子写入专用目录。Approval queue 仍属于后续独立持久化任务。
 
 Report Workflow 当前节点输出：
 
@@ -433,7 +436,9 @@ Approval trace 使用 `approval` event 记录 `requested`、`approved`、`reject
 
 在 assistant 消息中展开 `Run details`，可检查 Activation、Planner、Data Collector、Analyzer、Risk Checker、Citation Verifier、Report Writer、PDF Exporter 的状态、耗时、输入/输出摘要和 workflow run id。下方提供 Markdown/HTML 预览，引用显示 source、documentId、chunkId 与所支持的 finding。
 
-Report Workflow 由 canonical Run application service 内部启动，不再暴露浏览器手动编排入口。artifact 使用 `GET /api/report-artifacts/:artifactId`、`POST /api/report-artifacts/:artifactId/pdf` 和下载接口；审批使用 `POST /api/runs/:runId/approvals/:approvalId/decision`。
+Report Workflow 由 canonical Run application service 内部启动，不再暴露浏览器手动编排入口。artifact 使用 `GET /api/report-artifacts/:artifactId`、`POST /api/report-artifacts/:artifactId/pdf`、下载接口和 `DELETE /api/report-artifacts/:artifactId` 软删除；审批使用 `POST /api/runs/:runId/approvals/:approvalId/decision`。
+
+上述 workflow/artifact 路由都先使用服务端 session 的 `userId` 查询 repository；不存在与越权统一返回 404。PDF 下载不接受文件路径，数据库只保存服务端随机 storage key、大小和 SHA-256，软删除不会在数据库事务内同步删除物理文件。
 
 可调用验证入口：
 

@@ -27,6 +27,10 @@ Reserved prefixes for persistence work are:
 
 PR-00 intentionally creates no business migration.
 
+`0070_report.sql` creates `workflow_runs`, auditable `workflow_node_runs`, and `artifacts`.
+PostgreSQL stores only bounded Markdown/HTML previews and file metadata; PDF bytes stay in the
+configured `ArtifactStorage`.
+
 ## Conversation adapters
 
 `0010_conversation.sql` creates `conversations` and `messages`. The public

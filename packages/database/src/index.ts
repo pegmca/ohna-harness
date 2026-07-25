@@ -16,12 +16,17 @@ export {
   type PostgresConversationRepositories
 } from "./conversation-repository.js";
 import { isPostgresUniqueViolation, postgresTimestampToIso } from "./postgres.js";
+import type { ArtifactRepository, WorkflowRepository } from "@aiagent/report";
+import { createPostgresArtifactRepository, createPostgresWorkflowRepository } from "./report.js";
+export { createPostgresArtifactRepository, createPostgresWorkflowRepository } from "./report.js";
 
 const { Pool } = pg;
 
 export interface DatabaseRuntime {
   pool: pg.Pool;
   identityRepository: IdentityRepository;
+  workflowRepository: WorkflowRepository;
+  artifactRepository: ArtifactRepository;
   close(): Promise<void>;
   ping(): Promise<boolean>;
 }
@@ -38,6 +43,8 @@ export function createDatabaseRuntime(databaseUrl: string): DatabaseRuntime {
   return {
     pool,
     identityRepository: createPostgresIdentityRepository(pool),
+    workflowRepository: createPostgresWorkflowRepository(pool),
+    artifactRepository: createPostgresArtifactRepository(pool),
     async close() { await pool.end(); },
     async ping() {
       try {

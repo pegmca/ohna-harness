@@ -14,6 +14,17 @@ import {
   type WorkflowNodeDefinition,
   type WorkflowState
 } from "@aiagent/workflow";
+export {
+  MAX_ARTIFACT_TEXT_LENGTH,
+  type ArtifactRecord,
+  type ArtifactRepository,
+  type ArtifactStorage,
+  type ArtifactStorageWriteResult,
+  type PersistedWorkflow,
+  type WorkflowPersistenceContext,
+  type WorkflowRepository
+} from "./persistence.js";
+export { assertStorageKey, createLocalArtifactStorage } from "./local-artifact-storage.js";
 import { z } from "zod";
 
 const reportPlanSchema = z.object({

@@ -186,6 +186,9 @@ importers:
       '@aiagent/identity':
         specifier: workspace:*
         version: link:../identity
+      '@aiagent/report':
+        specifier: workspace:*
+        version: link:../report
       drizzle-orm:
         specifier: 0.44.7
         version: 0.44.7(@types/pg@8.15.5)(pg@8.16.3)

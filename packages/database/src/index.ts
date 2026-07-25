@@ -19,6 +19,7 @@ export {
 } from "./conversation-repository.js";
 import { isPostgresUniqueViolation, postgresTimestampToIso } from "./postgres.js";
 import { createPostgresRagDocumentRepository } from "./rag-documents.js";
+import { createPostgresConversationRepositories } from "./conversation-repository.js";
 import type { ArtifactRepository, WorkflowRepository } from "@aiagent/report";
 import { createPostgresArtifactRepository, createPostgresWorkflowRepository } from "./report.js";
 export { createPostgresArtifactRepository, createPostgresWorkflowRepository } from "./report.js";
@@ -27,6 +28,8 @@ const { Pool } = pg;
 
 export interface DatabaseRuntime {
   pool: pg.Pool;
+  conversationRepository: import("@aiagent/conversation").ConversationRepository;
+  messageRepository: import("@aiagent/conversation").MessageRepository;
   identityRepository: IdentityRepository;
   ragDocumentRepository: RagDocumentRepository;
   workflowRepository: WorkflowRepository;
@@ -44,8 +47,10 @@ export interface DatabaseRuntime {
 export function createDatabaseRuntime(databaseUrl: string): DatabaseRuntime {
   if (!databaseUrl.trim()) throw new Error("DATABASE_URL is required.");
   const pool = new Pool({ connectionString: databaseUrl, max: 10 });
+  const conversations = createPostgresConversationRepositories(pool);
   return {
     pool,
+    ...conversations,
     identityRepository: createPostgresIdentityRepository(pool),
     ragDocumentRepository: createPostgresRagDocumentRepository(pool),
     workflowRepository: createPostgresWorkflowRepository(pool),

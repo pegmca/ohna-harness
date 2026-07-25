@@ -5,6 +5,8 @@ import {
   type IdentitySnapshot
 } from "@aiagent/identity";
 import type { LlmClient } from "@aiagent/types";
+import type { ConversationRepository, MessageRepository } from "@aiagent/conversation";
+import { ConversationRepositoryError } from "@aiagent/conversation";
 import { createDataSourceRuntime, isSafeRagSourceUri, type DataSourceRuntime } from "@aiagent/rag";
 import { createLocalArtifactStorage, renderResearchReportPdf } from "@aiagent/report";
 import type { ArtifactRepository, ArtifactStorage, WorkflowRepository } from "@aiagent/report";
@@ -17,6 +19,10 @@ import type {
   AgentRunStreamEventDto,
   ApiError,
   ApiResult,
+  ConversationDto,
+  ConversationMessageDto,
+  CreateConversationRequestDto,
+  CursorPageDto,
   DataSourceChunksResponseDto,
   DataSourceDocumentsResponseDto,
   DataSourceIngestResponseDto,
@@ -31,9 +37,10 @@ import type {
   ProductArchitectureDto,
   ProductEvalReportDto,
   ToolApprovalDecisionDto,
-  TraceDto
+  TraceDto,
+  UpdateConversationRequestDto
 } from "@aiagent/types";
-import Fastify, { type FastifyInstance } from "fastify";
+import Fastify, { type FastifyInstance, type FastifyReply } from "fastify";
 import { z } from "zod";
 import {
   createInMemoryExecutionRegistry,
@@ -44,13 +51,26 @@ import {
 import { createRunApplicationService } from "./application/run-service.js";
 import { createInMemoryReportRepositories } from "./adapters/in-memory-report-persistence.js";
 import { publishArtifactPdf } from "./application/artifact-service.js";
+import { createConversationApplicationService } from "./application/conversation-service.js";
 
 const agentRunRequestSchema = z.object({
   message: z.string(),
   conversationId: z.string().min(1),
+  clientMessageId: z.string().uuid().optional(),
   mode: z.enum(["auto", "report"]),
   source: z.enum(["composer", "report_button"])
 });
+const createConversationRequestSchema = z.object({
+  title: z.string().trim().min(1).max(120)
+}).strict();
+const conversationPageQuerySchema = z.object({
+  cursor: z.string().min(1).optional(),
+  limit: z.coerce.number().int().positive().max(100).default(30)
+});
+const updateConversationRequestSchema = z.union([
+  z.object({ title: z.string().trim().min(1).max(120) }).strict(),
+  z.object({ archive: z.literal(true) }).strict()
+]);
 const identityBootstrapSchema = z.object({
   visitorId: z.string().min(8).max(256).regex(/^[A-Za-z0-9_-]+$/),
   fingerprintVersion: z.string().min(1).max(40)
@@ -97,6 +117,8 @@ export interface ApiServerOptions {
   workflowRepository?: WorkflowRepository;
   artifactRepository?: ArtifactRepository;
   artifactStorage?: ArtifactStorage;
+  conversationRepository?: ConversationRepository;
+  messageRepository?: MessageRepository;
 }
 
 /**
@@ -149,6 +171,12 @@ export function createApiServer(options: ApiServerOptions = {}): FastifyInstance
     { fingerprintPepper: "test-only-identity-pepper" }
   );
   const identityByRequest = new WeakMap<object, IdentitySnapshot>();
+  const conversationService = options.conversationRepository && options.messageRepository
+    ? createConversationApplicationService({
+        conversationRepository: options.conversationRepository,
+        messageRepository: options.messageRepository
+      })
+    : undefined;
 
   /**
    * 统一解析 session，使业务 route 只能读取服务端确认的 userId。
@@ -215,6 +243,111 @@ export function createApiServer(options: ApiServerOptions = {}): FastifyInstance
     }
     return { ok: true, requestId, data: toIdentityMeDto(identity, options) };
   });
+
+  /** 创建当前用户拥有的持久化会话。 */
+  app.post("/api/conversations", async (request, reply): Promise<ApiResult<ConversationDto>> => {
+    const requestId = createRequestId();
+    const identity = identityByRequest.get(request);
+    const parsed = createConversationRequestSchema.safeParse(request.body);
+    if (!identity) {
+      reply.code(401);
+      return fail(toApiError("unauthorized", "身份 session 无效。", requestId), requestId);
+    }
+    if (!parsed.success) {
+      reply.code(400);
+      return fail(toApiError("bad_request", "会话标题格式不正确。", requestId), requestId);
+    }
+    if (!conversationService) return unavailableConversation(reply, requestId);
+    try {
+      const data = await conversationService.create(identity.userId, parsed.data satisfies CreateConversationRequestDto);
+      reply.code(201);
+      return { ok: true, data, requestId };
+    } catch (error) {
+      return conversationFailure(reply, requestId, error);
+    }
+  });
+
+  /** 以稳定游标读取当前用户的 active 会话。 */
+  app.get<{ Querystring: { cursor?: string; limit?: string } }>(
+    "/api/conversations",
+    async (request, reply): Promise<ApiResult<CursorPageDto<ConversationDto>>> => {
+      const requestId = createRequestId();
+      const identity = identityByRequest.get(request);
+      const parsed = conversationPageQuerySchema.safeParse(request.query);
+      if (!identity) {
+        reply.code(401);
+        return fail(toApiError("unauthorized", "身份 session 无效。", requestId), requestId);
+      }
+      if (!parsed.success) {
+        reply.code(400);
+        return fail(toApiError("bad_request", "会话分页参数不正确。", requestId), requestId);
+      }
+      if (!conversationService) return unavailableConversation(reply, requestId);
+      try {
+        const data = await conversationService.list(identity.userId, parsed.data);
+        return { ok: true, data, requestId };
+      } catch (error) {
+        return conversationFailure(reply, requestId, error);
+      }
+    }
+  );
+
+  /** 读取当前用户拥有会话中的终态消息，越权与不存在统一为 not_found。 */
+  app.get<{
+    Params: { conversationId: string };
+    Querystring: { cursor?: string; limit?: string };
+  }>("/api/conversations/:conversationId/messages", async (request, reply): Promise<ApiResult<CursorPageDto<ConversationMessageDto>>> => {
+    const requestId = createRequestId();
+    const identity = identityByRequest.get(request);
+    const parsed = conversationPageQuerySchema.safeParse(request.query);
+    if (!identity) {
+      reply.code(401);
+      return fail(toApiError("unauthorized", "身份 session 无效。", requestId), requestId);
+    }
+    if (!parsed.success) {
+      reply.code(400);
+      return fail(toApiError("bad_request", "消息分页参数不正确。", requestId), requestId);
+    }
+    if (!conversationService) return unavailableConversation(reply, requestId);
+    try {
+      const data = await conversationService.listMessages(identity.userId, {
+        conversationId: request.params.conversationId,
+        ...parsed.data
+      });
+      return { ok: true, data, requestId };
+    } catch (error) {
+      return conversationFailure(reply, requestId, error);
+    }
+  });
+
+  /** 修改标题或归档当前用户拥有的会话。 */
+  app.patch<{ Params: { conversationId: string } }>(
+    "/api/conversations/:conversationId",
+    async (request, reply): Promise<ApiResult<ConversationDto>> => {
+      const requestId = createRequestId();
+      const identity = identityByRequest.get(request);
+      const parsed = updateConversationRequestSchema.safeParse(request.body);
+      if (!identity) {
+        reply.code(401);
+        return fail(toApiError("unauthorized", "身份 session 无效。", requestId), requestId);
+      }
+      if (!parsed.success) {
+        reply.code(400);
+        return fail(toApiError("bad_request", "仅支持修改 title 或 archive。", requestId), requestId);
+      }
+      if (!conversationService) return unavailableConversation(reply, requestId);
+      try {
+        const data = await conversationService.update(
+          identity.userId,
+          request.params.conversationId,
+          parsed.data satisfies UpdateConversationRequestDto
+        );
+        return { ok: true, data, requestId };
+      } catch (error) {
+        return conversationFailure(reply, requestId, error);
+      }
+    }
+  );
 
   /** 为当前 userId 生成 QQ 私聊绑定码。 */
   app.post("/api/identity/qq-binding-challenges", async (request, reply): Promise<ApiResult<QqBindingChallengeDto>> => {
@@ -310,6 +443,17 @@ export function createApiServer(options: ApiServerOptions = {}): FastifyInstance
       }), requestId);
     }
     const identity = identityByRequest.get(request);
+    if (identity && conversationService && parsed.data.clientMessageId) {
+      try {
+        await conversationService.persistUserMessage(identity.userId, {
+          conversationId: parsed.data.conversationId,
+          content: parsed.data.message.trim(),
+          clientMessageId: parsed.data.clientMessageId
+        });
+      } catch (error) {
+        return conversationFailure(reply, requestId, error);
+      }
+    }
     const accepted = await runService.create(
       parsed.data satisfies AgentRunCreateRequestDto,
       identity?.userId ?? "00000000-0000-0000-0000-000000000000"
@@ -772,6 +916,43 @@ function fail<TData>(error: ApiError, requestId: string): ApiResult<TData> {
     error,
     requestId
   };
+}
+
+/**
+ * 将 Conversation repository 错误映射到稳定 HTTP 错误，不泄漏数据库 cause。
+ *
+ * @param reply Fastify 响应。
+ * @param requestId API 请求标识。
+ * @param error 未知应用边界错误。
+ * @returns 结构化失败结果。
+ */
+function conversationFailure<TData>(
+  reply: FastifyReply,
+  requestId: string,
+  error: unknown
+): ApiResult<TData> {
+  if (error instanceof ConversationRepositoryError) {
+    if (error.code === "not_found") {
+      reply.code(404);
+      return fail(toApiError("not_found", "会话不存在。", requestId), requestId);
+    }
+    if (error.code === "invalid_cursor") {
+      reply.code(400);
+      return fail(toApiError("bad_request", "分页游标无效。", requestId), requestId);
+    }
+    if (error.code === "conflict") {
+      reply.code(409);
+      return fail(toApiError("conflict", "会话请求与已有数据冲突。", requestId), requestId);
+    }
+  }
+  reply.code(503);
+  return fail(toApiError("internal_error", "会话服务暂时不可用。", requestId), requestId);
+}
+
+/** @param reply Fastify 响应。 @param requestId API 请求标识。 @returns 未注入 repository 时的结构化错误。 */
+function unavailableConversation<TData>(reply: FastifyReply, requestId: string): ApiResult<TData> {
+  reply.code(503);
+  return fail(toApiError("internal_error", "会话服务未配置。", requestId), requestId);
 }
 
 /**

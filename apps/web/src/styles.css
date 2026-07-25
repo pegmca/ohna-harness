@@ -435,17 +435,59 @@ textarea:disabled {
 
 .conversation-item {
   display: grid;
-  gap: var(--md-space-1);
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--md-space-2);
   width: 100%;
   border: 1px solid transparent;
   border-radius: var(--md-radius-lg);
   background: transparent;
-  padding: var(--md-space-3);
+  padding: var(--md-space-1);
   color: var(--md-color-text-secondary);
   text-align: left;
   transition:
     background-color var(--md-motion-base) var(--md-ease),
     border-color var(--md-motion-base) var(--md-ease);
+}
+
+.conversation-select {
+  display: grid;
+  min-width: 0;
+  gap: var(--md-space-1);
+  border: 0;
+  background: transparent;
+  padding: var(--md-space-2);
+  color: inherit;
+  text-align: left;
+}
+
+.conversation-archive {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  border: 0;
+  border-radius: var(--md-radius-md);
+  background: transparent;
+  color: var(--md-color-text-muted);
+}
+
+.conversation-archive:hover,
+.conversation-archive:focus-visible {
+  background: var(--md-color-muted);
+  color: var(--md-color-text-primary);
+}
+
+.conversation-list-error {
+  display: grid;
+  gap: var(--md-space-2);
+  color: var(--md-color-danger);
+  font-size: var(--md-text-body-sm-size);
+}
+
+.conversation-load-more,
+.timeline-load-more {
+  justify-content: center;
 }
 
 .conversation-item:hover,

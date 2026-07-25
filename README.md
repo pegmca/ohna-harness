@@ -50,7 +50,7 @@
 - `apps/api`：Fastify HTTP adapter，负责请求校验、异步 Run 生命周期、SSE 事件投影和结构化响应。
 - `packages/agent`：Agent 能力边界，后续承载意图识别、循环调度和模型交互。
 - `packages/identity`：浏览器指纹、稳定 `userId`、session 与 QQ 绑定规则的领域边界。
-- `packages/database`：PostgreSQL 连接池、Drizzle schema、migration，以及 Identity、Workflow、Artifact repository adapter。
+- `packages/database`：PostgreSQL 连接池、Drizzle schema、migration，以及 Identity、Conversation、Workflow、Artifact repository adapter。
 - `packages/conversation`：Conversation/Message 领域模型、稳定游标页与 repository port。
 - `packages/channels`：QQ Bot WebSocket 消息适配、命令处理和 Agent 私聊入口。
 - `packages/types`：前后端共享类型边界，承载 API contract、DTO、结构化错误和稳定枚举。
@@ -73,8 +73,9 @@ PostgreSQL 的本地连接、现有身份表、migration 规则、备份恢复�
 
 Immersive Playground 已演进为带实时执行过程的研究 Workbench：
 
-- 页面采用 Agent Chat 布局：左侧本地会话列表，中间对话流，底部 composer，顶部提供 Report Mode 开关和生成研报按钮。
-- 每次提交先调用 `POST /api/runs` 获得 `runId`，请求字段为 `message`、`conversationId`、`mode: auto | report` 和 `source: composer | report_button`；再订阅 `GET /api/runs/:runId/events`。
+- 页面采用 Agent Chat 布局：左侧持久化会话列表，中间历史时间线与 live Run，底部 composer，顶部提供 Report Mode 开关和生成研报按钮。当前会话写入 `?conversation=<id>`，刷新后恢复选择。
+- 会话 API 提供创建、稳定游标分页、终态消息读取、改标题与归档。所有 route 从 HttpOnly session 取得 `userId`，不存在与越权统一返回 `not_found`。
+- 每次提交先调用 `POST /api/runs` 获得 `runId`，请求字段为 `message`、`conversationId`、稳定的 `clientMessageId`、`mode: auto | report` 和 `source: composer | report_button`；网络重试复用同一个 client ID，再订阅 `GET /api/runs/:runId/events`。
 - `GET /api/runs/:runId` 提供可恢复快照，`DELETE /api/runs/:runId` 取消尚未结束的运行。第一版实时范围是过程事件，最终回答作为终态事件一次提交。
 - run state、工具调用和 trace 从 assistant 消息进入右侧详情面板；桌面端压缩主区，移动端覆盖显示，不设置常驻调试侧栏。
 - 行情工具返回稳定的 60 根 mock OHLCV，详情面板使用 A 股红涨绿跌 K 线；图表按 lightweight-charts 要求保留 TradingView attribution。
@@ -87,13 +88,33 @@ curl -c /tmp/aiagent-cookie.txt -X POST http://localhost:3001/api/identity/boots
   -H "content-type: application/json" \
   -d '{"visitorId":"local-readme-visitor","fingerprintVersion":"manual-test"}'
 
+curl -X POST http://localhost:3001/api/conversations \
+  -b /tmp/aiagent-cookie.txt \
+  -H "content-type: application/json" \
+  -d '{"title":"平安银行研究"}'
+
 curl -X POST http://localhost:3001/api/runs \
   -b /tmp/aiagent-cookie.txt \
   -H "content-type: application/json" \
-  -d '{"message":"查询 000001.SZ 的行情。","conversationId":"readme-demo","mode":"auto","source":"composer"}'
+  -d '{"message":"查询 000001.SZ 的行情。","conversationId":"<上一步创建的 conversationId>","clientMessageId":"11111111-1111-4111-8111-111111111111","mode":"auto","source":"composer"}'
 
 # 使用上一步返回的 runId
 curl -N -b /tmp/aiagent-cookie.txt http://localhost:3001/api/runs/<runId>/events
+```
+
+分页查询、读取消息或归档会话：
+
+```bash
+curl -b /tmp/aiagent-cookie.txt \
+  'http://localhost:3001/api/conversations?limit=30'
+
+curl -b /tmp/aiagent-cookie.txt \
+  'http://localhost:3001/api/conversations/<conversationId>/messages?limit=50'
+
+curl -X PATCH http://localhost:3001/api/conversations/<conversationId> \
+  -b /tmp/aiagent-cookie.txt \
+  -H "content-type: application/json" \
+  -d '{"archive":true}'
 ```
 
 ## Docker Compose 一键 Demo

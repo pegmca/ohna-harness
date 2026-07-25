@@ -19,6 +19,7 @@
     { "path": "../../packages/agent" }
     ,{ "path": "../../packages/identity" }
     ,{ "path": "../../packages/database" }
+    ,{ "path": "../../packages/conversation" }
     ,{ "path": "../../packages/channels" }
   ]
 }

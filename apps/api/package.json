@@ -20,6 +20,7 @@
   "dependencies": {
     "@aiagent/agent": "workspace:*",
     "@aiagent/channels": "workspace:^",
+    "@aiagent/conversation": "workspace:^",
     "@aiagent/database": "workspace:^",
     "@aiagent/identity": "workspace:^",
     "@aiagent/rag": "workspace:*",

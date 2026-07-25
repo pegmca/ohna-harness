@@ -36,7 +36,7 @@ Immersive 是面向股票研究、公告分析、财务指标查询和研报生�
 
 ## 当前设计状态与改进优先级
 
-当前 Week 1 页面已经从“开发调试台”重构为 Agent Chat 基础形态：左侧本地会话列表，中间简洁对话流，底部 composer，运行状态、工具调用和 trace 作为 assistant 消息内的可展开派生信息。
+当前页面已经从“开发调试台”重构为 Agent Chat 基础形态：左侧持久化会话列表，中间简洁对话流，底部 composer，运行状态、工具调用和 trace 作为 assistant 消息内的可展开派生信息。会话选择写入稳定 URL state，刷新后可恢复；live Run 仍是消息派生状态，不作为历史第二事实源。
 
 身份入口采用无用户名模式：首次进入由浏览器指纹恢复或创建稳定 `userId`，设置页展示当前 userId、统一 QQ Bot 状态和一次性绑定码。身份初始化失败时阻断工作台并提供重试，避免在未确认 userId 时产生无法归属的运行数据。
 
@@ -50,7 +50,7 @@ Immersive 是面向股票研究、公告分析、财务指标查询和研报生�
 当前设计债务：
 
 - App 入口已改为 React Router lazy feature 边界，HTTP/SSE 已进入 `shared/api`；Workbench 内的业务视图仍需继续按 `chat`、`run-details`、`data-sources` 和 `report` 拆细。
-- 本地会话刷新后丢失，符合 Week 1 约束；后续真实产品需要服务端持久化。
+- 会话与终态消息已从服务端历史恢复；Run、streaming assistant 消息与 trace 的完整恢复仍等待后续持久化任务。
 - Report Mode 现在通过 canonical Run 触发完整 Workflow，不再由浏览器调用独立 Workflow API。
 - 工具调用和 trace 已有摘要和二级 JSON 折叠，后续应补充金融引用、证据质量和风险提示。
 

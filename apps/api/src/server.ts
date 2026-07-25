@@ -47,6 +47,8 @@ const app = createApiServer({
   cookieSecure: process.env.IDENTITY_COOKIE_SECURE === "true",
   workflowRepository: database.workflowRepository,
   artifactRepository: database.artifactRepository,
+  conversationRepository: database.conversationRepository,
+  messageRepository: database.messageRepository,
   artifactStorage: createLocalArtifactStorage(process.env.ARTIFACT_STORAGE_ROOT ?? "./var/artifacts"),
   runStore: database.runRepository,
   readiness: async () => {

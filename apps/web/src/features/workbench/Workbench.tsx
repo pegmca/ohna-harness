@@ -4,6 +4,8 @@ import type {
   AgentRunStreamEventDto,
   ApiError,
   ApiResult,
+  ConversationDto,
+  ConversationMessageDto,
   DataSourceChunksResponseDto,
   DataSourceDocumentDto,
   DataSourceDocumentsResponseDto,
@@ -22,6 +24,7 @@ import type {
 } from "@aiagent/types";
 import {
   Activity,
+  Archive,
   AlertTriangle,
   Bot,
   Braces,
@@ -44,11 +47,17 @@ import {
   Settings,
   X
 } from "lucide-react";
-import { type FormEvent, type ReactNode, useEffect, useMemo, useState } from "react";
+import { type FormEvent, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { SettingsPage } from "../settings";
 import { findMarketSeries, MarketCandlestickChart } from "../market-data";
 import { createAndStreamRun } from "../../shared/api/run-stream-client";
+import {
+  createConversation,
+  listConversationMessages,
+  listConversations,
+  updateConversation as updateConversationApi
+} from "../../shared/api/conversation-client";
 
 type MessageRole = "user" | "assistant";
 type MessageStatus = "complete" | "pending" | "failed";
@@ -63,16 +72,6 @@ interface UiMessage {
   ok?: boolean;
   run?: AgentRunResponseDto;
   streamEvents?: AgentRunStreamEventDto[];
-}
-
-interface LocalConversation {
-  id: string;
-  title: string;
-  createdAt: string;
-  updatedAt: string;
-  messages: UiMessage[];
-  latestRun?: AgentRunResponseDto;
-  reportMode: boolean;
 }
 
 interface SelectedRunDetail {
@@ -99,15 +98,24 @@ const demoDataSourceContent = `# 资产质量
 经营性现金流改善，但资本开支增加带来短期压力。`;
 
 /**
- * 渲染 Immersive Agent Chat，负责本地会话编排和真实 Agent API 调用。
+ * 渲染 Immersive Agent Chat；持久化历史只来自 Conversation API，live Run 仅作为瞬时派生状态。
  *
  * @returns Week 1 Agent Chat 产品页面。
  */
 export function Workbench() {
   const location = useLocation();
   const navigate = useNavigate();
-  const [conversations, setConversations] = useState<LocalConversation[]>(() => [createConversation()]);
-  const [activeConversationId, setActiveConversationId] = useState(() => conversations[0]?.id ?? "");
+  const [conversations, setConversations] = useState<ConversationDto[]>([]);
+  const [activeConversationId, setActiveConversationId] = useState(
+    () => new URLSearchParams(location.search).get("conversation") ?? ""
+  );
+  const [messages, setMessages] = useState<UiMessage[]>([]);
+  const [conversationCursor, setConversationCursor] = useState<string>();
+  const [messageCursor, setMessageCursor] = useState<string>();
+  const [conversationState, setConversationState] = useState<"loading" | "ready" | "error">("loading");
+  const [messageState, setMessageState] = useState<"idle" | "loading" | "ready" | "error">("idle");
+  const [conversationError, setConversationError] = useState<string>();
+  const [messageError, setMessageError] = useState<string>();
   const [input, setInput] = useState(demoPrompts[1]);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [composerError, setComposerError] = useState<string | undefined>();
@@ -115,13 +123,140 @@ export function Workbench() {
   const workspaceView = getWorkspaceView(location.pathname);
   const [approvalStatusById, setApprovalStatusById] = useState<Record<string, string>>({});
   const [selectedRunDetail, setSelectedRunDetail] = useState<SelectedRunDetail>();
+  const [reportMode, setReportMode] = useState(false);
+  const retrySubmission = useRef<{ message: string; clientMessageId: string } | undefined>(undefined);
+  const activeConversationIdRef = useRef(activeConversationId);
+  const messageRequestController = useRef<AbortController | undefined>(undefined);
+  const messageRequestGeneration = useRef(0);
+  const skipInitialHistoryConversationId = useRef<string | undefined>(undefined);
 
   const activeConversation = useMemo(
-    () => conversations.find((conversation) => conversation.id === activeConversationId) ?? conversations[0],
+    () => conversations.find((conversation) => conversation.conversationId === activeConversationId),
     [activeConversationId, conversations]
   );
-  const latestRun = activeConversation?.latestRun;
-  const isEmpty = (activeConversation?.messages.length ?? 0) === 0;
+  const latestRun = [...messages].reverse().find((message) => message.run)?.run;
+  const isEmpty = messages.length === 0;
+
+  useEffect(() => {
+    const controller = new AbortController();
+    void loadConversationPage(undefined, false, controller.signal);
+    return () => controller.abort();
+  }, []);
+
+  useEffect(() => {
+    if (!activeConversationId) {
+      return;
+    }
+    if (skipInitialHistoryConversationId.current === activeConversationId) {
+      return;
+    }
+    void loadMessagePage(activeConversationId);
+    return () => messageRequestController.current?.abort();
+  }, [activeConversationId]);
+
+  /**
+   * 加载会话分页；服务端列表是历史唯一事实源，追加时按 ID 去重。
+   *
+   * @param cursor 可选游标。
+   * @param append 是否追加。
+   * @param signal 取消信号。
+   * @returns 请求完成 Promise。
+   */
+  async function loadConversationPage(cursor?: string, append = false, signal?: AbortSignal): Promise<void> {
+    setConversationState("loading");
+    setConversationError(undefined);
+    try {
+      let result = await listConversations(cursor, signal);
+      if (!result.ok) {
+        setConversationState("error");
+        setConversationError(formatApiError(result.error));
+        return;
+      }
+      let loadedItems = result.data.items;
+      let nextCursor = result.data.nextCursor;
+      const requested = !append ? new URLSearchParams(location.search).get("conversation") : undefined;
+      // 稳定 URL 恢复必须继续读取游标页，不能因目标不在首屏而静默改选。
+      while (requested && !loadedItems.some((item) => item.conversationId === requested) && nextCursor) {
+        result = await listConversations(nextCursor, signal);
+        if (!result.ok) {
+          setConversationState("error");
+          setConversationError(formatApiError(result.error));
+          return;
+        }
+        loadedItems = mergeConversations(loadedItems, result.data.items);
+        nextCursor = result.data.nextCursor;
+      }
+      setConversations((current) => append ? mergeConversations(current, loadedItems) : loadedItems);
+      setConversationCursor(nextCursor);
+      setConversationState("ready");
+      if (!append) {
+        const selected = loadedItems.find((item) => item.conversationId === requested)
+          ?? loadedItems[0];
+        if (selected && selected.conversationId === activeConversationIdRef.current) {
+          navigate(`/?conversation=${encodeURIComponent(selected.conversationId)}`, { replace: true });
+        } else if (selected) {
+          selectConversation(selected.conversationId, true);
+        }
+        else {
+          activeConversationIdRef.current = "";
+          setActiveConversationId("");
+        }
+      }
+    } catch (error) {
+      if (signal?.aborted) return;
+      setConversationState("error");
+      setConversationError(error instanceof Error ? error.message : "会话列表加载失败。");
+    }
+  }
+
+  /**
+   * 统一加载初始历史与后续消息页；请求代次和当前选择共同阻止迟到响应串写。
+   *
+   * @param conversationId 请求所属会话。
+   * @param cursor 可选消息游标。
+   * @param append 是否追加分页。
+   * @returns 请求完成 Promise。
+   */
+  async function loadMessagePage(
+    conversationId: string,
+    cursor?: string,
+    append = false
+  ): Promise<void> {
+    messageRequestController.current?.abort();
+    const controller = new AbortController();
+    const generation = messageRequestGeneration.current + 1;
+    messageRequestGeneration.current = generation;
+    messageRequestController.current = controller;
+    setMessageState("loading");
+    setMessageError(undefined);
+    try {
+      const result = await listConversationMessages(conversationId, cursor, controller.signal);
+      if (
+        controller.signal.aborted
+        || generation !== messageRequestGeneration.current
+        || activeConversationIdRef.current !== conversationId
+      ) return;
+      if (!result.ok) {
+        setMessageState("error");
+        setMessageError(formatApiError(result.error));
+        return;
+      }
+      const incoming = result.data.items.map(toUiMessage);
+      setMessages((current) => append
+        ? mergeMessages(current, incoming)
+        : mergeMessages(incoming, current));
+      setMessageCursor(result.data.nextCursor);
+      setMessageState("ready");
+    } catch (error) {
+      if (
+        controller.signal.aborted
+        || generation !== messageRequestGeneration.current
+        || activeConversationIdRef.current !== conversationId
+      ) return;
+      setMessageState("error");
+      setMessageError(error instanceof Error ? error.message : "会话消息加载失败。");
+    }
+  }
 
   /**
    * 处理表单提交，保持提交入口只在顶层触发 API。
@@ -139,10 +274,15 @@ export function Workbench() {
    *
    * @returns void。
    */
-  function handleNewConversation(): void {
-    const conversation = createConversation();
-    setConversations((current) => [conversation, ...current]);
-    setActiveConversationId(conversation.id);
+  async function handleNewConversation(): Promise<void> {
+    const result = await createConversation({ title: "新会话" });
+    if (!result.ok) {
+      setConversationError(formatApiError(result.error));
+      setConversationState("error");
+      return;
+    }
+    setConversations((current) => [result.data, ...current]);
+    selectConversation(result.data.conversationId, false, true);
     setInput("");
     setComposerError(undefined);
     setIsSidebarOpen(false);
@@ -155,9 +295,55 @@ export function Workbench() {
    * @returns void。
    */
   function handleSelectConversation(conversationId: string): void {
-    setActiveConversationId(conversationId);
+    selectConversation(conversationId);
     setComposerError(undefined);
     setIsSidebarOpen(false);
+  }
+
+  /**
+   * 切换当前会话；当前页面刚创建的空会话可跳过首次历史请求，避免与首个 Run 写消息竞态。
+   *
+   * @param conversationId 会话 ID。
+   * @param replace 是否替换历史记录。
+   * @param skipInitialHistory 是否跳过已知为空的首次历史请求。
+   * @returns void。
+   */
+  function selectConversation(
+    conversationId: string,
+    replace = false,
+    skipInitialHistory = false
+  ): void {
+    messageRequestController.current?.abort();
+    messageRequestGeneration.current += 1;
+    activeConversationIdRef.current = conversationId;
+    skipInitialHistoryConversationId.current = skipInitialHistory ? conversationId : undefined;
+    setMessages([]);
+    setMessageCursor(undefined);
+    setMessageState(skipInitialHistory ? "ready" : "loading");
+    setActiveConversationId(conversationId);
+    const target = `/?conversation=${encodeURIComponent(conversationId)}`;
+    navigate(target, { replace });
+  }
+
+  /** @param conversationId 会话 ID。 @returns 归档请求完成 Promise。 */
+  async function handleArchiveConversation(conversationId: string): Promise<void> {
+    const result = await updateConversationApi(conversationId, { archive: true });
+    if (!result.ok) {
+      setConversationError(formatApiError(result.error));
+      return;
+    }
+    const remaining = conversations.filter((item) => item.conversationId !== conversationId);
+    setConversations(remaining);
+    if (activeConversationId === conversationId) {
+      const next = remaining[0];
+      setMessages([]);
+      if (next) selectConversation(next.conversationId, true);
+      else {
+        activeConversationIdRef.current = "";
+        setActiveConversationId("");
+        navigate("/", { replace: true });
+      }
+    }
   }
 
   /**
@@ -167,11 +353,7 @@ export function Workbench() {
    * @returns void。
    */
   function handleReportModeChange(checked: boolean): void {
-    updateConversation(activeConversationId, (conversation) => ({
-      ...conversation,
-      reportMode: checked,
-      updatedAt: new Date().toISOString()
-    }));
+    setReportMode(checked);
   }
 
   /**
@@ -203,18 +385,31 @@ export function Workbench() {
    */
   async function submitAgentMessage(message: string, triggerSource?: ReportTriggerSourceDto): Promise<void> {
     const trimmed = message.trim();
-    const conversation = activeConversation;
-
-    if (!trimmed || isSubmitting || !conversation) {
+    if (!trimmed || isSubmitting) {
       return;
     }
+    let conversation = activeConversation;
+    if (!conversation) {
+      const created = await createConversation({ title: createConversationTitle(trimmed) });
+      if (!created.ok) {
+        setComposerError(formatApiError(created.error));
+        return;
+      }
+      conversation = created.data;
+      setConversations((current) => [created.data, ...current]);
+      selectConversation(created.data.conversationId, false, true);
+    }
 
-    const submittedConversationId = conversation.id;
-    const submittedReportMode = conversation.reportMode;
+    const submittedConversationId = conversation.conversationId;
+    const submittedReportMode = reportMode;
     const pendingMessageId = createUiId("assistant");
+    const clientMessageId = retrySubmission.current?.message === trimmed
+      ? retrySubmission.current.clientMessageId
+      : crypto.randomUUID();
+    retrySubmission.current = { message: trimmed, clientMessageId };
     const now = new Date().toISOString();
     const userMessage: UiMessage = {
-      id: createUiId("user"),
+      id: clientMessageId,
       role: "user",
       content: trimmed,
       createdAt: now,
@@ -229,12 +424,18 @@ export function Workbench() {
       streamEvents: []
     };
 
-    updateConversation(submittedConversationId, (current) => ({
+    setMessages((current) => [
       ...current,
-      title: current.messages.length === 0 ? createConversationTitle(trimmed) : current.title,
-      updatedAt: now,
-      messages: [...current.messages, userMessage, pendingMessage]
-    }));
+      ...(current.some((item) => item.id === clientMessageId) ? [] : [userMessage]),
+      pendingMessage
+    ]);
+    if (conversation.title === "新会话") {
+      const title = createConversationTitle(trimmed);
+      void updateConversationApi(submittedConversationId, { title }).then((result) => {
+        if (result.ok) setConversations((current) =>
+          current.map((item) => item.conversationId === submittedConversationId ? result.data : item));
+      });
+    }
     setInput("");
     setComposerError(undefined);
     setIsSubmitting(true);
@@ -244,17 +445,15 @@ export function Workbench() {
         trimmed,
         submittedReportMode || triggerSource === "button",
         submittedConversationId,
+        clientMessageId,
         triggerSource,
         (event) => {
           replaceMessage(submittedConversationId, pendingMessageId, {
             content: formatRunProgress(event)
           });
-          updateConversation(submittedConversationId, (current) => ({
-            ...current,
-            messages: current.messages.map((item) => item.id === pendingMessageId
-              ? { ...item, streamEvents: [...(item.streamEvents ?? []), event] }
-              : item)
-          }));
+          setMessages((current) => current.map((item) => item.id === pendingMessageId
+            ? { ...item, streamEvents: [...(item.streamEvents ?? []), event] }
+            : item));
         }
       );
 
@@ -270,6 +469,7 @@ export function Workbench() {
       }
 
       const run = result.data;
+      retrySubmission.current = undefined;
       replaceMessage(submittedConversationId, pendingMessageId, {
         content: run.answer,
         status: run.ok ? "complete" : "failed",
@@ -277,11 +477,6 @@ export function Workbench() {
         run,
         streamEvents: undefined
       });
-      updateConversation(submittedConversationId, (current) => ({
-        ...current,
-        latestRun: run,
-        updatedAt: new Date().toISOString()
-      }));
 
       if (!run.ok && run.error) {
         setComposerError(formatApiError(run.error));
@@ -300,22 +495,6 @@ export function Workbench() {
   }
 
   /**
-   * 更新指定会话，集中处理本地会话数组不可变写入。
-   *
-   * @param conversationId 会话 id。
-   * @param updater 会话更新函数。
-   * @returns void。
-   */
-  function updateConversation(
-    conversationId: string,
-    updater: (conversation: LocalConversation) => LocalConversation
-  ): void {
-    setConversations((current) =>
-      current.map((conversation) => (conversation.id === conversationId ? updater(conversation) : conversation))
-    );
-  }
-
-  /**
    * 替换 pending assistant 消息，保证每次 run 的派生数据保留在消息内。
    *
    * @param conversationId 会话 id。
@@ -324,13 +503,10 @@ export function Workbench() {
    * @returns void。
    */
   function replaceMessage(conversationId: string, messageId: string, patch: Partial<UiMessage>): void {
-    updateConversation(conversationId, (conversation) => ({
-      ...conversation,
-      updatedAt: new Date().toISOString(),
-      messages: conversation.messages.map((messageItem) =>
-        messageItem.id === messageId ? { ...messageItem, ...patch } : messageItem
-      )
-    }));
+    if (conversationId !== activeConversationId) return;
+    setMessages((current) => current.map((messageItem) =>
+      messageItem.id === messageId ? { ...messageItem, ...patch } : messageItem
+    ));
   }
 
   /**
@@ -345,7 +521,7 @@ export function Workbench() {
     decision: ToolApprovalDecisionDto["decision"]
   ): Promise<void> {
     const approvalId = approvalRequest.approvalId;
-    const runId = activeConversation?.latestRun?.runId;
+    const runId = latestRun?.runId;
     if (!runId) {
       setComposerError("当前审批没有关联可操作的 Run。");
       return;
@@ -376,11 +552,17 @@ export function Workbench() {
   return (
     <main className={`agent-app-shell ${selectedRunDetail ? "has-detail-panel" : ""}`}>
       <ConversationSidebar
-        activeConversationId={activeConversation?.id}
+        activeConversationId={activeConversation?.conversationId}
+        error={conversationError}
+        hasMore={Boolean(conversationCursor)}
+        isLoading={conversationState === "loading"}
         conversations={conversations}
         isOpen={isSidebarOpen}
+        onArchiveConversation={(conversationId) => void handleArchiveConversation(conversationId)}
         onClose={() => setIsSidebarOpen(false)}
-        onNewConversation={handleNewConversation}
+        onLoadMore={() => void loadConversationPage(conversationCursor, true)}
+        onNewConversation={() => void handleNewConversation()}
+        onRetry={() => void loadConversationPage()}
         onSelectConversation={handleSelectConversation}
         onSelectView={(view) => {
           navigate(getWorkspacePath(view));
@@ -398,13 +580,20 @@ export function Workbench() {
             onGenerateReport={handleGenerateReport}
             onMenuClick={() => setIsSidebarOpen(true)}
             onReportModeChange={handleReportModeChange}
-            reportMode={activeConversation?.reportMode ?? false}
+            reportMode={reportMode}
           />
 
           <ChatTimeline
             approvalStatusById={approvalStatusById}
             isSubmitting={isSubmitting}
-            messages={activeConversation?.messages ?? []}
+            error={messageError}
+            hasMore={Boolean(messageCursor)}
+            isLoading={messageState === "loading"}
+            messages={messages}
+            onLoadMore={() => {
+              if (!activeConversationId) return;
+              void loadMessagePage(activeConversationId, messageCursor, true);
+            }}
             onApprovalDecision={handleApprovalDecision}
             onOpenRunDetail={setSelectedRunDetail}
             onUsePrompt={setInput}
@@ -418,7 +607,7 @@ export function Workbench() {
             onInputChange={setInput}
             onSubmit={handleSubmit}
             onUsePrompt={setInput}
-            reportMode={activeConversation?.reportMode ?? false}
+            reportMode={reportMode}
           />
         </section>
       ) : workspaceView === "data-sources" ? (
@@ -440,17 +629,23 @@ export function Workbench() {
 
 interface ConversationSidebarProps {
   activeConversationId: string | undefined;
-  conversations: LocalConversation[];
+  conversations: ConversationDto[];
+  error: string | undefined;
+  hasMore: boolean;
+  isLoading: boolean;
   isOpen: boolean;
+  onArchiveConversation: (conversationId: string) => void;
   onClose: () => void;
+  onLoadMore: () => void;
   onNewConversation: () => void;
+  onRetry: () => void;
   onSelectConversation: (conversationId: string) => void;
   onSelectView: (view: WorkspaceView) => void;
   workspaceView: WorkspaceView;
 }
 
 /**
- * 展示浏览器本地会话列表；移动端作为 drawer，桌面端作为固定左栏。
+ * 展示服务端会话列表；移动端作为 drawer，桌面端作为固定左栏。
  *
  * @param props 组件属性。
  * @returns 会话侧栏。
@@ -509,23 +704,40 @@ function ConversationSidebar(props: ConversationSidebarProps) {
         </nav>
 
         <div className="conversation-list">
+          {props.isLoading && props.conversations.length === 0 ? <p className="muted-row">正在加载会话…</p> : null}
+          {props.error ? (
+            <div className="conversation-list-error">
+              <span>{props.error}</span>
+              <button className="secondary-button" onClick={props.onRetry} type="button">重试</button>
+            </div>
+          ) : null}
+          {!props.isLoading && !props.error && props.conversations.length === 0
+            ? <p className="muted-row">暂无历史会话，创建一个开始研究。</p>
+            : null}
           {props.conversations.map((conversation) => (
-            <button
+            <div
               className={`conversation-item ${
-                conversation.id === props.activeConversationId ? "is-active" : ""
+                conversation.conversationId === props.activeConversationId ? "is-active" : ""
               }`}
-              key={conversation.id}
-              onClick={() => props.onSelectConversation(conversation.id)}
-              type="button"
+              key={conversation.conversationId}
             >
-              <span className="conversation-title">{conversation.title}</span>
-              <span className="conversation-preview">{getConversationPreview(conversation)}</span>
-              <span className="conversation-meta">
-                <span>{formatRelativeTime(conversation.updatedAt)}</span>
-                <span>{formatRunStatus(conversation.latestRun)}</span>
-              </span>
-            </button>
+              <button className="conversation-select" onClick={() => props.onSelectConversation(conversation.conversationId)} type="button">
+                <span className="conversation-title">{conversation.title}</span>
+                <span className="conversation-preview">最近更新 {formatRelativeTime(conversation.lastMessageAt)}</span>
+              </button>
+              <button
+                aria-label={`归档 ${conversation.title}`}
+                className="conversation-archive"
+                onClick={() => props.onArchiveConversation(conversation.conversationId)}
+                type="button"
+              ><Archive className="icon-size" /></button>
+            </div>
           ))}
+          {props.hasMore ? (
+            <button className="secondary-button conversation-load-more" disabled={props.isLoading} onClick={props.onLoadMore} type="button">
+              {props.isLoading ? "加载中…" : "加载更多"}
+            </button>
+          ) : null}
         </div>
 
         <footer className="sidebar-footer">
@@ -949,8 +1161,12 @@ function ChatHeader(props: ChatHeaderProps) {
 
 interface ChatTimelineProps {
   approvalStatusById: Record<string, string>;
+  error: string | undefined;
+  hasMore: boolean;
+  isLoading: boolean;
   isSubmitting: boolean;
   messages: UiMessage[];
+  onLoadMore: () => void;
   onApprovalDecision: (request: ToolApprovalRequestDto, decision: ToolApprovalDecisionDto["decision"]) => Promise<void>;
   onOpenRunDetail: (detail: SelectedRunDetail) => void;
   onUsePrompt: (prompt: string) => void;
@@ -963,6 +1179,12 @@ interface ChatTimelineProps {
  * @returns 对话消息列表。
  */
 function ChatTimeline(props: ChatTimelineProps) {
+  if (props.isLoading && props.messages.length === 0) {
+    return <section className="chat-timeline empty-timeline" aria-label="消息列表"><p className="muted-row">正在加载会话历史…</p></section>;
+  }
+  if (props.error && props.messages.length === 0) {
+    return <section className="chat-timeline empty-timeline" aria-label="消息列表"><div className="error-block"><AlertTriangle className="icon-size" /><span>{props.error}</span></div></section>;
+  }
   if (props.messages.length === 0) {
     return (
       <section className="chat-timeline empty-timeline" aria-label="消息列表">
@@ -979,6 +1201,7 @@ function ChatTimeline(props: ChatTimelineProps) {
   return (
     <section className="chat-timeline" aria-label="消息列表">
       <div className="timeline-inner">
+        {props.hasMore ? <button className="secondary-button timeline-load-more" onClick={props.onLoadMore} type="button">加载更多消息</button> : null}
         {props.messages.map((message) => (
           <ChatMessage
             approvalStatusById={props.approvalStatusById}
@@ -1560,6 +1783,8 @@ function StatusBadge(props: { children: ReactNode; tone: "danger" | "info" | "ne
  * @param message 当前用户输入。
  * @param reportMode Report Mode 占位开关状态。
  * @param conversationId 可选会话标识。
+ * @param clientMessageId 用户消息幂等键。
+ * @param reportTriggerSource 显式研报触发来源。
  * @param onEvent 实时事件回调。
  * @returns terminal API 运行结果。
  */
@@ -1567,12 +1792,14 @@ async function runAgent(
   message: string,
   reportMode: boolean,
   conversationId: string | undefined,
+  clientMessageId: string,
   reportTriggerSource?: ReportTriggerSourceDto,
   onEvent?: (event: AgentRunStreamEventDto) => void
 ): Promise<ApiResult<AgentRunResponseDto>> {
   return createAndStreamRun({
     message,
     conversationId: conversationId ?? createUiId("conversation"),
+    clientMessageId,
     mode: reportMode ? "report" : "auto",
     source: reportTriggerSource === "button" ? "report_button" : "composer"
   }, { onEvent });
@@ -1966,23 +2193,7 @@ function formatRunStatus(run: AgentRunResponseDto | undefined): string {
 }
 
 /**
- * 生成会话列表摘要，优先展示最后一条消息内容。
- *
- * @param conversation 本地会话。
- * @returns 摘要文案。
- */
-function getConversationPreview(conversation: LocalConversation): string {
-  const lastMessage = conversation.messages.at(-1);
-
-  if (!lastMessage) {
-    return "尚未提问";
-  }
-
-  return lastMessage.content.length > 54 ? `${lastMessage.content.slice(0, 54)}...` : lastMessage.content;
-}
-
-/**
- * 从第一条用户输入生成本地会话标题。
+ * 从第一条用户输入生成会话标题。
  *
  * @param message 用户输入。
  * @returns 会话标题。
@@ -1991,22 +2202,28 @@ function createConversationTitle(message: string): string {
   return message.length > 24 ? `${message.slice(0, 24)}...` : message;
 }
 
-/**
- * 创建浏览器本地会话；刷新后丢失符合 Week 1 约束。
- *
- * @returns 本地会话对象。
- */
-function createConversation(): LocalConversation {
-  const now = new Date().toISOString();
-
+/** @param message 服务端消息 DTO。 @returns 时间线 UI 消息。 */
+function toUiMessage(message: ConversationMessageDto): UiMessage {
   return {
-    id: createUiId("conversation"),
-    title: "新会话",
-    createdAt: now,
-    updatedAt: now,
-    messages: [],
-    reportMode: false
+    id: message.messageId,
+    role: message.role === "user" ? "user" : "assistant",
+    content: message.content,
+    createdAt: message.createdAt,
+    status: message.status === "failed" ? "failed" : "complete",
+    ok: message.status === "completed"
   };
+}
+
+/** @param current 已加载会话。 @param incoming 新页。 @returns 按 ID 去重的列表。 */
+function mergeConversations(current: ConversationDto[], incoming: ConversationDto[]): ConversationDto[] {
+  const seen = new Set(current.map((item) => item.conversationId));
+  return [...current, ...incoming.filter((item) => !seen.has(item.conversationId))];
+}
+
+/** @param current 已加载消息。 @param incoming 新页。 @returns 按 ID 去重并按时间线顺序排列的消息。 */
+function mergeMessages(current: UiMessage[], incoming: UiMessage[]): UiMessage[] {
+  const seen = new Set(current.map((item) => item.id));
+  return [...current, ...incoming.filter((item) => !seen.has(item.id))];
 }
 
 /**

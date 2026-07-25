@@ -2,6 +2,12 @@ import AxeBuilder from "@axe-core/playwright";
 import { expect, test } from "@playwright/test";
 
 test.beforeEach(async ({ page }) => {
+  await page.route("**/api/conversations?*", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ ok: true, requestId: "conversations_test", data: { items: [] } })
+    });
+  });
   await page.route("**/api/identity/me", async (route) => {
     await route.fulfill({
       contentType: "application/json",

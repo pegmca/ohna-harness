@@ -50,6 +50,9 @@ importers:
       '@aiagent/channels':
         specifier: workspace:^
         version: link:../../packages/channels
+      '@aiagent/conversation':
+        specifier: workspace:^
+        version: link:../../packages/conversation
       '@aiagent/database':
         specifier: workspace:^
         version: link:../../packages/database

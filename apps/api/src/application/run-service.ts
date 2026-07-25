@@ -27,8 +27,8 @@ type RunEventPayload =
 
 export interface RunServiceSink {
   saveTrace(trace: TraceDto): void;
-  saveWorkflow(workflow: ReportWorkflowResponseDto): void;
-  saveArtifact(artifact: ReportArtifactDto): void;
+  saveWorkflow(workflow: ReportWorkflowResponseDto, context: ReportPersistenceContext): Promise<void>;
+  saveArtifact(artifact: ReportArtifactDto, context: ReportPersistenceContext): Promise<void>;
   saveApproval(approval: ToolApprovalRequestDto, runId: string): void;
 }
 
@@ -44,10 +44,17 @@ export interface RunServiceDependencies {
 }
 
 export interface RunApplicationService {
-  create(request: AgentRunCreateRequestDto): Promise<AgentRunAcceptedDto>;
+  create(request: AgentRunCreateRequestDto, userId: string): Promise<AgentRunAcceptedDto>;
   get(runId: string): Promise<AgentRunSnapshotDto | undefined>;
   cancel(runId: string): Promise<AgentRunSnapshotDto | undefined>;
   subscribe(runId: string, listener: (event: AgentRunStreamEventDto) => void): () => void;
+}
+
+export interface ReportPersistenceContext {
+  userId: string;
+  conversationId: string;
+  agentRunId: string;
+  planId: string;
 }
 
 /**
@@ -99,7 +106,7 @@ export function createRunApplicationService(dependencies: RunServiceDependencies
     return next;
   }
 
-  async function execute(runId: string, request: AgentRunCreateRequestDto): Promise<void> {
+  async function execute(runId: string, request: AgentRunCreateRequestDto, userId: string): Promise<void> {
     const controller = dependencies.executionRegistry.get(runId);
     if (!controller) return;
     await publish(runId, { type: "run_status", status: "running", message: "Agent 已开始分析研究任务。" });
@@ -116,7 +123,7 @@ export function createRunApplicationService(dependencies: RunServiceDependencies
           : undefined,
         signal: controller.signal
       }, { traceRecorder: trace, llmClient: dependencies.llmClient });
-      const workflow = await maybeRunReport(runId, response, trace, controller.signal, dependencies.sink);
+      const workflow = await maybeRunReport(runId, userId, request.conversationId, response, trace, controller.signal, dependencies.sink);
       response.trace = trace.getTrace();
       dependencies.sink.saveTrace(response.trace);
       const result = redactSensitiveValue(toResponseDto(runId, response, request, snapshot.requestId, workflow));
@@ -134,7 +141,7 @@ export function createRunApplicationService(dependencies: RunServiceDependencies
   }
 
   return {
-    async create(request) {
+    async create(request, userId) {
       const runId = createId("run");
       const requestId = createId("api_req");
       const createdAt = now().toISOString();
@@ -149,7 +156,7 @@ export function createRunApplicationService(dependencies: RunServiceDependencies
       });
       dependencies.executionRegistry.create(runId);
       await publish(runId, { type: "run_status", status: "queued", message: "研究任务已进入队列。" });
-      dependencies.scheduler.schedule(() => execute(runId, request));
+      dependencies.scheduler.schedule(() => execute(runId, request, userId));
       return {
         runId,
         requestId,
@@ -175,6 +182,8 @@ export function createRunApplicationService(dependencies: RunServiceDependencies
 
 async function maybeRunReport(
   runId: string,
+  userId: string,
+  conversationId: string,
   response: AgentResponse,
   trace: ReturnType<typeof createObservableTraceRecorder>,
   signal: AbortSignal,
@@ -187,9 +196,10 @@ async function maybeRunReport(
     signal
   });
   const workflow = redactSensitiveValue(toWorkflowDto(result));
-  sink.saveWorkflow(workflow);
+  const context = { userId, conversationId, agentRunId: runId, planId: response.reportPlan.planId };
+  await sink.saveWorkflow(workflow, context);
   if (workflow.run.approvalRequest) sink.saveApproval(workflow.run.approvalRequest, runId);
-  if (workflow.artifact) sink.saveArtifact(workflow.artifact);
+  if (workflow.artifact) await sink.saveArtifact(workflow.artifact, context);
   return workflow;
 }
 

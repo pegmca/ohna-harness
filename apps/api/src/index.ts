@@ -6,7 +6,8 @@ import {
 } from "@aiagent/identity";
 import type { LlmClient } from "@aiagent/types";
 import { createDataSourceRuntime } from "@aiagent/rag";
-import { renderResearchReportPdf } from "@aiagent/report";
+import { createLocalArtifactStorage, renderResearchReportPdf } from "@aiagent/report";
+import type { ArtifactRepository, ArtifactStorage, WorkflowRepository } from "@aiagent/report";
 import type { RagStructuredError } from "@aiagent/rag";
 import { createInMemoryTraceStore, redactSensitiveValue } from "@aiagent/trace";
 import type {
@@ -41,6 +42,7 @@ import {
   createMicrotaskRunScheduler
 } from "./adapters/in-memory-run-runtime.js";
 import { createRunApplicationService } from "./application/run-service.js";
+import { createInMemoryReportRepositories } from "./adapters/in-memory-report-persistence.js";
 
 const agentRunRequestSchema = z.object({
   message: z.string(),
@@ -80,6 +82,9 @@ export interface ApiServerOptions {
   qqBotEnabled?: boolean;
   qqBotStatus?: () => IdentityMeDto["qqBot"]["status"];
   cookieSecure?: boolean;
+  workflowRepository?: WorkflowRepository;
+  artifactRepository?: ArtifactRepository;
+  artifactStorage?: ArtifactStorage;
 }
 
 /**
@@ -95,9 +100,12 @@ export function createApiServer(options: ApiServerOptions = {}): FastifyInstance
   const approvalDecisions = new Map<string, ToolApprovalDecisionDto>();
   const pendingApprovals = new Map<string, import("@aiagent/types").ToolApprovalRequestDto>();
   const approvalRunIds = new Map<string, string>();
-  const workflowRuns = new Map<string, ReportWorkflowResponseDto>();
-  const reportArtifacts = new Map<string, ReportArtifactDto>();
-  const reportPdfFiles = new Map<string, Uint8Array>();
+  const inMemoryReport = createInMemoryReportRepositories();
+  const workflowRepository = options.workflowRepository ?? inMemoryReport.workflowRepository;
+  const artifactRepository = options.artifactRepository ?? inMemoryReport.artifactRepository;
+  const artifactStorage = options.artifactStorage ?? createLocalArtifactStorage(
+    process.env.ARTIFACT_STORAGE_ROOT ?? `${process.cwd()}/.artifacts-test`
+  );
   const traceStore = createInMemoryTraceStore();
   const runStore = createInMemoryRunStore();
   const runEventBus = createInMemoryRunEventBus();
@@ -109,8 +117,15 @@ export function createApiServer(options: ApiServerOptions = {}): FastifyInstance
     llmClient: options.llmClient,
     sink: {
       saveTrace: (trace) => { traceStore.save(trace); },
-      saveWorkflow: (workflow) => { workflowRuns.set(workflow.run.runId, workflow); },
-      saveArtifact: (artifact) => { reportArtifacts.set(artifact.artifactId, artifact); },
+      saveWorkflow: async (workflow, context) => {
+        await workflowRepository.save({ context, run: workflow.run });
+      },
+      saveArtifact: async (artifact, context) => {
+        await artifactRepository.save({
+          artifact, ...context, kind: "research_report", mediaType: "text/html",
+          metadata: {}, updatedAt: artifact.createdAt
+        });
+      },
       saveApproval: (approval, runId) => {
         pendingApprovals.set(approval.approvalId, approval);
         approvalRunIds.set(approval.approvalId, runId);
@@ -282,7 +297,11 @@ export function createApiServer(options: ApiServerOptions = {}): FastifyInstance
         issues: parsed.success ? undefined : parsed.error.issues
       }), requestId);
     }
-    const accepted = await runService.create(parsed.data satisfies AgentRunCreateRequestDto);
+    const identity = identityByRequest.get(request);
+    const accepted = await runService.create(
+      parsed.data satisfies AgentRunCreateRequestDto,
+      identity?.userId ?? "00000000-0000-0000-0000-000000000000"
+    );
     reply.code(202);
     return { ok: true, requestId: accepted.requestId, data: accepted };
   });
@@ -535,36 +554,42 @@ export function createApiServer(options: ApiServerOptions = {}): FastifyInstance
     };
   });
 
-  /** 读取进程内 workflow 快照；本阶段明确不提供持久化 artifact store。 */
+  /** 按服务端身份读取持久化 workflow 快照。 */
   app.get<{ Params: { runId: string } }>("/api/report-workflows/:runId", async (request, reply): Promise<ApiResult<ReportWorkflowResponseDto>> => {
     const requestId = createRequestId();
-    const value = workflowRuns.get(request.params.runId);
+    const identity = identityByRequest.get(request);
+    const value = await workflowRepository.findById(identity?.userId ?? "00000000-0000-0000-0000-000000000000", request.params.runId);
     if (!value) {
       reply.code(404);
       return fail(toApiError("not_found", "Report workflow run 不存在。", requestId), requestId);
     }
-    return { ok: true, data: value, requestId };
+    const artifactId = `artifact_${value.run.runId}`;
+    const artifact = await artifactRepository.findById(value.context.userId, artifactId);
+    return { ok: true, data: { run: value.run, artifact: artifact?.artifact }, requestId };
   });
 
   /** 读取可预览报告 artifact，响应不暴露 report runtime 内部 state。 */
   app.get<{ Params: { artifactId: string } }>("/api/report-artifacts/:artifactId", async (request, reply): Promise<ApiResult<ReportArtifactDto>> => {
     const requestId = createRequestId();
-    const value = reportArtifacts.get(request.params.artifactId);
+    const identity = identityByRequest.get(request);
+    const value = await artifactRepository.findById(identity?.userId ?? "00000000-0000-0000-0000-000000000000", request.params.artifactId);
     if (!value) {
       reply.code(404);
       return fail(toApiError("not_found", "Report artifact 不存在。", requestId), requestId);
     }
-    return { ok: true, data: value, requestId };
+    return { ok: true, data: value.artifact, requestId };
   });
 
-  /** 审批后生成真实 PDF；只按 artifact ID 访问内存对象，不接受客户端文件路径。 */
+  /** 审批后生成真实 PDF；只按 artifact ID 访问持久化对象，不接受客户端文件路径。 */
   app.post<{ Params: { artifactId: string } }>("/api/report-artifacts/:artifactId/pdf", async (request, reply): Promise<ApiResult<ReportArtifactDto>> => {
     const requestId = createRequestId();
-    const artifact = reportArtifacts.get(request.params.artifactId);
-    if (!artifact) {
+    const identity = identityByRequest.get(request);
+    const record = await artifactRepository.findById(identity?.userId ?? "00000000-0000-0000-0000-000000000000", request.params.artifactId);
+    if (!record) {
       reply.code(404);
       return fail(toApiError("not_found", "Report artifact 不存在。", requestId), requestId);
     }
+    const artifact = record.artifact;
     const approvalId = `approval_${artifact.workflowRunId}_pdf_exporter`;
     if (approvalDecisions.get(approvalId)?.decision !== "approved") {
       reply.code(403);
@@ -572,7 +597,7 @@ export function createApiServer(options: ApiServerOptions = {}): FastifyInstance
     }
     try {
       const bytes = renderResearchReportPdf({ title: artifact.title, generatedAt: artifact.createdAt, markdown: artifact.markdown, citations: artifact.citations });
-      reportPdfFiles.set(artifact.artifactId, bytes);
+      const stored = await artifactStorage.writePdf(bytes);
       const updated: ReportArtifactDto = {
         ...artifact,
         status: "pdf_ready",
@@ -584,28 +609,57 @@ export function createApiServer(options: ApiServerOptions = {}): FastifyInstance
           downloadUrl: `/api/report-artifacts/${encodeURIComponent(artifact.artifactId)}/download`
         }
       };
-      reportArtifacts.set(updated.artifactId, updated);
+      await artifactRepository.save({
+        ...record, artifact: updated, mediaType: "application/pdf", sizeBytes: stored.sizeBytes,
+        checksumSha256: stored.checksumSha256, storageProvider: stored.provider, storageKey: stored.key,
+        updatedAt: updated.pdfExport.generatedAt ?? new Date().toISOString()
+      });
       return { ok: true, data: updated, requestId };
     } catch {
       const error = toApiError("internal_error", "PDF 生成失败，可安全重试。", requestId);
       const updated: ReportArtifactDto = { ...artifact, status: "pdf_failed", pdfExport: { status: "failed", fileName: artifact.pdfExport.fileName, message: error.message, error } };
-      reportArtifacts.set(updated.artifactId, updated);
+      await artifactRepository.save({ ...record, artifact: updated, updatedAt: new Date().toISOString() }).catch(() => undefined);
       reply.code(500);
       return fail(error, requestId);
     }
   });
 
-  /** 下载只查找已生成的内存 artifact，永不拼接或读取用户提供的路径。 */
+  /** 下载先校验用户归属，再用数据库中的不透明 storage key 读取 PDF。 */
   app.get<{ Params: { artifactId: string } }>("/api/report-artifacts/:artifactId/download", async (request, reply) => {
-    const artifact = reportArtifacts.get(request.params.artifactId);
-    const bytes = reportPdfFiles.get(request.params.artifactId);
-    if (!artifact || artifact.status !== "pdf_ready" || !bytes) {
+    const requestId = createRequestId();
+    const identity = identityByRequest.get(request);
+    const record = await artifactRepository.findById(identity?.userId ?? "00000000-0000-0000-0000-000000000000", request.params.artifactId);
+    const artifact = record?.artifact;
+    if (!record || !artifact || artifact.status !== "pdf_ready" || !record.storageKey) {
       reply.code(404);
-      return fail(toApiError("not_found", "PDF 不存在、尚未完成或已随进程重启清除。", createRequestId()), createRequestId());
+      return fail(toApiError("not_found", "PDF 不存在或尚未完成。", requestId), requestId);
     }
-    reply.header("content-type", "application/pdf");
-    reply.header("content-disposition", `attachment; filename="${sanitizeDownloadFileName(artifact.pdfExport.fileName ?? `${artifact.artifactId}.pdf`)}"`);
-    return reply.send(Buffer.from(bytes));
+    try {
+      const bytes = await artifactStorage.readPdf(record.storageKey);
+      reply.header("content-type", "application/pdf");
+      reply.header("content-disposition", `attachment; filename="${sanitizeDownloadFileName(artifact.pdfExport.fileName ?? `${artifact.artifactId}.pdf`)}"`);
+      return reply.send(Buffer.from(bytes));
+    } catch {
+      reply.code(500);
+      return fail(toApiError("internal_error", "PDF 文件暂时无法读取，请稍后重试。", requestId), requestId);
+    }
+  });
+
+  /** 软删除 Artifact metadata；物理 PDF 由后续维护任务清理。 */
+  app.delete<{ Params: { artifactId: string } }>("/api/report-artifacts/:artifactId", async (request, reply) => {
+    const requestId = createRequestId();
+    const identity = identityByRequest.get(request);
+    const deleted = await artifactRepository.softDelete(
+      identity?.userId ?? "00000000-0000-0000-0000-000000000000",
+      request.params.artifactId,
+      new Date().toISOString()
+    );
+    if (!deleted) {
+      reply.code(404);
+      return fail(toApiError("not_found", "Report artifact 不存在。", requestId), requestId);
+    }
+    reply.code(204);
+    return reply.send();
   });
 
   /** Eval 产品页使用版本化 baseline 的确定性证据投影，并明确标注 demo dataset。 */

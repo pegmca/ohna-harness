@@ -1,8 +1,13 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createInMemoryTraceRecorder } from "@aiagent/trace";
 import {
   createReportPackageSummary,
+  assertStorageKey,
+  createLocalArtifactStorage,
   createReportWorkflowNodes,
   reportAnalyzerInputSchema,
   reportAnalyzerOutputSchema,
@@ -19,6 +24,25 @@ import {
   renderResearchReportPdf,
   runReportWorkflow
 } from "../dist/index.js";
+
+test("local artifact storage rejects paths and publishes only atomically completed PDFs", async () => {
+  const root = await mkdtemp(join(tmpdir(), "aiagent-artifacts-"));
+  try {
+    const storage = createLocalArtifactStorage(root);
+    const bytes = new TextEncoder().encode("%PDF-1.4\ncomplete\n%%EOF\n");
+    const written = await storage.writePdf(bytes);
+    assert.match(written.key, /^[0-9a-f]{2}\/[0-9a-f-]{36}\.pdf$/);
+    assert.deepEqual([...await storage.readPdf(written.key)], [...bytes]);
+    assert.equal((await readdir(join(root, written.key.slice(0, 2)))).some((name) => name.endsWith(".tmp")), false);
+    assert.equal((await readFile(join(root, written.key))).byteLength, bytes.byteLength);
+    for (const unsafe of ["../secret.pdf", "/tmp/secret.pdf", "aa/evil\n.pdf", "aa/not-a-uuid.pdf"]) {
+      assert.throws(() => assertStorageKey(unsafe), /Invalid artifact storage key/);
+      await assert.rejects(() => storage.readPdf(unsafe), /Invalid artifact storage key/);
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 test("report package exposes its boundary summary", () => {
   assert.deepEqual(createReportPackageSummary(), {

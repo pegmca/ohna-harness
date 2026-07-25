@@ -1,4 +1,5 @@
-import { index, integer, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
+import { bigint, check, index, integer, jsonb, pgTable, text, timestamp, unique, uniqueIndex, uuid } from "drizzle-orm/pg-core";
 
 export const users = pgTable("users", {
   id: uuid("id").primaryKey(),
@@ -70,6 +71,82 @@ export const qqMessageReceipts = pgTable("qq_message_receipts", {
   completedAt: timestamp("completed_at", { withTimezone: true, mode: "string" })
 }, (table) => [
   uniqueIndex("qq_message_receipts_platform_uq").on(table.botAccountId, table.platformMessageId)
+]);
+
+export const workflowRuns = pgTable("workflow_runs", {
+  id: text("id").primaryKey(),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  conversationId: text("conversation_id").notNull(),
+  agentRunId: text("agent_run_id").notNull(),
+  planId: text("plan_id").notNull(),
+  workflowName: text("workflow_name").notNull(),
+  status: text("status").notNull(),
+  currentNodeId: text("current_node_id"),
+  error: jsonb("error"),
+  snapshot: jsonb("snapshot").notNull(),
+  startedAt: timestamp("started_at", { withTimezone: true, mode: "string" }).notNull(),
+  completedAt: timestamp("completed_at", { withTimezone: true, mode: "string" }),
+  createdAt: timestamp("created_at", { withTimezone: true, mode: "string" }).notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" }).notNull()
+}, (table) => [
+  check("workflow_runs_status_check", sql`${table.status} in ('pending','running','paused','approved','rejected','succeeded','failed')`),
+  index("workflow_runs_user_updated_idx").on(table.userId, table.updatedAt, table.id),
+  index("workflow_runs_agent_run_idx").on(table.userId, table.agentRunId)
+]);
+
+export const workflowNodeRuns = pgTable("workflow_node_runs", {
+  id: uuid("id").primaryKey(),
+  workflowRunId: text("workflow_run_id").notNull().references(() => workflowRuns.id, { onDelete: "cascade" }),
+  nodeId: text("node_id").notNull(),
+  nodeType: text("node_type").notNull(),
+  title: text("title").notNull(),
+  attempt: integer("attempt").notNull(),
+  status: text("status").notNull(),
+  inputSummary: jsonb("input_summary"),
+  outputSummary: jsonb("output_summary"),
+  error: jsonb("error"),
+  startedAt: timestamp("started_at", { withTimezone: true, mode: "string" }),
+  completedAt: timestamp("completed_at", { withTimezone: true, mode: "string" }),
+  durationMs: integer("duration_ms").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true, mode: "string" }).notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" }).notNull()
+}, (table) => [
+  unique("workflow_node_runs_workflow_node_attempt_uq").on(table.workflowRunId, table.nodeId, table.attempt),
+  check("workflow_node_runs_attempt_check", sql`${table.attempt} > 0`),
+  check("workflow_node_runs_duration_check", sql`${table.durationMs} >= 0`),
+  check("workflow_node_runs_status_check", sql`${table.status} in ('pending','running','paused','approved','rejected','succeeded','failed','skipped')`),
+  index("workflow_node_runs_workflow_idx").on(table.workflowRunId, table.createdAt, table.id)
+]);
+
+export const artifacts = pgTable("artifacts", {
+  id: text("id").primaryKey(),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  conversationId: text("conversation_id").notNull(),
+  agentRunId: text("agent_run_id").notNull(),
+  workflowRunId: text("workflow_run_id").notNull().references(() => workflowRuns.id, { onDelete: "cascade" }),
+  reportId: text("report_id").notNull(),
+  kind: text("kind").notNull(),
+  status: text("status").notNull(),
+  title: text("title").notNull(),
+  mediaType: text("media_type").notNull(),
+  sizeBytes: bigint("size_bytes", { mode: "number" }),
+  checksumSha256: text("checksum_sha256"),
+  storageProvider: text("storage_provider"),
+  storageKey: text("storage_key"),
+  markdownContent: text("markdown_content").notNull(),
+  htmlContent: text("html_content").notNull(),
+  payload: jsonb("payload").notNull(),
+  metadata: jsonb("metadata").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true, mode: "string" }).notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" }).notNull(),
+  deletedAt: timestamp("deleted_at", { withTimezone: true, mode: "string" })
+}, (table) => [
+  check("artifacts_kind_check", sql`${table.kind} in ('research_report')`),
+  check("artifacts_status_check", sql`${table.status} in ('html_preview_only','pdf_ready','pdf_failed')`),
+  check("artifacts_media_type_check", sql`${table.mediaType} in ('text/html','application/pdf')`),
+  check("artifacts_size_check", sql`${table.sizeBytes} is null or ${table.sizeBytes} >= 0`),
+  index("artifacts_user_updated_idx").on(table.userId, table.updatedAt, table.id),
+  index("artifacts_workflow_idx").on(table.userId, table.workflowRunId)
 ]);
 
 export const identityAuditEvents = pgTable("identity_audit_events", {

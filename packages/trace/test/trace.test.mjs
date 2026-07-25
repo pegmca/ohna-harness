@@ -24,14 +24,20 @@ test("redacts nested keys, secrets in text and truncates payloads", () => {
   assert.equal(recorder.getTrace().events[0].error.stage, "tool_call");
 });
 
-test("stores and retrieves a trace by requestId without sharing mutation", () => {
+test("stores and retrieves a trace by requestId without sharing mutation", async () => {
   const recorder = createInMemoryTraceRecorder("trace_3", "req_3");
   const store = createInMemoryTraceStore();
-  store.save(recorder.getTrace());
-  const found = store.getByRequestId("req_3");
+  const context = {
+    userId: "user_1", runId: "run_1", conversationId: "conversation_1",
+    traceId: "trace_3", requestId: "req_3", startedAt: new Date().toISOString()
+  };
+  await store.initialize(context);
+  await store.finalize(context, recorder.getTrace());
+  const found = await store.getByRequestId("user_1", "req_3");
   assert.equal(found?.traceId, "trace_3");
   found.events.push({});
-  assert.equal(store.getByRequestId("req_3").events.length, 0);
+  assert.equal((await store.getByRequestId("user_1", "req_3")).events.length, 0);
+  assert.equal(await store.getByRequestId("user_2", "req_3"), undefined);
 });
 
 test("redacts PII classes from nested trace payloads", () => {

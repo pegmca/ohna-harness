@@ -11,7 +11,7 @@ import { createDataSourceRuntime, isSafeRagSourceUri, type DataSourceRuntime } f
 import { createLocalArtifactStorage, renderResearchReportPdf } from "@aiagent/report";
 import type { ArtifactRepository, ArtifactStorage, WorkflowRepository } from "@aiagent/report";
 import type { RagStructuredError } from "@aiagent/rag";
-import { createInMemoryTraceStore, redactSensitiveValue } from "@aiagent/trace";
+import { createInMemoryTraceStore, redactSensitiveValue, type TraceStore } from "@aiagent/trace";
 import type {
   AgentRunAcceptedDto,
   AgentRunCreateRequestDto,
@@ -124,6 +124,7 @@ export interface ApiServerOptions {
   conversationRepository?: ConversationRepository;
   messageRepository?: MessageRepository;
   runStore?: RunStore;
+  traceStore?: TraceStore;
   staleRunThresholdMs?: number;
 }
 
@@ -146,8 +147,25 @@ export function createApiServer(options: ApiServerOptions = {}): FastifyInstance
   const artifactStorage = options.artifactStorage ?? createLocalArtifactStorage(
     process.env.ARTIFACT_STORAGE_ROOT ?? `${process.cwd()}/.artifacts-test`
   );
-  const traceStore = createInMemoryTraceStore();
   const runStore = options.runStore ?? createInMemoryRunStore();
+  const baseTraceStore = createInMemoryTraceStore();
+  const traceStore = options.traceStore ?? {
+    ...baseTraceStore,
+    /** @param context Trace 归属上下文。 @param event canonical event。 @returns Run 投影。 */
+    async append(context, event) {
+      await baseTraceStore.append(context, event);
+      const projection = await runStore.append(context.userId, context.runId, {
+        type: "trace_event",
+        event,
+        runId: context.runId,
+        requestId: context.requestId,
+        traceId: context.traceId,
+        conversationId: context.conversationId,
+        createdAt: event.createdAt
+      });
+      return projection?.type === "trace_event" ? projection : undefined;
+    }
+  };
   const runEventBus = createInMemoryRunEventBus();
   const runService = createRunApplicationService({
     store: runStore,
@@ -155,8 +173,11 @@ export function createApiServer(options: ApiServerOptions = {}): FastifyInstance
     executionRegistry: createInMemoryExecutionRegistry(),
     scheduler: createMicrotaskRunScheduler(),
     llmClient: options.llmClient,
+    traceStore,
+    recordInternalWarning: (warning) => {
+      app.log.warn(warning, "Trace persistence degraded");
+    },
     sink: {
-      saveTrace: (trace) => { traceStore.save(trace); },
       saveWorkflow: async (workflow, context) => {
         await workflowRepository.save({ context, run: workflow.run });
       },
@@ -430,13 +451,13 @@ export function createApiServer(options: ApiServerOptions = {}): FastifyInstance
     };
   });
 
-  /** 按对外 requestId 返回完整脱敏 trace；当前仅保存在 API 进程内存。 */
+  /** 按当前 session user 和对外 requestId 返回持久化脱敏 Trace。 */
   app.get<{ Params: { requestId: string } }>("/api/traces/:requestId", async (request, reply): Promise<ApiResult<TraceDto>> => {
     const lookupRequestId = createRequestId();
-    const trace = traceStore.getByRequestId(request.params.requestId);
+    const trace = await traceStore.getByRequestId(requestUserId(request), request.params.requestId);
     if (!trace) {
       reply.code(404);
-      return fail(toApiError("not_found", "Trace 不存在或已随进程重启清除。", lookupRequestId), lookupRequestId);
+      return fail(toApiError("not_found", "Trace 不存在。", lookupRequestId), lookupRequestId);
     }
     return { ok: true, data: trace, requestId: lookupRequestId };
   });

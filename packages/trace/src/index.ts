@@ -360,8 +360,59 @@ export interface ObservableTraceRecorder extends TraceRecorder {
 }
 
 export interface TraceStore {
-  save(trace: Trace): void;
-  getByRequestId(requestId: string): Trace | undefined;
+  /**
+   * 为一次 Run 建立 Trace 汇总行。
+   *
+   * @param context Trace 所属的用户与 Run 上下文。
+   * @returns 初始化完成。
+   */
+  initialize(context: TracePersistenceContext): Promise<void>;
+  /**
+   * 追加已脱敏事件，并返回由同一事件生成的 Run 投影。
+   *
+   * @param context Trace 所属上下文。
+   * @param event recorder 已脱敏的 canonical event。
+   * @returns 已提交的 Run 事件；Run 不存在时返回 undefined。
+   */
+  append(context: TracePersistenceContext, event: TraceEvent): Promise<TraceRunEventProjection | undefined>;
+  /**
+   * 用最终 summary 收口 Trace。
+   *
+   * @param context Trace 所属上下文。
+   * @param trace 最终脱敏 Trace。
+   * @returns 收口完成。
+   */
+  finalize(context: TracePersistenceContext, trace: Trace): Promise<void>;
+  /**
+   * 按用户和 requestId 查询 Trace。
+   *
+   * @param userId 当前用户。
+   * @param requestId 对外请求标识。
+   * @param afterSequence 内部增量读取游标。
+   * @returns 用户可见的 Trace。
+   */
+  getByRequestId(userId: string, requestId: string, afterSequence?: number): Promise<Trace | undefined>;
+}
+
+export interface TracePersistenceContext {
+  userId: string;
+  runId: string;
+  conversationId: string;
+  traceId: string;
+  requestId: string;
+  startedAt: string;
+}
+
+export interface TraceRunEventProjection {
+  eventId: string;
+  sequence: number;
+  runId: string;
+  requestId: string;
+  traceId: string;
+  conversationId: string;
+  createdAt: string;
+  type: "trace_event";
+  event: TraceEvent;
 }
 
 /**
@@ -493,12 +544,54 @@ export function summarizeTrace(events: readonly TraceEvent[], startedAt: string)
   };
 }
 
-/** 创建进程内 requestId 索引；本任务不承诺长期持久化。 */
+/** 创建进程内 TraceStore 测试 adapter，并保持用户隔离与 canonical Run 投影语义。 */
 export function createInMemoryTraceStore(): TraceStore {
-  const traces = new Map<string, Trace>();
+  const traces = new Map<string, { context: TracePersistenceContext; events: TraceEvent[]; trace?: Trace }>();
+  const runSequences = new Map<string, number>();
   return {
-    save(trace) { traces.set(trace.requestId, sanitizeValue(trace) as Trace); },
-    getByRequestId(requestId) { const trace = traces.get(requestId); return trace ? structuredClone(trace) : undefined; }
+    /** @param context Trace 归属上下文。 @returns 初始化完成。 */
+    async initialize(context) {
+      traces.set(context.requestId, { context: structuredClone(context), events: [] });
+    },
+    /** @param context Trace 归属上下文。 @param event 已脱敏事件。 @returns 内存 Run 投影。 */
+    async append(context, event) {
+      const stored = traces.get(context.requestId);
+      if (!stored || stored.context.userId !== context.userId || stored.context.runId !== context.runId) return undefined;
+      const sanitized = sanitizeTraceEvent(event);
+      stored.events.push(sanitized);
+      const sequence = (runSequences.get(context.runId) ?? 0) + 1;
+      runSequences.set(context.runId, sequence);
+      return {
+        eventId: crypto.randomUUID(),
+        sequence,
+        runId: context.runId,
+        requestId: context.requestId,
+        traceId: context.traceId,
+        conversationId: context.conversationId,
+        createdAt: sanitized.createdAt,
+        type: "trace_event",
+        event: sanitized
+      };
+    },
+    /** @param context Trace 归属上下文。 @param trace 最终 Trace。 @returns 收口完成。 */
+    async finalize(context, trace) {
+      const stored = traces.get(context.requestId);
+      if (!stored || stored.context.userId !== context.userId || stored.context.runId !== context.runId) return;
+      stored.trace = sanitizeValue({ ...trace, events: stored.events }) as Trace;
+    },
+    /** @param userId 当前用户。 @param requestId 请求标识。 @param afterSequence 事件游标。 @returns Trace。 */
+    async getByRequestId(userId, requestId, afterSequence = 0) {
+      const stored = traces.get(requestId);
+      if (!stored || stored.context.userId !== userId) return undefined;
+      const trace = stored.trace ?? {
+        traceId: stored.context.traceId,
+        requestId,
+        startedAt: stored.context.startedAt,
+        summary: summarizeTrace(stored.events, stored.context.startedAt),
+        events: stored.events
+      };
+      return structuredClone({ ...trace, events: trace.events.slice(afterSequence) });
+    }
   };
 }
 

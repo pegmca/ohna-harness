@@ -429,6 +429,14 @@ export interface AgentRunResponseDto {
   answer: string;
   steps: AgentStepDto[];
   trace: TraceDto;
+  /** Trace 旁路持久化状态；降级时只暴露稳定诊断，不包含数据库原始异常。 */
+  tracePersistence: {
+    status: "complete" | "degraded";
+    diagnostic?: {
+      code: "trace_persistence_degraded";
+      message: string;
+    };
+  };
   reportPlan?: ReportPlanDto;
   reportWorkflow?: ReportWorkflowResponseDto;
   error?: ApiError;

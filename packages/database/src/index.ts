@@ -32,6 +32,10 @@ import { createPostgresArtifactRepository, createPostgresWorkflowRepository } fr
 export { createPostgresArtifactRepository, createPostgresWorkflowRepository } from "./report.js";
 import { createPostgresRunRepository, type RunRepository } from "./run-repository.js";
 export { createPostgresRunRepository, type CreateRunInput, type RunRepository } from "./run-repository.js";
+import { createPostgresApprovalRepository } from "./approval-repository.js";
+export { createPostgresApprovalRepository } from "./approval-repository.js";
+import { createPostgresTraceStore } from "./trace-repository.js";
+export { createPostgresTraceStore } from "./trace-repository.js";
 
 const { Pool } = pg;
 
@@ -44,6 +48,8 @@ export interface DatabaseRuntime {
   workflowRepository: WorkflowRepository;
   artifactRepository: ArtifactRepository;
   runRepository: RunRepository;
+  approvalRepository: import("@aiagent/tools").ApprovalRepository;
+  traceStore: import("@aiagent/trace").TraceStore;
   close(): Promise<void>;
   ping(): Promise<boolean>;
 }
@@ -66,6 +72,8 @@ export function createDatabaseRuntime(databaseUrl: string): DatabaseRuntime {
     workflowRepository: createPostgresWorkflowRepository(pool),
     artifactRepository: createPostgresArtifactRepository(pool),
     runRepository: createPostgresRunRepository(pool),
+    approvalRepository: createPostgresApprovalRepository(pool),
+    traceStore: createPostgresTraceStore(pool),
     async close() { await pool.end(); },
     async ping() {
       try {

@@ -50,7 +50,7 @@
 - `apps/api`：Fastify HTTP adapter，负责请求校验、异步 Run 生命周期、SSE 事件投影和结构化响应。
 - `packages/agent`：Agent 能力边界，后续承载意图识别、循环调度和模型交互。
 - `packages/identity`：浏览器指纹、稳定 `userId`、session 与 QQ 绑定规则的领域边界。
-- `packages/database`：PostgreSQL 连接池、Drizzle schema、migration，以及 Identity、Conversation、Workflow、Artifact repository adapter。
+- `packages/database`：PostgreSQL 连接池、Drizzle schema、migration，以及 Identity、Conversation、Run、Trace、Workflow、Artifact repository adapter。
 - `packages/conversation`：Conversation/Message 领域模型、稳定游标页与 repository port。
 - `packages/channels`：QQ Bot WebSocket 消息适配、命令处理和 Agent 私聊入口。
 - `packages/types`：前后端共享类型边界，承载 API contract、DTO、结构化错误和稳定枚举。
@@ -129,7 +129,7 @@ docker compose up -d --build
 docker compose ps
 ```
 
-打开 `http://localhost:8080`。Web 仅对宿主机暴露 `8080`（可用 `AIAGENT_WEB_PORT` 修改），API 的 `3001` 只在 Compose 网络内暴露，由 Nginx 将浏览器 `/api/*` 请求代理到 `api:3001`。PostgreSQL 只绑定宿主机 `127.0.0.1:5432`；身份、session、Conversation/Message、Run/RunEvent、Workflow、Artifact metadata 与 RAG 文档 lineage 保存在 `postgres_data` volume，PDF bytes 保存在独立 `artifact_data` volume。Trace、Approval 与向量索引仍按各自后续任务迁移。
+打开 `http://localhost:8080`。Web 仅对宿主机暴露 `8080`（可用 `AIAGENT_WEB_PORT` 修改），API 的 `3001` 只在 Compose 网络内暴露，由 Nginx 将浏览器 `/api/*` 请求代理到 `api:3001`。PostgreSQL 只绑定宿主机 `127.0.0.1:5432`；身份、session、Conversation/Message、Run/RunEvent、Trace、Workflow、Artifact metadata 与 RAG 文档 lineage 保存在 `postgres_data` volume，PDF bytes 保存在独立 `artifact_data` volume。Approval 仍按后续任务迁移。
 
 本地热更新与断点调试使用“数据库在 Docker、Web/API 在宿主机”的组合：
 
@@ -344,7 +344,7 @@ Week 2-013 已把 RAG ingestion、chunk、retrieval 和 citation answer 接入 H
 当前 runtime 限制：
 
 - 只支持 Markdown/TXT demo 文档；PDF 仍返回结构化未配置错误。
-- Document/chunk/vector 已持久化并按当前 session owner 隔离；keyword candidates 在检索时从可见 chunks 重建。Run、trace 等其他状态仍按各自后续 PR 迁移。
+- Document/chunk/vector、Run 与 Trace 已持久化并按当前 session owner 隔离；keyword candidates 在检索时从可见 chunks 重建。Approval 等其他状态仍按各自后续 PR 迁移。
 - answer synthesis 是 deterministic heuristic 摘要，不调用真实 LLM；后续可在同一 RAG 边界内替换为带 context packing 的模型生成。
 
 API 验证：
@@ -419,9 +419,9 @@ Agent Loop 每一步都会返回结构化 `AgentStep`：`route_intent`、`model_
 
 工具路径只通过 `ToolRegistry.execute()` 调用工具，不直接依赖工具实现。工具参数错误、工具不存在、工具执行错误会以 `validation_error`、`tool_not_found`、`execution_error` 等结构化 `AgentError` 返回，同时保留底层 `toolError` details。
 
-`@aiagent/trace` 现在提供统一生产 trace contract：事件包含 `requestId`、`traceId`、`spanId`、`parentSpanId`，覆盖 request、model、tool/MCP、retrieval、Report activation/planner、workflow、approval、citation verifier、PDF export 和 final response。`Trace.summary` 在运行时边界聚合模型/工具/检索调用数、毫秒耗时、已知 token、未知 usage 调用数和错误数；未知 token 显式为 `unknown`。API 可通过 `GET /api/traces/:requestId` 查询当前进程内的完整脱敏 trace，进程重启后清空，不属于长期存储。
+`@aiagent/trace` 现在提供统一生产 trace contract：事件包含 `requestId`、`traceId`、`spanId`、`parentSpanId`，覆盖 request、model、tool/MCP、retrieval、Report activation/planner、workflow、approval、citation verifier、PDF export 和 final response。`Trace.summary` 在运行时边界聚合模型/工具/检索调用数、毫秒耗时、已知 token、未知 usage 调用数和错误数；未知 token 显式为 `unknown`。`0030_trace.sql` 持久化 Trace summary 与事件；`GET /api/traces/:requestId` 按当前 session user 查询，进程重启后仍可恢复。
 
-Trace recorder 会递归脱敏密钥、authorization、password、secret 和认证 token，清理文本中的 Bearer/API key，并把长字符串截断到 500 字符。retrieval 事件只保留 document/chunk 标识、排名和分数，不复制正文；Web 的 assistant `Run details` 直接消费后端 summary 和按时间排序的事件，不在浏览器重新聚合。
+Trace recorder 会在写库前递归脱敏密钥、authorization、password、secret、认证 token 与常见 PII，清理文本中的 Bearer/API key，并把长字符串截断到 500 字符。Trace 明细与 Run `trace_event` 投影由同一个 canonical event 在同一数据库事务写入；持久化失败不会打断 Agent，但最终 Run result 的 `tracePersistence` 会标记 `degraded` 并只暴露稳定诊断。
 
 可调用验证入口：
 

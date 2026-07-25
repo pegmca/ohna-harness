@@ -17,7 +17,12 @@ import type {
   ToolApprovalRequestDto,
   TraceDto
 } from "@aiagent/types";
-import { createObservableTraceRecorder, redactSensitiveValue } from "@aiagent/trace";
+import {
+  createObservableTraceRecorder,
+  redactSensitiveValue,
+  type TracePersistenceContext,
+  type TraceStore
+} from "@aiagent/trace";
 import { createHash, randomUUID } from "node:crypto";
 import type { RunEventBus, RunExecutionRegistry, RunScheduler, RunStore } from "./run-ports.js";
 
@@ -28,10 +33,9 @@ type RunEventPayload =
   | { type: "run_error"; error: ApiError };
 
 export interface RunServiceSink {
-  saveTrace(trace: TraceDto): void;
   saveWorkflow(workflow: ReportWorkflowResponseDto, context: ReportPersistenceContext): Promise<void>;
   saveArtifact(artifact: ReportArtifactDto, context: ReportPersistenceContext): Promise<void>;
-  saveApproval(approval: ToolApprovalRequestDto, runId: string): void;
+  saveApproval(approval: ToolApprovalRequestDto, context: ApprovalPersistenceContext): Promise<void>;
 }
 
 export interface RunServiceDependencies {
@@ -40,9 +44,11 @@ export interface RunServiceDependencies {
   executionRegistry: RunExecutionRegistry;
   scheduler: RunScheduler;
   sink: RunServiceSink;
+  traceStore: TraceStore;
   llmClient?: LlmClient;
   now?: () => Date;
   createId?: (prefix: string) => string;
+  recordInternalWarning?: (warning: { code: "trace_persistence_degraded"; runId: string; requestId: string }) => void;
 }
 
 export interface RunApplicationService {
@@ -59,6 +65,12 @@ export interface ReportPersistenceContext {
   conversationId: string;
   agentRunId: string;
   planId: string;
+}
+
+/** Approval 持久化归属上下文；userId 必须来自 Run 创建时的服务端身份。 */
+export interface ApprovalPersistenceContext {
+  runId: string;
+  userId: string;
 }
 
 /**
@@ -93,8 +105,40 @@ export function createRunApplicationService(dependencies: RunServiceDependencies
     await publish(userId, runId, { type: "run_status", status: "running", message: "Agent 已开始分析研究任务。" });
     const snapshot = await dependencies.store.findById(userId, runId);
     if (!snapshot) return;
-    const trace = createObservableTraceRecorder(`trace_${runId}`, snapshot.requestId);
-    const unsubscribe = trace.subscribe((event) => { void publish(userId, runId, { type: "trace_event", event }); });
+    const traceStartedAt = now().toISOString();
+    const trace = createObservableTraceRecorder(`trace_${runId}`, snapshot.requestId, [], traceStartedAt);
+    const traceContext: TracePersistenceContext = {
+      userId, runId, conversationId: snapshot.conversationId, traceId: trace.traceId,
+      requestId: trace.requestId, startedAt: traceStartedAt
+    };
+    let tracePersistenceDegraded = false;
+    let persistenceQueue = Promise.resolve();
+    /** 将 Trace 旁路故障收敛为一次结构化告警，避免原始异常进入 Run result。 */
+    const degradeTracePersistence = (): void => {
+      if (tracePersistenceDegraded) return;
+      tracePersistenceDegraded = true;
+      dependencies.recordInternalWarning?.({
+        code: "trace_persistence_degraded", runId, requestId: snapshot.requestId
+      });
+    };
+    try {
+      await dependencies.traceStore.initialize(traceContext);
+    } catch {
+      degradeTracePersistence();
+    }
+    const unsubscribe = trace.subscribe((event) => {
+      if (tracePersistenceDegraded) return;
+      persistenceQueue = persistenceQueue.then(async () => {
+        const projection = await dependencies.traceStore.append(traceContext, event);
+        if (!projection) {
+          degradeTracePersistence();
+          return;
+        }
+        dependencies.eventBus.publish(projection as AgentRunStreamEventDto);
+      }).catch(() => {
+        degradeTracePersistence();
+      });
+    });
     try {
       const response = await runAgent({
         message: request.message.trim(),
@@ -106,11 +150,42 @@ export function createRunApplicationService(dependencies: RunServiceDependencies
       }, { traceRecorder: trace, llmClient: dependencies.llmClient });
       const workflow = await maybeRunReport(runId, userId, request.conversationId, response, trace, controller.signal, dependencies.sink);
       response.trace = trace.getTrace();
-      dependencies.sink.saveTrace(response.trace);
-      const result = redactSensitiveValue(toResponseDto(runId, response, request, snapshot.requestId, workflow));
-      registerApprovals(runId, result.trace, dependencies.sink);
+      await persistenceQueue;
+      if (!tracePersistenceDegraded) {
+        try {
+          await dependencies.traceStore.finalize(traceContext, response.trace);
+        } catch {
+          degradeTracePersistence();
+        }
+      }
+      const result = redactSensitiveValue(toResponseDto(
+        runId, response, request, snapshot.requestId, workflow, tracePersistenceDegraded
+      ));
+      registerApprovals(runId, userId, result.trace, dependencies.sink);
       await publish(userId, runId, { type: "run_result", result });
     } catch (caught) {
+      trace.record({
+        type: "final_response",
+        id: `${trace.traceId}_persistence_failure_terminal`,
+        traceId: trace.traceId,
+        requestId: trace.requestId,
+        answerPreview: "",
+        ok: false,
+        error: {
+          code: controller.signal.aborted ? "request_cancelled" : "internal_error",
+          message: controller.signal.aborted ? "Agent run 已取消。" : "Agent run 执行失败。",
+          stage: "final_response"
+        },
+        createdAt: now().toISOString()
+      });
+      await persistenceQueue;
+      if (!tracePersistenceDegraded) {
+        try {
+          await dependencies.traceStore.finalize(traceContext, trace.getTrace());
+        } catch {
+          degradeTracePersistence();
+        }
+      }
       await publish(userId, runId, {
         type: "run_error",
         error: toRunError(caught, snapshot.requestId, controller.signal.aborted)
@@ -188,8 +263,18 @@ async function maybeRunReport(
   });
   const workflow = redactSensitiveValue(toWorkflowDto(result));
   const context = { userId, conversationId, agentRunId: runId, planId: response.reportPlan.planId };
+  if (workflow.run.approvalRequest && !workflow.run.approvalRequest.inputDigest) {
+    // workflow 审批（如 PDF exporter）由 workflow 包生成，不经过 tools executor，原生没有 inputDigest。
+    // 必须在 saveWorkflow 之前补齐确定性 digest：客户端从 workflow DTO 读取该 digest 调 decision
+    // endpoint，而 endpoint schema 要求非空 digest——缺了它审批永远无法决定，PDF 导出会回归。
+    workflow.run.approvalRequest.inputDigest = createWorkflowApprovalDigest(
+      workflow.run.approvalRequest.toolName,
+      workflow.run.runId,
+      `artifact_${workflow.run.runId}`
+    );
+  }
   await sink.saveWorkflow(workflow, context);
-  if (workflow.run.approvalRequest) sink.saveApproval(workflow.run.approvalRequest, runId);
+  if (workflow.run.approvalRequest) await sink.saveApproval(workflow.run.approvalRequest, { runId, userId });
   if (workflow.artifact) await sink.saveArtifact(workflow.artifact, context);
   return workflow;
 }
@@ -199,7 +284,8 @@ function toResponseDto(
   response: AgentResponse,
   request: AgentRunCreateRequestDto,
   requestId: string,
-  reportWorkflow?: ReportWorkflowResponseDto
+  reportWorkflow: ReportWorkflowResponseDto | undefined,
+  tracePersistenceDegraded: boolean
 ): AgentRunResponseDto {
   return {
     runId,
@@ -211,6 +297,15 @@ function toResponseDto(
     answer: response.answer,
     steps: response.steps.map(toStepDto),
     trace: response.trace,
+    tracePersistence: tracePersistenceDegraded
+      ? {
+          status: "degraded",
+          diagnostic: {
+            code: "trace_persistence_degraded",
+            message: "Trace 持久化暂时不可用；Agent 主结果已保留。"
+          }
+        }
+      : { status: "complete" },
     reportPlan: response.reportPlan,
     reportWorkflow,
     error: response.error ? {
@@ -274,10 +369,11 @@ function toRunError(caught: unknown, requestId: string, cancelled: boolean): Api
   };
 }
 
-function registerApprovals(runId: string, trace: TraceDto, sink: RunServiceSink): void {
+function registerApprovals(runId: string, userId: string, trace: TraceDto, sink: RunServiceSink): void {
   for (const event of trace.events) {
     if (event.type !== "approval" || event.status !== "requested") continue;
-    sink.saveApproval({
+    // sink 实现内部已记录失败日志；这里只保证审批登记异常不打断 Run 主流程。
+    void sink.saveApproval({
       approvalId: event.approvalId,
       traceId: event.traceId,
       requestId: event.requestId,
@@ -287,8 +383,22 @@ function registerApprovals(runId: string, trace: TraceDto, sink: RunServiceSink)
       inputPreview: event.inputPreview,
       inputDigest: event.inputDigest,
       permissionLevel: "needs_approval"
-    }, runId);
+    }, { runId, userId }).catch(() => undefined);
   }
+}
+
+/**
+ * 为 workflow 审批生成确定性输入摘要；风格与 tools executor 的 createInputDigest 一致，
+ * 对规范化序列化做 SHA-256 并截取前缀，不保存原文。
+ *
+ * @param toolName 工具名称。
+ * @param workflowRunId workflow run 标识。
+ * @param artifactId 导出目标 artifact 标识。
+ * @returns `input_` 前缀的稳定摘要。
+ */
+function createWorkflowApprovalDigest(toolName: string, workflowRunId: string, artifactId: string): string {
+  const serialized = JSON.stringify({ artifactId, toolName, workflowRunId });
+  return `input_${createHash("sha256").update(serialized).digest("hex").slice(0, 16)}`;
 }
 
 function createReportDemoDocuments() {

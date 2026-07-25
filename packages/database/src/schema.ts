@@ -299,6 +299,34 @@ export const agentRuns = pgTable("agent_runs", {
   completedAt: timestamp("completed_at", { withTimezone: true, mode: "string" })
 });
 
+// Approval 表镜像 0040_approval.sql；状态与决定由 CHECK 与 repository CAS 共同保证。
+export const toolApprovals = pgTable("tool_approvals", {
+  id: text("id").primaryKey(),
+  runId: uuid("run_id").notNull().references(() => agentRuns.id, { onDelete: "cascade" }),
+  requestId: text("request_id").notNull(),
+  traceId: text("trace_id").notNull(),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  toolName: text("tool_name"),
+  permissionLevel: text("permission_level"),
+  reason: text("reason"),
+  reasonCode: text("reason_code"),
+  inputDigest: text("input_digest").notNull(),
+  inputPreview: jsonb("input_preview"),
+  status: text("status").notNull(),
+  decision: text("decision"),
+  requestedAt: timestamp("requested_at", { withTimezone: true, mode: "string" }).notNull(),
+  decidedAt: timestamp("decided_at", { withTimezone: true, mode: "string" }),
+  expiresAt: timestamp("expires_at", { withTimezone: true, mode: "string" }),
+  reviewerUserId: uuid("reviewer_user_id"),
+  reviewerNote: text("reviewer_note")
+}, (table) => [
+  check("tool_approvals_permission_level_check", sql`${table.permissionLevel} in ('safe','needs_approval','blocked')`),
+  check("tool_approvals_status_check", sql`${table.status} in ('pending','approved','rejected','expired')`),
+  check("tool_approvals_decision_check", sql`${table.decision} in ('approved','rejected')`),
+  index("tool_approvals_user_status_requested_idx").on(table.userId, table.status, table.requestedAt),
+  index("tool_approvals_run_idx").on(table.runId)
+]);
+
 export const runEvents = pgTable("run_events", {
   id: uuid("id").primaryKey(),
   runId: uuid("run_id").notNull().references(() => agentRuns.id, { onDelete: "cascade" }),
@@ -312,4 +340,44 @@ export const runEvents = pgTable("run_events", {
 }, (table) => [
   uniqueIndex("run_events_run_sequence_uq").on(table.runId, table.sequence),
   index("run_events_user_run_sequence_idx").on(table.userId, table.runId, table.sequence)
+]);
+
+export const traces = pgTable("traces", {
+  id: text("id").primaryKey(),
+  requestId: text("request_id").notNull().unique(),
+  runId: uuid("run_id").notNull().unique().references(() => agentRuns.id, { onDelete: "cascade" }),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  status: text("status", { enum: ["running", "succeeded", "failed"] }).notNull(),
+  durationMs: integer("duration_ms").notNull().default(0),
+  modelCallCount: integer("model_call_count").notNull().default(0),
+  toolCallCount: integer("tool_call_count").notNull().default(0),
+  retrievalCount: integer("retrieval_count").notNull().default(0),
+  errorCount: integer("error_count").notNull().default(0),
+  inputTokens: integer("input_tokens"),
+  outputTokens: integer("output_tokens"),
+  knownTokenTotal: integer("known_token_total").notNull().default(0),
+  unknownTokenCallCount: integer("unknown_token_call_count").notNull().default(0),
+  lastSequence: bigint("last_sequence", { mode: "number" }).notNull().default(0),
+  startedAt: timestamp("started_at", { withTimezone: true, mode: "string" }).notNull(),
+  completedAt: timestamp("completed_at", { withTimezone: true, mode: "string" })
+}, (table) => [
+  check("traces_status_check", sql`${table.status} in ('running','succeeded','failed')`),
+  index("traces_user_request_idx").on(table.userId, table.requestId)
+]);
+
+export const traceEvents = pgTable("trace_events", {
+  id: uuid("id").primaryKey(),
+  traceId: text("trace_id").notNull().references(() => traces.id, { onDelete: "cascade" }),
+  runId: uuid("run_id").notNull().references(() => agentRuns.id, { onDelete: "cascade" }),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  sequence: bigint("sequence", { mode: "number" }).notNull(),
+  eventType: text("event_type").notNull(),
+  spanId: text("span_id"),
+  parentSpanId: text("parent_span_id"),
+  stage: text("stage"),
+  payload: jsonb("payload").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true, mode: "string" }).notNull()
+}, (table) => [
+  uniqueIndex("trace_events_trace_sequence_uq").on(table.traceId, table.sequence),
+  index("trace_events_user_trace_sequence_idx").on(table.userId, table.traceId, table.sequence)
 ]);

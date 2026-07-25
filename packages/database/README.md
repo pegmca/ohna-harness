@@ -26,8 +26,10 @@ Reserved prefixes for persistence work are:
 | `0080` | Citation |
 
 PR-00 intentionally creates no business migration. `0010` (Conversation / Message), `0020`
-(Run / RunEvent), `0050` (RAG documents), `0060` (pgvector retrieval) and `0070`
+(Run / RunEvent), `0040` (Approval), `0050` (RAG documents), `0060` (pgvector retrieval) and `0070`
 (Report / Artifact) are implemented; the other reserved prefixes remain unclaimed.
+
+PR-05 implements the `0040` prefix (`0040_approval.sql`): see "Approval adapters" below.
 
 PR-06 implements the `0050` prefix (`0050_rag_documents.sql`): `documents` / `document_versions` /
 `chunks` ingestion lineage with checksum idempotency, immutable versions, retryable failures and
@@ -52,6 +54,18 @@ endpoint is exposed in this slice.
 PostgreSQL stores only bounded Markdown/HTML previews and file metadata; PDF bytes stay in the
 configured `ArtifactStorage`.
 
+## Approval adapters
+
+`0040_approval.sql` creates `tool_approvals` (text approval id PK, FK to `agent_runs` and `users`,
+status `pending/approved/rejected/expired`, indexes on `(user_id,status,requested_at)` and
+`run_id`). The domain port `ApprovalRepository` is declared by `@aiagent/tools`;
+`createPostgresApprovalRepository(pool)` is exposed as `DatabaseRuntime.approvalRepository`.
+Registration is idempotent on approval id + input digest (`ON CONFLICT DO NOTHING` then re-read;
+a different digest/run/user is a structured conflict). Decisions use a single-row CAS predicate
+covering reviewer ownership, run, input digest, `status='pending'` and expiry, so concurrent
+approve/reject has exactly one winner; expired pending rows are atomically transitioned to
+`expired` by both `decide` and the export gate read path.
+
 ## Conversation adapters
 
 `0010_conversation.sql` creates `conversations` and `messages`. The public
@@ -67,6 +81,13 @@ adds the partial one-assistant-message-per-Run constraint. `createPostgresRunRep
 validates Conversation ownership and reserves both messages in the creation transaction. Event
 append locks the Run, allocates `version + 1`, persists the event and projection together, and
 rejects all transitions after the first terminal event.
+
+## Trace adapter
+
+`0030_trace.sql` creates request/run-unique `traces` summaries and sequenced `trace_events`.
+`createPostgresTraceStore(pool)` requires user ownership on every operation. Its append transaction
+locks the Run and Trace, writes the already-redacted canonical event once, derives the Run
+`trace_event` projection from that object, and commits both before live fan-out.
 
 ## Integration tests
 

@@ -15,6 +15,8 @@
     { "path": "../conversation" },
     { "path": "../identity" },
     { "path": "../rag" },
-    { "path": "../report" }
+    { "path": "../report" },
+    { "path": "../tools" },
+    { "path": "../trace" }
   ]
 }

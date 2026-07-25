@@ -43,12 +43,12 @@ The Web is feature-first: `app`, `features`, `entities`, and `shared`. A feature
 ## 5. Runtime View
 
 1. Web creates a run through the API.
-2. API route delegates creation to `RunApplicationService`; the current adapter writes a bounded in-memory snapshot.
+2. API route delegates creation to `RunApplicationService`; PostgreSQL atomically creates the Run, idempotent user message, and reserved assistant message.
 3. The application service schedules execution and Agent/Report emit one canonical, sanitized event stream.
-4. Trace storage and SSE subscribers consume the same events.
+4. PostgreSQL assigns each event sequence while locking the Run and updates its projection in the same transaction; only after commit does the in-memory bus fan out live events.
 5. Web projects events into assistant-message progress and an on-demand detail panel.
 6. A terminal event provides the final structured result. Explicit cancellation propagates through an execution registry owned `AbortSignal`.
-7. `RunStore`, `RunEventBus`, and `RunScheduler` are separate ports so persistence and workers can replace process-local adapters independently.
+7. SSE replays persisted events, subscribes to the process-local bus, buffers live delivery during a catch-up query, then merges and drains only continuous sequences. A later live gap triggers another persisted-event query. `RunStore`, `RunEventBus`, and `RunScheduler` remain separate ports.
 
 ## 6. Quality Attributes
 
@@ -60,4 +60,4 @@ The Web is feature-first: `app`, `features`, `entities`, and `shared`. A feature
 
 ## 7. Decisions and Risks
 
-Architecture-significant decisions live in `docs/decisions/`. The current runtime and artifact stores are process-local; restart loses runs and generated artifacts. RAG document ingestion lineage (documents, versions, chunks) is persisted in PostgreSQL via `0050_rag_documents.sql`, while the vector index remains an in-process store. Real persistence for runs and artifacts, authentication, and licensed market-data providers remain production follow-ups.
+Architecture-significant decisions live in `docs/decisions/`. Run snapshots/events, messages, RAG ingestion lineage, workflows, and artifact metadata are persisted in PostgreSQL; live event subscribers, cancellation controllers, trace, approval, and vector indexes remain process-local. A restart marks only stale non-terminal Runs as an explainable `run_interrupted` failure; automatic execution continuation remains a worker/queue follow-up.

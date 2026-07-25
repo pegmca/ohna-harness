@@ -195,6 +195,9 @@ importers:
       '@aiagent/report':
         specifier: workspace:*
         version: link:../report
+      '@aiagent/types':
+        specifier: workspace:*
+        version: link:../types
       drizzle-orm:
         specifier: 0.44.7
         version: 0.44.7(@types/pg@8.15.5)(pg@8.16.3)

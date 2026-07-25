@@ -14,6 +14,7 @@
   "references": [
     { "path": "../conversation" },
     { "path": "../identity" },
+    { "path": "../rag" },
     { "path": "../report" }
   ]
 }

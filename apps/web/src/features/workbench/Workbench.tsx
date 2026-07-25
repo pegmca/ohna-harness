@@ -5,9 +5,9 @@ import type {
   ApiError,
   ApiResult,
   DataSourceChunksResponseDto,
+  DataSourceDocumentDto,
   DataSourceDocumentsResponseDto,
   DataSourceIngestResponseDto,
-  IngestedFilingDocumentDto,
   ProductArchitectureDto,
   ProductEvalReportDto,
   RagAnswerResponseDto,
@@ -613,7 +613,7 @@ function DataSourcesWorkspace(props: { onMenuClick: () => void }) {
   const [content, setContent] = useState(demoDataSourceContent);
   const [query, setQuery] = useState("资产质量");
   const [question, setQuestion] = useState("公司资产质量如何？");
-  const [documents, setDocuments] = useState<IngestedFilingDocumentDto[]>([]);
+  const [documents, setDocuments] = useState<DataSourceDocumentDto[]>([]);
   const [chunks, setChunks] = useState<RagChunkDto[]>([]);
   const [searchResults, setSearchResults] = useState<RetrievalResultDto[]>([]);
   const [answer, setAnswer] = useState<RagAnswerResponseDto | undefined>();
@@ -664,8 +664,8 @@ function DataSourcesWorkspace(props: { onMenuClick: () => void }) {
       return;
     }
 
-    setDocuments((current) => upsertBy(current, result.data.document, (item) => item.documentId));
-    setChunks((current) => mergeChunks(current, result.data.chunks));
+    // ingest 成功后重新拉取分页列表，文档行展示服务端持久化的版本与状态。
+    await refreshDataSources();
     setStatus(`indexed ${result.data.indexedChunkCount} chunks`);
   }
 
@@ -771,8 +771,8 @@ function DataSourcesWorkspace(props: { onMenuClick: () => void }) {
             {documents.map((document) => (
               <article className="data-row" key={document.documentId}>
                 <strong>{document.title}</strong>
-                <span>{document.fileName}</span>
-                <small>{document.source}</small>
+                <span>v{document.latestVersion} · {document.latestStatus} · {document.scope}</span>
+                <small>{document.sourceUri}</small>
               </article>
             ))}
           </div>
@@ -2007,45 +2007,6 @@ function createConversation(): LocalConversation {
     messages: [],
     reportMode: false
   };
-}
-
-/**
- * 按稳定 key 更新或插入数组项，避免 ingest 后出现重复文档。
- *
- * @template TItem 数组元素类型。
- * @param current 当前数组。
- * @param next 新元素。
- * @param getKey key 提取函数。
- * @returns 合并后的新数组。
- */
-function upsertBy<TItem>(
-  current: readonly TItem[],
-  next: TItem,
-  getKey: (item: TItem) => string
-): TItem[] {
-  const nextKey = getKey(next);
-  const exists = current.some((item) => getKey(item) === nextKey);
-
-  return exists ? current.map((item) => (getKey(item) === nextKey ? next : item)) : [next, ...current];
-}
-
-/**
- * 合并 chunk 列表，相同 chunkId 使用最新 ingestion 输出替换。
- *
- * @param current 当前 chunk 列表。
- * @param next 本次 ingest 生成的 chunks。
- * @returns 合并后的 chunk 列表。
- */
-function mergeChunks(current: readonly RagChunkDto[], next: readonly RagChunkDto[]): RagChunkDto[] {
-  const chunksById = new Map(current.map((chunk) => [chunk.chunkId, chunk]));
-
-  next.forEach((chunk) => chunksById.set(chunk.chunkId, chunk));
-
-  return [...chunksById.values()].sort((left, right) =>
-    left.documentId === right.documentId
-      ? left.chunkIndex - right.chunkIndex
-      : left.documentId.localeCompare(right.documentId)
-  );
 }
 
 /**

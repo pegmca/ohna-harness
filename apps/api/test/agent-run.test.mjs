@@ -131,6 +131,22 @@ test("data sources and RAG routes retain structured DTO boundaries", async () =>
     }
   });
   assert.equal(ingest.statusCode, 200);
+  assert.equal(ingest.json().data.documentVersion, 1);
+  assert.equal(ingest.json().data.deduplicated, false);
+
+  const documents = await app.inject({ method: "GET", url: "/api/data-sources/documents" });
+  assert.equal(documents.statusCode, 200);
+  assert.equal(documents.json().data.nextCursor, null);
+  assert.equal(documents.json().data.documents.length, 1);
+  assert.equal(documents.json().data.documents[0].latestVersion, 1);
+  assert.equal(documents.json().data.documents[0].latestStatus, "indexed");
+  assert.equal(documents.json().data.documents[0].scope, "shared");
+
+  const chunks = await app.inject({ method: "GET", url: "/api/data-sources/chunks" });
+  assert.equal(chunks.statusCode, 200);
+  assert.equal(chunks.json().data.nextCursor, null);
+  assert.equal(chunks.json().data.chunks.length, ingest.json().data.indexedChunkCount);
+
   const answer = await app.inject({
     method: "POST",
     url: "/api/rag/answer",
@@ -138,6 +154,64 @@ test("data sources and RAG routes retain structured DTO boundaries", async () =>
   });
   assert.equal(answer.statusCode, 200);
   assert.equal(answer.json().data.answer.citations.length > 0, true);
+  await app.close();
+});
+
+test("data sources ingest rejects unsafe source identifiers", async () => {
+  const app = createApiServer();
+  const unsafeSources = ["/etc/passwd", "file:///etc/passwd", "../x", "C:\\data\\x.md", "~/secret.md"];
+
+  for (const source of unsafeSources) {
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/data-sources/ingest",
+      payload: {
+        source,
+        fileName: "annual-report.md",
+        content: "# 资产质量\n公司不良率保持稳定。"
+      }
+    });
+    assert.equal(response.statusCode, 400, `source ${source} should be rejected`);
+    assert.equal(response.json().error.code, "validation_failed");
+  }
+
+  const documents = await app.inject({ method: "GET", url: "/api/data-sources/documents" });
+  assert.equal(documents.json().data.documents.length, 0);
+  await app.close();
+});
+
+test("data sources list routes validate pagination query and page through results", async () => {
+  const app = createApiServer();
+  for (let index = 0; index < 3; index += 1) {
+    const ingest = await app.inject({
+      method: "POST",
+      url: "/api/data-sources/ingest",
+      payload: {
+        source: `demo/doc-${index}`,
+        fileName: `doc-${index}.md`,
+        content: `# 文档 ${index}\n第 ${index} 篇内容。`
+      }
+    });
+    assert.equal(ingest.statusCode, 200);
+  }
+
+  const invalid = await app.inject({ method: "GET", url: "/api/data-sources/documents?limit=0" });
+  assert.equal(invalid.statusCode, 400);
+  assert.equal(invalid.json().error.code, "validation_failed");
+
+  const seen = new Set();
+  let cursor;
+  for (let page = 0; page < 10; page += 1) {
+    const url = cursor
+      ? `/api/data-sources/documents?limit=2&cursor=${encodeURIComponent(cursor)}`
+      : "/api/data-sources/documents?limit=2";
+    const response = await app.inject({ method: "GET", url });
+    assert.equal(response.statusCode, 200);
+    response.json().data.documents.forEach((document) => seen.add(document.documentId));
+    if (!response.json().data.nextCursor) break;
+    cursor = response.json().data.nextCursor;
+  }
+  assert.equal(seen.size, 3);
   await app.close();
 });
 

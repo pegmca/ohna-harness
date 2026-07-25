@@ -6,9 +6,11 @@ import type {
   IdentityUser,
   QqIdentity
 } from "@aiagent/identity";
+import type { RagDocumentRepository } from "@aiagent/rag";
 import { randomUUID } from "node:crypto";
 import pg from "pg";
 export { findMissingColumnComments, type MigrationCommentIssue } from "./migration-lint.js";
+export { createPostgresRagDocumentRepository } from "./rag-documents.js";
 export { RepositoryError, type RepositoryErrorCode } from "./repository-error.js";
 export { isPostgresUniqueViolation, postgresTimestampToIso } from "./postgres.js";
 export {
@@ -16,6 +18,7 @@ export {
   type PostgresConversationRepositories
 } from "./conversation-repository.js";
 import { isPostgresUniqueViolation, postgresTimestampToIso } from "./postgres.js";
+import { createPostgresRagDocumentRepository } from "./rag-documents.js";
 import type { ArtifactRepository, WorkflowRepository } from "@aiagent/report";
 import { createPostgresArtifactRepository, createPostgresWorkflowRepository } from "./report.js";
 export { createPostgresArtifactRepository, createPostgresWorkflowRepository } from "./report.js";
@@ -25,6 +28,7 @@ const { Pool } = pg;
 export interface DatabaseRuntime {
   pool: pg.Pool;
   identityRepository: IdentityRepository;
+  ragDocumentRepository: RagDocumentRepository;
   workflowRepository: WorkflowRepository;
   artifactRepository: ArtifactRepository;
   close(): Promise<void>;
@@ -43,6 +47,7 @@ export function createDatabaseRuntime(databaseUrl: string): DatabaseRuntime {
   return {
     pool,
     identityRepository: createPostgresIdentityRepository(pool),
+    ragDocumentRepository: createPostgresRagDocumentRepository(pool),
     workflowRepository: createPostgresWorkflowRepository(pool),
     artifactRepository: createPostgresArtifactRepository(pool),
     async close() { await pool.end(); },

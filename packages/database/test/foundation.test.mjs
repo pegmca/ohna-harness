@@ -58,7 +58,7 @@ test("空库 migration 可执行、可幂等，并回滚失败 migration", { ski
     await runMigrations(context.pool, join(packageDir, "migrations"));
     await runMigrations(context.pool, join(packageDir, "migrations"));
     const applied = await context.pool.query("select name from __aiagent_migrations order by name");
-    assert.deepEqual(applied.rows.map((row) => row.name), ["0000_identity.sql", "0010_conversation.sql", "0070_report.sql"]);
+    assert.deepEqual(applied.rows.map((row) => row.name), ["0000_identity.sql", "0010_conversation.sql", "0050_rag_documents.sql", "0070_report.sql"]);
 
     await writeFile(join(fixtureDir, "9999_failure.sql"), "create table rolled_back(id integer); select missing_function();");
     await assert.rejects(() => runMigrations(context.pool, fixtureDir), (error) => {

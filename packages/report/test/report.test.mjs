@@ -222,7 +222,8 @@ test("report workflow risk review asks for more evidence when risk disclosure is
 test("report workflow degrades to an explicitly partial report when non-critical sources fail", async () => {
   const runId = "report_wf_partial_source";
   const unavailableRuntime = {
-    listDocuments: () => [], listChunks: () => [], snapshot: () => ({ documents: [], chunks: [], embeddedChunks: [] }),
+    listDocuments: async () => ({ documents: [], nextCursor: null }),
+    listChunks: async () => ({ chunks: [], nextCursor: null }),
     ingest: async () => ({ ok: true, data: {} }),
     search: async () => ({ ok: false, error: { code: "retrieval_failed", message: "market source temporarily unavailable" } }),
     answer: async () => ({ ok: false, error: { code: "answer_failed", message: "unavailable" } })

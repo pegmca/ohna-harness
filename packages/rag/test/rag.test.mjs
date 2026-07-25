@@ -8,6 +8,7 @@ import {
   createDataSourceRuntime,
   createHeuristicReranker,
   createHybridRetriever,
+  createInMemoryRagDocumentRepository,
   createInMemoryVectorStore,
   createRagAnswer,
   createRagPackageSummary,
@@ -15,7 +16,9 @@ import {
   DEFAULT_KEYWORD_WEIGHT,
   DEFAULT_VECTOR_SEARCH_TOP_K,
   DEFAULT_VECTOR_WEIGHT,
-  MAX_VECTOR_SEARCH_TOP_K
+  isSafeRagSourceUri,
+  MAX_VECTOR_SEARCH_TOP_K,
+  normalizeRagSourceUri
 } from "../dist/index.js";
 
 test("rag package entry exposes its boundary summary", () => {
@@ -624,8 +627,19 @@ test("data source runtime ingests, searches and answers with traceable citations
   });
 
   assert.equal(ingestResult.ok, true);
-  assert.equal(runtime.listDocuments().length, 1);
-  assert.equal(runtime.listChunks().length, ingestResult.data.indexedChunkCount);
+  assert.equal(ingestResult.data.documentVersion, 1);
+  assert.equal(ingestResult.data.deduplicated, false);
+
+  const documentsPage = await runtime.listDocuments();
+  const chunksPage = await runtime.listChunks();
+
+  assert.equal(documentsPage.documents.length, 1);
+  assert.equal(documentsPage.nextCursor, null);
+  assert.equal(documentsPage.documents[0].latestVersion, 1);
+  assert.equal(documentsPage.documents[0].latestStatus, "indexed");
+  assert.equal(documentsPage.documents[0].scope, "shared");
+  assert.equal(chunksPage.chunks.length, ingestResult.data.indexedChunkCount);
+  assert.equal(chunksPage.chunks[0].documentId, documentsPage.documents[0].documentId);
 
   const searchResult = await runtime.search("资产质量", {
     topK: 3
@@ -661,6 +675,377 @@ test("data source runtime applies unknown answer policy when evidence is missing
   assert.equal(ingestResult.ok, true);
   assert.equal(answerResult.ok, true);
   assert.match(answerResult.data.answer.answer, /资料不足|无法可靠回答/);
+});
+
+test("re-ingesting identical content is deduplicated without new versions or chunks", async () => {
+  const repository = createInMemoryRagDocumentRepository();
+  const runtime = createDataSourceRuntime({ repository });
+  const request = {
+    source: "demo",
+    fileName: "annual-report.md",
+    contentType: "text/markdown",
+    content: "# 资产质量\n公司不良率保持稳定。"
+  };
+  const first = await runtime.ingest(request);
+  const second = await runtime.ingest(request);
+
+  assert.equal(first.ok, true);
+  assert.equal(second.ok, true);
+  assert.equal(first.data.deduplicated, false);
+  assert.equal(second.data.deduplicated, true);
+  assert.equal(second.data.documentVersion, first.data.documentVersion);
+  assert.deepEqual(
+    second.data.chunks.map((chunk) => chunk.chunkId),
+    first.data.chunks.map((chunk) => chunk.chunkId)
+  );
+
+  const versions = await repository.listVersions({ documentId: first.data.document.documentId, ownerUserId: null });
+  const chunksPage = await runtime.listChunks();
+
+  assert.equal(versions.length, 1);
+  assert.equal(chunksPage.chunks.length, first.data.indexedChunkCount);
+
+  const searchResult = await runtime.search("不良率", { topK: 1 });
+  assert.equal(searchResult.ok, true);
+  assert.equal(searchResult.data.results.length, 1);
+});
+
+test("new content creates an immutable new version and keeps old chunks", async () => {
+  const repository = createInMemoryRagDocumentRepository();
+  const runtime = createDataSourceRuntime({ repository });
+  const base = { source: "demo", fileName: "annual-report.md", contentType: "text/markdown" };
+  const first = await runtime.ingest({ ...base, content: "# 资产质量\n公司不良率保持稳定。" });
+  const second = await runtime.ingest({ ...base, content: "# 资产质量\n公司不良率上升，拨备覆盖率下降。" });
+
+  assert.equal(first.ok, true);
+  assert.equal(second.ok, true);
+  assert.equal(second.data.deduplicated, false);
+  assert.equal(second.data.documentVersion, first.data.documentVersion + 1);
+  assert.equal(second.data.document.documentId, first.data.document.documentId);
+
+  const versions = await repository.listVersions({ documentId: first.data.document.documentId, ownerUserId: null });
+  const chunksPage = await runtime.listChunks();
+  const documentsPage = await runtime.listDocuments();
+
+  assert.equal(versions.length, 2);
+  assert.deepEqual(versions.map((version) => version.version), [1, 2]);
+  assert.ok(versions.every((version) => version.status === "indexed"));
+  assert.equal(chunksPage.chunks.length, first.data.indexedChunkCount + second.data.indexedChunkCount);
+  assert.equal(documentsPage.documents.length, 1);
+  assert.equal(documentsPage.documents[0].latestVersion, 2);
+
+  // 不同版本相同 chunkIndex 的 chunkId 必须不同（版本身份是 citation 回链目标），
+  // 且 listChunks(documentId) 能同时读到 v1 和 v2 的 chunks（旧 citation 目标仍存在）。
+  const firstChunkIds = new Set(first.data.chunks.map((chunk) => chunk.chunkId));
+  const secondChunkIds = new Set(second.data.chunks.map((chunk) => chunk.chunkId));
+  assert.ok([...secondChunkIds].every((chunkId) => !firstChunkIds.has(chunkId)));
+  const documentChunks = await runtime.listChunks({ documentId: first.data.document.documentId });
+  const persistedChunkIds = new Set(documentChunks.chunks.map((chunk) => chunk.chunkId));
+  assert.ok([...firstChunkIds].every((chunkId) => persistedChunkIds.has(chunkId)));
+  assert.ok([...secondChunkIds].every((chunkId) => persistedChunkIds.has(chunkId)));
+});
+
+test("failed ingestion is persisted with structured error and can be inspected", async () => {
+  const repository = createInMemoryRagDocumentRepository();
+  const runtime = createDataSourceRuntime({ repository });
+  const result = await runtime.ingest({
+    source: "demo",
+    fileName: "annual-report.md",
+    contentType: "text/markdown",
+    content: "   "
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.error.code, "ingestion_failed");
+  assert.equal(result.error.details.filingCode, "empty_file");
+
+  const documentsPage = await runtime.listDocuments();
+
+  assert.equal(documentsPage.documents.length, 1);
+  assert.equal(documentsPage.documents[0].latestStatus, "failed");
+
+  const versions = await repository.listVersions({ documentId: documentsPage.documents[0].documentId, ownerUserId: null });
+
+  assert.equal(versions.length, 1);
+  assert.equal(versions[0].status, "failed");
+  assert.equal(versions[0].error.code, "empty_file");
+  assert.equal(typeof versions[0].error.message, "string");
+
+  const retry = await runtime.ingest({
+    source: "demo",
+    fileName: "annual-report.md",
+    contentType: "text/markdown",
+    content: "# 资产质量\n公司不良率保持稳定。"
+  });
+
+  assert.equal(retry.ok, true);
+  assert.equal(retry.data.documentVersion, 2);
+  assert.equal(retry.data.deduplicated, false);
+
+  const versionsAfterRetry = await repository.listVersions({ documentId: documentsPage.documents[0].documentId, ownerUserId: null });
+
+  assert.equal(versionsAfterRetry.length, 2);
+  assert.deepEqual(versionsAfterRetry.map((version) => version.status), ["failed", "indexed"]);
+});
+
+test("retrying the same failed content updates the failed version in place", async () => {
+  const repository = createInMemoryRagDocumentRepository();
+  const runtime = createDataSourceRuntime({ repository });
+  const request = {
+    source: "demo",
+    fileName: "annual-report.md",
+    contentType: "text/markdown",
+    content: "   "
+  };
+  const first = await runtime.ingest(request);
+  const second = await runtime.ingest(request);
+
+  assert.equal(first.ok, false);
+  assert.equal(second.ok, false);
+
+  const documentsPage = await runtime.listDocuments();
+  const versions = await repository.listVersions({ documentId: documentsPage.documents[0].documentId, ownerUserId: null });
+
+  assert.equal(documentsPage.documents.length, 1);
+  assert.equal(versions.length, 1);
+  assert.equal(versions[0].status, "failed");
+});
+
+test("private documents are only visible to their owner", async () => {
+  const runtime = createDataSourceRuntime();
+  const ingestResult = await runtime.ingest(
+    {
+      source: "demo",
+      fileName: "annual-report.md",
+      contentType: "text/markdown",
+      content: "# 资产质量\n公司不良率保持稳定。"
+    },
+    { ownerUserId: "user-a" }
+  );
+
+  assert.equal(ingestResult.ok, true);
+
+  const ownerPage = await runtime.listDocuments({ ownerUserId: "user-a" });
+  const otherPage = await runtime.listDocuments({ ownerUserId: "user-b" });
+  const anonymousPage = await runtime.listDocuments();
+  const ownerChunks = await runtime.listChunks({ ownerUserId: "user-a" });
+  const otherChunks = await runtime.listChunks({ ownerUserId: "user-b" });
+
+  assert.equal(ownerPage.documents.length, 1);
+  assert.equal(ownerPage.documents[0].scope, "private");
+  assert.equal(otherPage.documents.length, 0);
+  assert.equal(anonymousPage.documents.length, 0);
+  assert.equal(ownerChunks.chunks.length, ingestResult.data.indexedChunkCount);
+  assert.equal(otherChunks.chunks.length, 0);
+});
+
+test("ingest rejects illegal owner/scope combinations with a structured error", async () => {
+  const repository = createInMemoryRagDocumentRepository();
+  const runtime = createDataSourceRuntime({ repository });
+  const request = {
+    source: "demo",
+    fileName: "annual-report.md",
+    contentType: "text/markdown",
+    content: "# 资产质量\n公司不良率保持稳定。"
+  };
+
+  const ownerWithShared = await runtime.ingest(request, { ownerUserId: "user-a", scope: "shared" });
+  const ownerWithDemo = await runtime.ingest(request, { ownerUserId: "user-a", scope: "demo" });
+
+  assert.equal(ownerWithShared.ok, false);
+  assert.equal(ownerWithShared.error.code, "ingestion_failed");
+  assert.match(String(ownerWithShared.error.details.reason), /shared\/demo/);
+  assert.equal(ownerWithDemo.ok, false);
+  assert.equal((await runtime.listDocuments()).documents.length, 0);
+  assert.equal((await runtime.listDocuments({ ownerUserId: "user-a" })).documents.length, 0);
+
+  await assert.rejects(
+    repository.saveIngestion({
+      ownerUserId: null,
+      scope: "private",
+      sourceType: "mock_text",
+      externalId: "ext-invalid",
+      title: "非法组合",
+      sourceUri: "demo",
+      contentType: "text/markdown",
+      contentChecksum: "checksum-invalid",
+      content: "内容",
+      parserVersion: "test",
+      chunkerVersion: "test",
+      outcome: { status: "failed", error: { code: "empty_file", message: "空" } },
+      now: "2026-01-01T00:00:00.000Z"
+    }),
+    (error) => {
+      assert.equal(error.name, "RagOwnerScopeValidationError");
+      assert.equal(error.code, "validation_failed");
+      return true;
+    }
+  );
+});
+
+test("ingest rejects unsafe source identifiers without persisting anything", async () => {
+  const runtime = createDataSourceRuntime();
+  const request = {
+    fileName: "annual-report.md",
+    contentType: "text/markdown",
+    content: "# 资产质量\n公司不良率保持稳定。"
+  };
+  const unsafeSources = [
+    "/etc/passwd",
+    "~/secret.md",
+    "C:\\data\\x.md",
+    "C:/data/x.md",
+    "file:///etc/passwd",
+    "../escape",
+    "a/../../b",
+    "bad\ttab",
+    "back\\slash",
+    "https://user:pass@example.com/x.md",
+    "https://user@example.com/x.md"
+  ];
+
+  for (const source of unsafeSources) {
+    const result = await runtime.ingest({ ...request, source });
+    assert.equal(result.ok, false, `source ${source} should be rejected`);
+    assert.equal(result.error.code, "ingestion_failed");
+    assert.equal(result.error.details.reason, "unsafe_source_uri");
+  }
+
+  assert.equal(isSafeRagSourceUri("demo"), true);
+  assert.equal(isSafeRagSourceUri("demo/annual-report"), true);
+  assert.equal(isSafeRagSourceUri("mock://filings/000001.SZ/2025-annual.md"), true);
+  assert.equal(isSafeRagSourceUri("https://example.com/filing.md?token=abc"), true);
+  assert.equal(isSafeRagSourceUri("local://annual-report.md"), true);
+  assert.equal(isSafeRagSourceUri("https://user:pass@example.com/x.md"), false);
+  assert.equal(isSafeRagSourceUri("https://user@example.com/x.md"), false);
+
+  assert.equal((await runtime.listDocuments()).documents.length, 0);
+  assert.equal((await runtime.listChunks()).chunks.length, 0);
+});
+
+test("signed http source is normalized so lineage and DTOs never contain query or fragment", async () => {
+  const runtime = createDataSourceRuntime();
+  const request = {
+    fileName: "annual-report.md",
+    contentType: "text/markdown",
+    content: "# 资产质量\n公司不良率保持稳定。"
+  };
+  const signed = await runtime.ingest({ ...request, source: "https://example.com/filing.md?token=abc&signature=y#frag" });
+
+  assert.equal(signed.ok, true);
+  assert.equal(signed.data.document.source, "https://example.com/filing.md");
+  assert.ok(signed.data.chunks.every((chunk) => chunk.source === "https://example.com/filing.md"));
+
+  // 同一文档不带 token 重复 ingest 命中同一 lineage（幂等）。
+  const unsigned = await runtime.ingest({ ...request, source: "https://example.com/filing.md" });
+  assert.equal(unsigned.ok, true);
+  assert.equal(unsigned.data.deduplicated, true);
+  assert.equal(unsigned.data.document.documentId, signed.data.document.documentId);
+
+  const documentsPage = await runtime.listDocuments();
+  const chunksPage = await runtime.listChunks();
+
+  assert.equal(documentsPage.documents.length, 1);
+  assert.equal(documentsPage.documents[0].sourceUri, "https://example.com/filing.md");
+  const serialized = JSON.stringify({ documents: documentsPage.documents, chunks: chunksPage.chunks });
+  assert.ok(!serialized.includes("token=abc"));
+  assert.ok(!serialized.includes("signature=y"));
+  assert.ok(!serialized.includes("frag"));
+
+  assert.equal(normalizeRagSourceUri("https://example.com/a/b.md?api_key=x#section"), "https://example.com/a/b.md");
+  assert.equal(normalizeRagSourceUri("demo/annual-report"), "demo/annual-report");
+  assert.equal(normalizeRagSourceUri("mock://filings/x.md"), "mock://filings/x.md");
+});
+
+test("non-sensitive query params stay in source identity while sensitive keys are stripped", async () => {
+  const runtime = createDataSourceRuntime();
+  const request = {
+    fileName: "annual-report.md",
+    contentType: "text/markdown",
+    content: "# 资产质量\n公司不良率保持稳定。"
+  };
+  const filingA = await runtime.ingest({ ...request, source: "https://example.com/download?id=filing-A" });
+  const filingB = await runtime.ingest({ ...request, source: "https://example.com/download?id=filing-B" });
+
+  assert.equal(filingA.ok, true);
+  assert.equal(filingB.ok, true);
+
+  // allowlist 标识参数参与 externalId：?id=A 与 ?id=B 是两个不同逻辑文档。
+  const twoDocuments = await runtime.listDocuments();
+  assert.equal(twoDocuments.documents.length, 2);
+  assert.notEqual(filingA.data.document.documentId, filingB.data.document.documentId);
+  assert.ok(twoDocuments.documents.some((document) => document.sourceUri === "https://example.com/download?id=filing-A"));
+  assert.ok(twoDocuments.documents.some((document) => document.sourceUri === "https://example.com/download?id=filing-B"));
+
+  // 同一资源带凭证参数重复 ingest 命中同一 lineage，凭证键值不持久化。
+  const signedA = await runtime.ingest({
+    ...request,
+    source: "https://example.com/download?id=filing-A&token=secret123&signature=xyz"
+  });
+  assert.equal(signedA.ok, true);
+  assert.equal(signedA.data.deduplicated, true);
+  assert.equal(signedA.data.document.documentId, filingA.data.document.documentId);
+
+  const documentsPage = await runtime.listDocuments();
+  const chunksPage = await runtime.listChunks();
+  const serialized = JSON.stringify({ documents: documentsPage.documents, chunks: chunksPage.chunks });
+  assert.ok(serialized.includes("id=filing-A"));
+  assert.ok(!serialized.includes("secret123"));
+  assert.ok(!serialized.includes("signature=xyz"));
+  assert.ok(!serialized.includes("token="));
+
+  // fragment 一律剥离；仅 allowlist 参数保留并排序，其余键（含云签名前缀）一律删除。
+  assert.equal(
+    normalizeRagSourceUri("https://example.com/a?z=1&id=filing-A#section"),
+    "https://example.com/a?id=filing-A"
+  );
+  assert.equal(
+    normalizeRagSourceUri("https://example.com/a?X-Amz-Signature=abc&x-goog-credential=def&id=x"),
+    "https://example.com/a?id=x"
+  );
+  assert.equal(
+    normalizeRagSourceUri("https://example.com/a?id=2&id=1&page=0"),
+    "https://example.com/a?id=1&id=2&page=0"
+  );
+});
+
+test("credential-like query variants never reach lineage and still deduplicate per resource", async () => {
+  const runtime = createDataSourceRuntime();
+  const request = {
+    fileName: "annual-report.md",
+    contentType: "text/markdown",
+    content: "# 资产质量\n公司不良率保持稳定。"
+  };
+  const plain = await runtime.ingest({ ...request, source: "https://example.com/download?id=filing-A" });
+  assert.equal(plain.ok, true);
+
+  // denylist 时代的绕过变体：allowlist 下无论键名如何变形都不会落库。
+  const variants = [
+    ["accessToken", "tok_1"],
+    ["auth_token", "tok_2"],
+    ["client_secret", "sec_3"],
+    ["session_id", "sess_4"],
+    ["code", "oauth_code_5"],
+    ["AWSAccessKeyId", "AKIA6"],
+    ["GoogleAccessId", "goo_7"]
+  ];
+
+  for (const [key, secret] of variants) {
+    const result = await runtime.ingest({ ...request, source: `https://example.com/download?id=filing-A&${key}=${secret}` });
+    assert.equal(result.ok, true, `${key} variant should ingest`);
+    assert.equal(result.data.deduplicated, true, `${key} variant should hit the same lineage`);
+    assert.equal(result.data.document.documentId, plain.data.document.documentId);
+
+    const documentsPage = await runtime.listDocuments();
+    const chunksPage = await runtime.listChunks();
+    const serialized = JSON.stringify({ documents: documentsPage.documents, chunks: chunksPage.chunks });
+    assert.ok(!serialized.includes(key), `${key} must not be persisted`);
+    assert.ok(!serialized.includes(secret), `${key} secret value must not be persisted`);
+  }
+
+  const documentsPage = await runtime.listDocuments();
+  assert.equal(documentsPage.documents.length, 1);
+  assert.equal(documentsPage.documents[0].sourceUri, "https://example.com/download?id=filing-A");
 });
 
 /**

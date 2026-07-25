@@ -1,6 +1,8 @@
-import { ingestFiling } from "@aiagent/filings";
+import { detectFilingFileType, ingestFiling } from "@aiagent/filings";
+import { createHash } from "node:crypto";
 import type {
   CitationDto,
+  DataSourceDocumentDto,
   DataSourceIngestRequestDto,
   DataSourceIngestResponseDto,
   EmbeddedChunkDto,
@@ -15,6 +17,42 @@ import type {
   TraceRetrievalEventDto,
   VectorSearchMatchDto
 } from "@aiagent/types";
+import {
+  createInMemoryRagDocumentRepository,
+  validateRagOwnerScope,
+  type NewRagChunkRecord,
+  type RagChunkRecord,
+  type RagDocumentRepository,
+  type RagDocumentScope,
+  type RagDocumentSourceType,
+  type SaveRagIngestionInput,
+  type SaveRagIngestionResult
+} from "./document-repository.js";
+
+export {
+  assertValidOwnerScope,
+  createInMemoryRagDocumentRepository,
+  createPersistentChunkId,
+  isRagDocumentVisible,
+  RagOwnerScopeValidationError,
+  validateRagOwnerScope
+} from "./document-repository.js";
+export type {
+  ListRagChunksQuery,
+  ListRagDocumentsQuery,
+  NewRagChunkRecord,
+  RagChunkRecord,
+  RagDocumentRecord,
+  RagDocumentRepository,
+  RagDocumentScope,
+  RagDocumentSourceType,
+  RagDocumentSummary,
+  RagDocumentVersionRecord,
+  RagDocumentVersionStatus,
+  RagIngestionOutcome,
+  SaveRagIngestionInput,
+  SaveRagIngestionResult
+} from "./document-repository.js";
 
 export type RagDocument = RagDocumentDto;
 export type RagChunk = RagChunkDto;
@@ -188,12 +226,6 @@ export interface Retriever {
   retrieve(query: string, options?: RetrievalOptions): Promise<HybridRetrievalResult>;
 }
 
-export interface DataSourceRuntimeSnapshot {
-  documents: IngestedFilingDocumentDto[];
-  chunks: RagChunk[];
-  embeddedChunks: EmbeddedChunk[];
-}
-
 export type DataSourceRuntimeResult<TData> =
   | {
       ok: true;
@@ -215,15 +247,41 @@ export interface RagAnswerRuntimeResponse {
 }
 
 /**
- * DataSourceRuntime 封装本地 demo 的 ingestion、chunk、embedding、index、retrieval 和 answer policy。
+ * ingestion 调用上下文：owner 与 scope 由 API adapter 从身份 session 推导，
+ * 缺省 ownerUserId 为空时落 shared scope，保持匿名 demo 行为向后兼容。
+ */
+export interface DataSourceIngestContext {
+  ownerUserId?: string | null;
+  scope?: RagDocumentScope;
+}
+
+/** 文档/chunk 分页查询选项，ownerUserId 缺省为匿名（只见 shared/demo）。 */
+export interface DataSourceListOptions {
+  ownerUserId?: string | null;
+  cursor?: string;
+  limit?: number;
+}
+
+/** chunk 分页查询选项，可按 documentId 过滤。 */
+export interface DataSourceListChunksOptions extends DataSourceListOptions {
+  documentId?: string;
+}
+
+/**
+ * DataSourceRuntime 封装 ingestion lineage 持久化、chunk、embedding、内存向量索引、retrieval 和 answer policy。
+ *
+ * 文档/版本/chunk 事实源是 RagDocumentRepository（PostgreSQL 或内存 adapter）；
+ * VectorStore 仍是进程内实现，只服务当前进程的 search/answer。
  */
 export interface DataSourceRuntime {
-  ingest(request: DataSourceIngestRequestDto): Promise<DataSourceRuntimeResult<DataSourceIngestResponseDto>>;
-  listDocuments(): DataSourceRuntimeSnapshot["documents"];
-  listChunks(): DataSourceRuntimeSnapshot["chunks"];
+  ingest(
+    request: DataSourceIngestRequestDto,
+    context?: DataSourceIngestContext
+  ): Promise<DataSourceRuntimeResult<DataSourceIngestResponseDto>>;
+  listDocuments(options?: DataSourceListOptions): Promise<{ documents: DataSourceDocumentDto[]; nextCursor: string | null }>;
+  listChunks(options?: DataSourceListChunksOptions): Promise<{ chunks: RagChunk[]; nextCursor: string | null }>;
   search(query: string, options?: RetrievalOptions): Promise<DataSourceRuntimeResult<RagSearchRuntimeResponse>>;
   answer(question: string, options?: RetrievalOptions): Promise<DataSourceRuntimeResult<RagAnswerRuntimeResponse>>;
-  snapshot(): DataSourceRuntimeSnapshot;
 }
 
 export interface HybridRetrieverOptions {
@@ -289,6 +347,12 @@ export const DEFAULT_CHUNKING_OPTIONS: ChunkingOptions = {
   maxChars: 1200,
   overlapChars: 150
 };
+
+/** 解析器版本标识：写入 document_versions，便于后续重放与兼容性诊断。 */
+export const RAG_PARSER_VERSION = "filings-markdown-txt-v1";
+
+/** 切块器版本标识：由默认 chunking options 派生，策略或窗口变化时必须同步更新。 */
+export const RAG_CHUNKER_VERSION = `${DEFAULT_CHUNKING_OPTIONS.strategy}-${DEFAULT_CHUNKING_OPTIONS.maxChars}-${DEFAULT_CHUNKING_OPTIONS.overlapChars}-v1`;
 
 export const DEFAULT_MOCK_EMBEDDING_MODEL = "deterministic-mock-embedding-v1";
 export const DEFAULT_MOCK_EMBEDDING_DIMENSIONS = 32;
@@ -369,15 +433,17 @@ export function createHybridRetriever(options: HybridRetrieverOptions): Retrieve
 }
 
 /**
- * 创建最小内存 Data Sources runtime。
+ * 创建 Data Sources runtime。
  *
- * 这个 runtime 只服务本地 demo 和测试：文档、chunks 和向量索引都保存在当前 Node.js 进程内；
- * API adapter 只调用这里的稳定方法，不把 RAG 状态管理逻辑复制到 HTTP route 中。
+ * 文档/版本/chunk lineage 由注入的 repository 持久化（生产为 PostgreSQL adapter）；
+ * 缺省使用内存 repository，保持 eval、MCP 等本地调用方零配置兼容。
+ * 向量索引仍是进程内 VectorStore，只服务当前进程检索。
  *
- * @returns 可执行 ingest、list、search 和 grounded answer 的内存 runtime。
+ * @param options 可选 repository 注入；缺省创建内存 repository。
+ * @returns 可执行 ingest、list、search 和 grounded answer 的 runtime。
  */
-export function createDataSourceRuntime(): DataSourceRuntime {
-  return new InMemoryDataSourceRuntime();
+export function createDataSourceRuntime(options: { repository?: RagDocumentRepository } = {}): DataSourceRuntime {
+  return new InMemoryDataSourceRuntime(options.repository ?? createInMemoryRagDocumentRepository());
 }
 
 /**
@@ -418,63 +484,153 @@ export function createRetrievalResultFromRetrievedChunk(result: RetrievedChunk):
 }
 
 /**
- * Data Sources 内存 runtime 实现，负责把 filings ingestion 和 RAG 检索链路串起来。
+ * Data Sources runtime 实现，负责把 filings ingestion、lineage 持久化和 RAG 检索链路串起来。
+ *
+ * 文档/版本/chunk 事实源是注入的 repository；内存 VectorStore 只承载当前进程的向量索引。
  */
 class InMemoryDataSourceRuntime implements DataSourceRuntime {
   private readonly embeddingClient = createDeterministicMockEmbeddingClient();
   private readonly vectorStore = createInMemoryVectorStore();
-  private readonly documentsById = new Map<string, IngestedFilingDocumentDto>();
+  private readonly repository: RagDocumentRepository;
   private readonly embeddedChunksById = new Map<string, EmbeddedChunk>();
 
   /**
-   * ingest Markdown/TXT 文档，生成 chunks、embedding，并写入内存向量库。
+   * 创建 runtime 实例。
+   *
+   * @param repository 文档 lineage repository（PostgreSQL 或内存 adapter）。
+   */
+  public constructor(repository: RagDocumentRepository) {
+    this.repository = repository;
+  }
+
+  /**
+   * ingest Markdown/TXT 文档：解析、切块、持久化 lineage、生成 embedding 并写入内存向量库。
+   *
+   * 持久化语义：
+   * - externalId 是 source/fileName/fileType 的 SHA-256，同来源重复 ingest 落到同一文档；
+   * - contentChecksum 相同的已 indexed 版本直接幂等命中（deduplicated），不重复建版本和 chunk，
+   *   但仍用 repository 返回的 chunks 重新 embed 并 upsert，保证同进程 search 可用；
+   * - 解析或切块失败也落 failed 版本（结构化错误），修复内容后可重试产生新版本。
    *
    * @param request API 校验后的 data source ingestion 请求。
-   * @returns 文档、chunks 和索引数量；失败时返回结构化 RAG 错误。
+   * @param context owner 与 scope；缺省匿名落 shared scope。
+   * @returns 文档、chunks、版本号、幂等标记和索引数量；失败时返回结构化 RAG 错误。
    */
   public async ingest(
-    request: DataSourceIngestRequestDto
+    request: DataSourceIngestRequestDto,
+    context: DataSourceIngestContext = {}
   ): Promise<DataSourceRuntimeResult<DataSourceIngestResponseDto>> {
+    const ownerUserId = context.ownerUserId ?? null;
+    const scope = context.scope ?? (ownerUserId ? "private" : "shared");
+    const ownerScopeViolation = validateRagOwnerScope({ ownerUserId, scope });
+
+    if (ownerScopeViolation !== undefined) {
+      return {
+        ok: false,
+        error: {
+          code: "ingestion_failed",
+          message: "ingest 请求的 owner/scope 组合非法。",
+          details: { reason: ownerScopeViolation }
+        }
+      };
+    }
+
+    if (!isSafeRagSourceUri(request.source)) {
+      return {
+        ok: false,
+        error: {
+          code: "ingestion_failed",
+          message: "Data source 标识不合法：仅支持 http(s) URL、mock:/demo: URI 或相对逻辑标识。",
+          details: { reason: "unsafe_source_uri" }
+        }
+      };
+    }
+
+    // sourceUri 是脱敏后的逻辑标识：http(s) URL 剥离 query/fragment，
+    // 同一文档带不带 token 命中同一 lineage，落库与 DTO 返回值永远不含敏感参数。
+    const sourceUri = normalizeRagSourceUri(request.source);
+    const fileType = detectFilingFileType(request.fileName, request.contentType);
+    const externalId = createRagContentChecksum(`${sourceUri}|${request.fileName}|${fileType ?? "unknown"}`);
+    const contentChecksum = createRagContentChecksum(request.content);
+    const contentType = request.contentType?.trim() || "unknown";
+    const now = new Date().toISOString();
+    const lineageBase = {
+      ownerUserId,
+      scope,
+      sourceType: resolveRagSourceType(sourceUri),
+      externalId,
+      sourceUri,
+      contentType,
+      contentChecksum,
+      content: request.content,
+      parserVersion: RAG_PARSER_VERSION,
+      chunkerVersion: RAG_CHUNKER_VERSION,
+      now
+    } as const;
+
     const ingestionResult = ingestFiling({
-      source: request.source,
+      source: sourceUri,
       fileName: request.fileName,
       contentType: request.contentType,
       content: request.content
     });
 
     if (!ingestionResult.ok) {
-      return {
-        ok: false,
-        error: {
-          code: "ingestion_failed",
-          message: ingestionResult.error.message,
-          details: {
-            filingCode: ingestionResult.error.code,
-            ...ingestionResult.error.details
-          }
+      const error = {
+        code: "ingestion_failed" as const,
+        message: ingestionResult.error.message,
+        details: {
+          filingCode: ingestionResult.error.code,
+          ...ingestionResult.error.details
         }
       };
+      await this.saveLineage({
+        ...lineageBase,
+        title: request.fileName,
+        outcome: {
+          status: "failed",
+          error: { code: ingestionResult.error.code, message: ingestionResult.error.message, details: ingestionResult.error.details }
+        }
+      });
+      return { ok: false, error };
     }
 
     const chunkingResult = chunkIngestedFilingDocument(ingestionResult.document);
 
     if (!chunkingResult.ok) {
-      return {
-        ok: false,
-        error: chunkingResult.error
-      };
+      await this.saveLineage({
+        ...lineageBase,
+        title: ingestionResult.document.title,
+        outcome: {
+          status: "failed",
+          error: { code: chunkingResult.error.code, message: chunkingResult.error.message, details: chunkingResult.error.details }
+        }
+      });
+      return { ok: false, error: chunkingResult.error };
     }
 
-    const embeddingResult = await this.embeddingClient.embedTexts(chunkingResult.chunks.map((chunk) => chunk.text));
+    const saved = await this.saveLineage({
+      ...lineageBase,
+      title: ingestionResult.document.title,
+      outcome: {
+        status: "indexed",
+        chunks: chunkingResult.chunks.map(toNewChunkRecord)
+      }
+    });
+
+    if (!saved.ok) {
+      return { ok: false, error: saved.error };
+    }
+
+    // 统一从 repository 返回的记录重建 RagChunkDto，幂等命中与新建版本走完全相同的形状。
+    const chunks = saved.result.chunks.map(ragChunkRecordToChunk);
+    const embeddingResult = await this.embeddingClient.embedTexts(chunks.map((chunk) => chunk.text));
 
     if (!embeddingResult.ok) {
-      return {
-        ok: false,
-        error: embeddingResult.error
-      };
+      return { ok: false, error: embeddingResult.error };
     }
 
-    const embeddedChunks = chunkingResult.chunks.map((chunk, index) => ({
+    const embeddedChunks = chunks.map((chunk, index) => ({
       ...chunk,
       embedding: embeddingResult.embeddings[index].vector,
       embeddingModel: embeddingResult.model
@@ -492,35 +648,56 @@ class InMemoryDataSourceRuntime implements DataSourceRuntime {
       };
     }
 
-    this.documentsById.set(ingestionResult.document.documentId, ingestionResult.document);
     embeddedChunks.forEach((chunk) => this.embeddedChunksById.set(chunk.chunkId, chunk));
 
     return {
       ok: true,
       data: {
-        document: ingestionResult.document,
-        chunks: chunkingResult.chunks,
-        indexedChunkCount: embeddedChunks.length
+        document: { ...ingestionResult.document, documentId: saved.result.document.id },
+        chunks,
+        indexedChunkCount: embeddedChunks.length,
+        documentVersion: saved.result.version.version,
+        deduplicated: saved.result.kind === "existing"
       }
     };
   }
 
   /**
-   * 列出当前进程内已 ingest 的文档。
+   * 经 repository 分页列出可见文档摘要。
    *
-   * @returns 文档数组副本。
+   * @param options owner、cursor 与 limit；缺省匿名第一页。
+   * @returns 文档摘要页与下一页 cursor。
    */
-  public listDocuments(): IngestedFilingDocumentDto[] {
-    return [...this.documentsById.values()];
+  public async listDocuments(
+    options: DataSourceListOptions = {}
+  ): Promise<{ documents: DataSourceDocumentDto[]; nextCursor: string | null }> {
+    return this.repository.listDocuments({
+      ownerUserId: options.ownerUserId ?? null,
+      ...(options.cursor !== undefined ? { cursor: options.cursor } : {}),
+      ...(options.limit !== undefined ? { limit: options.limit } : {})
+    });
   }
 
   /**
-   * 列出当前进程内已索引的 chunks，不返回 embedding，避免 UI 拉取无用大字段。
+   * 经 repository 分页列出可见 chunks，并重建为不暴露向量的 RagChunkDto。
    *
-   * @returns chunk 数组副本。
+   * @param options owner、可选 documentId、cursor 与 limit。
+   * @returns chunk 页与下一页 cursor。
    */
-  public listChunks(): RagChunk[] {
-    return [...this.embeddedChunksById.values()].map(stripEmbedding);
+  public async listChunks(
+    options: DataSourceListChunksOptions = {}
+  ): Promise<{ chunks: RagChunk[]; nextCursor: string | null }> {
+    const page = await this.repository.listChunks({
+      ownerUserId: options.ownerUserId ?? null,
+      ...(options.documentId !== undefined ? { documentId: options.documentId } : {}),
+      ...(options.cursor !== undefined ? { cursor: options.cursor } : {}),
+      ...(options.limit !== undefined ? { limit: options.limit } : {})
+    });
+
+    return {
+      chunks: page.chunks.map(ragChunkRecordToChunk),
+      nextCursor: page.nextCursor
+    };
   }
 
   /**
@@ -584,19 +761,25 @@ class InMemoryDataSourceRuntime implements DataSourceRuntime {
   }
 
   /**
-   * 返回 runtime 快照，供测试和调试验证当前内存状态。
+   * 持久化 ingestion 终态；repository 异常映射为结构化错误，不向调用方泄漏原始异常。
    *
-   * @returns 文档、chunks 和 embedded chunks 副本。
+   * @param input saveIngestion 输入。
+   * @returns 成功时返回 saveIngestion 结果，失败时返回结构化错误。
    */
-  public snapshot(): DataSourceRuntimeSnapshot {
-    return {
-      documents: this.listDocuments(),
-      chunks: this.listChunks(),
-      embeddedChunks: [...this.embeddedChunksById.values()].map((chunk) => ({
-        ...chunk,
-        embedding: [...chunk.embedding]
-      }))
-    };
+  private async saveLineage(
+    input: SaveRagIngestionInput
+  ): Promise<{ ok: true; result: SaveRagIngestionResult } | { ok: false; error: RagStructuredError }> {
+    try {
+      return { ok: true, result: await this.repository.saveIngestion(input) };
+    } catch {
+      return {
+        ok: false,
+        error: {
+          code: "indexing_failed",
+          message: "RAG 文档 lineage 持久化失败，请稍后重试。"
+        }
+      };
+    }
   }
 
   /**
@@ -1761,15 +1944,214 @@ function createQuote(text: string): string {
 }
 
 /**
- * 去掉 embedding 字段，把内部索引 chunk 转回可展示 RagChunk。
+ * 校验 ingest source 是否符合写入口安全边界。
  *
- * @param chunk embedded chunk。
- * @returns 不包含向量的 chunk。
+ * 拒绝：绝对路径（`/`、`~` 开头）、Windows 盘符（`C:`）、`file:` URI、包含 `..` 的
+ * 路径段、控制字符、反斜杠，以及带 userinfo（`user@`/`user:pass@`）的 http(s) URL；
+ * 允许：合法的 http(s) URL，以及由字母数字和 `-_.:/` 组成的相对逻辑标识
+ * （如 `demo/annual-report`、`mock://filings/x.md`）。
+ * API 层与 runtime 共用同一校验，保证 sourceUri 落库前已被白名单过滤，
+ * 因此列表 DTO 中的 sourceUri 不需要额外脱敏。
+ *
+ * @param source ingest 请求的 source。
+ * @returns 符合安全边界返回 true。
  */
-function stripEmbedding(chunk: EmbeddedChunk): RagChunk {
-  const { embedding: _embedding, embeddingModel: _embeddingModel, ...ragChunk } = chunk;
+export function isSafeRagSourceUri(source: string): boolean {
+  const value = source.trim();
+  if (value.length === 0 || value.length > 512) {
+    return false;
+  }
+  if (/^https?:\/\//i.test(value)) {
+    try {
+      const url = new URL(value);
+      // userinfo 是凭证载体，一律拒绝，避免账号密码进入 lineage 和共享列表。
+      return url.username === "" && url.password === "";
+    } catch {
+      return false;
+    }
+  }
+  if (/[\x00-\x1f]/.test(value)) {
+    return false;
+  }
+  if (value.includes("\\")) {
+    return false;
+  }
+  if (value.startsWith("/") || value.startsWith("~")) {
+    return false;
+  }
+  if (/^[a-zA-Z]:/.test(value)) {
+    return false;
+  }
+  if (/^file:/i.test(value)) {
+    return false;
+  }
+  if (value.split("/").includes("..")) {
+    return false;
+  }
+  return /^[A-Za-z0-9\-_.:/]+$/.test(value);
+}
 
-  return ragChunk;
+/**
+ * source URI query 安全资源标识 allowlist（大小写不敏感匹配）。
+ *
+ * 只有这些显式声明的非敏感标识键会保留在 canonical sourceUri 中并参与 lineage 区分；
+ * 未列入的合法标识参数不参与区分，需要时扩充本集合。
+ */
+const SAFE_SOURCE_QUERY_KEYS = new Set([
+  "id",
+  "doc",
+  "document",
+  "file",
+  "name",
+  "page",
+  "v",
+  "version",
+  "ticker",
+  "year",
+  "quarter",
+  "type",
+  "format",
+  "lang",
+  "locale",
+  "region",
+  "category"
+]);
+
+/**
+ * 规范化 ingest source 为可持久化的 canonical sourceUri。
+ *
+ * 该函数同时服务两个目标：
+ * - 脱敏：未知参数默认不可信。fragment 一律剥离；query 只保留 allowlist
+ *   （`SAFE_SOURCE_QUERY_KEYS`，大小写不敏感）中的资源标识键，其余键——无论是否长得像
+ *   凭证（token、accessToken、client_secret、AWSAccessKeyId……）——一律删除，
+ *   任何未声明的参数都不会进入 lineage，也不会出现在 shared/demo 列表 DTO 中。
+ * - 资源 identity：allowlist 内的参数（如 `?id=filing-A`）按键名（同键按值）排序后保留，
+ *   这样 `?id=A` 与 `?id=B` 是不同逻辑文档，而同一资源带不带凭证参数都命中同一 externalId。
+ *   tradeoff：未列入 allowlist 的合法标识参数不参与区分 lineage，需要时扩充常量集合。
+ *
+ * http(s) URL 返回 `origin + pathname + 规范化 query`；非 URL 逻辑标识已通过
+ * `isSafeRagSourceUri` 白名单，原样返回。
+ *
+ * @param source 已通过安全校验的 source。
+ * @returns 脱敏且保留资源标识参数的 canonical sourceUri。
+ */
+export function normalizeRagSourceUri(source: string): string {
+  const value = source.trim();
+  if (/^https?:\/\//i.test(value)) {
+    try {
+      const url = new URL(value);
+      const kept = [...url.searchParams.entries()]
+        .filter(([key]) => SAFE_SOURCE_QUERY_KEYS.has(key.toLowerCase()))
+        .sort(([leftKey, leftValue], [rightKey, rightValue]) =>
+          leftKey === rightKey ? leftValue.localeCompare(rightValue) : leftKey.localeCompare(rightKey)
+        );
+      const query = kept.map(([key, entryValue]) => `${encodeURIComponent(key)}=${encodeURIComponent(entryValue)}`).join("&");
+      return `${url.origin}${url.pathname}${query ? `?${query}` : ""}`;
+    } catch {
+      return value;
+    }
+  }
+  return value;
+}
+
+/**
+ * 计算 ingestion lineage 使用的 SHA-256 校验和（hex）。
+ *
+ * @param value 待哈希文本。
+ * @returns SHA-256 hex 字符串。
+ */
+function createRagContentChecksum(value: string): string {
+  return createHash("sha256").update(value, "utf8").digest("hex");
+}
+
+/**
+ * 从 ingest source URI 推导文档来源类型。
+ *
+ * http(s) 视为远程地址，mock/demo 前缀视为演示文本，其余按本地文件处理；
+ * 这只是 lineage 分类，不放宽 API 层已有的 ingestion 安全边界。
+ *
+ * @param source ingest 请求的 source。
+ * @returns 文档来源类型。
+ */
+function resolveRagSourceType(source: string): RagDocumentSourceType {
+  if (/^https?:\/\//i.test(source)) {
+    return "remote_url";
+  }
+  if (/^(mock|demo)(:|\/|$)/i.test(source)) {
+    return "mock_text";
+  }
+  return "local_file";
+}
+
+/**
+ * 把 chunker 输出的 RagChunk 映射为待持久化 chunk 记录。
+ *
+ * charStart/charEnd/startOffset/endOffset 没有独立列，统一并入 metadata JSONB，
+ * 读回时可还原出与 chunker 输出完全一致的 RagChunkDto 形状。
+ *
+ * @param chunk chunker 输出 chunk。
+ * @returns 待持久化 chunk 记录。
+ */
+function toNewChunkRecord(chunk: RagChunk): NewRagChunkRecord {
+  const lineStart = readMetadataNumber(chunk.metadata, "lineStart");
+  const lineEnd = readMetadataNumber(chunk.metadata, "lineEnd");
+  const pageNumber = chunk.pageNumber ?? chunk.page;
+
+  return {
+    chunkIndex: chunk.chunkIndex,
+    text: chunk.text,
+    ...(chunk.heading !== undefined ? { heading: chunk.heading } : {}),
+    ...(pageNumber !== undefined ? { pageNumber } : {}),
+    ...(lineStart !== undefined ? { lineStart } : {}),
+    ...(lineEnd !== undefined ? { lineEnd } : {}),
+    metadata: {
+      ...chunk.metadata,
+      charStart: chunk.charStart,
+      charEnd: chunk.charEnd,
+      startOffset: chunk.startOffset,
+      endOffset: chunk.endOffset
+    },
+    contentChecksum: createRagContentChecksum(chunk.text)
+  };
+}
+
+/**
+ * 把持久化 chunk 记录重建为 RagChunkDto，偏移字段从 metadata JSONB 还原。
+ *
+ * @param record 持久化 chunk 记录。
+ * @returns 与 chunker 输出形状一致的 RagChunkDto。
+ */
+function ragChunkRecordToChunk(record: RagChunkRecord): RagChunk {
+  const charStart = readMetadataNumber(record.metadata, "charStart") ?? 0;
+  const charEnd = readMetadataNumber(record.metadata, "charEnd") ?? record.text.length;
+
+  return {
+    chunkId: record.chunkId,
+    id: record.chunkId,
+    documentId: record.documentId,
+    source: record.source,
+    chunkIndex: record.chunkIndex,
+    text: record.text,
+    charStart,
+    charEnd,
+    startOffset: readMetadataNumber(record.metadata, "startOffset") ?? charStart,
+    endOffset: readMetadataNumber(record.metadata, "endOffset") ?? charEnd,
+    ...(record.pageNumber !== undefined ? { page: record.pageNumber, pageNumber: record.pageNumber } : {}),
+    ...(record.heading !== undefined ? { heading: record.heading } : {}),
+    metadata: { ...record.metadata }
+  };
+}
+
+/**
+ * 从 chunk metadata 读取数值字段，非数值一律视为缺失。
+ *
+ * @param metadata chunk metadata。
+ * @param key 字段名。
+ * @returns 数值或 undefined。
+ */
+function readMetadataNumber(metadata: Record<string, string | number | boolean | null>, key: string): number | undefined {
+  const value = metadata[key];
+  return typeof value === "number" ? value : undefined;
 }
 
 /**

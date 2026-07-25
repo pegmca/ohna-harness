@@ -186,6 +186,9 @@ importers:
       '@aiagent/identity':
         specifier: workspace:*
         version: link:../identity
+      '@aiagent/rag':
+        specifier: workspace:*
+        version: link:../rag
       '@aiagent/report':
         specifier: workspace:*
         version: link:../report

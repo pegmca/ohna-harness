@@ -157,6 +157,29 @@ test("data sources and RAG routes retain structured DTO boundaries", async () =>
   await app.close();
 });
 
+test("data sources ingest rejects unsafe source identifiers", async () => {
+  const app = createApiServer();
+  const unsafeSources = ["/etc/passwd", "file:///etc/passwd", "../x", "C:\\data\\x.md", "~/secret.md"];
+
+  for (const source of unsafeSources) {
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/data-sources/ingest",
+      payload: {
+        source,
+        fileName: "annual-report.md",
+        content: "# 资产质量\n公司不良率保持稳定。"
+      }
+    });
+    assert.equal(response.statusCode, 400, `source ${source} should be rejected`);
+    assert.equal(response.json().error.code, "validation_failed");
+  }
+
+  const documents = await app.inject({ method: "GET", url: "/api/data-sources/documents" });
+  assert.equal(documents.json().data.documents.length, 0);
+  await app.close();
+});
+
 test("data sources list routes validate pagination query and page through results", async () => {
   const app = createApiServer();
   for (let index = 0; index < 3; index += 1) {

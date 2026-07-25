@@ -174,7 +174,8 @@ export const documents = pgTable("documents", {
   uniqueIndex("documents_owner_external_uq")
     .on(sql`coalesce(${table.ownerUserId}, '00000000-0000-0000-0000-000000000000'::uuid)`, table.externalId)
     .where(sql`${table.deletedAt} is null`),
-  index("documents_owner_scope_idx").on(table.ownerUserId, table.scope)
+  index("documents_owner_scope_idx").on(table.ownerUserId, table.scope),
+  check("documents_owner_scope_check", sql`(${table.scope} = 'private') = (${table.ownerUserId} is not null)`)
 ]);
 
 export const documentVersions = pgTable("document_versions", {

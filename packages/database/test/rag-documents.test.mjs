@@ -147,6 +147,81 @@ test("saveIngestion 幂等命中、版本递增与失败重试", { skip: !integr
   }
 });
 
+test("saveIngestion 拒绝非法 owner/scope 组合", { skip: !integrationEnabled }, async () => {
+  const { context, repository } = await createRagFixture();
+  try {
+    const userA = randomUUID();
+    await insertUser(context.pool, userA);
+    const illegalInputs = [
+      createIngestionInput({ ownerUserId: userA, scope: "shared" }),
+      createIngestionInput({ ownerUserId: userA, scope: "demo" }),
+      createIngestionInput({ ownerUserId: null, scope: "private" })
+    ];
+
+    for (const input of illegalInputs) {
+      await assert.rejects(
+        repository.saveIngestion(input),
+        (error) => {
+          assert.equal(error.name, "RepositoryError");
+          assert.equal(error.code, "validation_failed");
+          return true;
+        }
+      );
+    }
+
+    // 数据库 CHECK 是最后防线：绕过 adapter 的直接 insert 同样被拒绝。
+    await assert.rejects(
+      context.pool.query(
+        "insert into documents(id, owner_user_id, scope, source_type, external_id, title, created_at, updated_at) values ($1, null, 'private', 'mock_text', 'ext-check', 'x', now(), now())",
+        [randomUUID()]
+      )
+    );
+
+    const documents = await repository.listDocuments({ ownerUserId: null });
+    assert.equal(documents.documents.length, 0);
+  } finally {
+    await context.cleanup();
+  }
+});
+
+test("软删除文档查询不可见，purge 到期后物理清除 versions/chunks/正文", { skip: !integrationEnabled }, async () => {
+  const { context, repository } = await createRagFixture();
+  try {
+    const saved = await repository.saveIngestion(createIngestionInput());
+    await context.pool.query("update documents set deleted_at = $2 where id = $1", [
+      saved.document.id,
+      "2026-02-01T00:00:00.000Z"
+    ]);
+
+    // purge 前软删除文档对所有读路径已不可见。
+    assert.equal((await repository.listDocuments({ ownerUserId: null })).documents.length, 0);
+    assert.equal((await repository.listChunks({ ownerUserId: null })).chunks.length, 0);
+    assert.equal(await repository.listVersions({ documentId: saved.document.id, ownerUserId: null }), undefined);
+
+    // 未到期不删。
+    assert.equal(await repository.purgeSoftDeletedDocuments("2026-01-15T00:00:00.000Z"), 0);
+    const remaining = await context.pool.query("select count(*)::integer as count from documents where id = $1", [saved.document.id]);
+    assert.equal(remaining.rows[0].count, 1);
+
+    // 到期后 documents/versions/chunks/正文全部物理删除。
+    assert.equal(await repository.purgeSoftDeletedDocuments("2026-03-01T00:00:00.000Z"), 1);
+    const counts = await context.pool.query(
+      `select
+         (select count(*)::integer from documents where id = $1) as documents,
+         (select count(*)::integer from document_versions where document_id = $1) as versions,
+         (select count(*)::integer from chunks c join document_versions v on v.id = c.document_version_id where v.document_id = $1) as chunks`,
+      [saved.document.id]
+    );
+    assert.deepEqual(counts.rows[0], { documents: 0, versions: 0, chunks: 0 });
+
+    // 物理删除后同 externalId 可以重新 ingest（部分唯一索引不拦截）。
+    const reingested = await repository.saveIngestion(createIngestionInput({ externalId: saved.document.externalId }));
+    assert.equal(reingested.kind, "created");
+  } finally {
+    await context.cleanup();
+  }
+});
+
 test("两个 pool 并发 saveIngestion 同一 externalId 只产生一个文档和版本", { skip: !integrationEnabled }, async () => {
   const { context, repository } = await createRagFixture();
   const secondPool = context.createPool();
@@ -183,7 +258,12 @@ test("scope 授权：private 仅 owner 可见，shared/demo 匿名可见", { ski
     await insertUser(context.pool, userB);
 
     const privateDoc = await repository.saveIngestion(
-      createIngestionInput({ ownerUserId: userA, scope: "private", externalId: "ext-private" })
+      createIngestionInput({
+        ownerUserId: userA,
+        scope: "private",
+        externalId: "ext-private",
+        outcome: { status: "indexed", chunks: [createChunk(0, "私有机密正文-仅限所有者可见")] }
+      })
     );
     await repository.saveIngestion(createIngestionInput({ scope: "shared", externalId: "ext-shared" }));
     await repository.saveIngestion(createIngestionInput({ scope: "demo", externalId: "ext-demo" }));
@@ -204,9 +284,14 @@ test("scope 授权：private 仅 owner 可见，shared/demo 匿名可见", { ski
     const ownerChunks = await repository.listChunks({ ownerUserId: userA });
     const otherChunks = await repository.listChunks({ ownerUserId: userB });
     const anonymousChunks = await repository.listChunks({ ownerUserId: null });
-    assert.equal(ownerChunks.chunks.length, 6);
+    assert.equal(ownerChunks.chunks.length, 5);
     assert.equal(otherChunks.chunks.length, 4);
     assert.equal(anonymousChunks.chunks.length, 4);
+
+    // 私有 chunk 正文对用户 B 和匿名完全不可见（显式正文断言，不只是数量）。
+    assert.ok(ownerChunks.chunks.some((chunk) => chunk.text === "私有机密正文-仅限所有者可见"));
+    assert.ok(otherChunks.chunks.every((chunk) => !chunk.text.includes("私有机密正文")));
+    assert.ok(anonymousChunks.chunks.every((chunk) => !chunk.text.includes("私有机密正文")));
 
     const privateVersionsForOther = await repository.listVersions({
       documentId: privateDoc.document.id,

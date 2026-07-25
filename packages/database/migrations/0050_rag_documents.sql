@@ -7,7 +7,8 @@ CREATE TABLE documents (
   title text NOT NULL,
   created_at timestamptz NOT NULL,
   updated_at timestamptz NOT NULL,
-  deleted_at timestamptz
+  deleted_at timestamptz,
+  CHECK ((scope = 'private') = (owner_user_id IS NOT NULL))
 );
 CREATE UNIQUE INDEX documents_owner_external_uq
   ON documents (coalesce(owner_user_id, '00000000-0000-0000-0000-000000000000'::uuid), external_id)

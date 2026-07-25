@@ -19,6 +19,7 @@ import type {
 } from "@aiagent/types";
 import {
   createInMemoryRagDocumentRepository,
+  validateRagOwnerScope,
   type NewRagChunkRecord,
   type RagChunkRecord,
   type RagDocumentRepository,
@@ -29,9 +30,12 @@ import {
 } from "./document-repository.js";
 
 export {
+  assertValidOwnerScope,
   createInMemoryRagDocumentRepository,
   createPersistentChunkId,
-  isRagDocumentVisible
+  isRagDocumentVisible,
+  RagOwnerScopeValidationError,
+  validateRagOwnerScope
 } from "./document-repository.js";
 export type {
   ListRagChunksQuery,
@@ -518,6 +522,30 @@ class InMemoryDataSourceRuntime implements DataSourceRuntime {
   ): Promise<DataSourceRuntimeResult<DataSourceIngestResponseDto>> {
     const ownerUserId = context.ownerUserId ?? null;
     const scope = context.scope ?? (ownerUserId ? "private" : "shared");
+    const ownerScopeViolation = validateRagOwnerScope({ ownerUserId, scope });
+
+    if (ownerScopeViolation !== undefined) {
+      return {
+        ok: false,
+        error: {
+          code: "ingestion_failed",
+          message: "ingest 请求的 owner/scope 组合非法。",
+          details: { reason: ownerScopeViolation }
+        }
+      };
+    }
+
+    if (!isSafeRagSourceUri(request.source)) {
+      return {
+        ok: false,
+        error: {
+          code: "ingestion_failed",
+          message: "Data source 标识不合法：仅支持 http(s) URL、mock:/demo: URI 或相对逻辑标识。",
+          details: { reason: "unsafe_source_uri" }
+        }
+      };
+    }
+
     const fileType = detectFilingFileType(request.fileName, request.contentType);
     const externalId = createRagContentChecksum(`${request.source}|${request.fileName}|${fileType ?? "unknown"}`);
     const contentChecksum = createRagContentChecksum(request.content);
@@ -1910,6 +1938,51 @@ function createQuote(text: string): string {
   const normalized = text.replace(/\s+/g, " ").trim();
 
   return normalized.length > 120 ? `${normalized.slice(0, 120)}...` : normalized;
+}
+
+/**
+ * 校验 ingest source 是否符合写入口安全边界。
+ *
+ * 拒绝：绝对路径（`/`、`~` 开头）、Windows 盘符（`C:`）、`file:` URI、包含 `..` 的
+ * 路径段、控制字符和反斜杠；允许：合法的 http(s) URL，以及由字母数字和 `-_.:/`
+ * 组成的相对逻辑标识（如 `demo/annual-report`、`mock://filings/x.md`）。
+ * API 层与 runtime 共用同一校验，保证 sourceUri 落库前已被白名单过滤，
+ * 因此列表 DTO 中的 sourceUri 不需要额外脱敏。
+ *
+ * @param source ingest 请求的 source。
+ * @returns 符合安全边界返回 true。
+ */
+export function isSafeRagSourceUri(source: string): boolean {
+  const value = source.trim();
+  if (value.length === 0 || value.length > 512) {
+    return false;
+  }
+  if (/^https?:\/\//i.test(value)) {
+    try {
+      return new URL(value).protocol.startsWith("http");
+    } catch {
+      return false;
+    }
+  }
+  if (/[\x00-\x1f]/.test(value)) {
+    return false;
+  }
+  if (value.includes("\\")) {
+    return false;
+  }
+  if (value.startsWith("/") || value.startsWith("~")) {
+    return false;
+  }
+  if (/^[a-zA-Z]:/.test(value)) {
+    return false;
+  }
+  if (/^file:/i.test(value)) {
+    return false;
+  }
+  if (value.split("/").includes("..")) {
+    return false;
+  }
+  return /^[A-Za-z0-9\-_.:/]+$/.test(value);
 }
 
 /**

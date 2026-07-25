@@ -24,6 +24,7 @@ export interface RagDocumentRecord {
   title: string;
   createdAt: string;
   updatedAt: string;
+  deletedAt?: string;
 }
 
 /**
@@ -200,6 +201,70 @@ export interface RagDocumentRepository {
    * @returns 版本数组；不可见时返回 undefined。
    */
   listVersions(query: { documentId: string; ownerUserId: string | null }): Promise<RagDocumentVersionRecord[] | undefined>;
+
+  /**
+   * 物理清除过期软删除文档。
+   *
+   * 软删除仅用于恢复窗口（30 天保留期语义），查询始终排除 deleted_at 非空的文档；
+   * 到期后由本方法物理删除，versions/chunks/正文随外键级联删除。
+   * 调用方是运维任务或后续 runtime 调度，不暴露 HTTP 端点。
+   *
+   * @param olderThan ISO 时间阈值；deleted_at 早于该时间的软删除文档被清除。
+   * @returns 物理删除的文档数量。
+   */
+  purgeSoftDeletedDocuments(olderThan: string): Promise<number>;
+}
+
+/**
+ * owner/scope 非法组合的结构化错误。
+ *
+ * rag package 不能依赖 packages/database 的 RepositoryError（会形成循环依赖），
+ * 因此这里定义边界错误；PostgreSQL adapter 会把它映射为 code `validation_failed`
+ * 的 RepositoryError，runtime 会把它映射为结构化 ingestion 错误。
+ */
+export class RagOwnerScopeValidationError extends Error {
+  readonly code = "validation_failed" as const;
+  readonly reason: string;
+
+  /**
+   * @param reason 非法组合的具体原因。
+   */
+  constructor(reason: string) {
+    super(`非法的 owner/scope 组合：${reason}`);
+    this.name = "RagOwnerScopeValidationError";
+    this.reason = reason;
+  }
+}
+
+/**
+ * 校验 owner/scope 组合合法性：private 必须有 owner，shared/demo 必须无 owner。
+ *
+ * 与 documents 表 CHECK `(scope = 'private') = (owner_user_id is not null)` 保持同一语义，
+ * 在写边界提前失败，避免非法数据抵达数据库约束。
+ *
+ * @param input 待校验的 owner 与 scope。
+ * @returns 非法时返回原因，合法时返回 undefined。
+ */
+export function validateRagOwnerScope(input: { ownerUserId: string | null; scope: RagDocumentScope }): string | undefined {
+  if (input.scope === "private" && input.ownerUserId === null) {
+    return "private 文档必须绑定 ownerUserId";
+  }
+  if (input.scope !== "private" && input.ownerUserId !== null) {
+    return "shared/demo 文档不能绑定 ownerUserId";
+  }
+  return undefined;
+}
+
+/**
+ * 校验 owner/scope 组合，非法时抛 RagOwnerScopeValidationError。
+ *
+ * @param input 待校验的 owner 与 scope。
+ */
+export function assertValidOwnerScope(input: { ownerUserId: string | null; scope: RagDocumentScope }): void {
+  const reason = validateRagOwnerScope(input);
+  if (reason !== undefined) {
+    throw new RagOwnerScopeValidationError(reason);
+  }
 }
 
 /**
@@ -269,6 +334,7 @@ class InMemoryRagDocumentRepository implements RagDocumentRepository {
    * @returns 命中、新建或重试结果。
    */
   public async saveIngestion(input: SaveRagIngestionInput): Promise<SaveRagIngestionResult> {
+    assertValidOwnerScope(input);
     const document = this.findOrCreateDocument(input);
     const existingVersion = [...this.versionsById.values()].find(
       (version) => version.documentId === document.id && version.contentChecksum === input.contentChecksum
@@ -334,7 +400,7 @@ class InMemoryRagDocumentRepository implements RagDocumentRepository {
   public async listDocuments(query: ListRagDocumentsQuery): Promise<{ documents: DataSourceDocumentDto[]; nextCursor: string | null }> {
     const limit = normalizeLimit(query.limit);
     const visible = [...this.documentsById.values()]
-      .filter((document) => isRagDocumentVisible(document, query.ownerUserId))
+      .filter((document) => document.deletedAt === undefined && isRagDocumentVisible(document, query.ownerUserId))
       .sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id));
     const startIndex = query.cursor ? visible.findIndex((document) => encodeDocumentCursor(document) === query.cursor) + 1 : 0;
     const page = visible.slice(Math.max(startIndex, 0), Math.max(startIndex, 0) + limit);
@@ -359,7 +425,7 @@ class InMemoryRagDocumentRepository implements RagDocumentRepository {
       .filter((chunk) => {
         if (query.documentId !== undefined && chunk.documentId !== query.documentId) return false;
         const document = this.documentsById.get(chunk.documentId);
-        return document !== undefined && isRagDocumentVisible(document, query.ownerUserId);
+        return document !== undefined && document.deletedAt === undefined && isRagDocumentVisible(document, query.ownerUserId);
       })
       .sort((left, right) => left.rowId.localeCompare(right.rowId));
     const startIndex = query.cursor ? visible.findIndex((chunk) => chunk.rowId === query.cursor) + 1 : 0;
@@ -380,7 +446,7 @@ class InMemoryRagDocumentRepository implements RagDocumentRepository {
    */
   public async listVersions(query: { documentId: string; ownerUserId: string | null }): Promise<RagDocumentVersionRecord[] | undefined> {
     const document = this.documentsById.get(query.documentId);
-    if (!document || !isRagDocumentVisible(document, query.ownerUserId)) {
+    if (!document || document.deletedAt !== undefined || !isRagDocumentVisible(document, query.ownerUserId)) {
       return undefined;
     }
     return [...this.versionsById.values()]
@@ -390,14 +456,37 @@ class InMemoryRagDocumentRepository implements RagDocumentRepository {
   }
 
   /**
-   * 按 (ownerUserId, externalId) 查找或创建文档。
+   * 物理清除过期软删除文档及其关联 versions/chunks。
+   *
+   * @param olderThan ISO 时间阈值。
+   * @returns 物理删除的文档数量。
+   */
+  public async purgeSoftDeletedDocuments(olderThan: string): Promise<number> {
+    const cutoff = Date.parse(olderThan);
+    const expired = [...this.documentsById.values()].filter(
+      (document) => document.deletedAt !== undefined && Date.parse(document.deletedAt) < cutoff
+    );
+    for (const document of expired) {
+      for (const version of [...this.versionsById.values()]) {
+        if (version.documentId === document.id) {
+          this.chunksByVersionId.delete(version.id);
+          this.versionsById.delete(version.id);
+        }
+      }
+      this.documentsById.delete(document.id);
+    }
+    return expired.length;
+  }
+
+  /**
+   * 按 (ownerUserId, externalId) 查找或创建文档；软删除文档不参与复用（与部分唯一索引语义一致）。
    *
    * @param input ingestion 输入。
    * @returns 已存在或新建的文档记录。
    */
   private findOrCreateDocument(input: SaveRagIngestionInput): RagDocumentRecord {
     const existing = [...this.documentsById.values()].find(
-      (document) => document.ownerUserId === input.ownerUserId && document.externalId === input.externalId
+      (document) => document.deletedAt === undefined && document.ownerUserId === input.ownerUserId && document.externalId === input.externalId
     );
     if (existing) return existing;
     const document: RagDocumentRecord = {

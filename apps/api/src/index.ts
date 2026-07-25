@@ -5,7 +5,7 @@ import {
   type IdentitySnapshot
 } from "@aiagent/identity";
 import type { LlmClient } from "@aiagent/types";
-import { createDataSourceRuntime, type DataSourceRuntime } from "@aiagent/rag";
+import { createDataSourceRuntime, isSafeRagSourceUri, type DataSourceRuntime } from "@aiagent/rag";
 import { createLocalArtifactStorage, renderResearchReportPdf } from "@aiagent/report";
 import type { ArtifactRepository, ArtifactStorage, WorkflowRepository } from "@aiagent/report";
 import type { RagStructuredError } from "@aiagent/rag";
@@ -56,7 +56,10 @@ const identityBootstrapSchema = z.object({
   fingerprintVersion: z.string().min(1).max(40)
 });
 const dataSourceIngestRequestSchema = z.object({
-  source: z.string().min(1),
+  // source 安全边界与 RAG runtime 写入口一致：拒绝本地路径、file: URI 和目录穿越。
+  source: z.string().min(1).refine(isSafeRagSourceUri, {
+    message: "source 仅支持 http(s) URL、mock:/demo: URI 或相对逻辑标识"
+  }),
   fileName: z.string().min(1),
   contentType: z.string().min(1).optional(),
   content: z.string().min(1)

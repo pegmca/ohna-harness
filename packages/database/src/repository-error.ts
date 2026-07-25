@@ -2,7 +2,8 @@ export type RepositoryErrorCode =
   | "conflict"
   | "not_found"
   | "database_unavailable"
-  | "invalid_state_transition";
+  | "invalid_state_transition"
+  | "validation_failed";
 
 /**
  * Repository 边界的结构化错误。

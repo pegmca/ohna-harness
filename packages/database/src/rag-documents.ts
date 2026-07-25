@@ -1,7 +1,9 @@
 import { randomUUID } from "node:crypto";
 import pg from "pg";
 import {
+  assertValidOwnerScope,
   createPersistentChunkId,
+  RagOwnerScopeValidationError,
   type NewRagChunkRecord,
   type RagChunkRecord,
   type RagDocumentRecord,
@@ -36,6 +38,12 @@ const MAX_WRITE_ATTEMPTS = 3;
 export function createPostgresRagDocumentRepository(pool: pg.Pool): RagDocumentRepository {
   return {
     async saveIngestion(input) {
+      // owner/scope 组合在写边界先做结构化校验，避免非法数据抵达数据库 CHECK。
+      try {
+        assertValidOwnerScope(input);
+      } catch (error) {
+        throw toRagRepositoryError(error);
+      }
       for (let attempt = 1; attempt <= MAX_WRITE_ATTEMPTS; attempt += 1) {
         try {
           return await withTransaction(pool, (client) => saveIngestionWithClient(client, input));
@@ -120,6 +128,18 @@ export function createPostgresRagDocumentRepository(pool: pg.Pool): RagDocumentR
           nextCursor: result.rows.length > limit && last ? last.id : null
         };
       });
+    },
+    async purgeSoftDeletedDocuments(olderThan) {
+      // 软删除仅保留恢复窗口；到期后单语句物理删除，versions/chunks/正文随 FK cascade 清除。
+      try {
+        const result = await pool.query(
+          "delete from documents where deleted_at is not null and deleted_at < $1::timestamptz",
+          [olderThan]
+        );
+        return result.rowCount ?? 0;
+      } catch (error) {
+        throw toRagRepositoryError(error);
+      }
     },
     async listVersions(query) {
       return guardRead(async () => {
@@ -579,7 +599,8 @@ async function guardRead<T>(operation: () => Promise<T>): Promise<T> {
 }
 
 /**
- * 把未知异常包装为 RepositoryError，保留 RepositoryError 原样透传。
+ * 把未知异常包装为 RepositoryError，保留 RepositoryError 原样透传；
+ * rag 边界的 owner/scope 校验错误映射为 validation_failed。
  *
  * @param error 未知异常。
  * @returns 结构化 repository 错误。
@@ -587,6 +608,9 @@ async function guardRead<T>(operation: () => Promise<T>): Promise<T> {
 function toRagRepositoryError(error: unknown): RepositoryError {
   if (error instanceof RepositoryError) {
     return error;
+  }
+  if (error instanceof RagOwnerScopeValidationError) {
+    return new RepositoryError("validation_failed", error.message, error);
   }
   return new RepositoryError("database_unavailable", "RAG 文档存储访问失败。", error);
 }

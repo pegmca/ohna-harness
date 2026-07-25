@@ -16,6 +16,7 @@ import {
   DEFAULT_KEYWORD_WEIGHT,
   DEFAULT_VECTOR_SEARCH_TOP_K,
   DEFAULT_VECTOR_WEIGHT,
+  isSafeRagSourceUri,
   MAX_VECTOR_SEARCH_TOP_K
 } from "../dist/index.js";
 
@@ -825,6 +826,76 @@ test("private documents are only visible to their owner", async () => {
   assert.equal(anonymousPage.documents.length, 0);
   assert.equal(ownerChunks.chunks.length, ingestResult.data.indexedChunkCount);
   assert.equal(otherChunks.chunks.length, 0);
+});
+
+test("ingest rejects illegal owner/scope combinations with a structured error", async () => {
+  const repository = createInMemoryRagDocumentRepository();
+  const runtime = createDataSourceRuntime({ repository });
+  const request = {
+    source: "demo",
+    fileName: "annual-report.md",
+    contentType: "text/markdown",
+    content: "# 资产质量\n公司不良率保持稳定。"
+  };
+
+  const ownerWithShared = await runtime.ingest(request, { ownerUserId: "user-a", scope: "shared" });
+  const ownerWithDemo = await runtime.ingest(request, { ownerUserId: "user-a", scope: "demo" });
+
+  assert.equal(ownerWithShared.ok, false);
+  assert.equal(ownerWithShared.error.code, "ingestion_failed");
+  assert.match(String(ownerWithShared.error.details.reason), /shared\/demo/);
+  assert.equal(ownerWithDemo.ok, false);
+  assert.equal((await runtime.listDocuments()).documents.length, 0);
+  assert.equal((await runtime.listDocuments({ ownerUserId: "user-a" })).documents.length, 0);
+
+  await assert.rejects(
+    repository.saveIngestion({
+      ownerUserId: null,
+      scope: "private",
+      sourceType: "mock_text",
+      externalId: "ext-invalid",
+      title: "非法组合",
+      sourceUri: "demo",
+      contentType: "text/markdown",
+      contentChecksum: "checksum-invalid",
+      content: "内容",
+      parserVersion: "test",
+      chunkerVersion: "test",
+      outcome: { status: "failed", error: { code: "empty_file", message: "空" } },
+      now: "2026-01-01T00:00:00.000Z"
+    }),
+    (error) => {
+      assert.equal(error.name, "RagOwnerScopeValidationError");
+      assert.equal(error.code, "validation_failed");
+      return true;
+    }
+  );
+});
+
+test("ingest rejects unsafe source identifiers without persisting anything", async () => {
+  const runtime = createDataSourceRuntime();
+  const request = {
+    fileName: "annual-report.md",
+    contentType: "text/markdown",
+    content: "# 资产质量\n公司不良率保持稳定。"
+  };
+  const unsafeSources = ["/etc/passwd", "~/secret.md", "C:\\data\\x.md", "C:/data/x.md", "file:///etc/passwd", "../escape", "a/../../b", "bad\ttab", "back\\slash"];
+
+  for (const source of unsafeSources) {
+    const result = await runtime.ingest({ ...request, source });
+    assert.equal(result.ok, false, `source ${source} should be rejected`);
+    assert.equal(result.error.code, "ingestion_failed");
+    assert.equal(result.error.details.reason, "unsafe_source_uri");
+  }
+
+  assert.equal(isSafeRagSourceUri("demo"), true);
+  assert.equal(isSafeRagSourceUri("demo/annual-report"), true);
+  assert.equal(isSafeRagSourceUri("mock://filings/000001.SZ/2025-annual.md"), true);
+  assert.equal(isSafeRagSourceUri("https://example.com/filing.md?token=abc"), true);
+  assert.equal(isSafeRagSourceUri("local://annual-report.md"), true);
+
+  assert.equal((await runtime.listDocuments()).documents.length, 0);
+  assert.equal((await runtime.listChunks()).chunks.length, 0);
 });
 
 /**

@@ -34,6 +34,13 @@ PR-06 implements the `0050` prefix (`0050_rag_documents.sql`): `documents` / `do
 `private/shared/demo` scope; the PostgreSQL adapter lives in `src/rag-documents.ts` and is exposed
 as `DatabaseRuntime.ragDocumentRepository`.
 
+Deletion and retention: soft delete (`deleted_at`) is only a 30-day recovery window; every read
+excludes soft-deleted documents. Private documents are hard-deleted with their owner via FK
+cascade. Expired soft-deleted documents are physically purged by
+`purgeSoftDeletedDocuments(olderThan)` (versions, chunks and inline content cascade in the same
+statement). Purge is triggered by an ops task or the later runtime-integration PR; no HTTP delete
+endpoint is exposed in this slice.
+
 `0070_report.sql` creates `workflow_runs`, auditable `workflow_node_runs`, and `artifacts`.
 PostgreSQL stores only bounded Markdown/HTML previews and file metadata; PDF bytes stay in the
 configured `ArtifactStorage`.

@@ -26,13 +26,20 @@ Reserved prefixes for persistence work are:
 | `0080` | Citation |
 
 PR-00 intentionally creates no business migration. `0010` (Conversation / Message), `0050`
-(RAG documents) and `0070` (Report / Artifact) are implemented; the other reserved prefixes
-remain unclaimed.
+(RAG documents), `0060` (pgvector retrieval) and `0070` (Report / Artifact) are implemented; the
+other reserved prefixes remain unclaimed.
 
 PR-06 implements the `0050` prefix (`0050_rag_documents.sql`): `documents` / `document_versions` /
 `chunks` ingestion lineage with checksum idempotency, immutable versions, retryable failures and
 `private/shared/demo` scope; the PostgreSQL adapter lives in `src/rag-documents.ts` and is exposed
 as `DatabaseRuntime.ragDocumentRepository`.
+
+PR-07 implements `0060_rag_vectors.sql`: it enables pgvector and adds `chunk_embeddings` with a
+fixed `vector(32)`, `(chunk_id, embedding_model, dimensions)` idempotency, cosine HNSW and
+model/dimensions indexes. `createPostgresVectorStore(pool, { ownerUserId })` binds authorization at
+construction; its search query materializes the authorized document/version/chunk candidate set
+before cosine ordering. The 32-dimensional column is reserved for `deterministic-mock-v1`; a real
+model with another dimension requires a new compatible migration/table or model-specific column.
 
 Deletion and retention: soft delete (`deleted_at`) is only a 30-day recovery window; every read
 excludes soft-deleted documents. Private documents are hard-deleted with their owner via FK

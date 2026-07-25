@@ -263,7 +263,7 @@ pnpm --filter @aiagent/agent test
 
 ## Week 2 RAG Package Foundation
 
-Week 2 新增三个 RAG 相关 package，当前已具备 Markdown/TXT 公告 ingestion 入口、RAG 基础边界、纯函数 chunk 策略、deterministic mock embedding、内存向量库、hybrid retrieval 和 deterministic heuristic rerank；暂不接入真实 PDF 解析、真实 embedding provider、Qdrant/pgvector、cross-encoder、LLM rerank 或 Agent Chat：
+Week 2 新增三个 RAG 相关 package，当前已具备 Markdown/TXT 公告 ingestion 入口、RAG 基础边界、纯函数 chunk 策略、deterministic mock embedding、内存测试 adapter、PostgreSQL pgvector adapter、hybrid retrieval 和 deterministic heuristic rerank；暂不接入真实 PDF 解析、真实 embedding provider、Qdrant、cross-encoder、LLM rerank 或 Agent Chat：
 
 - `@aiagent/filings`：保存公告/财报文件来源、document metadata、原始文本来源和 ingestion pipeline。`ingestFiling()` 支持 Markdown 与 TXT 解析，输出 `IngestedFilingDocument` 和带 `heading`、`lineStart`、`lineEnd` 的 blocks；PDF 当前返回 `pdf_parser_not_configured` 结构化错误，不静默生成文档。
 - `@aiagent/rag`：保存 `RagDocument`、`RagChunk`、`EmbeddedChunk`、`Citation`、`RetrievalResult`、`RagAnswer`、embedding/vector store/retriever/reranker 抽象和结构化错误类型，并导出 `chunkText()`、`chunkDocumentBlocks()`、`chunkIngestedFilingDocument()`、`createDeterministicMockEmbeddingClient()`、`createInMemoryVectorStore()`、`createHybridRetriever()` 和 `createHeuristicReranker()` 等入口。
@@ -285,7 +285,7 @@ RAG embedding 和内存向量库当前规则：
 - `VectorStore` 抽象暴露 `upsertChunks(chunks)` 和 `search(queryVector, options)`。`createInMemoryVectorStore()` 用 `Map` 按 `chunkId` upsert，相同 `chunkId` 会替换旧 chunk。
 - vector search 使用 cosine similarity，支持 `topK`、`documentId` 和 `source` filter。`topK` 默认 `5`，上限 `50`，避免一次返回过多结果。
 - 向量维度必须一致；chunk embedding 或 query vector 维度不匹配会返回 `embedding_dimension_mismatch` 或 `vector_store_dimension_mismatch` 结构化错误，而不是向 UI 泄漏异常。
-- 内存向量库只适合本地 demo 和测试，不持久化、不跨进程共享。后续接 Qdrant/pgvector 时应替换 `VectorStore` 实现；后续接 OpenAI/通义 embedding 时应替换 `EmbeddingClient` 实现。
+- 内存向量库只适合本地 demo、单测和 deterministic eval。`packages/database` 已提供固定 32 维的 PostgreSQL pgvector `VectorStore`，支持跨进程检索、owner/scope 授权优先过滤和 checksum 感知幂等 upsert；真实模型采用其他维度时必须新增兼容 schema。后续接 OpenAI/通义 embedding 时应替换 `EmbeddingClient` 实现。
 
 RAG hybrid retrieval 和 rerank 当前规则：
 

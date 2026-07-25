@@ -11,6 +11,13 @@ import { randomUUID } from "node:crypto";
 import pg from "pg";
 export { findMissingColumnComments, type MigrationCommentIssue } from "./migration-lint.js";
 export { createPostgresRagDocumentRepository } from "./rag-documents.js";
+export {
+  createPostgresVectorStore,
+  POSTGRES_RAG_VECTOR_DIMENSIONS,
+  POSTGRES_RAG_VECTOR_MODEL,
+  POSTGRES_RAG_VECTOR_PROVIDER,
+  type PostgresVectorStoreOptions
+} from "./rag-vector-store.js";
 export { RepositoryError, type RepositoryErrorCode } from "./repository-error.js";
 export { isPostgresUniqueViolation, postgresTimestampToIso } from "./postgres.js";
 export {

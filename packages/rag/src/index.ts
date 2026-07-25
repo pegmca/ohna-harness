@@ -298,6 +298,8 @@ export interface RagStructuredError {
     | "invalid_embedding_input"
     | "embedding_failed"
     | "embedding_dimension_mismatch"
+    | "embedding_model_mismatch"
+    | "embedding_checksum_mismatch"
     | "invalid_vector_search_options"
     | "vector_store_dimension_mismatch"
     | "invalid_retrieval_options"

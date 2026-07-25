@@ -2,6 +2,7 @@ import { createLlmClientFromEnv } from "@aiagent/agent";
 import { runAgent } from "@aiagent/agent";
 import { createQqBotChannel } from "@aiagent/channels";
 import { createDatabaseRuntime } from "@aiagent/database";
+import { createLocalArtifactStorage } from "@aiagent/report";
 import { createIdentityService } from "@aiagent/identity";
 import { createDataSourceRuntime } from "@aiagent/rag";
 import { createApiServer } from "./index.js";
@@ -40,6 +41,9 @@ const app = createApiServer({
   qqBotQrUrl: process.env.QQBOT_PUBLIC_QR_URL,
   qqBotStatus: () => qqChannel.getStatus(),
   cookieSecure: process.env.IDENTITY_COOKIE_SECURE === "true",
+  workflowRepository: database.workflowRepository,
+  artifactRepository: database.artifactRepository,
+  artifactStorage: createLocalArtifactStorage(process.env.ARTIFACT_STORAGE_ROOT ?? "./var/artifacts"),
   readiness: async () => {
     if (providerMode !== "mock" && providerMode !== "real") {
       return { ok: false, dependency: "provider-config", message: "AIAGENT_PROVIDER_MODE must be mock or real." };

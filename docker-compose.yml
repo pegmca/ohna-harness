@@ -47,6 +47,9 @@ services:
       QQBOT_APP_ID: ${QQBOT_APP_ID:-}
       QQBOT_APP_SECRET: ${QQBOT_APP_SECRET:-}
       QQBOT_PUBLIC_QR_URL: ${QQBOT_PUBLIC_QR_URL:-}
+      ARTIFACT_STORAGE_ROOT: /var/lib/aiagent/artifacts
+    volumes:
+      - artifact_data:/var/lib/aiagent/artifacts
     expose:
       - "3001"
     depends_on:
@@ -78,4 +81,5 @@ services:
       start_period: 3s
     restart: unless-stopped
 volumes:
+  artifact_data:
   postgres_data:

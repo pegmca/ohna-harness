@@ -25,11 +25,26 @@ Reserved prefixes for persistence work are:
 | `0070` | Report / Artifact |
 | `0080` | Citation |
 
-PR-00 intentionally creates no business migration. PR-06 implements the `0050` prefix
-(`0050_rag_documents.sql`): `documents` / `document_versions` / `chunks` ingestion lineage with
-checksum idempotency, immutable versions, retryable failures and `private/shared/demo` scope; the
-PostgreSQL adapter lives in `src/rag-documents.ts` and is exposed as
-`DatabaseRuntime.ragDocumentRepository`. The other reserved prefixes remain unclaimed.
+PR-00 intentionally creates no business migration. `0010` (Conversation / Message), `0050`
+(RAG documents) and `0070` (Report / Artifact) are implemented; the other reserved prefixes
+remain unclaimed.
+
+PR-06 implements the `0050` prefix (`0050_rag_documents.sql`): `documents` / `document_versions` /
+`chunks` ingestion lineage with checksum idempotency, immutable versions, retryable failures and
+`private/shared/demo` scope; the PostgreSQL adapter lives in `src/rag-documents.ts` and is exposed
+as `DatabaseRuntime.ragDocumentRepository`.
+
+`0070_report.sql` creates `workflow_runs`, auditable `workflow_node_runs`, and `artifacts`.
+PostgreSQL stores only bounded Markdown/HTML previews and file metadata; PDF bytes stay in the
+configured `ArtifactStorage`.
+
+## Conversation adapters
+
+`0010_conversation.sql` creates `conversations` and `messages`. The public
+`createPostgresConversationRepositories(pool)` factory returns the two domain ports declared by
+`@aiagent/conversation`. Ownership is part of every SQL predicate; conversation cursors use
+`(last_message_at,id)`, message cursors use `(sequence,id)`, and message writes lock the owned
+conversation row before idempotency checks and sequence allocation.
 
 ## Integration tests
 

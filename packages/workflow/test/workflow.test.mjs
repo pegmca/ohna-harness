@@ -98,6 +98,15 @@ test("workflow retries a transient node and records recovery without real waitin
   let calls = 0;
   const result = await runSequentialWorkflow({ workflowName: "retry", initialState: { value: 0 }, sleep: async () => undefined, nodes: [{ nodeId: "flaky", type: "test", title: "Flaky", inputSchema: z.object({}), outputSchema: z.object({ value: z.number() }), buildInput: () => ({}), recovery: { maxAttempts: 2, isRetryable: () => true }, execute: () => { calls += 1; if (calls === 1) throw new Error("temporary"); return { value: 1 }; }, applyOutput: (state, output) => ({ ...state, value: output.value }) }] });
   assert.equal(result.ok, true); assert.equal(calls, 2); assert.equal(result.run.recovery[0].action, "retried");
+  assert.deepEqual(
+    result.run.events.filter((event) => event.nodeId === "flaky").map((event) => [event.type, event.data?.attempt, event.error?.message]),
+    [
+      ["node_started", 1, undefined],
+      ["node_failed", 1, "temporary"],
+      ["node_started", 2, undefined],
+      ["node_succeeded", undefined, undefined]
+    ]
+  );
 });
 
 test("workflow deadline terminates with structured partial state", async () => {
@@ -145,6 +154,8 @@ test("decideNext can loop back to an earlier node with max steps protection", as
   assert.equal(result.ok, true);
   assert.equal(result.state.value, 30);
   assert.equal(result.run.executedSteps, 4);
+  assert.equal(result.run.events.filter((event) => event.nodeId === "increment" && event.type === "node_failed").length, 0);
+  assert.equal(result.run.events.filter((event) => event.nodeId === "increment" && event.type === "node_succeeded").length, 3);
   assert.deepEqual(
     result.run.nodes.map((node) => node.status),
     ["succeeded", "succeeded"]

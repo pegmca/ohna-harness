@@ -1,4 +1,5 @@
-import { index, integer, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
+import { bigint, index, integer, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
 
 export const users = pgTable("users", {
   id: uuid("id").primaryKey(),
@@ -80,4 +81,41 @@ export const identityAuditEvents = pgTable("identity_audit_events", {
   createdAt: timestamp("created_at", { withTimezone: true, mode: "string" }).notNull()
 }, (table) => [
   index("identity_audit_events_user_idx").on(table.userId, table.createdAt)
+]);
+
+export const conversations = pgTable("conversations", {
+  id: uuid("id").primaryKey(),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  title: text("title").notNull(),
+  status: text("status", { enum: ["active", "archived"] }).notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true, mode: "string" }).notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" }).notNull(),
+  lastMessageAt: timestamp("last_message_at", { withTimezone: true, mode: "string" }).notNull(),
+  archivedAt: timestamp("archived_at", { withTimezone: true, mode: "string" })
+}, (table) => [
+  index("conversations_user_status_last_message_idx").on(
+    table.userId,
+    table.status,
+    table.lastMessageAt.desc(),
+    table.id.desc()
+  )
+]);
+
+export const messages = pgTable("messages", {
+  id: uuid("id").primaryKey(),
+  conversationId: uuid("conversation_id").notNull().references(() => conversations.id, { onDelete: "cascade" }),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  runId: uuid("run_id"),
+  role: text("role", { enum: ["user", "assistant", "system", "tool"] }).notNull(),
+  content: text("content").notNull(),
+  status: text("status", { enum: ["pending", "streaming", "completed", "failed", "cancelled"] }).notNull(),
+  clientMessageId: text("client_message_id"),
+  sequence: bigint("sequence", { mode: "number" }).notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true, mode: "string" }).notNull(),
+  completedAt: timestamp("completed_at", { withTimezone: true, mode: "string" })
+}, (table) => [
+  uniqueIndex("messages_conversation_sequence_uq").on(table.conversationId, table.sequence),
+  uniqueIndex("messages_conversation_client_message_uq")
+    .on(table.conversationId, table.clientMessageId)
+    .where(sql`${table.clientMessageId} is not null`)
 ]);

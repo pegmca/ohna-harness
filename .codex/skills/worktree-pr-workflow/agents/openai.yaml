@@ -1,7 +1,0 @@
-interface:
-  display_name: "Worktree PR Workflow"
-  short_description: "设计并协调多 Worktree Agent 的分阶段 PR 交付"
-  default_prompt: "Use $worktree-pr-workflow to design or coordinate a document-driven worktree PR workflow."
-
-policy:
-  allow_implicit_invocation: false

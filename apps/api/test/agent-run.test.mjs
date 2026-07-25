@@ -265,6 +265,53 @@ test("approval decision 拒绝其他已认证用户，reviewer 身份只来自�
   await app.close();
 });
 
+test("workflow PDF 审批带确定性 digest，可经 decision endpoint 决定并放行 PDF 导出", async () => {
+  const written = new Map();
+  const artifactStorage = {
+    async writePdf(bytes) {
+      const key = "test/report.pdf";
+      written.set(key, bytes);
+      return { provider: "local", key, sizeBytes: bytes.length, checksumSha256: "ab".repeat(32) };
+    },
+    async readPdf(key) { return written.get(key); },
+    async deletePdf(key) { written.delete(key); }
+  };
+  const app = createApiServer({
+    approvalRepository: createInMemoryApprovalRepository(),
+    runStore: createInMemoryRunStore(),
+    artifactStorage
+  });
+  const accepted = (await app.inject({
+    method: "POST",
+    url: "/api/runs",
+    payload: {
+      message: "基于最近两年公告和财务数据，为 000001.SZ 生成研究简报 PDF。",
+      conversationId: "conversation_pdf_approval",
+      mode: "report",
+      source: "report_button"
+    }
+  })).json().data;
+  const snapshot = await waitForTerminal(app, accepted.snapshotUrl);
+  const approval = snapshot.result.reportWorkflow.run.approvalRequest;
+  // 回归防护：workflow 审批必须在登记前补齐非空 digest，否则永远无法决定。
+  assert.equal(typeof approval.inputDigest, "string");
+  assert.equal(approval.inputDigest.length > 0, true);
+
+  const decided = await app.inject({
+    method: "POST",
+    url: `/api/runs/${accepted.runId}/approvals/${approval.approvalId}/decision`,
+    payload: { decision: "approved", inputDigest: approval.inputDigest }
+  });
+  assert.equal(decided.statusCode, 200);
+  assert.equal(decided.json().data.decision, "approved");
+
+  const artifactId = snapshot.result.reportWorkflow.artifact.artifactId;
+  const exported = await app.inject({ method: "POST", url: `/api/report-artifacts/${artifactId}/pdf` });
+  assert.equal(exported.statusCode, 200);
+  assert.equal(exported.json().data.status, "pdf_ready");
+  await app.close();
+});
+
 test("data sources and RAG routes retain structured DTO boundaries", async () => {
   const app = createApiServer();
   const ingest = await app.inject({

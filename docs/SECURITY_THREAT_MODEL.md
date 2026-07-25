@@ -9,7 +9,7 @@
 ## 攻击面与控制
 
 - Prompt injection：恶意文档可能要求忽略策略或调用敏感工具。结构化隔离是主边界，启发式检测用于降权、确认和阻止，不作为唯一防线。
-- 工具越权：工具默认只能从注册表执行，zod 在执行前后校验；调用可传请求级 allowlist。敏感动作需要审批，审批同时绑定 `approvalId`、`requestId` 和完整规范化输入摘要，模型输出本身不被当作审批。审批决定持久化在 `tool_approvals`：reviewer 身份只来自服务端 session，决定操作使用 `status='pending' AND input_digest 匹配 AND user_id=reviewer AND 未过期` 的单行 CAS，并发 approve/reject 只有一个成功；相同 id 不同 digest 的登记视为重放冲突；过期 pending 由 decide 与导出 gate 原子转为 `expired`，过期审批绝不放行工具执行。
+- 工具越权：工具默认只能从注册表执行，zod 在执行前后校验；调用可传请求级 allowlist。敏感动作需要审批，审批同时绑定 `approvalId`、`requestId` 和完整规范化输入摘要，模型输出本身不被当作审批。审批决定持久化在 `tool_approvals`：reviewer 身份只来自服务端 session，决定操作使用 `status='pending' AND input_digest 匹配 AND user_id=reviewer AND 未过期` 的单行 CAS，并发 approve/reject 只有一个成功；相同 id 不同 digest 的登记视为重放冲突；过期 pending 由 decide 与导出 gate 原子转为 `expired`，过期审批绝不放行工具执行；导出 gate 查询同时限定 user 与归属 Run。workflow PDF exporter 审批不经 tools executor，登记时由 run-service 补齐确定性 SHA-256 输入摘要，保证审批可决定且导出 gate 可按 digest 绑定放行。
 - SQL 绕过：只接受单条 `SELECT/WITH`，拒绝注释、未闭合语法、写/DDL/权限关键词及文件读取、存储过程等危险 primitive。代码检查只是第一层；部署必须使用只能连接允许 schema/view 且无写、DDL、文件、扩展和跨库权限的数据库账号，并在数据库侧设置 statement timeout 与审计。
 - 数据泄漏：email、国内手机号、居民证件号、常见账户/银行卡数字和 secret 在 trace、API error、Agent API DTO、workflow/report artifact 输出前递归脱敏；普通日志不得显式记录 request body、prompt 或 artifact 正文。
 - MCP 暴露面：只包装客户端已知的三个 schema 化金融工具，未知 discovery 结果不注册；MCP 工具仍经过同一个 registry/schema/permission 执行边界。

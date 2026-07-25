@@ -13,7 +13,7 @@ import type { ArtifactRepository, ArtifactStorage, WorkflowRepository } from "@a
 import type { RagStructuredError } from "@aiagent/rag";
 import { createInMemoryTraceStore, redactSensitiveValue } from "@aiagent/trace";
 import type { ApprovalRecord, ApprovalRepository } from "@aiagent/tools";
-import { APPROVAL_REQUEST_TTL_MS, ApprovalRepositoryError } from "@aiagent/tools";
+import { APPROVAL_REQUEST_TTL_MS } from "@aiagent/tools";
 import type {
   AgentRunAcceptedDto,
   AgentRunCreateRequestDto,
@@ -190,12 +190,12 @@ export function createApiServer(options: ApiServerOptions = {}): FastifyInstance
             expiresAt: new Date(now + APPROVAL_REQUEST_TTL_MS).toISOString()
           });
         } catch (error) {
-          // 相同 id 不同 digest/run/user 的重放冲突不影响 Run 主流程；只记录安全日志。
-          if (error instanceof ApprovalRepositoryError && error.code === "conflict") {
-            app.log.warn({ approvalId: approval.approvalId }, "approval registration conflicted with an existing record");
-            return;
-          }
-          throw error;
+          // 审批登记失败（含相同 id 不同 digest/run/user 的重放冲突）不影响 Run 主流程，
+          // 但必须留下日志线索，便于审计与排障。
+          app.log.warn(
+            { err: error, approvalId: approval.approvalId, runId: context.runId },
+            "approval registration failed"
+          );
         }
       }
     }
@@ -911,8 +911,8 @@ export function createApiServer(options: ApiServerOptions = {}): FastifyInstance
     }
     const artifact = record.artifact;
     const approvalId = `approval_${artifact.workflowRunId}_pdf_exporter`;
-    // 导出 gate 只认当前用户名下已批准且未过期的持久化决定；过期 pending 由 repository 原子转为 expired。
-    const approved = await approvalRepository.findApprovedDecision(requestUserId(request), approvalId);
+    // 导出 gate 只认当前用户、同一 Agent Run 下已批准且未过期的持久化决定；过期 pending 由 repository 原子转为 expired。
+    const approved = await approvalRepository.findApprovedDecision(requestUserId(request), record.agentRunId, approvalId);
     if (!approved) {
       reply.code(403);
       return fail(toApiError("forbidden", "PDF 导出需要先批准对应 workflow 的 exporter。", requestId, { approvalId }), requestId);

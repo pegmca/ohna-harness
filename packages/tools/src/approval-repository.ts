@@ -116,8 +116,9 @@ export interface ApprovalRepository {
    * 查询当前用户已批准的审批决定，供 PDF 导出等 gate 使用；过期记录一律排除。
    *
    * @param userId 当前用户标识。
+   * @param runId 审批所属 Agent Run 标识；过期转移与查询都必须限定归属 Run。
    * @param approvalId 审批标识。
    * @returns 已批准且未过期的记录，否则 undefined。
    */
-  findApprovedDecision(userId: string, approvalId: string): Promise<ApprovalRecord | undefined>;
+  findApprovedDecision(userId: string, runId: string, approvalId: string): Promise<ApprovalRecord | undefined>;
 }

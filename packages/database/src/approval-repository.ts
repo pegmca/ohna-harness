@@ -97,19 +97,19 @@ class PostgresApprovalRepository implements ApprovalRepository {
     }
   }
 
-  /** @param userId 当前用户。 @param approvalId 审批标识。 @returns 已批准且未过期记录。 */
-  async findApprovedDecision(userId: string, approvalId: string): Promise<ApprovalRecord | undefined> {
+  /** @param userId 当前用户。 @param runId 审批所属 Run。 @param approvalId 审批标识。 @returns 已批准且未过期记录。 */
+  async findApprovedDecision(userId: string, runId: string, approvalId: string): Promise<ApprovalRecord | undefined> {
     try {
       return await withTransaction(this.pool, async (client) => {
         // gate 读路径顺手把过期 pending 原子转为 expired，保证过期审批不会被后续放行。
         await client.query(
           `update tool_approvals set status='expired'
-            where id=$1 and user_id=$2 and status='pending' and expires_at is not null and expires_at <= now()`,
-          [approvalId, userId]
+            where id=$1 and run_id=$2 and user_id=$3 and status='pending' and expires_at is not null and expires_at <= now()`,
+          [approvalId, runId, userId]
         );
         const result = await client.query<ApprovalRow>(
-          "select * from tool_approvals where id=$1 and user_id=$2 and status='approved'",
-          [approvalId, userId]
+          "select * from tool_approvals where id=$1 and run_id=$2 and user_id=$3 and status='approved'",
+          [approvalId, runId, userId]
         );
         return result.rows[0] ? mapRow(result.rows[0]) : undefined;
       });

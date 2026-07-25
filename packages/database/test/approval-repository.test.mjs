@@ -70,7 +70,7 @@ test("Approval repository 保证幂等创建、CAS 决定、绑定校验、过�
     );
 
     // pending 与过期记录都不会被导出 gate 放行。
-    assert.equal(await repository.findApprovedDecision(userOne, base.approvalId), undefined);
+    assert.equal(await repository.findApprovedDecision(userOne, runId, base.approvalId), undefined);
 
     const decideBase = {
       approvalId: base.approvalId,
@@ -93,7 +93,9 @@ test("Approval repository 保证幂等创建、CAS 决定、绑定校验、过�
     const wrongUser = await repository.decide({ ...decideBase, decision: "approved", reviewerUserId: userTwo });
     assert.equal(wrongUser.ok, false);
     assert.equal(wrongUser.code, "not_found");
-    assert.equal(await repository.findApprovedDecision(userTwo, base.approvalId), undefined);
+    assert.equal(await repository.findApprovedDecision(userTwo, runId, base.approvalId), undefined);
+    // gate 查询也必须限定归属 Run，跨 Run 的同名审批不予放行。
+    assert.equal(await repository.findApprovedDecision(userOne, "20000000-0000-4000-8000-000000000100", base.approvalId), undefined);
 
     // 并发 approved/rejected 只有一个状态迁移成功。
     const [approve, reject] = await Promise.all([
@@ -115,11 +117,11 @@ test("Approval repository 保证幂等创建、CAS 决定、绑定校验、过�
     assert.equal(opposite.code, "conflict");
 
     if (winner.record.decision === "approved") {
-      const approved = await repository.findApprovedDecision(userOne, base.approvalId);
+      const approved = await repository.findApprovedDecision(userOne, runId, base.approvalId);
       assert.equal(approved?.status, "approved");
       assert.equal(approved?.reviewerUserId, userOne);
     } else {
-      assert.equal(await repository.findApprovedDecision(userOne, base.approvalId), undefined);
+      assert.equal(await repository.findApprovedDecision(userOne, runId, base.approvalId), undefined);
     }
 
     // 过期 pending 决定被拒绝，并原子转为 expired。
@@ -140,7 +142,7 @@ test("Approval repository 保证幂等创建、CAS 决定、绑定校验、过�
     assert.equal(expired.code, "expired");
     const expiredRow = await context.pool.query("select status from tool_approvals where id=$1", [expiredInput.approvalId]);
     assert.equal(expiredRow.rows[0].status, "expired");
-    assert.equal(await repository.findApprovedDecision(userOne, expiredInput.approvalId), undefined);
+    assert.equal(await repository.findApprovedDecision(userOne, runId, expiredInput.approvalId), undefined);
 
     // 每一列都必须有中文 COMMENT，供 DBeaver 等工具直接展示。
     const comments = await context.pool.query(

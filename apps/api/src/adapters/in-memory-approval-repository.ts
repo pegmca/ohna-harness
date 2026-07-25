@@ -77,9 +77,9 @@ export function createInMemoryApprovalRepository(): ApprovalRepository {
       return { ok: false, code: "conflict", conflictReason: "decision", record };
     },
 
-    async findApprovedDecision(userId: string, approvalId: string): Promise<ApprovalRecord | undefined> {
+    async findApprovedDecision(userId: string, runId: string, approvalId: string): Promise<ApprovalRecord | undefined> {
       const record = records.get(approvalId);
-      if (!record || record.userId !== userId) return undefined;
+      if (!record || record.userId !== userId || record.runId !== runId) return undefined;
       if (record.status === "pending" && record.expiresAt && Date.parse(record.expiresAt) <= Date.now()) {
         records.set(approvalId, { ...record, status: "expired" });
         return undefined;

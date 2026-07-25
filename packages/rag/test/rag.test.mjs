@@ -17,7 +17,8 @@ import {
   DEFAULT_VECTOR_SEARCH_TOP_K,
   DEFAULT_VECTOR_WEIGHT,
   isSafeRagSourceUri,
-  MAX_VECTOR_SEARCH_TOP_K
+  MAX_VECTOR_SEARCH_TOP_K,
+  normalizeRagSourceUri
 } from "../dist/index.js";
 
 test("rag package entry exposes its boundary summary", () => {
@@ -732,6 +733,16 @@ test("new content creates an immutable new version and keeps old chunks", async 
   assert.equal(chunksPage.chunks.length, first.data.indexedChunkCount + second.data.indexedChunkCount);
   assert.equal(documentsPage.documents.length, 1);
   assert.equal(documentsPage.documents[0].latestVersion, 2);
+
+  // 不同版本相同 chunkIndex 的 chunkId 必须不同（版本身份是 citation 回链目标），
+  // 且 listChunks(documentId) 能同时读到 v1 和 v2 的 chunks（旧 citation 目标仍存在）。
+  const firstChunkIds = new Set(first.data.chunks.map((chunk) => chunk.chunkId));
+  const secondChunkIds = new Set(second.data.chunks.map((chunk) => chunk.chunkId));
+  assert.ok([...secondChunkIds].every((chunkId) => !firstChunkIds.has(chunkId)));
+  const documentChunks = await runtime.listChunks({ documentId: first.data.document.documentId });
+  const persistedChunkIds = new Set(documentChunks.chunks.map((chunk) => chunk.chunkId));
+  assert.ok([...firstChunkIds].every((chunkId) => persistedChunkIds.has(chunkId)));
+  assert.ok([...secondChunkIds].every((chunkId) => persistedChunkIds.has(chunkId)));
 });
 
 test("failed ingestion is persisted with structured error and can be inspected", async () => {
@@ -879,7 +890,19 @@ test("ingest rejects unsafe source identifiers without persisting anything", asy
     contentType: "text/markdown",
     content: "# 资产质量\n公司不良率保持稳定。"
   };
-  const unsafeSources = ["/etc/passwd", "~/secret.md", "C:\\data\\x.md", "C:/data/x.md", "file:///etc/passwd", "../escape", "a/../../b", "bad\ttab", "back\\slash"];
+  const unsafeSources = [
+    "/etc/passwd",
+    "~/secret.md",
+    "C:\\data\\x.md",
+    "C:/data/x.md",
+    "file:///etc/passwd",
+    "../escape",
+    "a/../../b",
+    "bad\ttab",
+    "back\\slash",
+    "https://user:pass@example.com/x.md",
+    "https://user@example.com/x.md"
+  ];
 
   for (const source of unsafeSources) {
     const result = await runtime.ingest({ ...request, source });
@@ -893,9 +916,45 @@ test("ingest rejects unsafe source identifiers without persisting anything", asy
   assert.equal(isSafeRagSourceUri("mock://filings/000001.SZ/2025-annual.md"), true);
   assert.equal(isSafeRagSourceUri("https://example.com/filing.md?token=abc"), true);
   assert.equal(isSafeRagSourceUri("local://annual-report.md"), true);
+  assert.equal(isSafeRagSourceUri("https://user:pass@example.com/x.md"), false);
+  assert.equal(isSafeRagSourceUri("https://user@example.com/x.md"), false);
 
   assert.equal((await runtime.listDocuments()).documents.length, 0);
   assert.equal((await runtime.listChunks()).chunks.length, 0);
+});
+
+test("signed http source is normalized so lineage and DTOs never contain query or fragment", async () => {
+  const runtime = createDataSourceRuntime();
+  const request = {
+    fileName: "annual-report.md",
+    contentType: "text/markdown",
+    content: "# 资产质量\n公司不良率保持稳定。"
+  };
+  const signed = await runtime.ingest({ ...request, source: "https://example.com/filing.md?token=abc&signature=y#frag" });
+
+  assert.equal(signed.ok, true);
+  assert.equal(signed.data.document.source, "https://example.com/filing.md");
+  assert.ok(signed.data.chunks.every((chunk) => chunk.source === "https://example.com/filing.md"));
+
+  // 同一文档不带 token 重复 ingest 命中同一 lineage（幂等）。
+  const unsigned = await runtime.ingest({ ...request, source: "https://example.com/filing.md" });
+  assert.equal(unsigned.ok, true);
+  assert.equal(unsigned.data.deduplicated, true);
+  assert.equal(unsigned.data.document.documentId, signed.data.document.documentId);
+
+  const documentsPage = await runtime.listDocuments();
+  const chunksPage = await runtime.listChunks();
+
+  assert.equal(documentsPage.documents.length, 1);
+  assert.equal(documentsPage.documents[0].sourceUri, "https://example.com/filing.md");
+  const serialized = JSON.stringify({ documents: documentsPage.documents, chunks: chunksPage.chunks });
+  assert.ok(!serialized.includes("token=abc"));
+  assert.ok(!serialized.includes("signature=y"));
+  assert.ok(!serialized.includes("frag"));
+
+  assert.equal(normalizeRagSourceUri("https://example.com/a/b.md?api_key=x#section"), "https://example.com/a/b.md");
+  assert.equal(normalizeRagSourceUri("demo/annual-report"), "demo/annual-report");
+  assert.equal(normalizeRagSourceUri("mock://filings/x.md"), "mock://filings/x.md");
 });
 
 /**

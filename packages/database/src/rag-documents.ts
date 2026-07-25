@@ -428,7 +428,7 @@ async function insertChunks(
 }
 
 /**
- * 读取版本全部 chunks 并投影为领域记录；chunkId 由文档身份和序号派生，与写入时一致。
+ * 读取版本全部 chunks 并投影为领域记录；chunkId 由版本身份和序号派生，与写入时一致。
  *
  * @param client 事务内 PostgreSQL client。
  * @param versionId 版本 id。
@@ -520,7 +520,11 @@ function mapVersionRow(row: VersionRow): RagDocumentVersionRecord {
  */
 function mapChunkRow(row: ChunkRow): RagChunkRecord {
   return {
-    chunkId: createPersistentChunkId(row.document_id, row.chunk_index),
+    chunkId: createPersistentChunkId({
+      documentVersionId: row.document_version_id,
+      chunkerVersion: row.chunker_version,
+      chunkIndex: row.chunk_index
+    }),
     documentId: row.document_id,
     documentVersionId: row.document_version_id,
     source: row.source_uri,

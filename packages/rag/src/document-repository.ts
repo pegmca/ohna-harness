@@ -50,7 +50,7 @@ export interface RagDocumentVersionRecord {
 }
 
 /**
- * 待持久化的新 chunk：chunkId 由 adapter 依据文档身份和序号派生，调用方不提供。
+ * 待持久化的新 chunk：chunkId 由 adapter 依据不可变版本身份和序号派生，调用方不提供。
  */
 export interface NewRagChunkRecord {
   chunkIndex: number;
@@ -270,15 +270,20 @@ export function assertValidOwnerScope(input: { ownerUserId: string | null; scope
 /**
  * 派生持久化 chunk 的稳定域 id。
  *
- * chunkId 由文档身份和序号决定而不是随机生成，保证幂等重读、向量索引和 citation
- * 在不同进程、不同时间点拿到完全一致的身份。
+ * chunkId 由不可变版本身份（documentVersionId + chunkerVersion）和序号决定而不是随机生成：
+ * 同一版本重复读取得到完全一致的 chunkId（幂等），不同版本相同 chunkIndex 的 chunkId 不同。
+ * 版本是 citation 回链的稳定目标——旧版本 chunks 不会被新版本覆盖身份，
+ * 内存 VectorStore 中不同版本的条目也不会互相替换。
  *
- * @param documentId 持久化文档 id。
- * @param chunkIndex 版本内 chunk 序号。
+ * @param identity 版本身份与 chunk 序号。
  * @returns 稳定 chunk id。
  */
-export function createPersistentChunkId(documentId: string, chunkIndex: number): string {
-  return `${documentId}_chunk_${String(chunkIndex).padStart(4, "0")}`;
+export function createPersistentChunkId(identity: {
+  documentVersionId: string;
+  chunkerVersion: string;
+  chunkIndex: number;
+}): string {
+  return `${identity.documentVersionId}_${identity.chunkerVersion}_chunk_${String(identity.chunkIndex).padStart(4, "0")}`;
 }
 
 /**
@@ -527,7 +532,11 @@ class InMemoryRagDocumentRepository implements RagDocumentRepository {
         version.id,
         input.outcome.chunks.map((chunk) => ({
           rowId: this.nextId("chunk"),
-          chunkId: createPersistentChunkId(version.documentId, chunk.chunkIndex),
+          chunkId: createPersistentChunkId({
+            documentVersionId: version.id,
+            chunkerVersion: input.chunkerVersion,
+            chunkIndex: chunk.chunkIndex
+          }),
           documentId: version.documentId,
           documentVersionId: version.id,
           source: input.sourceUri,

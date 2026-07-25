@@ -89,12 +89,20 @@ test("saveIngestion 幂等命中、版本递增与失败重试", { skip: !integr
     assert.equal(created.version.version, 1);
     assert.equal(created.version.status, "indexed");
     assert.equal(created.chunks.length, 2);
-    assert.equal(created.chunks[0].chunkId, `${created.document.id}_chunk_0000`);
+    assert.equal(
+      created.chunks[0].chunkId,
+      `${created.version.id}_heading-aware-1200-150-v1_chunk_0000`
+    );
 
     const deduplicated = await repository.saveIngestion(input);
     assert.equal(deduplicated.kind, "existing");
     assert.equal(deduplicated.document.id, created.document.id);
     assert.equal(deduplicated.chunks.length, 2);
+    // 幂等命中同一版本，chunkId 完全一致。
+    assert.deepEqual(
+      deduplicated.chunks.map((chunk) => chunk.chunkId),
+      created.chunks.map((chunk) => chunk.chunkId)
+    );
 
     const nextVersion = await repository.saveIngestion(
       createIngestionInput({
@@ -106,6 +114,8 @@ test("saveIngestion 幂等命中、版本递增与失败重试", { skip: !integr
     assert.equal(nextVersion.kind, "created");
     assert.equal(nextVersion.version.version, 2);
     assert.equal(nextVersion.document.id, created.document.id);
+    // 不同版本相同 chunkIndex 的 chunkId 不同，旧版本 citation 目标不被覆盖。
+    assert.notEqual(nextVersion.chunks[0].chunkId, created.chunks[0].chunkId);
 
     const failed = await repository.saveIngestion(
       createIngestionInput({

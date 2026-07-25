@@ -546,17 +546,20 @@ class InMemoryDataSourceRuntime implements DataSourceRuntime {
       };
     }
 
+    // sourceUri 是脱敏后的逻辑标识：http(s) URL 剥离 query/fragment，
+    // 同一文档带不带 token 命中同一 lineage，落库与 DTO 返回值永远不含敏感参数。
+    const sourceUri = normalizeRagSourceUri(request.source);
     const fileType = detectFilingFileType(request.fileName, request.contentType);
-    const externalId = createRagContentChecksum(`${request.source}|${request.fileName}|${fileType ?? "unknown"}`);
+    const externalId = createRagContentChecksum(`${sourceUri}|${request.fileName}|${fileType ?? "unknown"}`);
     const contentChecksum = createRagContentChecksum(request.content);
     const contentType = request.contentType?.trim() || "unknown";
     const now = new Date().toISOString();
     const lineageBase = {
       ownerUserId,
       scope,
-      sourceType: resolveRagSourceType(request.source),
+      sourceType: resolveRagSourceType(sourceUri),
       externalId,
-      sourceUri: request.source,
+      sourceUri,
       contentType,
       contentChecksum,
       content: request.content,
@@ -566,7 +569,7 @@ class InMemoryDataSourceRuntime implements DataSourceRuntime {
     } as const;
 
     const ingestionResult = ingestFiling({
-      source: request.source,
+      source: sourceUri,
       fileName: request.fileName,
       contentType: request.contentType,
       content: request.content
@@ -1944,8 +1947,9 @@ function createQuote(text: string): string {
  * 校验 ingest source 是否符合写入口安全边界。
  *
  * 拒绝：绝对路径（`/`、`~` 开头）、Windows 盘符（`C:`）、`file:` URI、包含 `..` 的
- * 路径段、控制字符和反斜杠；允许：合法的 http(s) URL，以及由字母数字和 `-_.:/`
- * 组成的相对逻辑标识（如 `demo/annual-report`、`mock://filings/x.md`）。
+ * 路径段、控制字符、反斜杠，以及带 userinfo（`user@`/`user:pass@`）的 http(s) URL；
+ * 允许：合法的 http(s) URL，以及由字母数字和 `-_.:/` 组成的相对逻辑标识
+ * （如 `demo/annual-report`、`mock://filings/x.md`）。
  * API 层与 runtime 共用同一校验，保证 sourceUri 落库前已被白名单过滤，
  * 因此列表 DTO 中的 sourceUri 不需要额外脱敏。
  *
@@ -1959,7 +1963,9 @@ export function isSafeRagSourceUri(source: string): boolean {
   }
   if (/^https?:\/\//i.test(value)) {
     try {
-      return new URL(value).protocol.startsWith("http");
+      const url = new URL(value);
+      // userinfo 是凭证载体，一律拒绝，避免账号密码进入 lineage 和共享列表。
+      return url.username === "" && url.password === "";
     } catch {
       return false;
     }
@@ -1983,6 +1989,30 @@ export function isSafeRagSourceUri(source: string): boolean {
     return false;
   }
   return /^[A-Za-z0-9\-_.:/]+$/.test(value);
+}
+
+/**
+ * 规范化 ingest source 为可持久化的脱敏 sourceUri。
+ *
+ * http(s) URL 只保留 `origin + pathname`，剥离全部 query 和 fragment——
+ * 签名 URL 的 token/api_key/signature 等敏感参数不会进入 lineage，也不会出现在
+ * shared/demo 列表 DTO 中；同时保证同一文档带不带 token 都命中同一 externalId。
+ * 非 URL 逻辑标识已通过 `isSafeRagSourceUri` 白名单，原样返回。
+ *
+ * @param source 已通过安全校验的 source。
+ * @returns 脱敏后的 sourceUri。
+ */
+export function normalizeRagSourceUri(source: string): string {
+  const value = source.trim();
+  if (/^https?:\/\//i.test(value)) {
+    try {
+      const url = new URL(value);
+      return `${url.origin}${url.pathname}`;
+    } catch {
+      return value;
+    }
+  }
+  return value;
 }
 
 /**

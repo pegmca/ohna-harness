@@ -12,9 +12,12 @@ import { createLocalArtifactStorage, renderResearchReportPdf } from "@aiagent/re
 import type { ArtifactRepository, ArtifactStorage, WorkflowRepository } from "@aiagent/report";
 import type { RagStructuredError } from "@aiagent/rag";
 import { createInMemoryTraceStore, redactSensitiveValue, type TraceStore } from "@aiagent/trace";
+import type { ApprovalRecord, ApprovalRepository } from "@aiagent/tools";
+import { APPROVAL_REQUEST_TTL_MS } from "@aiagent/tools";
 import type {
   AgentRunAcceptedDto,
   AgentRunCreateRequestDto,
+  AgentRunEventInputDto,
   AgentRunSnapshotDto,
   ApiError,
   ApiResult,
@@ -51,6 +54,7 @@ import { createRunApplicationService } from "./application/run-service.js";
 import type { RunStore } from "./application/run-ports.js";
 import { createOrderedRunEventStream, isTerminalRunStatus } from "./application/ordered-run-event-stream.js";
 import { createInMemoryReportRepositories } from "./adapters/in-memory-report-persistence.js";
+import { createInMemoryApprovalRepository } from "./adapters/in-memory-approval-repository.js";
 import { publishArtifactPdf } from "./application/artifact-service.js";
 import { createConversationApplicationService } from "./application/conversation-service.js";
 
@@ -126,6 +130,7 @@ export interface ApiServerOptions {
   runStore?: RunStore;
   traceStore?: TraceStore;
   staleRunThresholdMs?: number;
+  approvalRepository?: ApprovalRepository;
 }
 
 /**
@@ -138,9 +143,8 @@ export function createApiServer(options: ApiServerOptions = {}): FastifyInstance
     logger: true
   });
   const dataSourceRuntime = options.dataSourceRuntime ?? createDataSourceRuntime();
-  const approvalDecisions = new Map<string, ToolApprovalDecisionDto>();
-  const pendingApprovals = new Map<string, import("@aiagent/types").ToolApprovalRequestDto>();
-  const approvalRunIds = new Map<string, string>();
+  // 未注入时退回进程内 adapter，仅供本地 dev 与单测；生产必须注入 PostgreSQL adapter，重启后审批不丢失。
+  const approvalRepository = options.approvalRepository ?? createInMemoryApprovalRepository();
   const inMemoryReport = createInMemoryReportRepositories();
   const workflowRepository = options.workflowRepository ?? inMemoryReport.workflowRepository;
   const artifactRepository = options.artifactRepository ?? inMemoryReport.artifactRepository;
@@ -187,9 +191,33 @@ export function createApiServer(options: ApiServerOptions = {}): FastifyInstance
           metadata: {}, updatedAt: artifact.createdAt
         });
       },
-      saveApproval: (approval, runId) => {
-        pendingApprovals.set(approval.approvalId, approval);
-        approvalRunIds.set(approval.approvalId, runId);
+      saveApproval: async (approval, context) => {
+        try {
+          const now = Date.now();
+          await approvalRepository.requestApproval({
+            approvalId: approval.approvalId,
+            runId: context.runId,
+            requestId: approval.requestId ?? approval.approvalId,
+            traceId: approval.traceId,
+            userId: context.userId,
+            toolName: approval.toolName,
+            permissionLevel: approval.permissionLevel,
+            reason: approval.reason,
+            reasonCode: approval.reasonCode,
+            // 原请求未绑定摘要时落库为空串；此类审批无法通过 decision endpoint 决定，只能过期。
+            inputDigest: approval.inputDigest ?? "",
+            inputPreview: approval.inputPreview ?? null,
+            requestedAt: new Date(now).toISOString(),
+            expiresAt: new Date(now + APPROVAL_REQUEST_TTL_MS).toISOString()
+          });
+        } catch (error) {
+          // 审批登记失败（含相同 id 不同 digest/run/user 的重放冲突）不影响 Run 主流程，
+          // 但必须留下日志线索，便于审计与排障。
+          app.log.warn(
+            { err: error, approvalId: approval.approvalId, runId: context.runId },
+            "approval registration failed"
+          );
+        }
       }
     }
   });
@@ -759,12 +787,12 @@ export function createApiServer(options: ApiServerOptions = {}): FastifyInstance
   });
 
   /**
-   * Approval decision 接口只接收人工 approve/reject 决策并存入当前进程内存。
-   * 权限判断仍由 packages/tools 或 packages/workflow 在执行敏感动作前完成。
+   * Approval decision 接口把人工 approve/reject 决策持久化到 Approval repository。
+   * reviewer 身份只来自服务端 session，归属、run、digest 绑定与过期由 repository CAS 统一校验。
    *
-   * @param request Fastify 请求对象，body 必须符合 ToolApprovalDecisionDto。
+   * @param request Fastify 请求对象，body 必须符合 RunApprovalDecisionRequestDto。
    * @param reply Fastify 响应对象，用于在请求无效时设置 HTTP 状态码。
-   * @returns 成功时返回已记录的 approval decision。
+   * @returns 成功时返回已持久化的 approval decision。
    */
   app.post<{ Params: { runId: string; approvalId: string } }>(
     "/api/runs/:runId/approvals/:approvalId/decision",
@@ -780,31 +808,92 @@ export function createApiServer(options: ApiServerOptions = {}): FastifyInstance
       return fail(error, requestId);
     }
 
-    const pending = pendingApprovals.get(request.params.approvalId);
-    const run = await runService.get(requestUserId(request), request.params.runId);
-    if (!run || !pending || approvalRunIds.get(request.params.approvalId) !== request.params.runId
-      || (pending.inputDigest && parsed.data.inputDigest !== pending.inputDigest)) {
+    const result = await approvalRepository.decide({
+      approvalId: request.params.approvalId,
+      runId: request.params.runId,
+      reviewerUserId: requestUserId(request),
+      decision: parsed.data.decision,
+      expectedInputDigest: parsed.data.inputDigest,
+      reviewerNote: parsed.data.reviewerNote?.trim(),
+      decidedAt: new Date().toISOString()
+    });
+
+    if (!result.ok) {
+      if (result.code === "conflict" && result.conflictReason === "decision") {
+        reply.code(409);
+        return fail(toApiError("conflict", "Approval 已存在不同决定，不能覆盖。", requestId, { reasonCode: "SEC_APPROVAL_CONFLICT" }), requestId);
+      }
+      if (result.code === "expired") {
+        reply.code(409);
+        return fail(toApiError("conflict", "Approval 已过期，请重新发起研究任务。", requestId, { reasonCode: "SEC_APPROVAL_EXPIRED" }), requestId);
+      }
+      // 不存在、归属不符与 digest 绑定不符统一 403 话术，不泄漏资源是否存在。
       reply.code(403);
       return fail(toApiError("forbidden", "Approval request 不存在、已处理或与原请求不匹配。", requestId, { reasonCode: "SEC_APPROVAL_BINDING_MISMATCH" }), requestId);
     }
 
-    const decision: ToolApprovalDecisionDto = {
-      approvalId: request.params.approvalId,
-      decision: parsed.data.decision,
-      reviewerNote: parsed.data.reviewerNote?.trim(),
-      requestId: pending.requestId,
-      inputDigest: parsed.data.inputDigest
-    };
-    approvalDecisions.set(decision.approvalId, decision);
-    pendingApprovals.delete(decision.approvalId);
-    approvalRunIds.delete(decision.approvalId);
+    const record = result.record;
+    if (!result.idempotent) {
+      // 决定已提交后追加 approval decided trace event；append 失败只记录日志，不回滚决定。
+      await appendApprovalDecisionTraceEvent(record);
+    }
 
     return {
       ok: true,
-      data: decision,
+      data: {
+        approvalId: record.approvalId,
+        decision: record.decision ?? parsed.data.decision,
+        reviewerNote: record.reviewerNote,
+        requestId: record.requestId,
+        inputDigest: record.inputDigest
+      },
       requestId
     };
   });
+
+  /**
+   * 在 decide 成功提交后向同一 Run 追加 approval decided trace event。
+   * Run 已终态或事件写入失败不影响已持久化的决定，只记录日志。
+   *
+   * @param record 已决定的审批记录。
+   * @returns 完成 Promise。
+   */
+  const appendApprovalDecisionTraceEvent = async (record: ApprovalRecord): Promise<void> => {
+    try {
+      const snapshot = await runService.get(record.userId, record.runId);
+      if (!snapshot) return;
+      const createdAt = new Date().toISOString();
+      const eventInput = redactSensitiveValue({
+        type: "trace_event",
+        runId: record.runId,
+        requestId: snapshot.requestId,
+        traceId: `trace_${record.runId}`,
+        conversationId: snapshot.conversationId,
+        createdAt,
+        event: {
+          type: "approval",
+          id: `${record.traceId}_${record.approvalId}_${record.status}_${Date.now().toString(36)}`,
+          traceId: record.traceId,
+          requestId: record.requestId,
+          approvalId: record.approvalId,
+          toolName: record.toolName ?? "unknown",
+          status: record.status,
+          reason: record.reason ?? "",
+          inputPreview: record.inputPreview ?? null,
+          reviewerNote: record.reviewerNote,
+          inputDigest: record.inputDigest,
+          reasonCode: record.reasonCode,
+          createdAt
+        }
+      }) as AgentRunEventInputDto;
+      const appended = await runStore.append(record.userId, record.runId, eventInput);
+      if (!appended) {
+        app.log.info({ runId: record.runId, approvalId: record.approvalId }, "approval decided trace event skipped because the run is terminal or missing");
+      }
+    } catch (error) {
+      app.log.warn({ err: error, approvalId: record.approvalId }, "approval decided trace event append failed");
+    }
+  };
 
   /** 按服务端身份读取持久化 workflow 快照。 */
   app.get<{ Params: { runId: string } }>("/api/report-workflows/:runId", async (request, reply): Promise<ApiResult<ReportWorkflowResponseDto>> => {
@@ -843,7 +932,9 @@ export function createApiServer(options: ApiServerOptions = {}): FastifyInstance
     }
     const artifact = record.artifact;
     const approvalId = `approval_${artifact.workflowRunId}_pdf_exporter`;
-    if (approvalDecisions.get(approvalId)?.decision !== "approved") {
+    // 导出 gate 只认当前用户、同一 Agent Run 下已批准且未过期的持久化决定；过期 pending 由 repository 原子转为 expired。
+    const approved = await approvalRepository.findApprovedDecision(requestUserId(request), record.agentRunId, approvalId);
+    if (!approved) {
       reply.code(403);
       return fail(toApiError("forbidden", "PDF 导出需要先批准对应 workflow 的 exporter。", requestId, { approvalId }), requestId);
     }

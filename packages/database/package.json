@@ -16,13 +16,14 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate": "pnpm build && node dist/migrate.js",
     "test": "pnpm build && node --test test/*.test.mjs",
-    "typecheck": "pnpm --filter @aiagent/conversation build && pnpm --filter @aiagent/identity build && pnpm --filter @aiagent/rag build && pnpm --filter @aiagent/report build && pnpm --filter @aiagent/trace build && tsc -p tsconfig.json --pretty false --noEmit"
+    "typecheck": "pnpm --filter @aiagent/conversation build && pnpm --filter @aiagent/identity build && pnpm --filter @aiagent/rag build && pnpm --filter @aiagent/report build && pnpm --filter @aiagent/tools build && pnpm --filter @aiagent/trace build && tsc -p tsconfig.json --pretty false --noEmit"
   },
   "dependencies": {
     "@aiagent/conversation": "workspace:*",
     "@aiagent/identity": "workspace:*",
     "@aiagent/rag": "workspace:*",
     "@aiagent/report": "workspace:*",
+    "@aiagent/tools": "workspace:*",
     "@aiagent/trace": "workspace:*",
     "@aiagent/types": "workspace:*",
     "drizzle-orm": "0.44.7",

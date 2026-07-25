@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createApiServer } from "../dist/index.js";
+import { createInMemoryApprovalRepository } from "../dist/adapters/in-memory-approval-repository.js";
+import { createInMemoryRunStore } from "../dist/adapters/in-memory-run-runtime.js";
 
 const runRequest = {
   message: "帮我查询 000001.SZ 最近一期净利润和 ROE。",
@@ -17,9 +19,9 @@ async function bootstrap(app, visitorId) {
   return response.headers["set-cookie"].split(";")[0];
 }
 
-async function waitForTerminal(app, snapshotUrl, cookie) {
+async function waitForTerminal(app, snapshotUrl, headers = {}) {
   for (let attempt = 0; attempt < 50; attempt += 1) {
-    const response = await app.inject({ method: "GET", url: snapshotUrl, headers: cookie ? { cookie } : undefined });
+    const response = await app.inject({ method: "GET", url: snapshotUrl, headers });
     const snapshot = response.json().data;
     if (["succeeded", "failed", "cancelled"].includes(snapshot.status)) return snapshot;
     await new Promise((resolve) => setTimeout(resolve, 10));
@@ -74,7 +76,7 @@ test("Trace API 按 session user 隔离 requestId", async () => {
     method: "POST", url: "/api/runs", headers: { cookie: ownerCookie },
     payload: { ...runRequest, clientMessageId: "trace-owner-client-1" }
   })).json().data;
-  await waitForTerminal(app, accepted.snapshotUrl, ownerCookie);
+  await waitForTerminal(app, accepted.snapshotUrl, { cookie: ownerCookie });
   const own = await app.inject({
     method: "GET", url: `/api/traces/${accepted.requestId}`, headers: { cookie: ownerCookie }
   });
@@ -216,6 +218,145 @@ test("approval decision is bound to its run and input digest", async () => {
   });
   assert.equal(approved.statusCode, 200);
   assert.equal(approved.json().data.decision, "approved");
+  await app.close();
+});
+
+test("approval decision 在 API 重启后仍可执行，且支持幂等重试与冲突检测", async () => {
+  // 两个 server 实例共享同一份 repository/runStore，等价于重启后连接同一数据库。
+  const approvalRepository = createInMemoryApprovalRepository();
+  const runStore = createInMemoryRunStore();
+  const appOne = createApiServer({ approvalRepository, runStore });
+  const accepted = (await appOne.inject({
+    method: "POST",
+    url: "/api/runs",
+    payload: {
+      message: "执行 SQL: SELECT * FROM metrics",
+      conversationId: "conversation_approval_restart",
+      mode: "auto",
+      source: "composer"
+    }
+  })).json().data;
+  const snapshot = await waitForTerminal(appOne, accepted.snapshotUrl);
+  const approval = snapshot.result.trace.events.find(
+    (event) => event.type === "approval" && event.status === "requested"
+  );
+  await appOne.close();
+
+  const appTwo = createApiServer({ approvalRepository, runStore });
+  const url = `/api/runs/${accepted.runId}/approvals/${approval.approvalId}/decision`;
+  const decided = await appTwo.inject({
+    method: "POST",
+    url,
+    payload: { decision: "approved", inputDigest: approval.inputDigest }
+  });
+  assert.equal(decided.statusCode, 200);
+  assert.equal(decided.json().data.decision, "approved");
+
+  const retry = await appTwo.inject({
+    method: "POST",
+    url,
+    payload: { decision: "approved", inputDigest: approval.inputDigest }
+  });
+  assert.equal(retry.statusCode, 200);
+
+  const conflict = await appTwo.inject({
+    method: "POST",
+    url,
+    payload: { decision: "rejected", inputDigest: approval.inputDigest }
+  });
+  assert.equal(conflict.statusCode, 409);
+  assert.equal(conflict.json().error.code, "conflict");
+  await appTwo.close();
+});
+
+test("approval decision 拒绝其他已认证用户，reviewer 身份只来自服务端 session", async () => {
+  const app = createApiServer({
+    requireIdentity: true,
+    approvalRepository: createInMemoryApprovalRepository(),
+    runStore: createInMemoryRunStore()
+  });
+  const cookieOne = await bootstrap(app, "visitor-approval-owner-1");
+  const cookieTwo = await bootstrap(app, "visitor-approval-other-2");
+  const accepted = (await app.inject({
+    method: "POST",
+    url: "/api/runs",
+    headers: { cookie: cookieOne },
+    payload: {
+      message: "执行 SQL: SELECT * FROM metrics",
+      conversationId: "conversation_approval_isolation",
+      mode: "auto",
+      source: "composer"
+    }
+  })).json().data;
+  const snapshot = await waitForTerminal(app, accepted.snapshotUrl, { cookie: cookieOne });
+  const approval = snapshot.result.trace.events.find(
+    (event) => event.type === "approval" && event.status === "requested"
+  );
+  const url = `/api/runs/${accepted.runId}/approvals/${approval.approvalId}/decision`;
+
+  const foreign = await app.inject({
+    method: "POST",
+    url,
+    headers: { cookie: cookieTwo },
+    payload: { decision: "approved", inputDigest: approval.inputDigest }
+  });
+  assert.equal(foreign.statusCode, 403);
+  assert.equal(foreign.json().error.code, "forbidden");
+
+  const owned = await app.inject({
+    method: "POST",
+    url,
+    headers: { cookie: cookieOne },
+    payload: { decision: "approved", inputDigest: approval.inputDigest }
+  });
+  assert.equal(owned.statusCode, 200);
+  await app.close();
+});
+
+test("workflow PDF 审批带确定性 digest，可经 decision endpoint 决定并放行 PDF 导出", async () => {
+  const written = new Map();
+  const artifactStorage = {
+    async writePdf(bytes) {
+      const key = "test/report.pdf";
+      written.set(key, bytes);
+      return { provider: "local", key, sizeBytes: bytes.length, checksumSha256: "ab".repeat(32) };
+    },
+    async readPdf(key) { return written.get(key); },
+    async deletePdf(key) { written.delete(key); }
+  };
+  const app = createApiServer({
+    approvalRepository: createInMemoryApprovalRepository(),
+    runStore: createInMemoryRunStore(),
+    artifactStorage
+  });
+  const accepted = (await app.inject({
+    method: "POST",
+    url: "/api/runs",
+    payload: {
+      message: "基于最近两年公告和财务数据，为 000001.SZ 生成研究简报 PDF。",
+      conversationId: "conversation_pdf_approval",
+      mode: "report",
+      source: "report_button"
+    }
+  })).json().data;
+  const snapshot = await waitForTerminal(app, accepted.snapshotUrl);
+  const approval = snapshot.result.reportWorkflow.run.approvalRequest;
+  // 回归防护：workflow 审批必须在登记前补齐非空 digest，否则永远无法决定。
+  assert.equal(typeof approval.inputDigest, "string");
+  assert.equal(approval.inputDigest.length > 0, true);
+
+  const decided = await app.inject({
+    method: "POST",
+    url: `/api/runs/${accepted.runId}/approvals/${approval.approvalId}/decision`,
+    payload: { decision: "approved", inputDigest: approval.inputDigest }
+  });
+  assert.equal(decided.statusCode, 200);
+  assert.equal(decided.json().data.decision, "approved");
+
+  const artifactId = snapshot.result.reportWorkflow.artifact.artifactId;
+  const exported = await app.inject({ method: "POST", url: `/api/report-artifacts/${artifactId}/pdf` });
+  assert.equal(exported.statusCode, 200);
+  assert.equal(exported.json().data.status, "pdf_ready");
   await app.close();
 });
 

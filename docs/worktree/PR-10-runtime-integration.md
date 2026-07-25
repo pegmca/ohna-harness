@@ -19,6 +19,9 @@
 - graceful shutdown 先停止接收新 Run，等待有限 drain，标记未完成任务为 interrupted，
   关闭 event subscribers、storage 和 pool。
 - 删除旧 API composition 中残留的事实源 Map 和不可达兼容路径。
+- 收口 PR-05 遗留边界：Approval decision 与 approval decided trace event 追加不在同一
+  DB 事务（decide 提交后由 endpoint 旁路 append，Run 终态时事件可能缺失），需在 runtime
+  整合时统一事务或 outbox 语义。
 
 ## 全链路验证
 

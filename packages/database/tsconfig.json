@@ -16,6 +16,7 @@
     { "path": "../identity" },
     { "path": "../rag" },
     { "path": "../report" },
-    { "path": "../tools" }
+    { "path": "../tools" },
+    { "path": "../trace" }
   ]
 }

@@ -52,6 +52,7 @@ const app = createApiServer({
   artifactStorage: createLocalArtifactStorage(process.env.ARTIFACT_STORAGE_ROOT ?? "./var/artifacts"),
   runStore: database.runRepository,
   approvalRepository: database.approvalRepository,
+  traceStore: database.traceStore,
   readiness: async () => {
     if (providerMode !== "mock" && providerMode !== "real") {
       return { ok: false, dependency: "provider-config", message: "AIAGENT_PROVIDER_MODE must be mock or real." };

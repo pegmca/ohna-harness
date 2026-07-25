@@ -17,7 +17,12 @@ import type {
   ToolApprovalRequestDto,
   TraceDto
 } from "@aiagent/types";
-import { createObservableTraceRecorder, redactSensitiveValue } from "@aiagent/trace";
+import {
+  createObservableTraceRecorder,
+  redactSensitiveValue,
+  type TracePersistenceContext,
+  type TraceStore
+} from "@aiagent/trace";
 import { createHash, randomUUID } from "node:crypto";
 import type { RunEventBus, RunExecutionRegistry, RunScheduler, RunStore } from "./run-ports.js";
 
@@ -28,7 +33,6 @@ type RunEventPayload =
   | { type: "run_error"; error: ApiError };
 
 export interface RunServiceSink {
-  saveTrace(trace: TraceDto): void;
   saveWorkflow(workflow: ReportWorkflowResponseDto, context: ReportPersistenceContext): Promise<void>;
   saveArtifact(artifact: ReportArtifactDto, context: ReportPersistenceContext): Promise<void>;
   saveApproval(approval: ToolApprovalRequestDto, context: ApprovalPersistenceContext): Promise<void>;
@@ -40,9 +44,11 @@ export interface RunServiceDependencies {
   executionRegistry: RunExecutionRegistry;
   scheduler: RunScheduler;
   sink: RunServiceSink;
+  traceStore: TraceStore;
   llmClient?: LlmClient;
   now?: () => Date;
   createId?: (prefix: string) => string;
+  recordInternalWarning?: (warning: { code: "trace_persistence_degraded"; runId: string; requestId: string }) => void;
 }
 
 export interface RunApplicationService {
@@ -99,8 +105,40 @@ export function createRunApplicationService(dependencies: RunServiceDependencies
     await publish(userId, runId, { type: "run_status", status: "running", message: "Agent 已开始分析研究任务。" });
     const snapshot = await dependencies.store.findById(userId, runId);
     if (!snapshot) return;
-    const trace = createObservableTraceRecorder(`trace_${runId}`, snapshot.requestId);
-    const unsubscribe = trace.subscribe((event) => { void publish(userId, runId, { type: "trace_event", event }); });
+    const traceStartedAt = now().toISOString();
+    const trace = createObservableTraceRecorder(`trace_${runId}`, snapshot.requestId, [], traceStartedAt);
+    const traceContext: TracePersistenceContext = {
+      userId, runId, conversationId: snapshot.conversationId, traceId: trace.traceId,
+      requestId: trace.requestId, startedAt: traceStartedAt
+    };
+    let tracePersistenceDegraded = false;
+    let persistenceQueue = Promise.resolve();
+    /** 将 Trace 旁路故障收敛为一次结构化告警，避免原始异常进入 Run result。 */
+    const degradeTracePersistence = (): void => {
+      if (tracePersistenceDegraded) return;
+      tracePersistenceDegraded = true;
+      dependencies.recordInternalWarning?.({
+        code: "trace_persistence_degraded", runId, requestId: snapshot.requestId
+      });
+    };
+    try {
+      await dependencies.traceStore.initialize(traceContext);
+    } catch {
+      degradeTracePersistence();
+    }
+    const unsubscribe = trace.subscribe((event) => {
+      if (tracePersistenceDegraded) return;
+      persistenceQueue = persistenceQueue.then(async () => {
+        const projection = await dependencies.traceStore.append(traceContext, event);
+        if (!projection) {
+          degradeTracePersistence();
+          return;
+        }
+        dependencies.eventBus.publish(projection as AgentRunStreamEventDto);
+      }).catch(() => {
+        degradeTracePersistence();
+      });
+    });
     try {
       const response = await runAgent({
         message: request.message.trim(),
@@ -112,11 +150,42 @@ export function createRunApplicationService(dependencies: RunServiceDependencies
       }, { traceRecorder: trace, llmClient: dependencies.llmClient });
       const workflow = await maybeRunReport(runId, userId, request.conversationId, response, trace, controller.signal, dependencies.sink);
       response.trace = trace.getTrace();
-      dependencies.sink.saveTrace(response.trace);
-      const result = redactSensitiveValue(toResponseDto(runId, response, request, snapshot.requestId, workflow));
+      await persistenceQueue;
+      if (!tracePersistenceDegraded) {
+        try {
+          await dependencies.traceStore.finalize(traceContext, response.trace);
+        } catch {
+          degradeTracePersistence();
+        }
+      }
+      const result = redactSensitiveValue(toResponseDto(
+        runId, response, request, snapshot.requestId, workflow, tracePersistenceDegraded
+      ));
       registerApprovals(runId, userId, result.trace, dependencies.sink);
       await publish(userId, runId, { type: "run_result", result });
     } catch (caught) {
+      trace.record({
+        type: "final_response",
+        id: `${trace.traceId}_persistence_failure_terminal`,
+        traceId: trace.traceId,
+        requestId: trace.requestId,
+        answerPreview: "",
+        ok: false,
+        error: {
+          code: controller.signal.aborted ? "request_cancelled" : "internal_error",
+          message: controller.signal.aborted ? "Agent run 已取消。" : "Agent run 执行失败。",
+          stage: "final_response"
+        },
+        createdAt: now().toISOString()
+      });
+      await persistenceQueue;
+      if (!tracePersistenceDegraded) {
+        try {
+          await dependencies.traceStore.finalize(traceContext, trace.getTrace());
+        } catch {
+          degradeTracePersistence();
+        }
+      }
       await publish(userId, runId, {
         type: "run_error",
         error: toRunError(caught, snapshot.requestId, controller.signal.aborted)
@@ -215,7 +284,8 @@ function toResponseDto(
   response: AgentResponse,
   request: AgentRunCreateRequestDto,
   requestId: string,
-  reportWorkflow?: ReportWorkflowResponseDto
+  reportWorkflow: ReportWorkflowResponseDto | undefined,
+  tracePersistenceDegraded: boolean
 ): AgentRunResponseDto {
   return {
     runId,
@@ -227,6 +297,15 @@ function toResponseDto(
     answer: response.answer,
     steps: response.steps.map(toStepDto),
     trace: response.trace,
+    tracePersistence: tracePersistenceDegraded
+      ? {
+          status: "degraded",
+          diagnostic: {
+            code: "trace_persistence_degraded",
+            message: "Trace 持久化暂时不可用；Agent 主结果已保留。"
+          }
+        }
+      : { status: "complete" },
     reportPlan: response.reportPlan,
     reportWorkflow,
     error: response.error ? {

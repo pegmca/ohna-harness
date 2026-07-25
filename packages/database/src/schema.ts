@@ -341,3 +341,43 @@ export const runEvents = pgTable("run_events", {
   uniqueIndex("run_events_run_sequence_uq").on(table.runId, table.sequence),
   index("run_events_user_run_sequence_idx").on(table.userId, table.runId, table.sequence)
 ]);
+
+export const traces = pgTable("traces", {
+  id: text("id").primaryKey(),
+  requestId: text("request_id").notNull().unique(),
+  runId: uuid("run_id").notNull().unique().references(() => agentRuns.id, { onDelete: "cascade" }),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  status: text("status", { enum: ["running", "succeeded", "failed"] }).notNull(),
+  durationMs: integer("duration_ms").notNull().default(0),
+  modelCallCount: integer("model_call_count").notNull().default(0),
+  toolCallCount: integer("tool_call_count").notNull().default(0),
+  retrievalCount: integer("retrieval_count").notNull().default(0),
+  errorCount: integer("error_count").notNull().default(0),
+  inputTokens: integer("input_tokens"),
+  outputTokens: integer("output_tokens"),
+  knownTokenTotal: integer("known_token_total").notNull().default(0),
+  unknownTokenCallCount: integer("unknown_token_call_count").notNull().default(0),
+  lastSequence: bigint("last_sequence", { mode: "number" }).notNull().default(0),
+  startedAt: timestamp("started_at", { withTimezone: true, mode: "string" }).notNull(),
+  completedAt: timestamp("completed_at", { withTimezone: true, mode: "string" })
+}, (table) => [
+  check("traces_status_check", sql`${table.status} in ('running','succeeded','failed')`),
+  index("traces_user_request_idx").on(table.userId, table.requestId)
+]);
+
+export const traceEvents = pgTable("trace_events", {
+  id: uuid("id").primaryKey(),
+  traceId: text("trace_id").notNull().references(() => traces.id, { onDelete: "cascade" }),
+  runId: uuid("run_id").notNull().references(() => agentRuns.id, { onDelete: "cascade" }),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  sequence: bigint("sequence", { mode: "number" }).notNull(),
+  eventType: text("event_type").notNull(),
+  spanId: text("span_id"),
+  parentSpanId: text("parent_span_id"),
+  stage: text("stage"),
+  payload: jsonb("payload").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true, mode: "string" }).notNull()
+}, (table) => [
+  uniqueIndex("trace_events_trace_sequence_uq").on(table.traceId, table.sequence),
+  index("trace_events_user_trace_sequence_idx").on(table.userId, table.traceId, table.sequence)
+]);

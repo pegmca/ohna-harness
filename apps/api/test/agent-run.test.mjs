@@ -64,6 +64,54 @@ test("run application service exposes ordered events and a terminal snapshot", a
   assert.equal(snapshot.events[0].type, "run_status");
   assert.equal(snapshot.events.at(-1).type, "run_result");
   assert.equal(snapshot.events.some((event) => event.type === "trace_event"), true);
+  assert.equal(snapshot.result.tracePersistence.status, "complete");
+  await app.close();
+});
+
+test("Trace API 按 session user 隔离 requestId", async () => {
+  const app = createApiServer({ requireIdentity: true });
+  const ownerCookie = await bootstrap(app, "visitor-trace-owner-0001");
+  const foreignCookie = await bootstrap(app, "visitor-trace-owner-0002");
+  const accepted = (await app.inject({
+    method: "POST", url: "/api/runs", headers: { cookie: ownerCookie },
+    payload: { ...runRequest, clientMessageId: "trace-owner-client-1" }
+  })).json().data;
+  await waitForTerminal(app, accepted.snapshotUrl, { cookie: ownerCookie });
+  const own = await app.inject({
+    method: "GET", url: `/api/traces/${accepted.requestId}`, headers: { cookie: ownerCookie }
+  });
+  assert.equal(own.statusCode, 200);
+  assert.equal(own.json().data.requestId, accepted.requestId);
+  const foreign = await app.inject({
+    method: "GET", url: `/api/traces/${accepted.requestId}`, headers: { cookie: foreignCookie }
+  });
+  assert.equal(foreign.statusCode, 404);
+  assert.equal(foreign.json().error.code, "not_found");
+  await app.close();
+});
+
+test("Trace 持久化失败不打断 Agent，并在最终结果留下结构化降级证据", async () => {
+  const unavailableTraceStore = {
+    async initialize() { throw new Error("postgres://user:secret@internal/trace"); },
+    async append() { throw new Error("raw database exception"); },
+    async finalize() { throw new Error("raw database exception"); },
+    async getByRequestId() { return undefined; },
+    async listEvents() { return undefined; }
+  };
+  const app = createApiServer({ traceStore: unavailableTraceStore });
+  const accepted = (await app.inject({ method: "POST", url: "/api/runs", payload: runRequest })).json().data;
+  const snapshot = await waitForTerminal(app, accepted.snapshotUrl);
+  assert.equal(snapshot.status, "succeeded");
+  assert.equal(snapshot.result.ok, true);
+  assert.deepEqual(snapshot.result.tracePersistence, {
+    status: "degraded",
+    diagnostic: {
+      code: "trace_persistence_degraded",
+      message: "Trace 持久化暂时不可用；Agent 主结果已保留。"
+    }
+  });
+  assert.equal(JSON.stringify(snapshot).includes("postgres://"), false);
+  assert.equal(JSON.stringify(snapshot).includes("raw database exception"), false);
   await app.close();
 });
 

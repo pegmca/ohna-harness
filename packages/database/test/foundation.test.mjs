@@ -62,6 +62,7 @@ test("空库 migration 可执行、可幂等，并回滚失败 migration", { ski
       "0000_identity.sql",
       "0010_conversation.sql",
       "0020_runs.sql",
+      "0030_trace.sql",
       "0040_approval.sql",
       "0050_rag_documents.sql",
       "0060_rag_vectors.sql",

@@ -82,6 +82,13 @@ validates Conversation ownership and reserves both messages in the creation tran
 append locks the Run, allocates `version + 1`, persists the event and projection together, and
 rejects all transitions after the first terminal event.
 
+## Trace adapter
+
+`0030_trace.sql` creates request/run-unique `traces` summaries and sequenced `trace_events`.
+`createPostgresTraceStore(pool)` requires user ownership on every operation. Its append transaction
+locks the Run and Trace, writes the already-redacted canonical event once, derives the Run
+`trace_event` projection from that object, and commits both before live fan-out.
+
 ## Integration tests
 
 Set `TEST_DATABASE_URL` to an explicitly separate database, then run:

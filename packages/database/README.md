@@ -38,7 +38,7 @@ PR-07 implements `0060_rag_vectors.sql`: it enables pgvector and adds `chunk_emb
 fixed `vector(32)`, `(chunk_id, embedding_model, dimensions)` idempotency, cosine HNSW and
 model/dimensions indexes. `createPostgresVectorStore(pool, { ownerUserId })` binds authorization at
 construction; its search query materializes the authorized document/version/chunk candidate set
-before cosine ordering. The 32-dimensional column is reserved for `deterministic-mock-v1`; a real
+before cosine ordering. The 32-dimensional column is reserved for `deterministic-mock-embedding-v1`; a real
 model with another dimension requires a new compatible migration/table or model-specific column.
 
 Deletion and retention: soft delete (`deleted_at`) is only a 30-day recovery window; every read

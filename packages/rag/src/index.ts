@@ -267,11 +267,16 @@ export interface DataSourceListChunksOptions extends DataSourceListOptions {
   documentId?: string;
 }
 
+/** search/answer 的调用身份；缺省匿名时只能检索 shared/demo。 */
+export interface DataSourceRetrievalContext {
+  ownerUserId?: string | null;
+}
+
 /**
- * DataSourceRuntime 封装 ingestion lineage 持久化、chunk、embedding、内存向量索引、retrieval 和 answer policy。
+ * DataSourceRuntime 封装 ingestion lineage 持久化、chunk、embedding、向量索引、retrieval 和 answer policy。
  *
  * 文档/版本/chunk 事实源是 RagDocumentRepository（PostgreSQL 或内存 adapter）；
- * VectorStore 仍是进程内实现，只服务当前进程的 search/answer。
+ * VectorStore 由 composition root 注入；生产使用 PostgreSQL，单测/eval 显式使用内存 adapter。
  */
 export interface DataSourceRuntime {
   ingest(
@@ -280,8 +285,15 @@ export interface DataSourceRuntime {
   ): Promise<DataSourceRuntimeResult<DataSourceIngestResponseDto>>;
   listDocuments(options?: DataSourceListOptions): Promise<{ documents: DataSourceDocumentDto[]; nextCursor: string | null }>;
   listChunks(options?: DataSourceListChunksOptions): Promise<{ chunks: RagChunk[]; nextCursor: string | null }>;
-  search(query: string, options?: RetrievalOptions): Promise<DataSourceRuntimeResult<RagSearchRuntimeResponse>>;
-  answer(question: string, options?: RetrievalOptions): Promise<DataSourceRuntimeResult<RagAnswerRuntimeResponse>>;
+  search(query: string, options?: RetrievalOptions, context?: DataSourceRetrievalContext): Promise<DataSourceRuntimeResult<RagSearchRuntimeResponse>>;
+  answer(question: string, options?: RetrievalOptions, context?: DataSourceRetrievalContext): Promise<DataSourceRuntimeResult<RagAnswerRuntimeResponse>>;
+}
+
+/** Data Sources runtime 的 adapter 依赖。 */
+export interface DataSourceRuntimeOptions {
+  repository?: RagDocumentRepository;
+  embeddingClient?: EmbeddingClient;
+  vectorStoreFactory?: (ownerUserId: string | null) => VectorStore;
 }
 
 export interface HybridRetrieverOptions {
@@ -410,6 +422,26 @@ export function createInMemoryVectorStore(options: { dimensions?: number } = {})
 }
 
 /**
+ * 创建按 owner 复用的内存 VectorStore factory。
+ *
+ * 该 factory 仅供单测/eval/MCP 显式选择，保证 ingest 与后续 search 使用同一实例；
+ * owner 分桶避免不同私有用户的内存向量候选互串。
+ *
+ * @returns 可注入 DataSource runtime 的 owner-bound factory。
+ */
+export function createInMemoryVectorStoreFactory(): (ownerUserId: string | null) => VectorStore {
+  const stores = new Map<string, VectorStore>();
+  return (ownerUserId) => {
+    const key = ownerUserId ?? "__shared_demo__";
+    const existing = stores.get(key);
+    if (existing) return existing;
+    const created = createInMemoryVectorStore();
+    stores.set(key, created);
+    return created;
+  };
+}
+
+/**
  * 创建 deterministic heuristic reranker。
  *
  * 第一版 rerank 不接 LLM 或 cross-encoder，而是用 query term coverage、heading match 和 hybrid score
@@ -437,15 +469,18 @@ export function createHybridRetriever(options: HybridRetrieverOptions): Retrieve
 /**
  * 创建 Data Sources runtime。
  *
- * 文档/版本/chunk lineage 由注入的 repository 持久化（生产为 PostgreSQL adapter）；
- * 缺省使用内存 repository，保持 eval、MCP 等本地调用方零配置兼容。
- * 向量索引仍是进程内 VectorStore，只服务当前进程检索。
+ * 文档 lineage、embedding client 与按 owner 绑定的 VectorStore 均可由 composition root 注入。
+ * 零配置仅用于兼容本地测试；生产 server 必须显式注入 PostgreSQL repository/store factory。
  *
- * @param options 可选 repository 注入；缺省创建内存 repository。
+ * @param options repository、embedding client 与 owner-bound VectorStore factory。
  * @returns 可执行 ingest、list、search 和 grounded answer 的 runtime。
  */
-export function createDataSourceRuntime(options: { repository?: RagDocumentRepository } = {}): DataSourceRuntime {
-  return new InMemoryDataSourceRuntime(options.repository ?? createInMemoryRagDocumentRepository());
+export function createDataSourceRuntime(options: DataSourceRuntimeOptions = {}): DataSourceRuntime {
+  return new DataSourceRuntimeService({
+    repository: options.repository ?? createInMemoryRagDocumentRepository(),
+    embeddingClient: options.embeddingClient ?? createDeterministicMockEmbeddingClient(),
+    vectorStoreFactory: options.vectorStoreFactory ?? createInMemoryVectorStoreFactory()
+  });
 }
 
 /**
@@ -488,21 +523,22 @@ export function createRetrievalResultFromRetrievedChunk(result: RetrievedChunk):
 /**
  * Data Sources runtime 实现，负责把 filings ingestion、lineage 持久化和 RAG 检索链路串起来。
  *
- * 文档/版本/chunk 事实源是注入的 repository；内存 VectorStore 只承载当前进程的向量索引。
+ * 文档/版本/chunk 事实源是注入的 repository；VectorStore factory 按当前 owner 绑定具体 adapter。
  */
-class InMemoryDataSourceRuntime implements DataSourceRuntime {
-  private readonly embeddingClient = createDeterministicMockEmbeddingClient();
-  private readonly vectorStore = createInMemoryVectorStore();
+class DataSourceRuntimeService implements DataSourceRuntime {
+  private readonly embeddingClient: EmbeddingClient;
+  private readonly vectorStoreFactory: (ownerUserId: string | null) => VectorStore;
   private readonly repository: RagDocumentRepository;
-  private readonly embeddedChunksById = new Map<string, EmbeddedChunk>();
 
   /**
    * 创建 runtime 实例。
    *
-   * @param repository 文档 lineage repository（PostgreSQL 或内存 adapter）。
+   * @param options 显式 adapter 依赖。
    */
-  public constructor(repository: RagDocumentRepository) {
-    this.repository = repository;
+  public constructor(options: Required<DataSourceRuntimeOptions>) {
+    this.repository = options.repository;
+    this.embeddingClient = options.embeddingClient;
+    this.vectorStoreFactory = options.vectorStoreFactory;
   }
 
   /**
@@ -637,7 +673,7 @@ class InMemoryDataSourceRuntime implements DataSourceRuntime {
       embedding: embeddingResult.embeddings[index].vector,
       embeddingModel: embeddingResult.model
     }));
-    const upsertResult = await this.vectorStore.upsertChunks(embeddedChunks);
+    const upsertResult = await this.vectorStoreFactory(ownerUserId).upsertChunks(embeddedChunks);
 
     if (!upsertResult.ok) {
       return {
@@ -649,8 +685,6 @@ class InMemoryDataSourceRuntime implements DataSourceRuntime {
         }
       };
     }
-
-    embeddedChunks.forEach((chunk) => this.embeddedChunksById.set(chunk.chunkId, chunk));
 
     return {
       ok: true,
@@ -711,9 +745,12 @@ class InMemoryDataSourceRuntime implements DataSourceRuntime {
    */
   public async search(
     query: string,
-    options: RetrievalOptions = {}
+    options: RetrievalOptions = {},
+    context: DataSourceRetrievalContext = {}
   ): Promise<DataSourceRuntimeResult<RagSearchRuntimeResponse>> {
-    const retrievalResult = await this.createRetriever().retrieve(query, options);
+    const retriever = await this.createRetriever(context.ownerUserId ?? null);
+    if (!retriever.ok) return retriever;
+    const retrievalResult = await retriever.retriever.retrieve(query, options);
     const trace = createTraceRetrievalEvent(query, retrievalResult);
 
     if (!retrievalResult.ok) {
@@ -741,9 +778,12 @@ class InMemoryDataSourceRuntime implements DataSourceRuntime {
    */
   public async answer(
     question: string,
-    options: RetrievalOptions = {}
+    options: RetrievalOptions = {},
+    context: DataSourceRetrievalContext = {}
   ): Promise<DataSourceRuntimeResult<RagAnswerRuntimeResponse>> {
-    const retrievalResult = await this.createRetriever().retrieve(question, options);
+    const retriever = await this.createRetriever(context.ownerUserId ?? null);
+    if (!retriever.ok) return retriever;
+    const retrievalResult = await retriever.retriever.retrieve(question, options);
     const trace = createTraceRetrievalEvent(question, retrievalResult);
 
     if (!retrievalResult.ok) {
@@ -785,16 +825,43 @@ class InMemoryDataSourceRuntime implements DataSourceRuntime {
   }
 
   /**
-   * 基于当前内存 chunks 创建检索器。
+   * 从持久化 repository 分页加载当前 owner 可见 chunks，并创建 hybrid retriever。
    *
-   * @returns 绑定当前语料的 hybrid retriever。
+   * @param ownerUserId 当前调用身份。
+   * @returns 绑定持久化向量库和 keyword candidates 的 retriever。
    */
-  private createRetriever(): Retriever {
-    return createHybridRetriever({
-      embeddingClient: this.embeddingClient,
-      vectorStore: this.vectorStore,
-      chunks: [...this.embeddedChunksById.values()]
-    });
+  private async createRetriever(
+    ownerUserId: string | null
+  ): Promise<{ ok: true; retriever: Retriever } | { ok: false; error: RagStructuredError }> {
+    try {
+      const chunks: RagChunk[] = [];
+      let cursor: string | undefined;
+      do {
+        const page = await this.repository.listChunks({ ownerUserId, limit: 100, ...(cursor ? { cursor } : {}) });
+        chunks.push(...page.chunks.map(ragChunkRecordToChunk));
+        cursor = page.nextCursor ?? undefined;
+      } while (cursor !== undefined);
+      const embeddingResult = await this.embeddingClient.embedTexts(chunks.map((chunk) => chunk.text));
+      if (!embeddingResult.ok) return embeddingResult;
+      const embeddedChunks = chunks.map((chunk, index) => ({
+        ...chunk,
+        embedding: embeddingResult.embeddings[index].vector,
+        embeddingModel: embeddingResult.model
+      }));
+      return {
+        ok: true,
+        retriever: createHybridRetriever({
+          embeddingClient: this.embeddingClient,
+          vectorStore: this.vectorStoreFactory(ownerUserId),
+          chunks: embeddedChunks
+        })
+      };
+    } catch {
+      return {
+        ok: false,
+        error: { code: "retrieval_failed", message: "RAG 持久化候选读取失败，请稍后重试。" }
+      };
+    }
   }
 }
 

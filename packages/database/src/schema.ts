@@ -236,6 +236,7 @@ export const chunkEmbeddings = pgTable("chunk_embeddings", {
 }, (table) => [
   uniqueIndex("chunk_embeddings_chunk_model_dimensions_uq").on(table.chunkId, table.embeddingModel, table.dimensions),
   index("chunk_embeddings_model_dimensions_idx").on(table.embeddingModel, table.dimensions),
+  check("chunk_embeddings_model_check", sql`${table.embeddingModel} = 'deterministic-mock-embedding-v1'`),
   check("chunk_embeddings_dimensions_check", sql`${table.dimensions} = 32`)
 ]);
 

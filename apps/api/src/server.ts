@@ -1,10 +1,10 @@
 import { createLlmClientFromEnv } from "@aiagent/agent";
 import { runAgent } from "@aiagent/agent";
 import { createQqBotChannel } from "@aiagent/channels";
-import { createDatabaseRuntime } from "@aiagent/database";
+import { createDatabaseRuntime, createPostgresVectorStore } from "@aiagent/database";
 import { createLocalArtifactStorage } from "@aiagent/report";
 import { createIdentityService } from "@aiagent/identity";
-import { createDataSourceRuntime } from "@aiagent/rag";
+import { createDataSourceRuntime, createDeterministicMockEmbeddingClient } from "@aiagent/rag";
 import { createApiServer } from "./index.js";
 
 const port = Number(process.env.PORT ?? 3001);
@@ -35,7 +35,11 @@ const qqChannel = createQqBotChannel({
 const app = createApiServer({
   llmClient: llmResult?.ok ? llmResult.data : undefined,
   identityService,
-  dataSourceRuntime: createDataSourceRuntime({ repository: database.ragDocumentRepository }),
+  dataSourceRuntime: createDataSourceRuntime({
+    repository: database.ragDocumentRepository,
+    embeddingClient: createDeterministicMockEmbeddingClient(),
+    vectorStoreFactory: (ownerUserId) => createPostgresVectorStore(database.pool, { ownerUserId })
+  }),
   requireIdentity: true,
   qqBotEnabled,
   qqBotQrUrl: process.env.QQBOT_PUBLIC_QR_URL,

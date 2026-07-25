@@ -14,7 +14,7 @@ INSERT INTO documents SELECT md5('d'||g)::uuid, NULL, 'shared', NULL FROM genera
 INSERT INTO document_versions SELECT md5('v'||g)::uuid, md5('d'||g)::uuid, 'demo/plan/'||g, 'indexed' FROM generate_series(1,10000) g;
 INSERT INTO chunks SELECT md5('c'||g)::uuid, md5('v'||g)::uuid, 0, 'fixture '||g, 'plan-v1', '{}'::jsonb FROM generate_series(1,10000) g;
 INSERT INTO chunk_embeddings
-SELECT md5('e'||g)::uuid, md5('c'||g)::uuid, 'deterministic-mock-v1', 32,
+SELECT md5('e'||g)::uuid, md5('c'||g)::uuid, 'deterministic-mock-embedding-v1', 32,
        ('['||array_to_string(array_fill(((g % 17)::float / 17)::text, ARRAY[32]), ',')||']')::public.vector
 FROM generate_series(1,10000) g;
 
@@ -33,7 +33,7 @@ WITH authorized_candidates AS MATERIALIZED (
   WHERE d.deleted_at IS NULL
     AND v.status = 'indexed'
     AND (d.scope IN ('shared','demo') OR (d.scope = 'private' AND d.owner_user_id = NULL::uuid))
-    AND e.embedding_model = 'deterministic-mock-v1'
+    AND e.embedding_model = 'deterministic-mock-embedding-v1'
     AND e.dimensions = 32
 )
 SELECT embedding_id
@@ -45,7 +45,7 @@ LIMIT 20;
 EXPLAIN (ANALYZE, BUFFERS)
 SELECT id
 FROM chunk_embeddings
-WHERE embedding_model = 'deterministic-mock-v1' AND dimensions = 32
+WHERE embedding_model = 'deterministic-mock-embedding-v1' AND dimensions = 32
 ORDER BY embedding OPERATOR(public.<=>) ('['||array_to_string(array_fill('0.1'::text, ARRAY[32]), ',')||']')::public.vector
 LIMIT 20;
 

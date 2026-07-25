@@ -279,17 +279,17 @@ RAG chunk 策略当前规则：
 - `chunkIndex` 从 0 开始并在文档内连续；`chunkId` 稳定派生为 `${documentId}_chunk_0000` 这类形式。
 - 每个 chunk 都保留 `documentId`、`source`、`page/pageNumber`、`heading`、`charStart`、`charEnd` 和 metadata，后续 citation 可以从 chunk 追溯到原始 block、行号或页码。
 
-RAG embedding 和内存向量库当前规则：
+RAG embedding 和向量库当前规则：
 
 - `EmbeddingClient` 抽象暴露 `embedTexts(texts)`，当前实现 `createDeterministicMockEmbeddingClient()` 使用规范化 token、稳定 hash 和 L2 normalize 生成固定维度向量。同一文本多次 embedding 结果完全一致，便于无网络、无 API key 的单测。
 - `VectorStore` 抽象暴露 `upsertChunks(chunks)` 和 `search(queryVector, options)`。`createInMemoryVectorStore()` 用 `Map` 按 `chunkId` upsert，相同 `chunkId` 会替换旧 chunk。
 - vector search 使用 cosine similarity，支持 `topK`、`documentId` 和 `source` filter。`topK` 默认 `5`，上限 `50`，避免一次返回过多结果。
 - 向量维度必须一致；chunk embedding 或 query vector 维度不匹配会返回 `embedding_dimension_mismatch` 或 `vector_store_dimension_mismatch` 结构化错误，而不是向 UI 泄漏异常。
-- 内存向量库只适合本地 demo、单测和 deterministic eval。`packages/database` 已提供固定 32 维的 PostgreSQL pgvector `VectorStore`，支持跨进程检索、owner/scope 授权优先过滤和 checksum 感知幂等 upsert；真实模型采用其他维度时必须新增兼容 schema。后续接 OpenAI/通义 embedding 时应替换 `EmbeddingClient` 实现。
+- 内存向量库只适合单测、MCP demo 和 deterministic eval，并由这些调用方显式注入。生产 API 的 Data Sources runtime 注入固定 32 维 PostgreSQL pgvector `VectorStore`，支持跨进程检索、owner/scope 授权优先过滤和 checksum 感知幂等 upsert；真实模型采用其他维度时必须新增兼容 schema。
 
 RAG hybrid retrieval 和 rerank 当前规则：
 
-- `Retriever` 抽象暴露 `retrieve(query, options)`，`createHybridRetriever()` 组合 `EmbeddingClient`、`VectorStore` 和调用方传入的 embedded chunks。向量召回仍走 `VectorStore`，关键词召回扫描本地 chunks，保持未来替换持久化索引的边界。
+- `Retriever` 抽象暴露 `retrieve(query, options)`，`createHybridRetriever()` 组合 `EmbeddingClient`、`VectorStore` 和调用方传入的 embedded chunks。生产 runtime 的向量召回走 pgvector，关键词候选在每次检索时从授权后的持久化 repository 分页重建，进程重启后不依赖旧内存 Map。
 - 支持 `mode: "vector" | "keyword" | "hybrid"`。`topK` 复用向量检索默认值 `5` 和上限 `50`；`candidateLimit` 默认 `20`，并受同一上限保护。
 - 第一版 keyword scoring 是轻量 BM25-like heuristic：中英文 token 匹配、query term coverage、term frequency 和 heading boost，不新增重型生产依赖。它适合小规模公告/财报 demo，后续可替换为真实 BM25 索引。
 - hybrid 模式默认使用 `vectorWeight: 0.65`、`keywordWeight: 0.35`；vector-only 和 keyword-only 模式默认分别使用 1/0 与 0/1。返回结果会输出 `vectorScore`、`keywordScore`、`hybridScore`、`finalScore`、命中词、覆盖率和 heading match。
@@ -314,7 +314,7 @@ typecheck、test、build 与依赖架构检查；数据库集成测试不会连�
 
 Week 2-013 已把 RAG ingestion、chunk、retrieval 和 citation answer 接入 HTTP API 与 Web 页面，形成最小可演示的 Data Sources 工作区：
 
-- `packages/rag` 新增 `createDataSourceRuntime()`，在一个 Node.js 进程内保存 documents、chunks 和 embedded chunks，并组合 `@aiagent/filings` ingestion、heading-aware chunking、deterministic mock embedding、内存 vector store、hybrid retriever 和 grounded answer policy。
+- `packages/rag` 的 `createDataSourceRuntime()` 组合 `@aiagent/filings` ingestion、heading-aware chunking、embedding、可注入 VectorStore、hybrid retriever 和 grounded answer policy；生产 composition 使用 PostgreSQL document repository 与 pgvector store，测试/eval 显式使用内存 adapter。
 - `apps/api` 新增 `POST /api/data-sources/ingest`、`GET /api/data-sources/documents`、`GET /api/data-sources/chunks`、`POST /api/rag/search`、`POST /api/rag/answer`。Route handler 只做 zod 校验、调用 RAG runtime、DTO 映射和 `ApiResult` 结构化响应。
 - `packages/types` 新增 Data Sources/RAG API DTO，并扩展 `CitationDto`：每条 citation 包含 `chunkId`、`documentId`、`source`、`heading`、`chunkIndex`、`quote` 和 `confidence`，可以从 answer 追溯到原始文档、来源、章节和 chunk 顺序。
 - `apps/web` 左侧工作区导航新增 Data Sources 页面。页面通过 HTTP API 展示粘贴/上传文本、document list、chunk list、retrieval results、answer 和 citations；前端不直接依赖 RAG runtime。
@@ -323,7 +323,7 @@ Week 2-013 已把 RAG ingestion、chunk、retrieval 和 citation answer 接入 H
 当前 runtime 限制：
 
 - 只支持 Markdown/TXT demo 文档；PDF 仍返回结构化未配置错误。
-- 内存状态只存在于当前 API 进程，不持久化、不跨进程共享、不做多用户隔离。
+- Document/chunk/vector 已持久化并按当前 session owner 隔离；keyword candidates 在检索时从可见 chunks 重建。Run、trace 等其他状态仍按各自后续 PR 迁移。
 - answer synthesis 是 deterministic heuristic 摘要，不调用真实 LLM；后续可在同一 RAG 边界内替换为带 context packing 的模型生成。
 
 API 验证：

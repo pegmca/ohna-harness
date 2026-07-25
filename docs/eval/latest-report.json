@@ -3,7 +3,7 @@
   "datasetVersion": "financial-research-v1.0.0",
   "run": {
     "id": "eval-financial-research-v1.0.0-seed-20260719",
-    "startedAt": "2026-07-25T06:28:45.076Z",
+    "startedAt": "2026-07-25T07:00:49.553Z",
     "seed": 20260719,
     "strategy": "deterministic_fixture",
     "llmJudge": false

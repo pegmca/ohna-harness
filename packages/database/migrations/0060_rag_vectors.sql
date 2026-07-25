@@ -4,7 +4,7 @@ CREATE TABLE chunk_embeddings (
   id uuid PRIMARY KEY,
   chunk_id uuid NOT NULL REFERENCES chunks(id) ON DELETE CASCADE,
   embedding_provider text NOT NULL,
-  embedding_model text NOT NULL,
+  embedding_model text NOT NULL CHECK (embedding_model = 'deterministic-mock-embedding-v1'),
   dimensions integer NOT NULL CHECK (dimensions = 32),
   embedding public.vector(32) NOT NULL,
   chunk_content_checksum text NOT NULL,

@@ -6,10 +6,9 @@ import test from "node:test";
 import {
   createPostgresRagDocumentRepository,
   createPostgresVectorStore,
-  POSTGRES_RAG_VECTOR_DIMENSIONS,
   POSTGRES_RAG_VECTOR_MODEL
 } from "../dist/index.js";
-import { createDeterministicMockEmbeddingClient } from "../../rag/dist/index.js";
+import { createDataSourceRuntime, createDeterministicMockEmbeddingClient } from "../../rag/dist/index.js";
 import { runMigrations } from "../dist/migrate.js";
 import { createDatabaseTestContext } from "./helpers/database-test-helper.mjs";
 
@@ -92,10 +91,7 @@ async function createFixture() {
   return {
     context,
     repository: createPostgresRagDocumentRepository(context.pool),
-    embeddingClient: createDeterministicMockEmbeddingClient({
-      model: POSTGRES_RAG_VECTOR_MODEL,
-      dimensions: POSTGRES_RAG_VECTOR_DIMENSIONS
-    })
+    embeddingClient: createDeterministicMockEmbeddingClient()
   };
 }
 
@@ -236,6 +232,73 @@ test("pgvector 数据库失败不会泄漏 SQL", { skip: !integrationEnabled }, 
     assert.equal(result.ok, false);
     assert.equal(result.error.code, "retrieval_failed");
     assert.doesNotMatch(result.error.message, /select|chunk_embeddings|connection refused|ECONN|password authentication/i);
+  } finally {
+    await context.cleanup();
+  }
+});
+
+test("Data Sources runtime 使用默认模型经 PostgreSQL ingest，重启后 hybrid search 保持授权语义", { skip: !integrationEnabled }, async () => {
+  const { context } = await createFixture();
+  try {
+    const ownerA = randomUUID();
+    const ownerB = randomUUID();
+    await insertUser(context.pool, ownerA);
+    await insertUser(context.pool, ownerB);
+    const createRuntime = (pool) => createDataSourceRuntime({
+      repository: createPostgresRagDocumentRepository(pool),
+      embeddingClient: createDeterministicMockEmbeddingClient(),
+      vectorStoreFactory: (ownerUserId) => createPostgresVectorStore(pool, { ownerUserId })
+    });
+    const firstRuntime = createRuntime(context.pool);
+    const privateIngest = await firstRuntime.ingest({
+      source: "demo/private-runtime",
+      fileName: "private-runtime.md",
+      contentType: "text/markdown",
+      content: "# 私有经营指标\nA 用户专属净利润增长 18%。"
+    }, { ownerUserId: ownerA });
+    const sharedIngest = await firstRuntime.ingest({
+      source: "demo/shared-runtime",
+      fileName: "shared-runtime.md",
+      contentType: "text/markdown",
+      content: "# 共享经营指标\n行业净利润平均增长 6%。"
+    }, { ownerUserId: null, scope: "shared" });
+    const demoIngest = await firstRuntime.ingest({
+      source: "demo/demo-runtime",
+      fileName: "demo-runtime.md",
+      contentType: "text/markdown",
+      content: "# 演示经营指标\n演示公司净利润增长 9%。"
+    }, { ownerUserId: null, scope: "demo" });
+    assert.ok([privateIngest, sharedIngest, demoIngest].every((result) => result.ok));
+
+    const restartedPool = context.createPool();
+    try {
+      const restartedRuntime = createRuntime(restartedPool);
+      const ownerSearch = await restartedRuntime.search(
+        "专属净利润增长",
+        { mode: "hybrid", topK: 10 },
+        { ownerUserId: ownerA }
+      );
+      const otherSearch = await restartedRuntime.search(
+        "专属净利润增长",
+        { mode: "hybrid", topK: 10 },
+        { ownerUserId: ownerB }
+      );
+      const anonymousSearch = await restartedRuntime.search(
+        "净利润增长",
+        { mode: "hybrid", topK: 10 },
+        { ownerUserId: null }
+      );
+      assert.equal(ownerSearch.ok, true);
+      assert.ok(ownerSearch.data.results.some((result) => result.text.includes("A 用户专属")));
+      assert.equal(otherSearch.ok, true);
+      assert.ok(otherSearch.data.results.every((result) => !result.text.includes("A 用户专属")));
+      assert.equal(anonymousSearch.ok, true);
+      assert.ok(anonymousSearch.data.results.some((result) => result.text.includes("行业净利润")));
+      assert.ok(anonymousSearch.data.results.some((result) => result.text.includes("演示公司")));
+      assert.ok(anonymousSearch.data.results.every((result) => !result.text.includes("A 用户专属")));
+    } finally {
+      await restartedPool.end();
+    }
   } finally {
     await context.cleanup();
   }

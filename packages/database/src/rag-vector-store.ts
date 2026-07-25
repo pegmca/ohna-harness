@@ -9,18 +9,18 @@ import type {
   VectorStore,
   VectorStoreResult
 } from "@aiagent/rag";
+import { DEFAULT_MOCK_EMBEDDING_MODEL } from "@aiagent/rag";
 
 /** PR-07 的固定向量列维度；真实模型不得混入此索引。 */
 export const POSTGRES_RAG_VECTOR_DIMENSIONS = 32;
 /** deterministic mock embedding 的稳定模型名。 */
-export const POSTGRES_RAG_VECTOR_MODEL = "deterministic-mock-v1";
+export const POSTGRES_RAG_VECTOR_MODEL = DEFAULT_MOCK_EMBEDDING_MODEL;
 /** 当前工程闭环的 provider 标识。 */
 export const POSTGRES_RAG_VECTOR_PROVIDER = "deterministic-mock";
 
 /** PostgreSQL VectorStore 的隔离配置。 */
 export interface PostgresVectorStoreOptions {
   ownerUserId: string | null;
-  embeddingModel?: string;
   embeddingProvider?: string;
   dimensions?: number;
 }
@@ -33,13 +33,13 @@ export interface PostgresVectorStoreOptions {
  * RAG 结构化错误，不把 SQL、连接信息或原始 driver message 返回给上层。
  *
  * @param pool PostgreSQL 连接池。
- * @param options owner、模型、provider 与固定维度配置。
+ * @param options owner、provider 与固定维度配置；模型固定复用 RAG 默认常量。
  * @returns 实现现有 VectorStore 端口的 pgvector adapter。
  */
 export function createPostgresVectorStore(pool: pg.Pool, options: PostgresVectorStoreOptions): VectorStore {
   return new PostgresVectorStore(pool, {
     ownerUserId: options.ownerUserId,
-    embeddingModel: options.embeddingModel ?? POSTGRES_RAG_VECTOR_MODEL,
+    embeddingModel: POSTGRES_RAG_VECTOR_MODEL,
     embeddingProvider: options.embeddingProvider ?? POSTGRES_RAG_VECTOR_PROVIDER,
     dimensions: options.dimensions ?? POSTGRES_RAG_VECTOR_DIMENSIONS
   });
@@ -255,6 +255,12 @@ class PostgresVectorStore implements VectorStore {
     }
     if (!this.options.embeddingModel.trim()) {
       return { code: "embedding_model_mismatch", message: "embedding model 不能为空。" };
+    }
+    if (this.options.embeddingModel !== POSTGRES_RAG_VECTOR_MODEL) {
+      return {
+        code: "embedding_model_mismatch",
+        message: "当前 PostgreSQL 向量索引仅支持固定 deterministic mock 模型。"
+      };
     }
     return undefined;
   }

@@ -48,7 +48,7 @@ The Web is feature-first: `app`, `features`, `entities`, and `shared`. A feature
 4. PostgreSQL assigns each event sequence while locking the Run and updates its projection in the same transaction; only after commit does the in-memory bus fan out live events.
 5. Web projects events into assistant-message progress and an on-demand detail panel.
 6. A terminal event provides the final structured result. Explicit cancellation propagates through an execution registry owned `AbortSignal`.
-7. SSE replays persisted events, subscribes to the process-local bus, then performs a catch-up query to close the replay/live race. `RunStore`, `RunEventBus`, and `RunScheduler` remain separate ports.
+7. SSE replays persisted events, subscribes to the process-local bus, buffers live delivery during a catch-up query, then merges and drains only continuous sequences. A later live gap triggers another persisted-event query. `RunStore`, `RunEventBus`, and `RunScheduler` remain separate ports.
 
 ## 6. Quality Attributes
 

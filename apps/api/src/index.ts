@@ -14,7 +14,6 @@ import type {
   AgentRunAcceptedDto,
   AgentRunCreateRequestDto,
   AgentRunSnapshotDto,
-  AgentRunStreamEventDto,
   ApiError,
   ApiResult,
   DataSourceChunksResponseDto,
@@ -43,6 +42,7 @@ import {
 } from "./adapters/in-memory-run-runtime.js";
 import { createRunApplicationService } from "./application/run-service.js";
 import type { RunStore } from "./application/run-ports.js";
+import { createOrderedRunEventStream, isTerminalRunStatus } from "./application/ordered-run-event-stream.js";
 import { createInMemoryReportRepositories } from "./adapters/in-memory-report-persistence.js";
 import { publishArtifactPdf } from "./application/artifact-service.js";
 
@@ -375,33 +375,38 @@ export function createApiServer(options: ApiServerOptions = {}): FastifyInstance
     });
     const header = request.headers["last-event-id"];
     const headerSequence = Number(Array.isArray(header) ? header[0] : header ?? 0);
-    let lastSequence = Math.max(parsedQuery.data.afterSequence ?? 0, Number.isSafeInteger(headerSequence) && headerSequence >= 0 ? headerSequence : 0);
+    const afterSequence = Math.max(parsedQuery.data.afterSequence ?? 0, Number.isSafeInteger(headerSequence) && headerSequence >= 0 ? headerSequence : 0);
     const heartbeat = setInterval(() => reply.raw.write(": heartbeat\n\n"), 15_000);
-    const writeEvent = (event: AgentRunStreamEventDto): void => {
-      if (event.sequence <= lastSequence || reply.raw.writableEnded) return;
-      lastSequence = event.sequence;
-      reply.raw.write(`id: ${event.sequence}\nevent: run_event\ndata: ${JSON.stringify(event)}\n\n`);
-      if (event.type === "run_result" || event.type === "run_error") {
+    let unsubscribe = (): void => undefined;
+    const stream = createOrderedRunEventStream({
+      afterSequence,
+      loadAfter: async (sequence) => await runService.listEvents(userId, run.runId, sequence) ?? [],
+      write(event) {
+        if (!reply.raw.writableEnded) {
+          reply.raw.write(`id: ${event.sequence}\nevent: run_event\ndata: ${JSON.stringify(event)}\n\n`);
+        }
+      },
+      close() {
         clearInterval(heartbeat);
-        reply.raw.end();
+        unsubscribe();
+        if (!reply.raw.writableEnded) reply.raw.end();
       }
-    };
-    const replay = await runService.listEvents(userId, run.runId, lastSequence);
-    for (const event of replay ?? []) writeEvent(event);
-    if (reply.raw.writableEnded) return;
-    if (run.result || run.error) {
+    });
+    await stream.replay(await runService.listEvents(userId, run.runId, afterSequence) ?? []);
+    if (stream.isClosed()) return;
+    if (isTerminalRunStatus(run.status)) {
       clearInterval(heartbeat);
       reply.raw.end();
       return;
     }
-    const unsubscribe = runService.subscribe(run.runId, writeEvent);
-    // 订阅后再补查一次，覆盖首次 replay 查询与 live subscribe 之间提交的事件。
-    const catchUp = await runService.listEvents(userId, run.runId, lastSequence);
-    for (const event of catchUp ?? []) writeEvent(event);
+    unsubscribe = runService.subscribe(run.runId, (event) => { void stream.acceptLive(event); });
     request.raw.on("close", () => {
       clearInterval(heartbeat);
       unsubscribe();
     });
+    // 订阅后再补查一次，覆盖首次 replay 查询与 live subscribe 之间提交的事件。
+    await stream.completeCatchUp(await runService.listEvents(userId, run.runId, afterSequence) ?? []);
+    if (stream.isClosed()) return;
   });
 
   const staleThresholdMs = options.staleRunThresholdMs ?? 5 * 60_000;

@@ -19,5 +19,5 @@ Use one structured run-event stream as the source for Trace persistence, SSE del
 - Token-by-token answer streaming is excluded from the first implementation.
 - Run events and their current Run projection are persisted atomically in PostgreSQL.
 - The database assigns a continuous per-Run sequence under a row lock; terminal state transitions are protected by the same lock.
-- SSE accepts `Last-Event-ID` or `afterSequence`, replays persisted events, subscribes live, and performs a second catch-up query with sequence de-duplication.
+- SSE accepts `Last-Event-ID` or `afterSequence`, replays persisted events, subscribes live, and buffers live delivery until a second catch-up query can merge and drain events in continuous sequence order.
 - The in-memory event bus is deliberately non-durable and only fans out events after the database transaction commits.

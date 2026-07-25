@@ -195,6 +195,9 @@ importers:
       '@aiagent/report':
         specifier: workspace:*
         version: link:../report
+      '@aiagent/trace':
+        specifier: workspace:*
+        version: link:../trace
       '@aiagent/types':
         specifier: workspace:*
         version: link:../types

@@ -32,6 +32,10 @@ Keep package boundaries explicit. Do not move runtime behavior into `apps/web` w
 - Keep public interfaces small and stable. If an interface changes, update callers and related docs in the same task.
 - This repository is for learning. Add concise explanatory comments in Chinese for important abstractions, package boundaries, agent/model/tool control flow, structured error handling, timeout/retry behavior, and any non-obvious implementation tradeoff. Every function and method should have standard Chinese JSDoc, including `@param`, `@returns`, and `@template` when they add useful context. Prefer comments that explain why the code exists or how the learning concept works; do not comment trivial assignments or repeat what the code already says.
 
+## Database Rules
+
+- 新建数据库表、修改表结构或新增字段时，必须在同一个 SQL migration 中使用 `COMMENT ON COLUMN` 为每个字段添加准确的中文注释；修改字段语义时必须同步更新注释，确保 DBeaver 等数据库工具可以直接展示字段含义。
+
 ## Design And Styling Rules
 
 Read `DESIGN.md` in the project root before changing UI.

@@ -1991,41 +1991,43 @@ export function isSafeRagSourceUri(source: string): boolean {
   return /^[A-Za-z0-9\-_.:/]+$/.test(value);
 }
 
-/** source URI query 脱敏 denylist：常见凭证/签名/会话键（大小写不敏感匹配）。 */
-const SENSITIVE_SOURCE_QUERY_KEYS = new Set([
-  "token",
-  "api_key",
-  "apikey",
-  "key",
-  "secret",
-  "signature",
-  "sig",
-  "access_token",
-  "refresh_token",
-  "auth",
-  "authorization",
-  "password",
-  "credential",
-  "credentials",
-  "session",
-  "sessionid",
-  "expires",
-  "expire"
+/**
+ * source URI query 安全资源标识 allowlist（大小写不敏感匹配）。
+ *
+ * 只有这些显式声明的非敏感标识键会保留在 canonical sourceUri 中并参与 lineage 区分；
+ * 未列入的合法标识参数不参与区分，需要时扩充本集合。
+ */
+const SAFE_SOURCE_QUERY_KEYS = new Set([
+  "id",
+  "doc",
+  "document",
+  "file",
+  "name",
+  "page",
+  "v",
+  "version",
+  "ticker",
+  "year",
+  "quarter",
+  "type",
+  "format",
+  "lang",
+  "locale",
+  "region",
+  "category"
 ]);
-
-/** 云厂商签名参数前缀（大小写不敏感匹配），如 x-amz-signature、x-goog-credential。 */
-const SENSITIVE_SOURCE_QUERY_PREFIXES = ["x-amz-", "x-goog-"];
 
 /**
  * 规范化 ingest source 为可持久化的 canonical sourceUri。
  *
  * 该函数同时服务两个目标：
- * - 脱敏：fragment 一律剥离；query 中命中 denylist（token/api_key/signature/session 等
- *   常见凭证键，以及 `x-amz-`/`x-goog-` 前缀的云签名参数，大小写不敏感）的键值对删除，
- *   敏感值不会进入 lineage，也不会出现在 shared/demo 列表 DTO 中。
- * - 资源 identity：未命中 denylist 的参数视为资源标识（如 `?id=filing-A`），
- *   按键名（同键按值）排序后保留；这样 `?id=A` 与 `?id=B` 是不同逻辑文档，
- *   而同一资源带不带 token 都命中同一 externalId。
+ * - 脱敏：未知参数默认不可信。fragment 一律剥离；query 只保留 allowlist
+ *   （`SAFE_SOURCE_QUERY_KEYS`，大小写不敏感）中的资源标识键，其余键——无论是否长得像
+ *   凭证（token、accessToken、client_secret、AWSAccessKeyId……）——一律删除，
+ *   任何未声明的参数都不会进入 lineage，也不会出现在 shared/demo 列表 DTO 中。
+ * - 资源 identity：allowlist 内的参数（如 `?id=filing-A`）按键名（同键按值）排序后保留，
+ *   这样 `?id=A` 与 `?id=B` 是不同逻辑文档，而同一资源带不带凭证参数都命中同一 externalId。
+ *   tradeoff：未列入 allowlist 的合法标识参数不参与区分 lineage，需要时扩充常量集合。
  *
  * http(s) URL 返回 `origin + pathname + 规范化 query`；非 URL 逻辑标识已通过
  * `isSafeRagSourceUri` 白名单，原样返回。
@@ -2039,7 +2041,7 @@ export function normalizeRagSourceUri(source: string): string {
     try {
       const url = new URL(value);
       const kept = [...url.searchParams.entries()]
-        .filter(([key]) => !isSensitiveSourceQueryKey(key))
+        .filter(([key]) => SAFE_SOURCE_QUERY_KEYS.has(key.toLowerCase()))
         .sort(([leftKey, leftValue], [rightKey, rightValue]) =>
           leftKey === rightKey ? leftValue.localeCompare(rightValue) : leftKey.localeCompare(rightKey)
         );
@@ -2050,18 +2052,6 @@ export function normalizeRagSourceUri(source: string): string {
     }
   }
   return value;
-}
-
-/**
- * 判断 query 键是否命中脱敏 denylist（大小写不敏感，含云签名前缀）。
- *
- * @param key query 参数名。
- * @returns 敏感键返回 true。
- */
-function isSensitiveSourceQueryKey(key: string): boolean {
-  const normalized = key.toLowerCase();
-  return SENSITIVE_SOURCE_QUERY_KEYS.has(normalized)
-    || SENSITIVE_SOURCE_QUERY_PREFIXES.some((prefix) => normalized.startsWith(prefix));
 }
 
 /**

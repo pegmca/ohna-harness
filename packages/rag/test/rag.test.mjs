@@ -970,14 +970,14 @@ test("non-sensitive query params stay in source identity while sensitive keys ar
   assert.equal(filingA.ok, true);
   assert.equal(filingB.ok, true);
 
-  // 非敏感标识参数参与 externalId：?id=A 与 ?id=B 是两个不同逻辑文档。
+  // allowlist 标识参数参与 externalId：?id=A 与 ?id=B 是两个不同逻辑文档。
   const twoDocuments = await runtime.listDocuments();
   assert.equal(twoDocuments.documents.length, 2);
   assert.notEqual(filingA.data.document.documentId, filingB.data.document.documentId);
   assert.ok(twoDocuments.documents.some((document) => document.sourceUri === "https://example.com/download?id=filing-A"));
   assert.ok(twoDocuments.documents.some((document) => document.sourceUri === "https://example.com/download?id=filing-B"));
 
-  // 同一资源带敏感参数重复 ingest 命中同一 lineage，敏感值不持久化。
+  // 同一资源带凭证参数重复 ingest 命中同一 lineage，凭证键值不持久化。
   const signedA = await runtime.ingest({
     ...request,
     source: "https://example.com/download?id=filing-A&token=secret123&signature=xyz"
@@ -994,19 +994,58 @@ test("non-sensitive query params stay in source identity while sensitive keys ar
   assert.ok(!serialized.includes("signature=xyz"));
   assert.ok(!serialized.includes("token="));
 
-  // fragment 一律剥离；x-amz-/x-goog- 前缀键剥离，其他参数保留并排序。
+  // fragment 一律剥离；仅 allowlist 参数保留并排序，其余键（含云签名前缀）一律删除。
   assert.equal(
     normalizeRagSourceUri("https://example.com/a?z=1&id=filing-A#section"),
-    "https://example.com/a?id=filing-A&z=1"
+    "https://example.com/a?id=filing-A"
   );
   assert.equal(
     normalizeRagSourceUri("https://example.com/a?X-Amz-Signature=abc&x-goog-credential=def&id=x"),
     "https://example.com/a?id=x"
   );
   assert.equal(
-    normalizeRagSourceUri("https://example.com/a?b=2&b=1&a=0"),
-    "https://example.com/a?a=0&b=1&b=2"
+    normalizeRagSourceUri("https://example.com/a?id=2&id=1&page=0"),
+    "https://example.com/a?id=1&id=2&page=0"
   );
+});
+
+test("credential-like query variants never reach lineage and still deduplicate per resource", async () => {
+  const runtime = createDataSourceRuntime();
+  const request = {
+    fileName: "annual-report.md",
+    contentType: "text/markdown",
+    content: "# 资产质量\n公司不良率保持稳定。"
+  };
+  const plain = await runtime.ingest({ ...request, source: "https://example.com/download?id=filing-A" });
+  assert.equal(plain.ok, true);
+
+  // denylist 时代的绕过变体：allowlist 下无论键名如何变形都不会落库。
+  const variants = [
+    ["accessToken", "tok_1"],
+    ["auth_token", "tok_2"],
+    ["client_secret", "sec_3"],
+    ["session_id", "sess_4"],
+    ["code", "oauth_code_5"],
+    ["AWSAccessKeyId", "AKIA6"],
+    ["GoogleAccessId", "goo_7"]
+  ];
+
+  for (const [key, secret] of variants) {
+    const result = await runtime.ingest({ ...request, source: `https://example.com/download?id=filing-A&${key}=${secret}` });
+    assert.equal(result.ok, true, `${key} variant should ingest`);
+    assert.equal(result.data.deduplicated, true, `${key} variant should hit the same lineage`);
+    assert.equal(result.data.document.documentId, plain.data.document.documentId);
+
+    const documentsPage = await runtime.listDocuments();
+    const chunksPage = await runtime.listChunks();
+    const serialized = JSON.stringify({ documents: documentsPage.documents, chunks: chunksPage.chunks });
+    assert.ok(!serialized.includes(key), `${key} must not be persisted`);
+    assert.ok(!serialized.includes(secret), `${key} secret value must not be persisted`);
+  }
+
+  const documentsPage = await runtime.listDocuments();
+  assert.equal(documentsPage.documents.length, 1);
+  assert.equal(documentsPage.documents[0].sourceUri, "https://example.com/download?id=filing-A");
 });
 
 /**

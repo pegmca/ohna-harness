@@ -18,6 +18,7 @@
     "paths": {
       "@aiagent/agent": ["./packages/agent/src/index.ts"],
       "@aiagent/channels": ["./packages/channels/src/index.ts"],
+      "@aiagent/conversation": ["./packages/conversation/src/index.ts"],
       "@aiagent/database": ["./packages/database/src/index.ts"],
       "@aiagent/eval": ["./packages/eval/src/index.ts"],
       "@aiagent/filings": ["./packages/filings/src/index.ts"],

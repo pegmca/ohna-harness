@@ -11,6 +11,10 @@ import pg from "pg";
 export { findMissingColumnComments, type MigrationCommentIssue } from "./migration-lint.js";
 export { RepositoryError, type RepositoryErrorCode } from "./repository-error.js";
 export { isPostgresUniqueViolation, postgresTimestampToIso } from "./postgres.js";
+export {
+  createPostgresConversationRepositories,
+  type PostgresConversationRepositories
+} from "./conversation-repository.js";
 import { isPostgresUniqueViolation, postgresTimestampToIso } from "./postgres.js";
 import type { ArtifactRepository, WorkflowRepository } from "@aiagent/report";
 import { createPostgresArtifactRepository, createPostgresWorkflowRepository } from "./report.js";

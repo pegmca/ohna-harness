@@ -31,6 +31,14 @@ PR-00 intentionally creates no business migration.
 PostgreSQL stores only bounded Markdown/HTML previews and file metadata; PDF bytes stay in the
 configured `ArtifactStorage`.
 
+## Conversation adapters
+
+`0010_conversation.sql` creates `conversations` and `messages`. The public
+`createPostgresConversationRepositories(pool)` factory returns the two domain ports declared by
+`@aiagent/conversation`. Ownership is part of every SQL predicate; conversation cursors use
+`(last_message_at,id)`, message cursors use `(sequence,id)`, and message writes lock the owned
+conversation row before idempotency checks and sequence allocation.
+
 ## Integration tests
 
 Set `TEST_DATABASE_URL` to an explicitly separate database, then run:

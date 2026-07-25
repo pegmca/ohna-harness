@@ -1,6 +1,8 @@
-import type { AgentRunEventInputDto, AgentRunSnapshotDto, AgentRunStatusDto, AgentRunStreamEventDto, ApiError } from "@aiagent/types";
+import type { AgentRunEventInputDto, AgentRunSnapshotDto, AgentRunStatusDto, AgentRunStreamEventDto, ApiError, CitationDto } from "@aiagent/types";
+import type { NewCitationInput } from "@aiagent/rag";
 import { randomUUID } from "node:crypto";
 import type pg from "pg";
+import { insertMessageCitations } from "./citation-repository.js";
 import { postgresTimestampToIso, withTransaction } from "./postgres.js";
 import { RepositoryError } from "./repository-error.js";
 
@@ -130,6 +132,7 @@ class PostgresRunRepository implements RunRepository {
               event.type === "run_result" ? event.result.answer : "",
               nextStatus === "succeeded" ? "completed" : nextStatus, event.createdAt]
           );
+          await persistTerminalCitations(client, userId, run.assistant_message_id, event);
         }
         return event;
       });
@@ -219,8 +222,49 @@ async function loadSnapshot(executor: Pick<pg.Pool | pg.PoolClient, "query">, ro
   };
 }
 
-/** @param event 事件。 @param current 当前状态。 @returns 事件投影后的状态。 */
-function statusFromEvent(event: AgentRunEventInputDto, current: AgentRunStatusDto): AgentRunStatusDto {
+/**
+ * 在终态事务内写入 message citations；必须与 assistant message 终态同事务提交，
+ * 任一失败整体回滚，避免回答已落库但证据链接丢失（或反之）的部分持久化状态。
+ *
+ * @param client 当前事务。
+ * @param userId 当前用户。
+ * @param assistantMessageId 预留的 assistant message ID。
+ * @param event 已提交的终态事件。
+ * @returns 写入完成；非 run_result 或无引用时无操作。
+ */
+async function persistTerminalCitations(
+  client: pg.PoolClient,
+  userId: string,
+  assistantMessageId: string | null,
+  event: AgentRunStreamEventDto
+): Promise<void> {
+  if (event.type !== "run_result" || !assistantMessageId || !event.result.citations?.length) return;
+  await insertMessageCitations(client, {
+    userId,
+    messageId: assistantMessageId,
+    citations: event.result.citations.map(toNewCitationInput),
+    createdAt: event.createdAt
+  });
+}
+
+/**
+ * 把回答证据 DTO 映射为 citation 写入输入；序号按数组顺序从 1 开始，保证展示顺序稳定。
+ *
+ * @param citation 回答证据 DTO。
+ * @param index 数组下标。
+ * @returns citation 写入输入。
+ */
+function toNewCitationInput(citation: CitationDto, index: number): NewCitationInput {
+  return {
+    ordinal: index + 1,
+    chunkId: citation.chunkId,
+    claim: citation.heading ?? citation.source,
+    quote: citation.quote,
+    score: citation.confidence
+  };
+}
+
+/** @param event 事件。 @param current 当前状态。 @returns 事件投影后的状态。 */function statusFromEvent(event: AgentRunEventInputDto, current: AgentRunStatusDto): AgentRunStatusDto {
   if (event.type === "run_status") return event.status;
   if (event.type === "run_error") return event.error.code === "request_cancelled" ? "cancelled" : "failed";
   if (event.type === "run_result") return event.result.ok ? "succeeded" : "failed";

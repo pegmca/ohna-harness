@@ -5,8 +5,11 @@ import {
   type PersistedWorkflow,
   type WorkflowRepository
 } from "@aiagent/report";
+import type { NewCitationInput } from "@aiagent/rag";
+import type { ReportCitationDto } from "@aiagent/types";
 import { randomUUID } from "node:crypto";
 import type pg from "pg";
+import { deleteArtifactCitations, insertArtifactCitations } from "./citation-repository.js";
 import { postgresTimestampToIso, withTransaction } from "./postgres.js";
 import { RepositoryError } from "./repository-error.js";
 
@@ -77,21 +80,32 @@ export function createPostgresArtifactRepository(pool: pg.Pool): ArtifactReposit
     async save(value) {
       assertArtifactTextLimit(value);
       try {
-        const result = await pool.query(
-          `insert into artifacts(id,user_id,conversation_id,agent_run_id,workflow_run_id,report_id,kind,status,title,media_type,size_bytes,checksum_sha256,storage_provider,storage_key,markdown_content,html_content,payload,metadata,created_at,updated_at,deleted_at)
-           values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
-           on conflict (id) do update set status=excluded.status,title=excluded.title,media_type=excluded.media_type,
-             size_bytes=excluded.size_bytes,checksum_sha256=excluded.checksum_sha256,storage_provider=excluded.storage_provider,
-             storage_key=excluded.storage_key,markdown_content=excluded.markdown_content,html_content=excluded.html_content,
-             payload=excluded.payload,metadata=excluded.metadata,updated_at=excluded.updated_at
-           where artifacts.user_id=excluded.user_id and artifacts.deleted_at is null returning id`,
-          [value.artifact.artifactId, value.userId, value.conversationId, value.agentRunId, value.artifact.workflowRunId,
-            value.artifact.reportId, value.kind, value.artifact.status, value.artifact.title, value.mediaType,
-            value.sizeBytes ?? null, value.checksumSha256 ?? null, value.storageProvider ?? null, value.storageKey ?? null,
-            value.artifact.markdown, value.artifact.html, value.artifact, value.metadata, value.artifact.createdAt,
-            value.updatedAt, value.deletedAt ?? null]
-        );
-        if (!result.rows[0]) throw new RepositoryError("conflict", "Artifact ownership or deletion conflict.");
+        // artifact 与其 citations 必须同事务提交：任一失败整体回滚，避免报告落库但证据链接丢失。
+        await withTransaction(pool, async (client) => {
+          const result = await client.query(
+            `insert into artifacts(id,user_id,conversation_id,agent_run_id,workflow_run_id,report_id,kind,status,title,media_type,size_bytes,checksum_sha256,storage_provider,storage_key,markdown_content,html_content,payload,metadata,created_at,updated_at,deleted_at)
+             values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
+             on conflict (id) do update set status=excluded.status,title=excluded.title,media_type=excluded.media_type,
+               size_bytes=excluded.size_bytes,checksum_sha256=excluded.checksum_sha256,storage_provider=excluded.storage_provider,
+               storage_key=excluded.storage_key,markdown_content=excluded.markdown_content,html_content=excluded.html_content,
+               payload=excluded.payload,metadata=excluded.metadata,updated_at=excluded.updated_at
+             where artifacts.user_id=excluded.user_id and artifacts.deleted_at is null returning id`,
+            [value.artifact.artifactId, value.userId, value.conversationId, value.agentRunId, value.artifact.workflowRunId,
+              value.artifact.reportId, value.kind, value.artifact.status, value.artifact.title, value.mediaType,
+              value.sizeBytes ?? null, value.checksumSha256 ?? null, value.storageProvider ?? null, value.storageKey ?? null,
+              value.artifact.markdown, value.artifact.html, value.artifact, value.metadata, value.artifact.createdAt,
+              value.updatedAt, value.deletedAt ?? null]
+          );
+          if (!result.rows[0]) throw new RepositoryError("conflict", "Artifact ownership or deletion conflict.");
+          await insertArtifactCitations(client, {
+            userId: value.userId,
+            artifactId: value.artifact.artifactId,
+            citations: value.artifact.citations.map((citation, index) =>
+              toNewArtifactCitationInput(citation, index, value.artifact.citationVerification.verified)
+            ),
+            createdAt: value.updatedAt
+          });
+        });
         return value;
       } catch (error) {
         if (error instanceof RepositoryError) throw error;
@@ -113,11 +127,16 @@ export function createPostgresArtifactRepository(pool: pg.Pool): ArtifactReposit
     },
     async softDelete(userId, artifactId, deletedAt) {
       try {
-        const result = await pool.query(
-          "update artifacts set deleted_at=$3,updated_at=$3 where id=$1 and user_id=$2 and deleted_at is null",
-          [artifactId, userId, deletedAt]
-        );
-        return (result.rowCount ?? 0) === 1;
+        // 软删除生成物时在同一事务中级联删除 citation 关系，与 FK on delete cascade 语义一致。
+        return await withTransaction(pool, async (client) => {
+          const result = await client.query(
+            "update artifacts set deleted_at=$3,updated_at=$3 where id=$1 and user_id=$2 and deleted_at is null",
+            [artifactId, userId, deletedAt]
+          );
+          if ((result.rowCount ?? 0) !== 1) return false;
+          await deleteArtifactCitations(client, artifactId);
+          return true;
+        });
       } catch (error) {
         throw new RepositoryError("database_unavailable", "Artifact persistence is unavailable.", error);
       }
@@ -224,6 +243,27 @@ function mapArtifact(row: ArtifactRow): ArtifactRecord {
     checksumSha256: row.checksum_sha256 ?? undefined, storageProvider: row.storage_provider ?? undefined,
     storageKey: row.storage_key ?? undefined, metadata: row.metadata, updatedAt: postgresTimestampToIso(row.updated_at),
     deletedAt: row.deleted_at ? postgresTimestampToIso(row.deleted_at) : undefined
+  };
+}
+
+/**
+ * 把报告引用 DTO 映射为 citation 写入输入；序号按数组顺序从 1 开始。
+ *
+ * claim 取 claimId（无则 supportsFinding）；verifier 状态取报告级校验结论，
+ * 自动校验未通过时保持 unverified，等待后续显式状态迁移。
+ *
+ * @param citation 报告引用 DTO。
+ * @param index 数组下标。
+ * @param verified 报告级引用校验是否通过。
+ * @returns citation 写入输入。
+ */
+function toNewArtifactCitationInput(citation: ReportCitationDto, index: number, verified: boolean): NewCitationInput {
+  return {
+    ordinal: index + 1,
+    ...(citation.chunkId !== undefined ? { chunkId: citation.chunkId } : {}),
+    claim: citation.claimId ?? citation.supportsFinding,
+    quote: citation.quote,
+    verifierStatus: verified ? "verified" : "unverified"
   };
 }
 

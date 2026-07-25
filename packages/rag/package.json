@@ -13,7 +13,7 @@
   },
   "scripts": {
     "build": "tsc -b",
-    "test": "pnpm build && node --test test/rag.test.mjs",
+    "test": "pnpm build && node --test test/*.test.mjs",
     "typecheck": "pnpm --filter @aiagent/types build && tsc -p tsconfig.json --pretty false --noEmit"
   },
   "dependencies": {

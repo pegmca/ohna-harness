@@ -26,8 +26,8 @@ Reserved prefixes for persistence work are:
 | `0080` | Citation |
 
 PR-00 intentionally creates no business migration. `0010` (Conversation / Message), `0020`
-(Run / RunEvent), `0040` (Approval), `0050` (RAG documents), `0060` (pgvector retrieval) and `0070`
-(Report / Artifact) are implemented; the other reserved prefixes remain unclaimed.
+(Run / RunEvent), `0040` (Approval), `0050` (RAG documents), `0060` (pgvector retrieval), `0070`
+(Report / Artifact) and `0080` (Citation) are implemented; no reserved prefixes remain unclaimed.
 
 PR-05 implements the `0040` prefix (`0040_approval.sql`): see "Approval adapters" below.
 
@@ -53,6 +53,26 @@ endpoint is exposed in this slice.
 `0070_report.sql` creates `workflow_runs`, auditable `workflow_node_runs`, and `artifacts`.
 PostgreSQL stores only bounded Markdown/HTML previews and file metadata; PDF bytes stay in the
 configured `ArtifactStorage`.
+
+## Citation adapter
+
+`0080_citations.sql` creates `message_citations` and `artifact_citations`. Each row carries
+user/message-or-artifact ownership, a citation `ordinal` (unique per parent), `claim`, a
+generation-time `quote` snapshot, an optional retrieval `score`, a `verifier_status`
+(`unverified/verified/rejected/manual_verified/manual_rejected`) and nullable FKs to the exact
+`chunks`/`document_versions` rows used at generation time. Referenced chunks/versions use
+`ON DELETE RESTRICT` (retention policy owns deletion); parent messages/artifacts cascade.
+
+The domain port `CitationRepository` is declared by `@aiagent/rag`
+(`src/citation-repository.ts`); `createPostgresCitationRepository(pool)` is exposed as
+`DatabaseRuntime.citationRepository`. Writes are not exposed on the port: message citations are
+inserted inside the `RunRepository.append` terminal transaction, and artifact citations inside
+`ArtifactRepository.save` (idempotent on `(artifact_id, ordinal)`; `softDelete` removes citation
+rows in the same transaction). Reads verify parent ownership first, then project source
+accessibility per current document scope: `accessible` (full linkage + quote), `inaccessible`
+(ordinal/claim kept, no quote or source URI) or `unresolved` (quote snapshot only). Verifier
+updates use an explicit state machine — automatic results cannot overwrite each other and manual
+terminal states cannot be overwritten at all.
 
 ## Approval adapters
 

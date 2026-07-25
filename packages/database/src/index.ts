@@ -6,7 +6,7 @@ import type {
   IdentityUser,
   QqIdentity
 } from "@aiagent/identity";
-import type { RagDocumentRepository } from "@aiagent/rag";
+import type { CitationRepository, RagDocumentRepository } from "@aiagent/rag";
 import { randomUUID } from "node:crypto";
 import pg from "pg";
 export { findMissingColumnComments, type MigrationCommentIssue } from "./migration-lint.js";
@@ -36,6 +36,8 @@ import { createPostgresApprovalRepository } from "./approval-repository.js";
 export { createPostgresApprovalRepository } from "./approval-repository.js";
 import { createPostgresTraceStore } from "./trace-repository.js";
 export { createPostgresTraceStore } from "./trace-repository.js";
+import { createPostgresCitationRepository } from "./citation-repository.js";
+export { createPostgresCitationRepository } from "./citation-repository.js";
 
 const { Pool } = pg;
 
@@ -45,6 +47,7 @@ export interface DatabaseRuntime {
   messageRepository: import("@aiagent/conversation").MessageRepository;
   identityRepository: IdentityRepository;
   ragDocumentRepository: RagDocumentRepository;
+  citationRepository: CitationRepository;
   workflowRepository: WorkflowRepository;
   artifactRepository: ArtifactRepository;
   runRepository: RunRepository;
@@ -69,6 +72,7 @@ export function createDatabaseRuntime(databaseUrl: string): DatabaseRuntime {
     ...conversations,
     identityRepository: createPostgresIdentityRepository(pool),
     ragDocumentRepository: createPostgresRagDocumentRepository(pool),
+    citationRepository: createPostgresCitationRepository(pool),
     workflowRepository: createPostgresWorkflowRepository(pool),
     artifactRepository: createPostgresArtifactRepository(pool),
     runRepository: createPostgresRunRepository(pool),

@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { bigint, check, customType, index, integer, jsonb, pgTable, text, timestamp, unique, uniqueIndex, uuid } from "drizzle-orm/pg-core";
+import { bigint, check, customType, doublePrecision, index, integer, jsonb, pgTable, text, timestamp, unique, uniqueIndex, uuid } from "drizzle-orm/pg-core";
 
 export const users = pgTable("users", {
   id: uuid("id").primaryKey(),
@@ -380,4 +380,47 @@ export const traceEvents = pgTable("trace_events", {
 }, (table) => [
   uniqueIndex("trace_events_trace_sequence_uq").on(table.traceId, table.sequence),
   index("trace_events_user_trace_sequence_idx").on(table.userId, table.traceId, table.sequence)
+]);
+
+// Citation 表镜像 0080_citations.sql；被引用 chunk/version 默认保留（restrict），生成物删除级联。
+export const messageCitations = pgTable("message_citations", {
+  id: uuid("id").primaryKey(),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  messageId: uuid("message_id").notNull().references(() => messages.id, { onDelete: "cascade" }),
+  chunkId: uuid("chunk_id").references(() => chunks.id, { onDelete: "restrict" }),
+  documentVersionId: uuid("document_version_id").references(() => documentVersions.id, { onDelete: "restrict" }),
+  ordinal: integer("ordinal").notNull(),
+  claim: text("claim").notNull(),
+  quote: text("quote").notNull(),
+  score: doublePrecision("score"),
+  verifierStatus: text("verifier_status").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true, mode: "string" }).notNull()
+}, (table) => [
+  uniqueIndex("message_citations_message_id_ordinal_key").on(table.messageId, table.ordinal),
+  index("message_citations_chunk_idx").on(table.chunkId),
+  index("message_citations_document_version_idx").on(table.documentVersionId),
+  index("message_citations_user_message_idx").on(table.userId, table.messageId, table.ordinal),
+  check("message_citations_ordinal_check", sql`${table.ordinal} > 0`),
+  check("message_citations_verifier_status_check", sql`${table.verifierStatus} in ('unverified','verified','rejected','manual_verified','manual_rejected')`)
+]);
+
+export const artifactCitations = pgTable("artifact_citations", {
+  id: uuid("id").primaryKey(),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  artifactId: text("artifact_id").notNull().references(() => artifacts.id, { onDelete: "cascade" }),
+  chunkId: uuid("chunk_id").references(() => chunks.id, { onDelete: "restrict" }),
+  documentVersionId: uuid("document_version_id").references(() => documentVersions.id, { onDelete: "restrict" }),
+  ordinal: integer("ordinal").notNull(),
+  claim: text("claim").notNull(),
+  quote: text("quote").notNull(),
+  score: doublePrecision("score"),
+  verifierStatus: text("verifier_status").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true, mode: "string" }).notNull()
+}, (table) => [
+  uniqueIndex("artifact_citations_artifact_id_ordinal_key").on(table.artifactId, table.ordinal),
+  index("artifact_citations_chunk_idx").on(table.chunkId),
+  index("artifact_citations_document_version_idx").on(table.documentVersionId),
+  index("artifact_citations_user_artifact_idx").on(table.userId, table.artifactId, table.ordinal),
+  check("artifact_citations_ordinal_check", sql`${table.ordinal} > 0`),
+  check("artifact_citations_verifier_status_check", sql`${table.verifierStatus} in ('unverified','verified','rejected','manual_verified','manual_rejected')`)
 ]);

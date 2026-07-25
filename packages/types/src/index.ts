@@ -427,6 +427,8 @@ export interface AgentRunResponseDto {
   ok: boolean;
   intent: AgentIntentDto;
   answer: string;
+  /** grounded answer 的证据引用；持久化为 message citations 后可在来源归档时仍保持序号稳定。 */
+  citations?: CitationDto[];
   steps: AgentStepDto[];
   trace: TraceDto;
   /** Trace 旁路持久化状态；降级时只暴露稳定诊断，不包含数据库原始异常。 */

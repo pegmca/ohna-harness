@@ -306,6 +306,9 @@ pnpm test
 pnpm build
 ```
 
+GitHub PR 会运行 `.github/workflows/ci.yml`，在独立 PostgreSQL service 上执行根级
+typecheck、test、build 与依赖架构检查；数据库集成测试不会连接开发数据库。
+
 ## Week 2 Citation Answer And Data Sources
 
 Week 2-013 已把 RAG ingestion、chunk、retrieval 和 citation answer 接入 HTTP API 与 Web 页面，形成最小可演示的 Data Sources 工作区：

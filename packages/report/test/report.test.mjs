@@ -35,6 +35,9 @@ test("local artifact storage rejects paths and publishes only atomically complet
     assert.deepEqual([...await storage.readPdf(written.key)], [...bytes]);
     assert.equal((await readdir(join(root, written.key.slice(0, 2)))).some((name) => name.endsWith(".tmp")), false);
     assert.equal((await readFile(join(root, written.key))).byteLength, bytes.byteLength);
+    await storage.deletePdf(written.key);
+    await storage.deletePdf(written.key);
+    await assert.rejects(() => storage.readPdf(written.key), /Artifact PDF storage read failed/);
     for (const unsafe of ["../secret.pdf", "/tmp/secret.pdf", "aa/evil\n.pdf", "aa/not-a-uuid.pdf"]) {
       assert.throws(() => assertStorageKey(unsafe), /Invalid artifact storage key/);
       await assert.rejects(() => storage.readPdf(unsafe), /Invalid artifact storage key/);

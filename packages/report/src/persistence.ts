@@ -98,6 +98,13 @@ export interface ArtifactStorage {
    * @returns PDF bytes。
    */
   readPdf(key: string): Promise<Uint8Array>;
+  /**
+   * 删除本次 saga 尚未提交 metadata 的 PDF，用于失败补偿。
+   *
+   * @param key adapter 已生成且通过校验的 storage key。
+   * @returns 删除完成；文件已不存在也视为成功。
+   */
+  deletePdf(key: string): Promise<void>;
 }
 
 export interface ArtifactPersistenceFailure {

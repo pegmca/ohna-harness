@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [master]
+  push:
+    branches: [master]
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:0.8.5-pg16-bookworm
+        env:
+          POSTGRES_DB: aiagent_test
+          POSTGRES_USER: aiagent
+          POSTGRES_PASSWORD: aiagent-test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U aiagent -d aiagent_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgresql://aiagent:aiagent-test@127.0.0.1:5432/aiagent_test
+      DATABASE_URL: postgresql://aiagent:aiagent-test@127.0.0.1:5432/aiagent
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm build
+      - run: pnpm architecture:check

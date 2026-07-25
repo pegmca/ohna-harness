@@ -52,8 +52,22 @@ export function createLocalArtifactStorage(rootDir: string): ArtifactStorage {
       } catch (error) {
         throw new Error("Artifact PDF storage read failed.", { cause: error });
       }
+    },
+    async deletePdf(key): Promise<void> {
+      assertStorageKey(key);
+      try {
+        await unlink(join(rootDir, key));
+      } catch (error) {
+        if (isMissingFileError(error)) return;
+        throw new Error("Artifact PDF storage compensation failed.", { cause: error });
+      }
     }
   };
+}
+
+/** @param error 未知文件系统错误。 @returns 是否为文件不存在。 */
+function isMissingFileError(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
 }
 
 /**

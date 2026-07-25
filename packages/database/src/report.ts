@@ -31,19 +31,8 @@ export function createPostgresWorkflowRepository(pool: pg.Pool): WorkflowReposit
               value.run.error ?? null, value.run, value.run.startedAt, value.run.completedAt ?? null, now]
           );
           if (!result.rows[0]) throw new RepositoryError("invalid_state_transition", "Workflow terminal status cannot transition.");
-          const attemptCounts = countNodeAttempts(value.run);
           for (const node of value.run.nodes) {
-            const attempts = attemptCounts.get(node.nodeId) ?? 1;
-            for (let attempt = 1; attempt <= attempts; attempt += 1) {
-              const isFinalAttempt = attempt === attempts;
-              const retry = value.run.recovery?.find((item) => item.nodeId === node.nodeId && item.action === "retried");
-              const attemptStatus = isFinalAttempt ? node.status : "failed";
-              const attemptError = isFinalAttempt ? node.error ?? null : {
-                code: "node_execution_failed",
-                message: retry?.reason ?? "Workflow node retryable attempt failed.",
-                nodeId: node.nodeId,
-                details: { retryable: true, attempt }
-              };
+            for (const attempt of buildNodeAttempts(value.run, node.nodeId)) {
               await client.query(
                 `insert into workflow_node_runs(id,workflow_run_id,node_id,node_type,title,attempt,status,input_summary,output_summary,error,started_at,completed_at,duration_ms,created_at,updated_at)
                  values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$14)
@@ -52,9 +41,9 @@ export function createPostgresWorkflowRepository(pool: pg.Pool): WorkflowReposit
                    completed_at=excluded.completed_at,duration_ms=excluded.duration_ms,updated_at=excluded.updated_at
                  where workflow_node_runs.status not in ('rejected','succeeded','failed','skipped')
                     or workflow_node_runs.status=excluded.status`,
-                [randomUUID(), value.run.runId, node.nodeId, node.type, node.title, attempt, attemptStatus,
-                  node.inputSummary ?? null, isFinalAttempt ? node.outputSummary ?? null : null, attemptError, node.startedAt ?? null,
-                  node.completedAt ?? null, Math.max(0, Math.round(node.durationMs)), now]
+                [randomUUID(), value.run.runId, node.nodeId, node.type, node.title, attempt.attempt, attempt.status,
+                  attempt.inputSummary ?? null, attempt.outputSummary ?? null, attempt.error ?? null, attempt.startedAt ?? null,
+                  attempt.completedAt ?? null, attempt.durationMs, now]
               );
             }
           }
@@ -146,13 +135,85 @@ interface ArtifactRow {
   payload: ArtifactRecord["artifact"]; metadata: Record<string, unknown>; updated_at: Date | string; deleted_at: Date | string | null;
 }
 
-/** @param run Workflow DTO。 @returns 每个节点的 attempt 数量。 */
-function countNodeAttempts(run: PersistedWorkflow["run"]): Map<string, number> {
-  const counts = new Map<string, number>();
+interface NodeAttemptSnapshot {
+  attempt: number;
+  status: PersistedWorkflow["run"]["nodes"][number]["status"];
+  inputSummary?: Record<string, unknown>;
+  outputSummary?: Record<string, unknown>;
+  error?: PersistedWorkflow["run"]["error"];
+  startedAt?: string;
+  completedAt?: string;
+  durationMs: number;
+}
+
+/**
+ * 从 canonical workflow events 重建真实节点 attempt。
+ *
+ * 正常 verifier loop 会产生多个 succeeded attempt；runtime 内部 retry 则产生 failed 后再开始，
+ * 因此不能仅凭同一 nodeId 的出现次数推断失败。
+ *
+ * @param run Workflow DTO。
+ * @param nodeId 节点 ID。
+ * @returns 按执行顺序排列的 attempt 快照。
+ */
+function buildNodeAttempts(run: PersistedWorkflow["run"], nodeId: string): NodeAttemptSnapshot[] {
+  const attempts: NodeAttemptSnapshot[] = [];
   for (const event of run.events) {
-    if (event.type === "node_started" && event.nodeId) counts.set(event.nodeId, (counts.get(event.nodeId) ?? 0) + 1);
+    if (event.nodeId !== nodeId) continue;
+    if (event.type === "node_started") {
+      attempts.push({
+        attempt: attempts.length + 1,
+        status: "running",
+        inputSummary: toSummary(event.data?.inputSummary),
+        startedAt: event.createdAt,
+        durationMs: 0
+      });
+      continue;
+    }
+    if (!["node_succeeded", "node_failed", "node_paused", "node_rejected"].includes(event.type)) continue;
+    let current = attempts.at(-1);
+    if (!current || isTerminalNodeStatus(current.status)) {
+      current = { attempt: attempts.length + 1, status: "pending", durationMs: 0 };
+      attempts.push(current);
+    }
+    current.status = event.type === "node_succeeded"
+      ? "succeeded"
+      : event.type === "node_paused"
+        ? "paused"
+        : event.type === "node_rejected"
+          ? "rejected"
+          : "failed";
+    current.outputSummary = toSummary(event.data?.outputSummary);
+    current.error = event.error;
+    current.completedAt = event.createdAt;
+    current.durationMs = current.startedAt
+      ? Math.max(0, Date.parse(event.createdAt) - Date.parse(current.startedAt))
+      : 0;
   }
-  return counts;
+  if (attempts.length > 0) return attempts;
+  const node = run.nodes.find((item) => item.nodeId === nodeId);
+  return node ? [{
+    attempt: 1,
+    status: node.status,
+    inputSummary: node.inputSummary,
+    outputSummary: node.outputSummary,
+    error: node.error,
+    startedAt: node.startedAt,
+    completedAt: node.completedAt,
+    durationMs: Math.max(0, Math.round(node.durationMs))
+  }] : [];
+}
+
+/** @param status 节点状态。 @returns 是否已结束当前 attempt。 */
+function isTerminalNodeStatus(status: NodeAttemptSnapshot["status"]): boolean {
+  return ["paused", "rejected", "succeeded", "failed", "skipped"].includes(status);
+}
+
+/** @param value event data 中的未知摘要。 @returns 对象摘要或 undefined。 */
+function toSummary(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
 }
 
 /** @param row PostgreSQL 行。 @returns Artifact record。 */

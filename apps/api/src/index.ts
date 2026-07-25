@@ -43,6 +43,7 @@ import {
 } from "./adapters/in-memory-run-runtime.js";
 import { createRunApplicationService } from "./application/run-service.js";
 import { createInMemoryReportRepositories } from "./adapters/in-memory-report-persistence.js";
+import { publishArtifactPdf } from "./application/artifact-service.js";
 
 const agentRunRequestSchema = z.object({
   message: z.string(),
@@ -595,33 +596,27 @@ export function createApiServer(options: ApiServerOptions = {}): FastifyInstance
       reply.code(403);
       return fail(toApiError("forbidden", "PDF 导出需要先批准对应 workflow 的 exporter。", requestId, { approvalId }), requestId);
     }
-    try {
-      const bytes = renderResearchReportPdf({ title: artifact.title, generatedAt: artifact.createdAt, markdown: artifact.markdown, citations: artifact.citations });
-      const stored = await artifactStorage.writePdf(bytes);
-      const updated: ReportArtifactDto = {
-        ...artifact,
-        status: "pdf_ready",
-        pdfExport: {
-          status: "ready",
-          fileName: artifact.pdfExport.fileName ?? `${artifact.artifactId}.pdf`,
-          message: "真实 PDF 已生成并通过 artifact ID 提供下载。",
-          generatedAt: new Date().toISOString(),
-          downloadUrl: `/api/report-artifacts/${encodeURIComponent(artifact.artifactId)}/download`
-        }
-      };
-      await artifactRepository.save({
-        ...record, artifact: updated, mediaType: "application/pdf", sizeBytes: stored.sizeBytes,
-        checksumSha256: stored.checksumSha256, storageProvider: stored.provider, storageKey: stored.key,
-        updatedAt: updated.pdfExport.generatedAt ?? new Date().toISOString()
-      });
-      return { ok: true, data: updated, requestId };
-    } catch {
-      const error = toApiError("internal_error", "PDF 生成失败，可安全重试。", requestId);
-      const updated: ReportArtifactDto = { ...artifact, status: "pdf_failed", pdfExport: { status: "failed", fileName: artifact.pdfExport.fileName, message: error.message, error } };
-      await artifactRepository.save({ ...record, artifact: updated, updatedAt: new Date().toISOString() }).catch(() => undefined);
-      reply.code(500);
-      return fail(error, requestId);
-    }
+    const published = await publishArtifactPdf(
+      record,
+      artifactRepository,
+      artifactStorage,
+      () => renderResearchReportPdf({
+        title: artifact.title,
+        generatedAt: artifact.createdAt,
+        markdown: artifact.markdown,
+        citations: artifact.citations
+      })
+    );
+    if (published.ok) return { ok: true, data: published.artifact, requestId };
+    reply.code(500);
+    return fail(toApiError(
+      "internal_error",
+      published.failureStatePersisted
+        ? "PDF 生成失败，失败状态已记录，可安全重试。"
+        : "PDF 生成失败且状态暂时无法保存，请稍后查询 Artifact 状态。",
+      requestId,
+      { failurePhase: published.phase, failureStatePersisted: published.failureStatePersisted }
+    ), requestId);
   });
 
   /** 下载先校验用户归属，再用数据库中的不透明 storage key 读取 PDF。 */

@@ -17,9 +17,21 @@ test("workflow and artifact persist across repository instances with owner isola
       "insert into users(id,created_at,updated_at,last_seen_at) values ($1,$3,$3,$3),($2,$3,$3,$3)",
       [userA, userB, now]
     );
-    const workflow = createWorkflow(userA, now);
+    const workflow = createWorkflow(userA, now, "workflow-loop", [
+      { id: "e1", type: "node_started", nodeId: "writer", createdAt: now, data: { inputSummary: { pass: 1 } } },
+      { id: "e2", type: "node_succeeded", nodeId: "writer", createdAt: now, data: { outputSummary: { pass: 1 } } },
+      { id: "e3", type: "node_started", nodeId: "writer", createdAt: now, data: { inputSummary: { pass: 2 } } },
+      { id: "e4", type: "node_succeeded", nodeId: "writer", createdAt: now, data: { outputSummary: { pass: 2 } } }
+    ]);
+    const retriedWorkflow = createWorkflow(userA, now, "workflow-retry", [
+      { id: "r1", type: "node_started", nodeId: "writer", createdAt: now, data: { attempt: 1 } },
+      { id: "r2", type: "node_failed", nodeId: "writer", createdAt: now, data: { attempt: 1, retryable: true }, error: { code: "node_execution_failed", message: "temporary", nodeId: "writer" } },
+      { id: "r3", type: "node_started", nodeId: "writer", createdAt: now, data: { attempt: 2 } },
+      { id: "r4", type: "node_succeeded", nodeId: "writer", createdAt: now }
+    ]);
     await createPostgresWorkflowRepository(context.pool).save(workflow);
-    const artifact = createArtifact(userA, now);
+    await createPostgresWorkflowRepository(context.pool).save(retriedWorkflow);
+    const artifact = createArtifact(userA, now, workflow.run.runId);
     await createPostgresArtifactRepository(context.pool).save(artifact);
 
     const secondPool = context.createPool();
@@ -29,7 +41,12 @@ test("workflow and artifact persist across repository instances with owner isola
       assert.equal((await createPostgresArtifactRepository(secondPool).findById(userA, artifact.artifact.artifactId)).artifact.html, "<h1>报告</h1>");
       assert.equal(await createPostgresArtifactRepository(secondPool).findById(userB, artifact.artifact.artifactId), undefined);
       const attempts = await secondPool.query("select attempt,status from workflow_node_runs where workflow_run_id=$1 order by attempt", [workflow.run.runId]);
-      assert.deepEqual(attempts.rows, [{ attempt: 1, status: "failed" }, { attempt: 2, status: "succeeded" }]);
+      assert.deepEqual(attempts.rows, [{ attempt: 1, status: "succeeded" }, { attempt: 2, status: "succeeded" }]);
+      const retriedAttempts = await secondPool.query("select attempt,status,error->>'message' as message from workflow_node_runs where workflow_run_id=$1 order by attempt", [retriedWorkflow.run.runId]);
+      assert.deepEqual(retriedAttempts.rows, [
+        { attempt: 1, status: "failed", message: "temporary" },
+        { attempt: 2, status: "succeeded", message: null }
+      ]);
       await assert.rejects(
         () => createPostgresWorkflowRepository(secondPool).save({ ...workflow, run: { ...workflow.run, status: "running" } }),
         (error) => error.code === "invalid_state_transition"
@@ -43,29 +60,25 @@ test("workflow and artifact persist across repository instances with owner isola
 });
 
 /** @param userId 用户 ID。 @param now 时间。 @returns Workflow fixture。 */
-function createWorkflow(userId, now) {
+function createWorkflow(userId, now, workflowRunId, events) {
   return {
     context: { userId, conversationId: "conversation-1", agentRunId: "run-1", planId: "plan-1" },
     run: {
-      runId: "workflow-1", workflowName: "report", status: "succeeded", startedAt: now, completedAt: now,
+      runId: workflowRunId, workflowName: "report", status: "succeeded", startedAt: now, completedAt: now,
       durationMs: 2, maxSteps: 4, executedSteps: 2, edges: [], error: undefined,
-      events: [
-        { id: "e1", type: "node_started", nodeId: "writer", createdAt: now },
-        { id: "e2", type: "node_started", nodeId: "writer", createdAt: now },
-        { id: "e3", type: "node_succeeded", nodeId: "writer", createdAt: now }
-      ],
+      events,
       nodes: [{ nodeId: "writer", type: "report.writer", title: "Writer", status: "succeeded", startedAt: now, completedAt: now, durationMs: 2 }]
     }
   };
 }
 
 /** @param userId 用户 ID。 @param now 时间。 @returns Artifact fixture。 */
-function createArtifact(userId, now) {
+function createArtifact(userId, now, workflowRunId) {
   return {
     userId, conversationId: "conversation-1", agentRunId: "run-1", kind: "research_report", mediaType: "text/html",
     metadata: {}, updatedAt: now,
     artifact: {
-      artifactId: "artifact-1", reportId: "plan-1", workflowRunId: "workflow-1", status: "html_preview_only",
+      artifactId: "artifact-1", reportId: "plan-1", workflowRunId, status: "html_preview_only",
       title: "报告", markdown: "# 报告", html: "<h1>报告</h1>", citations: [],
       citationVerification: { decision: "pass", verified: true, missingClaims: [], missingMetrics: [] },
       pdfExport: { status: "queued", message: "等待导出" }, createdAt: now

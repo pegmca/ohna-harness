@@ -8,6 +8,7 @@ import {
   createDataSourceRuntime,
   createHeuristicReranker,
   createHybridRetriever,
+  createInMemoryRagDocumentRepository,
   createInMemoryVectorStore,
   createRagAnswer,
   createRagPackageSummary,
@@ -624,8 +625,19 @@ test("data source runtime ingests, searches and answers with traceable citations
   });
 
   assert.equal(ingestResult.ok, true);
-  assert.equal(runtime.listDocuments().length, 1);
-  assert.equal(runtime.listChunks().length, ingestResult.data.indexedChunkCount);
+  assert.equal(ingestResult.data.documentVersion, 1);
+  assert.equal(ingestResult.data.deduplicated, false);
+
+  const documentsPage = await runtime.listDocuments();
+  const chunksPage = await runtime.listChunks();
+
+  assert.equal(documentsPage.documents.length, 1);
+  assert.equal(documentsPage.nextCursor, null);
+  assert.equal(documentsPage.documents[0].latestVersion, 1);
+  assert.equal(documentsPage.documents[0].latestStatus, "indexed");
+  assert.equal(documentsPage.documents[0].scope, "shared");
+  assert.equal(chunksPage.chunks.length, ingestResult.data.indexedChunkCount);
+  assert.equal(chunksPage.chunks[0].documentId, documentsPage.documents[0].documentId);
 
   const searchResult = await runtime.search("资产质量", {
     topK: 3
@@ -661,6 +673,158 @@ test("data source runtime applies unknown answer policy when evidence is missing
   assert.equal(ingestResult.ok, true);
   assert.equal(answerResult.ok, true);
   assert.match(answerResult.data.answer.answer, /资料不足|无法可靠回答/);
+});
+
+test("re-ingesting identical content is deduplicated without new versions or chunks", async () => {
+  const repository = createInMemoryRagDocumentRepository();
+  const runtime = createDataSourceRuntime({ repository });
+  const request = {
+    source: "demo",
+    fileName: "annual-report.md",
+    contentType: "text/markdown",
+    content: "# 资产质量\n公司不良率保持稳定。"
+  };
+  const first = await runtime.ingest(request);
+  const second = await runtime.ingest(request);
+
+  assert.equal(first.ok, true);
+  assert.equal(second.ok, true);
+  assert.equal(first.data.deduplicated, false);
+  assert.equal(second.data.deduplicated, true);
+  assert.equal(second.data.documentVersion, first.data.documentVersion);
+  assert.deepEqual(
+    second.data.chunks.map((chunk) => chunk.chunkId),
+    first.data.chunks.map((chunk) => chunk.chunkId)
+  );
+
+  const versions = await repository.listVersions({ documentId: first.data.document.documentId, ownerUserId: null });
+  const chunksPage = await runtime.listChunks();
+
+  assert.equal(versions.length, 1);
+  assert.equal(chunksPage.chunks.length, first.data.indexedChunkCount);
+
+  const searchResult = await runtime.search("不良率", { topK: 1 });
+  assert.equal(searchResult.ok, true);
+  assert.equal(searchResult.data.results.length, 1);
+});
+
+test("new content creates an immutable new version and keeps old chunks", async () => {
+  const repository = createInMemoryRagDocumentRepository();
+  const runtime = createDataSourceRuntime({ repository });
+  const base = { source: "demo", fileName: "annual-report.md", contentType: "text/markdown" };
+  const first = await runtime.ingest({ ...base, content: "# 资产质量\n公司不良率保持稳定。" });
+  const second = await runtime.ingest({ ...base, content: "# 资产质量\n公司不良率上升，拨备覆盖率下降。" });
+
+  assert.equal(first.ok, true);
+  assert.equal(second.ok, true);
+  assert.equal(second.data.deduplicated, false);
+  assert.equal(second.data.documentVersion, first.data.documentVersion + 1);
+  assert.equal(second.data.document.documentId, first.data.document.documentId);
+
+  const versions = await repository.listVersions({ documentId: first.data.document.documentId, ownerUserId: null });
+  const chunksPage = await runtime.listChunks();
+  const documentsPage = await runtime.listDocuments();
+
+  assert.equal(versions.length, 2);
+  assert.deepEqual(versions.map((version) => version.version), [1, 2]);
+  assert.ok(versions.every((version) => version.status === "indexed"));
+  assert.equal(chunksPage.chunks.length, first.data.indexedChunkCount + second.data.indexedChunkCount);
+  assert.equal(documentsPage.documents.length, 1);
+  assert.equal(documentsPage.documents[0].latestVersion, 2);
+});
+
+test("failed ingestion is persisted with structured error and can be inspected", async () => {
+  const repository = createInMemoryRagDocumentRepository();
+  const runtime = createDataSourceRuntime({ repository });
+  const result = await runtime.ingest({
+    source: "demo",
+    fileName: "annual-report.md",
+    contentType: "text/markdown",
+    content: "   "
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.error.code, "ingestion_failed");
+  assert.equal(result.error.details.filingCode, "empty_file");
+
+  const documentsPage = await runtime.listDocuments();
+
+  assert.equal(documentsPage.documents.length, 1);
+  assert.equal(documentsPage.documents[0].latestStatus, "failed");
+
+  const versions = await repository.listVersions({ documentId: documentsPage.documents[0].documentId, ownerUserId: null });
+
+  assert.equal(versions.length, 1);
+  assert.equal(versions[0].status, "failed");
+  assert.equal(versions[0].error.code, "empty_file");
+  assert.equal(typeof versions[0].error.message, "string");
+
+  const retry = await runtime.ingest({
+    source: "demo",
+    fileName: "annual-report.md",
+    contentType: "text/markdown",
+    content: "# 资产质量\n公司不良率保持稳定。"
+  });
+
+  assert.equal(retry.ok, true);
+  assert.equal(retry.data.documentVersion, 2);
+  assert.equal(retry.data.deduplicated, false);
+
+  const versionsAfterRetry = await repository.listVersions({ documentId: documentsPage.documents[0].documentId, ownerUserId: null });
+
+  assert.equal(versionsAfterRetry.length, 2);
+  assert.deepEqual(versionsAfterRetry.map((version) => version.status), ["failed", "indexed"]);
+});
+
+test("retrying the same failed content updates the failed version in place", async () => {
+  const repository = createInMemoryRagDocumentRepository();
+  const runtime = createDataSourceRuntime({ repository });
+  const request = {
+    source: "demo",
+    fileName: "annual-report.md",
+    contentType: "text/markdown",
+    content: "   "
+  };
+  const first = await runtime.ingest(request);
+  const second = await runtime.ingest(request);
+
+  assert.equal(first.ok, false);
+  assert.equal(second.ok, false);
+
+  const documentsPage = await runtime.listDocuments();
+  const versions = await repository.listVersions({ documentId: documentsPage.documents[0].documentId, ownerUserId: null });
+
+  assert.equal(documentsPage.documents.length, 1);
+  assert.equal(versions.length, 1);
+  assert.equal(versions[0].status, "failed");
+});
+
+test("private documents are only visible to their owner", async () => {
+  const runtime = createDataSourceRuntime();
+  const ingestResult = await runtime.ingest(
+    {
+      source: "demo",
+      fileName: "annual-report.md",
+      contentType: "text/markdown",
+      content: "# 资产质量\n公司不良率保持稳定。"
+    },
+    { ownerUserId: "user-a" }
+  );
+
+  assert.equal(ingestResult.ok, true);
+
+  const ownerPage = await runtime.listDocuments({ ownerUserId: "user-a" });
+  const otherPage = await runtime.listDocuments({ ownerUserId: "user-b" });
+  const anonymousPage = await runtime.listDocuments();
+  const ownerChunks = await runtime.listChunks({ ownerUserId: "user-a" });
+  const otherChunks = await runtime.listChunks({ ownerUserId: "user-b" });
+
+  assert.equal(ownerPage.documents.length, 1);
+  assert.equal(ownerPage.documents[0].scope, "private");
+  assert.equal(otherPage.documents.length, 0);
+  assert.equal(anonymousPage.documents.length, 0);
+  assert.equal(ownerChunks.chunks.length, ingestResult.data.indexedChunkCount);
+  assert.equal(otherChunks.chunks.length, 0);
 });
 
 /**

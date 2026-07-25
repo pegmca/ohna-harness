@@ -25,7 +25,11 @@ Reserved prefixes for persistence work are:
 | `0070` | Report / Artifact |
 | `0080` | Citation |
 
-PR-00 intentionally creates no business migration.
+PR-00 intentionally creates no business migration. PR-06 implements the `0050` prefix
+(`0050_rag_documents.sql`): `documents` / `document_versions` / `chunks` ingestion lineage with
+checksum idempotency, immutable versions, retryable failures and `private/shared/demo` scope; the
+PostgreSQL adapter lives in `src/rag-documents.ts` and is exposed as
+`DatabaseRuntime.ragDocumentRepository`. The other reserved prefixes remain unclaimed.
 
 ## Integration tests
 

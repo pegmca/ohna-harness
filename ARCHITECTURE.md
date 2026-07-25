@@ -60,4 +60,4 @@ The Web is feature-first: `app`, `features`, `entities`, and `shared`. A feature
 
 ## 7. Decisions and Risks
 
-Architecture-significant decisions live in `docs/decisions/`. The current runtime and artifact stores are process-local; restart loses runs and generated artifacts. Real persistence, authentication, and licensed market-data providers remain production follow-ups.
+Architecture-significant decisions live in `docs/decisions/`. The current runtime and artifact stores are process-local; restart loses runs and generated artifacts. RAG document ingestion lineage (documents, versions, chunks) is persisted in PostgreSQL via `0050_rag_documents.sql`, while the vector index remains an in-process store. Real persistence for runs and artifacts, authentication, and licensed market-data providers remain production follow-ups.

@@ -6,18 +6,22 @@ import type {
   IdentityUser,
   QqIdentity
 } from "@aiagent/identity";
+import type { RagDocumentRepository } from "@aiagent/rag";
 import { randomUUID } from "node:crypto";
 import pg from "pg";
 export { findMissingColumnComments, type MigrationCommentIssue } from "./migration-lint.js";
+export { createPostgresRagDocumentRepository } from "./rag-documents.js";
 export { RepositoryError, type RepositoryErrorCode } from "./repository-error.js";
 export { isPostgresUniqueViolation, postgresTimestampToIso } from "./postgres.js";
 import { isPostgresUniqueViolation, postgresTimestampToIso } from "./postgres.js";
+import { createPostgresRagDocumentRepository } from "./rag-documents.js";
 
 const { Pool } = pg;
 
 export interface DatabaseRuntime {
   pool: pg.Pool;
   identityRepository: IdentityRepository;
+  ragDocumentRepository: RagDocumentRepository;
   close(): Promise<void>;
   ping(): Promise<boolean>;
 }
@@ -34,6 +38,7 @@ export function createDatabaseRuntime(databaseUrl: string): DatabaseRuntime {
   return {
     pool,
     identityRepository: createPostgresIdentityRepository(pool),
+    ragDocumentRepository: createPostgresRagDocumentRepository(pool),
     async close() { await pool.end(); },
     async ping() {
       try {

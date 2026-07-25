@@ -878,26 +878,56 @@ export interface DataSourceIngestRequestDto {
 }
 
 /**
- * Data Sources ingestion 响应 DTO，展示文档和本次入库 chunk 数量。
+ * RAG 文档可见范围 DTO：private 仅 owner 可见，shared/demo 对所有调用方可见。
+ */
+export type RagDocumentScopeDto = "private" | "shared" | "demo";
+
+/**
+ * RAG 文档版本状态 DTO：failed 为终态但允许同内容重试。
+ */
+export type RagDocumentVersionStatusDto = "pending" | "indexed" | "failed";
+
+/**
+ * Data Sources 文档摘要 DTO，表达持久化文档身份、最新版本状态和来源，不包含全文。
+ */
+export interface DataSourceDocumentDto {
+  documentId: string;
+  title: string;
+  scope: RagDocumentScopeDto;
+  sourceType: FilingSourceKindDto;
+  externalId: string;
+  sourceUri: string;
+  latestVersion: number;
+  latestStatus: RagDocumentVersionStatusDto;
+  createdAt: ISODateTimeString;
+  updatedAt: ISODateTimeString;
+}
+
+/**
+ * Data Sources ingestion 响应 DTO，展示文档、版本号、幂等命中标记和本次入库 chunk 数量。
  */
 export interface DataSourceIngestResponseDto {
   document: IngestedFilingDocumentDto;
   chunks: RagChunkDto[];
   indexedChunkCount: number;
+  documentVersion: number;
+  deduplicated: boolean;
 }
 
 /**
- * Data Sources 文档列表响应 DTO。
+ * Data Sources 文档列表响应 DTO，使用稳定 cursor 分页。
  */
 export interface DataSourceDocumentsResponseDto {
-  documents: IngestedFilingDocumentDto[];
+  documents: DataSourceDocumentDto[];
+  nextCursor: string | null;
 }
 
 /**
- * Data Sources chunk 列表响应 DTO。
+ * Data Sources chunk 列表响应 DTO，使用稳定 cursor 分页。
  */
 export interface DataSourceChunksResponseDto {
   chunks: RagChunkDto[];
+  nextCursor: string | null;
 }
 
 /**

@@ -5,7 +5,7 @@ import {
   type IdentitySnapshot
 } from "@aiagent/identity";
 import type { LlmClient } from "@aiagent/types";
-import { createDataSourceRuntime } from "@aiagent/rag";
+import { createDataSourceRuntime, type DataSourceRuntime } from "@aiagent/rag";
 import { renderResearchReportPdf } from "@aiagent/report";
 import type { RagStructuredError } from "@aiagent/rag";
 import { createInMemoryTraceStore, redactSensitiveValue } from "@aiagent/trace";
@@ -58,6 +58,13 @@ const dataSourceIngestRequestSchema = z.object({
   contentType: z.string().min(1).optional(),
   content: z.string().min(1)
 });
+const dataSourceDocumentsQuerySchema = z.object({
+  cursor: z.string().min(1).optional(),
+  limit: z.coerce.number().int().positive().max(100).default(50)
+});
+const dataSourceChunksQuerySchema = dataSourceDocumentsQuerySchema.extend({
+  documentId: z.string().min(1).optional()
+});
 const ragSearchRequestSchema = z.object({
   query: z.string().min(1),
   topK: z.number().int().positive().optional()
@@ -75,6 +82,7 @@ export interface ApiServerOptions {
   llmClient?: LlmClient;
   readiness?: () => Promise<{ ok: boolean; dependency: string; message?: string }>;
   identityService?: IdentityService;
+  dataSourceRuntime?: DataSourceRuntime;
   requireIdentity?: boolean;
   qqBotQrUrl?: string;
   qqBotEnabled?: boolean;
@@ -91,7 +99,7 @@ export function createApiServer(options: ApiServerOptions = {}): FastifyInstance
   const app = Fastify({
     logger: true
   });
-  const dataSourceRuntime = createDataSourceRuntime();
+  const dataSourceRuntime = options.dataSourceRuntime ?? createDataSourceRuntime();
   const approvalDecisions = new Map<string, ToolApprovalDecisionDto>();
   const pendingApprovals = new Map<string, import("@aiagent/types").ToolApprovalRequestDto>();
   const approvalRunIds = new Map<string, string>();
@@ -364,12 +372,15 @@ export function createApiServer(options: ApiServerOptions = {}): FastifyInstance
       return fail(error, requestId);
     }
 
-    const result = await dataSourceRuntime.ingest({
-      source: parsed.data.source.trim(),
-      fileName: parsed.data.fileName.trim(),
-      contentType: parsed.data.contentType?.trim(),
-      content: parsed.data.content
-    });
+    const result = await dataSourceRuntime.ingest(
+      {
+        source: parsed.data.source.trim(),
+        fileName: parsed.data.fileName.trim(),
+        contentType: parsed.data.contentType?.trim(),
+        content: parsed.data.content
+      },
+      { ownerUserId: identityByRequest.get(request)?.userId ?? null }
+    );
 
     if (!result.ok) {
       reply.code(400);
@@ -384,38 +395,73 @@ export function createApiServer(options: ApiServerOptions = {}): FastifyInstance
   });
 
   /**
-   * Data Sources 文档列表接口只读取当前进程内 runtime 快照，不在 API 层保存业务状态。
+   * Data Sources 文档列表接口经 repository 分页读取，按 owner/scope 授权，API 层不保存业务状态。
    *
-   * @returns 当前已 ingest 的文档列表。
+   * @param request Fastify 请求对象，query 支持 cursor 和 limit（默认 50，上限 100）。
+   * @param reply Fastify 响应对象，用于参数校验或读取失败时设置 HTTP 状态码。
+   * @returns 当前身份可见的文档摘要页和下一页 cursor。
    */
-  app.get("/api/data-sources/documents", async (): Promise<ApiResult<DataSourceDocumentsResponseDto>> => {
-    const requestId = createRequestId();
+  app.get<{ Querystring: { cursor?: string; limit?: string } }>(
+    "/api/data-sources/documents",
+    async (request, reply): Promise<ApiResult<DataSourceDocumentsResponseDto>> => {
+      const requestId = createRequestId();
+      const parsed = dataSourceDocumentsQuerySchema.safeParse(request.query);
 
-    return {
-      ok: true,
-      data: {
-        documents: dataSourceRuntime.listDocuments()
-      },
-      requestId
-    };
-  });
+      if (!parsed.success) {
+        reply.code(400);
+        return fail(toApiError("validation_failed", "Data source documents 查询参数不正确。", requestId, {
+          issues: parsed.error.issues
+        }), requestId);
+      }
+
+      try {
+        const page = await dataSourceRuntime.listDocuments({
+          ownerUserId: identityByRequest.get(request)?.userId ?? null,
+          ...(parsed.data.cursor !== undefined ? { cursor: parsed.data.cursor } : {}),
+          limit: parsed.data.limit
+        });
+        return { ok: true, data: page, requestId };
+      } catch {
+        reply.code(500);
+        return fail(toApiError("internal_error", "Data source documents 读取失败。", requestId), requestId);
+      }
+    }
+  );
 
   /**
-   * Data Sources chunk 列表接口返回可展示 chunk，不暴露 embedding 向量等内部索引字段。
+   * Data Sources chunk 列表接口分页返回可展示 chunk，不暴露 embedding 向量等内部索引字段。
    *
-   * @returns 当前已索引的 chunk 列表。
+   * @param request Fastify 请求对象，query 支持 cursor、limit 和可选 documentId 过滤。
+   * @param reply Fastify 响应对象，用于参数校验或读取失败时设置 HTTP 状态码。
+   * @returns 当前身份可见的 chunk 页和下一页 cursor。
    */
-  app.get("/api/data-sources/chunks", async (): Promise<ApiResult<DataSourceChunksResponseDto>> => {
-    const requestId = createRequestId();
+  app.get<{ Querystring: { cursor?: string; limit?: string; documentId?: string } }>(
+    "/api/data-sources/chunks",
+    async (request, reply): Promise<ApiResult<DataSourceChunksResponseDto>> => {
+      const requestId = createRequestId();
+      const parsed = dataSourceChunksQuerySchema.safeParse(request.query);
 
-    return {
-      ok: true,
-      data: {
-        chunks: dataSourceRuntime.listChunks()
-      },
-      requestId
-    };
-  });
+      if (!parsed.success) {
+        reply.code(400);
+        return fail(toApiError("validation_failed", "Data source chunks 查询参数不正确。", requestId, {
+          issues: parsed.error.issues
+        }), requestId);
+      }
+
+      try {
+        const page = await dataSourceRuntime.listChunks({
+          ownerUserId: identityByRequest.get(request)?.userId ?? null,
+          ...(parsed.data.documentId !== undefined ? { documentId: parsed.data.documentId } : {}),
+          ...(parsed.data.cursor !== undefined ? { cursor: parsed.data.cursor } : {}),
+          limit: parsed.data.limit
+        });
+        return { ok: true, data: page, requestId };
+      } catch {
+        reply.code(500);
+        return fail(toApiError("internal_error", "Data source chunks 读取失败。", requestId), requestId);
+      }
+    }
+  );
 
   /**
    * RAG search 接口执行混合检索，并把 runtime 检索结果映射为带 score、metadata 和 citation 的 DTO。

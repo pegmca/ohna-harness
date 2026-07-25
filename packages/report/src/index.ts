@@ -1014,7 +1014,9 @@ function validateExecutablePlan(plan: ReportPlanDto): WorkflowErrorDto | undefin
 }
 
 /**
- * 将 demo documents 批量 ingest 到 RAG runtime，跳过已存在的 source 避免重复索引。
+ * 将 demo documents 批量 ingest 到 RAG runtime，跳过已存在 sourceUri 的文档避免重复索引。
+ *
+ * 文档列表已是 async cursor 分页接口，这里循环拉完所有页再取 sourceUri 集合。
  *
  * @param runtime RAG runtime。
  * @param documents 待 ingest 的 demo 文档。
@@ -1023,7 +1025,17 @@ async function ingestReportDocuments(
   runtime: DataSourceRuntime,
   documents: ReportWorkflowDemoDocument[]
 ): Promise<void> {
-  const existingSources = new Set(runtime.listDocuments().map((document) => document.source));
+  const existingSources = new Set<string>();
+  let cursor: string | undefined;
+
+  do {
+    const page = await runtime.listDocuments({
+      limit: 100,
+      ...(cursor !== undefined ? { cursor } : {})
+    });
+    page.documents.forEach((document) => existingSources.add(document.sourceUri));
+    cursor = page.nextCursor ?? undefined;
+  } while (cursor !== undefined);
 
   for (const document of documents) {
     if (existingSources.has(document.source)) {

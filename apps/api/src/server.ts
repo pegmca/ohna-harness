@@ -48,6 +48,7 @@ const app = createApiServer({
   workflowRepository: database.workflowRepository,
   artifactRepository: database.artifactRepository,
   artifactStorage: createLocalArtifactStorage(process.env.ARTIFACT_STORAGE_ROOT ?? "./var/artifacts"),
+  runStore: database.runRepository,
   readiness: async () => {
     if (providerMode !== "mock" && providerMode !== "real") {
       return { ok: false, dependency: "provider-config", message: "AIAGENT_PROVIDER_MODE must be mock or real." };

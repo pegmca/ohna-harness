@@ -276,3 +276,40 @@ export const messages = pgTable("messages", {
     .on(table.conversationId, table.clientMessageId)
     .where(sql`${table.clientMessageId} is not null`)
 ]);
+
+export const agentRuns = pgTable("agent_runs", {
+  id: uuid("id").primaryKey(),
+  requestId: text("request_id").notNull().unique(),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  conversationId: uuid("conversation_id").notNull().references(() => conversations.id, { onDelete: "cascade" }),
+  userMessageId: uuid("user_message_id").notNull(),
+  assistantMessageId: uuid("assistant_message_id"),
+  mode: text("mode").notNull(),
+  source: text("source").notNull(),
+  status: text("status").notNull(),
+  intent: text("intent"),
+  traceId: text("trace_id").notNull(),
+  workflowRunId: text("workflow_run_id"),
+  result: jsonb("result"),
+  error: jsonb("error"),
+  version: bigint("version", { mode: "number" }).notNull().default(0),
+  createdAt: timestamp("created_at", { withTimezone: true, mode: "string" }).notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" }).notNull(),
+  startedAt: timestamp("started_at", { withTimezone: true, mode: "string" }),
+  completedAt: timestamp("completed_at", { withTimezone: true, mode: "string" })
+});
+
+export const runEvents = pgTable("run_events", {
+  id: uuid("id").primaryKey(),
+  runId: uuid("run_id").notNull().references(() => agentRuns.id, { onDelete: "cascade" }),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  conversationId: uuid("conversation_id").notNull().references(() => conversations.id, { onDelete: "cascade" }),
+  traceId: text("trace_id").notNull(),
+  sequence: bigint("sequence", { mode: "number" }).notNull(),
+  eventType: text("event_type").notNull(),
+  payload: jsonb("payload").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true, mode: "string" }).notNull()
+}, (table) => [
+  uniqueIndex("run_events_run_sequence_uq").on(table.runId, table.sequence),
+  index("run_events_user_run_sequence_idx").on(table.userId, table.runId, table.sequence)
+]);

@@ -66,7 +66,7 @@
 
 设计文档拆分为两层：根目录 `DESIGN.md` 是 Kimi 风格、支持明暗主题的 Workbench 视觉系统，定义 design token、组件视觉语言和 AI 前端生成约束；`system.css` 是唯一 token / utility 参考实现；`docs/IMMERSIVE_PRODUCT_DESIGN.md` 承载金融研究 Agent 的产品体验、信息架构和页面模块。代码边界和 AI Coding 约束分别见 `ARCHITECTURE.md` 与 `docs/AI_CODING.md`。
 
-PostgreSQL 的本地连接、现有身份表、migration 规则、备份恢复以及后续 Conversation、Run
+PostgreSQL 的本地连接、身份、Conversation/Message、Run/RunEvent、migration 规则、备份恢复
 和 pgvector 持久化规划见 [``]()。
 
 ## Immersive Playground
@@ -74,8 +74,8 @@ PostgreSQL 的本地连接、现有身份表、migration 规则、备份恢复�
 Immersive Playground 已演进为带实时执行过程的研究 Workbench：
 
 - 页面采用 Agent Chat 布局：左侧本地会话列表，中间对话流，底部 composer，顶部提供 Report Mode 开关和生成研报按钮。
-- 每次提交先调用 `POST /api/runs` 获得 `runId`，请求字段为 `message`、`conversationId`、`mode: auto | report` 和 `source: composer | report_button`；再订阅 `GET /api/runs/:runId/events`。
-- `GET /api/runs/:runId` 提供可恢复快照，`DELETE /api/runs/:runId` 取消尚未结束的运行。第一版实时范围是过程事件，最终回答作为终态事件一次提交。
+- 每次提交先调用 `POST /api/runs` 获得 `runId`，请求字段为 `message`、`conversationId`、`mode: auto | report`、`source: composer | report_button`，可带 `clientMessageId` 实现幂等重试；再订阅 `GET /api/runs/:runId/events`。
+- `GET /api/runs/:runId` 提供 PostgreSQL 可恢复快照，`DELETE /api/runs/:runId` 取消尚未结束的运行。SSE 支持 `Last-Event-ID` 或 `afterSequence` 持久回放；最终回答作为终态事件一次提交。
 - run state、工具调用和 trace 从 assistant 消息进入右侧详情面板；桌面端压缩主区，移动端覆盖显示，不设置常驻调试侧栏。
 - 行情工具返回稳定的 60 根 mock OHLCV，详情面板使用 A 股红涨绿跌 K 线；图表按 lightweight-charts 要求保留 TradingView attribution。
 - `/`、`/data-sources`、`/workflow`、`/citations`、`/eval`、`/architecture`、`/settings` 均为可刷新路由；设置页支持浅色、深色和跟随系统。
@@ -108,7 +108,7 @@ docker compose up -d --build
 docker compose ps
 ```
 
-打开 `http://localhost:8080`。Web 仅对宿主机暴露 `8080`（可用 `AIAGENT_WEB_PORT` 修改），API 的 `3001` 只在 Compose 网络内暴露，由 Nginx 将浏览器 `/api/*` 请求代理到 `api:3001`。PostgreSQL 只绑定宿主机 `127.0.0.1:5432`；身份、session、Workflow 和 Artifact metadata 保存在 `postgres_data` volume，PDF bytes 保存在独立 `artifact_data` volume。聊天、RAG、Run 与 trace 仍按各自后续任务迁移。
+打开 `http://localhost:8080`。Web 仅对宿主机暴露 `8080`（可用 `AIAGENT_WEB_PORT` 修改），API 的 `3001` 只在 Compose 网络内暴露，由 Nginx 将浏览器 `/api/*` 请求代理到 `api:3001`。PostgreSQL 只绑定宿主机 `127.0.0.1:5432`；身份、session、Conversation/Message、Run/RunEvent、Workflow、Artifact metadata 与 RAG 文档 lineage 保存在 `postgres_data` volume，PDF bytes 保存在独立 `artifact_data` volume。Trace、Approval 与向量索引仍按各自后续任务迁移。
 
 本地热更新与断点调试使用“数据库在 Docker、Web/API 在宿主机”的组合：
 

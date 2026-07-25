@@ -29,6 +29,8 @@ import { createPostgresRagDocumentRepository } from "./rag-documents.js";
 import type { ArtifactRepository, WorkflowRepository } from "@aiagent/report";
 import { createPostgresArtifactRepository, createPostgresWorkflowRepository } from "./report.js";
 export { createPostgresArtifactRepository, createPostgresWorkflowRepository } from "./report.js";
+import { createPostgresRunRepository, type RunRepository } from "./run-repository.js";
+export { createPostgresRunRepository, type CreateRunInput, type RunRepository } from "./run-repository.js";
 
 const { Pool } = pg;
 
@@ -38,6 +40,7 @@ export interface DatabaseRuntime {
   ragDocumentRepository: RagDocumentRepository;
   workflowRepository: WorkflowRepository;
   artifactRepository: ArtifactRepository;
+  runRepository: RunRepository;
   close(): Promise<void>;
   ping(): Promise<boolean>;
 }
@@ -57,6 +60,7 @@ export function createDatabaseRuntime(databaseUrl: string): DatabaseRuntime {
     ragDocumentRepository: createPostgresRagDocumentRepository(pool),
     workflowRepository: createPostgresWorkflowRepository(pool),
     artifactRepository: createPostgresArtifactRepository(pool),
+    runRepository: createPostgresRunRepository(pool),
     async close() { await pool.end(); },
     async ping() {
       try {

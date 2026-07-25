@@ -25,9 +25,9 @@ Reserved prefixes for persistence work are:
 | `0070` | Report / Artifact |
 | `0080` | Citation |
 
-PR-00 intentionally creates no business migration. `0010` (Conversation / Message), `0050`
-(RAG documents), `0060` (pgvector retrieval) and `0070` (Report / Artifact) are implemented; the
-other reserved prefixes remain unclaimed.
+PR-00 intentionally creates no business migration. `0010` (Conversation / Message), `0020`
+(Run / RunEvent), `0050` (RAG documents), `0060` (pgvector retrieval) and `0070`
+(Report / Artifact) are implemented; the other reserved prefixes remain unclaimed.
 
 PR-06 implements the `0050` prefix (`0050_rag_documents.sql`): `documents` / `document_versions` /
 `chunks` ingestion lineage with checksum idempotency, immutable versions, retryable failures and
@@ -59,6 +59,14 @@ configured `ArtifactStorage`.
 `@aiagent/conversation`. Ownership is part of every SQL predicate; conversation cursors use
 `(last_message_at,id)`, message cursors use `(sequence,id)`, and message writes lock the owned
 conversation row before idempotency checks and sequence allocation.
+
+## Run adapters
+
+`0020_runs.sql` creates `agent_runs` and canonical `run_events`, connects `messages.run_id`, and
+adds the partial one-assistant-message-per-Run constraint. `createPostgresRunRepository(pool)`
+validates Conversation ownership and reserves both messages in the creation transaction. Event
+append locks the Run, allocates `version + 1`, persists the event and projection together, and
+rejects all transitions after the first terminal event.
 
 ## Integration tests
 

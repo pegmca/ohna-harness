@@ -9,6 +9,14 @@ const runRequest = {
   source: "composer"
 };
 
+async function bootstrap(app, visitorId) {
+  const response = await app.inject({
+    method: "POST", url: "/api/identity/bootstrap",
+    payload: { visitorId, fingerprintVersion: "test-v1" }
+  });
+  return response.headers["set-cookie"].split(";")[0];
+}
+
 async function waitForTerminal(app, snapshotUrl) {
   for (let attempt = 0; attempt < 50; attempt += 1) {
     const response = await app.inject({ method: "GET", url: snapshotUrl });
@@ -54,6 +62,50 @@ test("run application service exposes ordered events and a terminal snapshot", a
   assert.equal(snapshot.events[0].type, "run_status");
   assert.equal(snapshot.events.at(-1).type, "run_result");
   assert.equal(snapshot.events.some((event) => event.type === "trace_event"), true);
+  await app.close();
+});
+
+test("SSE 终态 replay 支持 Last-Event-ID 与 afterSequence，且不重复业务事件", async () => {
+  const app = createApiServer();
+  const accepted = (await app.inject({ method: "POST", url: "/api/runs", payload: runRequest })).json().data;
+  const snapshot = await waitForTerminal(app, accepted.snapshotUrl);
+  const after = Math.max(0, snapshot.events.length - 3);
+  const replay = await app.inject({
+    method: "GET",
+    url: `${accepted.eventsUrl}?afterSequence=${after - 1}`,
+    headers: { "last-event-id": String(after) }
+  });
+  assert.equal(replay.statusCode, 200);
+  const events = replay.body.split("\n")
+    .filter((line) => line.startsWith("data: "))
+    .map((line) => JSON.parse(line.slice(6)));
+  assert.deepEqual(events.map((event) => event.sequence), snapshot.events.slice(after).map((event) => event.sequence));
+  assert.equal(new Set(events.map((event) => event.sequence)).size, events.length);
+  assert.equal(["run_result", "run_error"].includes(events.at(-1).type), true);
+  await app.close();
+});
+
+test("重复 clientMessageId 复用同一 Run，且 Run API 对用户隐藏其他用户资源", async () => {
+  const app = createApiServer({ requireIdentity: true });
+  const cookieOne = await bootstrap(app, "visitor-run-owner-0001");
+  const cookieTwo = await bootstrap(app, "visitor-run-owner-0002");
+  const payload = { ...runRequest, clientMessageId: "client-idempotency-1" };
+  const first = await app.inject({ method: "POST", url: "/api/runs", headers: { cookie: cookieOne }, payload });
+  const duplicate = await app.inject({ method: "POST", url: "/api/runs", headers: { cookie: cookieOne }, payload });
+  assert.equal(first.statusCode, 202);
+  assert.equal(duplicate.statusCode, 202);
+  assert.equal(first.json().data.runId, duplicate.json().data.runId);
+
+  const runId = first.json().data.runId;
+  for (const request of [
+    { method: "GET", url: `/api/runs/${runId}` },
+    { method: "DELETE", url: `/api/runs/${runId}` },
+    { method: "GET", url: `/api/runs/${runId}/events` }
+  ]) {
+    const response = await app.inject({ ...request, headers: { cookie: cookieTwo } });
+    assert.equal(response.statusCode, 404);
+    assert.equal(response.json().error.code, "not_found");
+  }
   await app.close();
 });
 

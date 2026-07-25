@@ -23,6 +23,7 @@
     "@aiagent/identity": "workspace:*",
     "@aiagent/rag": "workspace:*",
     "@aiagent/report": "workspace:*",
+    "@aiagent/types": "workspace:*",
     "drizzle-orm": "0.44.7",
     "pg": "8.16.3"
   },

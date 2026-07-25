@@ -42,6 +42,7 @@ import {
   createMicrotaskRunScheduler
 } from "./adapters/in-memory-run-runtime.js";
 import { createRunApplicationService } from "./application/run-service.js";
+import type { RunStore } from "./application/run-ports.js";
 import { createInMemoryReportRepositories } from "./adapters/in-memory-report-persistence.js";
 import { publishArtifactPdf } from "./application/artifact-service.js";
 
@@ -49,7 +50,11 @@ const agentRunRequestSchema = z.object({
   message: z.string(),
   conversationId: z.string().min(1),
   mode: z.enum(["auto", "report"]),
-  source: z.enum(["composer", "report_button"])
+  source: z.enum(["composer", "report_button"]),
+  clientMessageId: z.string().min(1).max(200).optional()
+});
+const runEventsQuerySchema = z.object({
+  afterSequence: z.coerce.number().int().min(0).optional()
 });
 const identityBootstrapSchema = z.object({
   visitorId: z.string().min(8).max(256).regex(/^[A-Za-z0-9_-]+$/),
@@ -97,6 +102,8 @@ export interface ApiServerOptions {
   workflowRepository?: WorkflowRepository;
   artifactRepository?: ArtifactRepository;
   artifactStorage?: ArtifactStorage;
+  runStore?: RunStore;
+  staleRunThresholdMs?: number;
 }
 
 /**
@@ -119,7 +126,7 @@ export function createApiServer(options: ApiServerOptions = {}): FastifyInstance
     process.env.ARTIFACT_STORAGE_ROOT ?? `${process.cwd()}/.artifacts-test`
   );
   const traceStore = createInMemoryTraceStore();
-  const runStore = createInMemoryRunStore();
+  const runStore = options.runStore ?? createInMemoryRunStore();
   const runEventBus = createInMemoryRunEventBus();
   const runService = createRunApplicationService({
     store: runStore,
@@ -149,6 +156,9 @@ export function createApiServer(options: ApiServerOptions = {}): FastifyInstance
     { fingerprintPepper: "test-only-identity-pepper" }
   );
   const identityByRequest = new WeakMap<object, IdentitySnapshot>();
+  const anonymousUserId = "00000000-0000-0000-0000-000000000000";
+  /** @param request Fastify request 对象。 @returns 已认证用户或测试兼容匿名用户。 */
+  const requestUserId = (request: object): string => identityByRequest.get(request)?.userId ?? anonymousUserId;
 
   /**
    * 统一解析 session，使业务 route 只能读取服务端确认的 userId。
@@ -312,7 +322,7 @@ export function createApiServer(options: ApiServerOptions = {}): FastifyInstance
     const identity = identityByRequest.get(request);
     const accepted = await runService.create(
       parsed.data satisfies AgentRunCreateRequestDto,
-      identity?.userId ?? "00000000-0000-0000-0000-000000000000"
+      identity?.userId ?? anonymousUserId
     );
     reply.code(202);
     return { ok: true, requestId: accepted.requestId, data: accepted };
@@ -321,7 +331,7 @@ export function createApiServer(options: ApiServerOptions = {}): FastifyInstance
   /** 返回当前 run 快照，供刷新恢复和非流式诊断使用。 */
   app.get<{ Params: { runId: string } }>("/api/runs/:runId", async (request, reply): Promise<ApiResult<AgentRunSnapshotDto>> => {
     const lookupRequestId = createRequestId();
-    const run = await runService.get(request.params.runId);
+    const run = await runService.get(requestUserId(request), request.params.runId);
     if (!run) {
       reply.code(404);
       return fail(toApiError("not_found", "Agent run 不存在或已过期。", lookupRequestId), lookupRequestId);
@@ -332,7 +342,7 @@ export function createApiServer(options: ApiServerOptions = {}): FastifyInstance
   /** 显式取消 run；浏览器断开 SSE 不会隐式终止后台任务。 */
   app.delete<{ Params: { runId: string } }>("/api/runs/:runId", async (request, reply): Promise<ApiResult<AgentRunSnapshotDto>> => {
     const lookupRequestId = createRequestId();
-    const run = await runService.cancel(request.params.runId);
+    const run = await runService.cancel(requestUserId(request), request.params.runId);
     if (!run) {
       reply.code(404);
       return fail(toApiError("not_found", "Agent run 不存在或已过期。", lookupRequestId), lookupRequestId);
@@ -341,11 +351,19 @@ export function createApiServer(options: ApiServerOptions = {}): FastifyInstance
   });
 
   /** 以 SSE 重放历史事件并继续推送新增事件。 */
-  app.get<{ Params: { runId: string } }>("/api/runs/:runId/events", async (request, reply) => {
-    const run = await runService.get(request.params.runId);
+  app.get<{ Params: { runId: string }; Querystring: { afterSequence?: string } }>("/api/runs/:runId/events", async (request, reply) => {
+    const userId = requestUserId(request);
+    const parsedQuery = runEventsQuerySchema.safeParse(request.query);
+    if (!parsedQuery.success) {
+      reply.code(400);
+      const requestId = createRequestId();
+      return fail(toApiError("validation_failed", "SSE replay 游标格式不正确。", requestId), requestId);
+    }
+    const run = await runService.get(userId, request.params.runId);
     if (!run) {
+      const requestId = createRequestId();
       reply.code(404);
-      return fail(toApiError("not_found", "Agent run 不存在或已过期。", createRequestId()), createRequestId());
+      return fail(toApiError("not_found", "Agent run 不存在或已过期。", requestId), requestId);
     }
 
     reply.hijack();
@@ -356,24 +374,39 @@ export function createApiServer(options: ApiServerOptions = {}): FastifyInstance
       "x-accel-buffering": "no"
     });
     const header = request.headers["last-event-id"];
-    const lastEventId = Number(Array.isArray(header) ? header[0] : header ?? 0);
+    const headerSequence = Number(Array.isArray(header) ? header[0] : header ?? 0);
+    let lastSequence = Math.max(parsedQuery.data.afterSequence ?? 0, Number.isSafeInteger(headerSequence) && headerSequence >= 0 ? headerSequence : 0);
     const heartbeat = setInterval(() => reply.raw.write(": heartbeat\n\n"), 15_000);
     const writeEvent = (event: AgentRunStreamEventDto): void => {
+      if (event.sequence <= lastSequence || reply.raw.writableEnded) return;
+      lastSequence = event.sequence;
       reply.raw.write(`id: ${event.sequence}\nevent: run_event\ndata: ${JSON.stringify(event)}\n\n`);
       if (event.type === "run_result" || event.type === "run_error") {
         clearInterval(heartbeat);
         reply.raw.end();
       }
     };
-    for (const event of run.events) {
-      if (event.sequence > lastEventId) writeEvent(event);
+    const replay = await runService.listEvents(userId, run.runId, lastSequence);
+    for (const event of replay ?? []) writeEvent(event);
+    if (reply.raw.writableEnded) return;
+    if (run.result || run.error) {
+      clearInterval(heartbeat);
+      reply.raw.end();
+      return;
     }
-    if (run.result || run.error) return;
     const unsubscribe = runService.subscribe(run.runId, writeEvent);
+    // 订阅后再补查一次，覆盖首次 replay 查询与 live subscribe 之间提交的事件。
+    const catchUp = await runService.listEvents(userId, run.runId, lastSequence);
+    for (const event of catchUp ?? []) writeEvent(event);
     request.raw.on("close", () => {
       clearInterval(heartbeat);
       unsubscribe();
     });
+  });
+
+  const staleThresholdMs = options.staleRunThresholdMs ?? 5 * 60_000;
+  app.addHook("onReady", async () => {
+    await runService.recoverStale(new Date(Date.now() - staleThresholdMs).toISOString());
   });
 
   /**
@@ -579,7 +612,7 @@ export function createApiServer(options: ApiServerOptions = {}): FastifyInstance
     }
 
     const pending = pendingApprovals.get(request.params.approvalId);
-    const run = await runService.get(request.params.runId);
+    const run = await runService.get(requestUserId(request), request.params.runId);
     if (!run || !pending || approvalRunIds.get(request.params.approvalId) !== request.params.runId
       || (pending.inputDigest && parsed.data.inputDigest !== pending.inputDigest)) {
       reply.code(403);

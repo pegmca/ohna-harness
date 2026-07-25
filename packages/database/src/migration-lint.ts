@@ -1,4 +1,4 @@
-const CREATE_TABLE_PATTERN = /create\s+table(?:\s+if\s+not\s+exists)?\s+([\w."-]+)\s*\(([\s\S]*?)\);/gi;
+const CREATE_TABLE_PATTERN = /create\s+table(?:\s+if\s+not\s+exists)?\s+([\w."-]+)\s*\(([\s\S]*?)\)\s*;/gi;
 const COLUMN_PATTERN = /^\s*"?([a-z_][a-z0-9_]*)"?\s+/i;
 const TABLE_CONSTRAINT_PATTERN = /^(constraint|primary|unique|check|foreign|exclude)\b/i;
 
@@ -17,7 +17,8 @@ export interface MigrationCommentIssue {
  */
 export function findMissingColumnComments(sql: string): MigrationCommentIssue[] {
   const issues: MigrationCommentIssue[] = [];
-  for (const match of sql.matchAll(CREATE_TABLE_PATTERN)) {
+  const normalizedSql = stripSqlComments(sql);
+  for (const match of normalizedSql.matchAll(CREATE_TABLE_PATTERN)) {
     const table = normalizeIdentifier(match[1]);
     for (const definition of splitTopLevel(match[2])) {
       const trimmed = definition.trim();
@@ -29,10 +30,53 @@ export function findMissingColumnComments(sql: string): MigrationCommentIssue[] 
         `comment\\s+on\\s+column\\s+(?:[\\w\"-]+\\.)?\"?${escapeRegExp(table)}\"?\\.\"?${escapeRegExp(column)}\"?\\s+is\\s+'[^']*[\\u3400-\\u9fff][^']*'`,
         "i"
       );
-      if (!commentPattern.test(sql)) issues.push({ table, column });
+      if (!commentPattern.test(normalizedSql)) issues.push({ table, column });
     }
   }
   return issues;
+}
+
+/**
+ * 删除 SQL 行注释和块注释，同时保留字符串及双引号标识符中的同形字符。
+ *
+ * @param sql 原始 migration SQL。
+ * @returns 用空白替代注释后的 SQL。
+ */
+// eslint-disable-next-line complexity -- SQL 引号与两类注释必须由同一状态机区分，拆分会隐藏状态转换。
+function stripSqlComments(sql: string): string {
+  let result = "";
+  let state: "normal" | "single_quote" | "double_quote" | "line_comment" | "block_comment" = "normal";
+  for (let index = 0; index < sql.length; index += 1) {
+    const char = sql[index];
+    const next = sql[index + 1];
+    if (state === "line_comment") {
+      if (char === "\n") { state = "normal"; result += char; } else result += " ";
+      continue;
+    }
+    if (state === "block_comment") {
+      if (char === "*" && next === "/") { result += "  "; index += 1; state = "normal"; }
+      else result += char === "\n" ? "\n" : " ";
+      continue;
+    }
+    if (state === "single_quote") {
+      result += char;
+      if (char === "'" && next === "'") { result += next; index += 1; }
+      else if (char === "'") state = "normal";
+      continue;
+    }
+    if (state === "double_quote") {
+      result += char;
+      if (char === '"' && next === '"') { result += next; index += 1; }
+      else if (char === '"') state = "normal";
+      continue;
+    }
+    if (char === "-" && next === "-") { result += "  "; index += 1; state = "line_comment"; continue; }
+    if (char === "/" && next === "*") { result += "  "; index += 1; state = "block_comment"; continue; }
+    if (char === "'") state = "single_quote";
+    if (char === '"') state = "double_quote";
+    result += char;
+  }
+  return result;
 }
 
 /**

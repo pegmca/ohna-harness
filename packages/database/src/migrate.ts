@@ -18,20 +18,25 @@ export const DEFAULT_MIGRATIONS_DIR = join(dirname(fileURLToPath(import.meta.url
  * @returns migration 完成 Promise。
  */
 export async function runMigrations(pool: pg.Pool, migrationsDir = DEFAULT_MIGRATIONS_DIR): Promise<void> {
-  await pool.query(
-    `create table if not exists __aiagent_migrations(
-       name text primary key,
-       applied_at timestamptz not null default now()
-     );
-     comment on column __aiagent_migrations.name is '已执行的 migration 文件名';
-     comment on column __aiagent_migrations.applied_at is 'migration 成功提交时间'`
-  );
+  await withTransaction(pool, async (client) => {
+    await lockMigrationRunner(client);
+    await client.query(
+      `create table if not exists __aiagent_migrations(
+         name text primary key,
+         applied_at timestamptz not null default now()
+       );
+       comment on column __aiagent_migrations.name is '已执行的 migration 文件名';
+       comment on column __aiagent_migrations.applied_at is 'migration 成功提交时间'`
+    );
+  });
   const files = (await readdir(migrationsDir)).filter((file) => file.endsWith(".sql")).sort();
   for (const file of files) {
-    const applied = await pool.query("select 1 from __aiagent_migrations where name=$1", [file]);
-    if (applied.rowCount) continue;
     try {
       await withTransaction(pool, async (client) => {
+        // 事务级 advisory lock 让多个实例串行检查与执行同一 migration，连接释放时自动解锁。
+        await lockMigrationRunner(client);
+        const applied = await client.query("select 1 from __aiagent_migrations where name=$1", [file]);
+        if (applied.rowCount) return;
         await client.query(await readFile(join(migrationsDir, file), "utf8"));
         await client.query("insert into __aiagent_migrations(name) values ($1)", [file]);
       });
@@ -39,6 +44,16 @@ export async function runMigrations(pool: pg.Pool, migrationsDir = DEFAULT_MIGRA
       throw new MigrationError(file, cause);
     }
   }
+}
+
+/**
+ * 获取数据库范围的 migration 事务锁，覆盖清单初始化、已执行检查与 SQL 执行。
+ *
+ * @param client 当前事务持有的 PostgreSQL client。
+ * @returns 获得锁后的 Promise。
+ */
+async function lockMigrationRunner(client: pg.PoolClient): Promise<void> {
+  await client.query("select pg_advisory_xact_lock(hashtextextended('__aiagent_migrations', 0))");
 }
 
 /** migration 失败的安全错误；公开消息只包含文件名，内部 cause 用于日志诊断。 */

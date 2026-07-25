@@ -76,3 +76,23 @@ test("空库 migration 可执行、可幂等，并回滚失败 migration", { ski
     await context.cleanup();
   }
 });
+
+test("两个 pool 并发执行同一非幂等 migration 时只应用一次", { skip: !integrationEnabled }, async () => {
+  const context = await createDatabaseTestContext(process.env.TEST_DATABASE_URL, process.env.DATABASE_URL);
+  const secondPool = context.createPool();
+  const fixtureDir = await mkdtemp(join(tmpdir(), "aiagent-concurrent-migrations-"));
+  try {
+    await writeFile(join(fixtureDir, "0010_concurrent.sql"), "create table concurrent_records(id integer primary key);");
+    await Promise.all([runMigrations(context.pool, fixtureDir), runMigrations(secondPool, fixtureDir)]);
+    const applied = await context.pool.query(
+      "select count(*)::integer as count from __aiagent_migrations where name='0010_concurrent.sql'"
+    );
+    assert.equal(applied.rows[0].count, 1);
+    const table = await context.pool.query("select to_regclass('concurrent_records') as name");
+    assert.equal(table.rows[0].name, "concurrent_records");
+  } finally {
+    await secondPool.end();
+    await rm(fixtureDir, { recursive: true, force: true });
+    await context.cleanup();
+  }
+});

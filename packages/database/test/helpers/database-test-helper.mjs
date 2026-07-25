@@ -29,7 +29,7 @@ export function assertSafeTestDatabaseUrl(testDatabaseUrl, developmentDatabaseUr
  *
  * @param {string} testDatabaseUrl 独立测试数据库连接串。
  * @param {string | undefined} developmentDatabaseUrl 开发数据库连接串。
- * @returns {Promise<{pool: pg.Pool, schema: string, cleanup: () => Promise<void>}>} 测试上下文。
+ * @returns {Promise<{pool: pg.Pool, schema: string, createPool: () => pg.Pool, cleanup: () => Promise<void>}>} 测试上下文。
  */
 export async function createDatabaseTestContext(testDatabaseUrl, developmentDatabaseUrl) {
   assertSafeTestDatabaseUrl(testDatabaseUrl, developmentDatabaseUrl);
@@ -40,6 +40,9 @@ export async function createDatabaseTestContext(testDatabaseUrl, developmentData
   return {
     pool,
     schema,
+    createPool() {
+      return new Pool({ connectionString: testDatabaseUrl, max: 2, options: `-c search_path=${schema}` });
+    },
     async cleanup() {
       if (!schema.startsWith(TEST_SCHEMA_PREFIX)) throw new Error("Refusing to clean an unmanaged test schema.");
       await pool.end();

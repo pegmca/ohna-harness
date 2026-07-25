@@ -7,6 +7,7 @@ helpers. Domain packages declare repository ports and do not depend on `pg`.
 
 - `runMigrations` applies files in lexical order.
 - Each SQL file and its `__aiagent_migrations` record commit in the same transaction.
+- A transaction-level advisory lock serializes the applied check and SQL execution across instances.
 - A failure reports only the migration filename; the original cause remains server-side diagnostic data.
 - Existing migration `0000_identity.sql` is historical and is not modified. From `0010` onward, every
   column created by a migration must have a Chinese `COMMENT ON COLUMN` in that same file.

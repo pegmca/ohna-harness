@@ -15,6 +15,7 @@ const conversations = [
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  vi.clearAllMocks();
 });
 
 describe("Workbench conversation history", () => {
@@ -64,6 +65,77 @@ describe("Workbench conversation history", () => {
     expect(await screen.findByText("更多会话")).toBeTruthy();
   });
 
+  it("continues conversation pagination until the URL-selected conversation is found", async () => {
+    const requestedUrls: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      requestedUrls.push(url);
+      if (url === "/api/conversations?limit=30") {
+        return ok({ items: [conversation("c1", "首屏会话")], nextCursor: "next" });
+      }
+      if (url.includes("cursor=next")) {
+        return ok({ items: [conversation("target", "深页会话")] });
+      }
+      if (url.includes("/target/messages")) return ok({ items: [] });
+      throw new Error(`Unexpected fetch: ${url}`);
+    }));
+
+    render(<MemoryRouter initialEntries={["/?conversation=target"]}><Workbench /></MemoryRouter>);
+    expect(await screen.findByRole("heading", { name: "深页会话" })).toBeTruthy();
+    expect(requestedUrls.some((url) => url.includes("cursor=next"))).toBe(true);
+  });
+
+  it("does not append a delayed message page after switching conversations", async () => {
+    const delayedPage = deferred<Response>();
+    let c1Requests = 0;
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.startsWith("/api/conversations?")) return ok({ items: conversations });
+      if (url.includes("/c1/messages")) {
+        c1Requests += 1;
+        if (c1Requests === 1) return ok({ items: [message("m1", "c1", "首条消息")], nextCursor: "more" });
+        init?.signal?.addEventListener("abort", () => delayedPage.reject(new DOMException("Aborted", "AbortError")));
+        return delayedPage.promise;
+      }
+      if (url.includes("/c2/messages")) return ok({ items: [message("m2", "c2", "第二会话消息")] });
+      throw new Error(`Unexpected fetch: ${url}`);
+    }));
+
+    render(<MemoryRouter initialEntries={["/?conversation=c1"]}><Workbench /></MemoryRouter>);
+    await screen.findByText("首条消息");
+    fireEvent.click(screen.getByRole("button", { name: "加载更多消息" }));
+    fireEvent.click(screen.getByRole("button", { name: /^第二会话/ }));
+    expect(await screen.findByText("第二会话消息")).toBeTruthy();
+    await act(async () => delayedPage.resolve(ok({ items: [message("late", "c1", "迟到分页消息")] })));
+    expect(screen.queryByText("迟到分页消息")).toBeNull();
+  });
+
+  it("preserves live messages when an empty conversation history response arrives late", async () => {
+    const delayedHistory = deferred<Response>();
+    const { createAndStreamRun } = await import("../../shared/api/run-stream-client");
+    vi.mocked(createAndStreamRun).mockResolvedValue({
+      ok: false,
+      requestId: "run_failed",
+      error: { code: "internal_error", message: "network failed", requestId: "run_failed" }
+    });
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/conversations?limit=30") return ok({ items: [] });
+      if (url === "/api/conversations") return ok(conversation("created", "首次问题"));
+      if (url.includes("/created/messages")) return delayedHistory.promise;
+      throw new Error(`Unexpected fetch: ${url}`);
+    }));
+
+    const { container } = render(<MemoryRouter><Workbench /></MemoryRouter>);
+    await screen.findByText("暂无历史会话，创建一个开始研究。");
+    const textbox = screen.getByRole("textbox");
+    fireEvent.change(textbox, { target: { value: "首次问题" } });
+    fireEvent.submit(textbox.closest("form")!);
+    await screen.findByText("首次问题");
+    await act(async () => delayedHistory.resolve(ok({ items: [] })));
+    expect(container.querySelector(".message-text")?.textContent).toBe("首次问题");
+  });
+
   it("reuses the same clientMessageId when the user retries an identical failed submission", async () => {
     const runRequests: Array<{ clientMessageId?: string }> = [];
     const { createAndStreamRun } = await import("../../shared/api/run-stream-client");
@@ -92,6 +164,7 @@ describe("Workbench conversation history", () => {
     fireEvent.submit(textbox.closest("form")!);
     await waitFor(() => expect(runRequests).toHaveLength(2));
     expect(runRequests[1].clientMessageId).toBe(runRequests[0].clientMessageId);
+    expect(screen.getAllByText("同一问题")).toHaveLength(1);
   });
 });
 

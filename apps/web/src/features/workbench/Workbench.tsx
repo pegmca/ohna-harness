@@ -125,6 +125,9 @@ export function Workbench() {
   const [selectedRunDetail, setSelectedRunDetail] = useState<SelectedRunDetail>();
   const [reportMode, setReportMode] = useState(false);
   const retrySubmission = useRef<{ message: string; clientMessageId: string } | undefined>(undefined);
+  const activeConversationIdRef = useRef(activeConversationId);
+  const messageRequestController = useRef<AbortController | undefined>(undefined);
+  const messageRequestGeneration = useRef(0);
 
   const activeConversation = useMemo(
     () => conversations.find((conversation) => conversation.conversationId === activeConversationId),
@@ -141,30 +144,10 @@ export function Workbench() {
 
   useEffect(() => {
     if (!activeConversationId) {
-      setMessages([]);
-      setMessageState("idle");
       return;
     }
-    const controller = new AbortController();
-    setMessages([]);
-    setMessageState("loading");
-    setMessageError(undefined);
-    void listConversationMessages(activeConversationId, undefined, controller.signal).then((result) => {
-      if (controller.signal.aborted) return;
-      if (!result.ok) {
-        setMessageState("error");
-        setMessageError(formatApiError(result.error));
-        return;
-      }
-      setMessages(result.data.items.map(toUiMessage));
-      setMessageCursor(result.data.nextCursor);
-      setMessageState("ready");
-    }).catch((error: unknown) => {
-      if (controller.signal.aborted) return;
-      setMessageState("error");
-      setMessageError(error instanceof Error ? error.message : "会话消息加载失败。");
-    });
-    return () => controller.abort();
+    void loadMessagePage(activeConversationId);
+    return () => messageRequestController.current?.abort();
   }, [activeConversationId]);
 
   /**
@@ -179,26 +162,95 @@ export function Workbench() {
     setConversationState("loading");
     setConversationError(undefined);
     try {
-      const result = await listConversations(cursor, signal);
+      let result = await listConversations(cursor, signal);
       if (!result.ok) {
         setConversationState("error");
         setConversationError(formatApiError(result.error));
         return;
       }
-      setConversations((current) => append ? mergeConversations(current, result.data.items) : result.data.items);
-      setConversationCursor(result.data.nextCursor);
+      let loadedItems = result.data.items;
+      let nextCursor = result.data.nextCursor;
+      const requested = !append ? new URLSearchParams(location.search).get("conversation") : undefined;
+      // 稳定 URL 恢复必须继续读取游标页，不能因目标不在首屏而静默改选。
+      while (requested && !loadedItems.some((item) => item.conversationId === requested) && nextCursor) {
+        result = await listConversations(nextCursor, signal);
+        if (!result.ok) {
+          setConversationState("error");
+          setConversationError(formatApiError(result.error));
+          return;
+        }
+        loadedItems = mergeConversations(loadedItems, result.data.items);
+        nextCursor = result.data.nextCursor;
+      }
+      setConversations((current) => append ? mergeConversations(current, loadedItems) : loadedItems);
+      setConversationCursor(nextCursor);
       setConversationState("ready");
       if (!append) {
-        const requested = new URLSearchParams(location.search).get("conversation");
-        const selected = result.data.items.find((item) => item.conversationId === requested)
-          ?? result.data.items[0];
-        if (selected) selectConversation(selected.conversationId, true);
-        else setActiveConversationId("");
+        const selected = loadedItems.find((item) => item.conversationId === requested)
+          ?? loadedItems[0];
+        if (selected && selected.conversationId === activeConversationIdRef.current) {
+          navigate(`/?conversation=${encodeURIComponent(selected.conversationId)}`, { replace: true });
+        } else if (selected) {
+          selectConversation(selected.conversationId, true);
+        }
+        else {
+          activeConversationIdRef.current = "";
+          setActiveConversationId("");
+        }
       }
     } catch (error) {
       if (signal?.aborted) return;
       setConversationState("error");
       setConversationError(error instanceof Error ? error.message : "会话列表加载失败。");
+    }
+  }
+
+  /**
+   * 统一加载初始历史与后续消息页；请求代次和当前选择共同阻止迟到响应串写。
+   *
+   * @param conversationId 请求所属会话。
+   * @param cursor 可选消息游标。
+   * @param append 是否追加分页。
+   * @returns 请求完成 Promise。
+   */
+  async function loadMessagePage(
+    conversationId: string,
+    cursor?: string,
+    append = false
+  ): Promise<void> {
+    messageRequestController.current?.abort();
+    const controller = new AbortController();
+    const generation = messageRequestGeneration.current + 1;
+    messageRequestGeneration.current = generation;
+    messageRequestController.current = controller;
+    setMessageState("loading");
+    setMessageError(undefined);
+    try {
+      const result = await listConversationMessages(conversationId, cursor, controller.signal);
+      if (
+        controller.signal.aborted
+        || generation !== messageRequestGeneration.current
+        || activeConversationIdRef.current !== conversationId
+      ) return;
+      if (!result.ok) {
+        setMessageState("error");
+        setMessageError(formatApiError(result.error));
+        return;
+      }
+      const incoming = result.data.items.map(toUiMessage);
+      setMessages((current) => append
+        ? mergeMessages(current, incoming)
+        : mergeMessages(incoming, current));
+      setMessageCursor(result.data.nextCursor);
+      setMessageState("ready");
+    } catch (error) {
+      if (
+        controller.signal.aborted
+        || generation !== messageRequestGeneration.current
+        || activeConversationIdRef.current !== conversationId
+      ) return;
+      setMessageState("error");
+      setMessageError(error instanceof Error ? error.message : "会话消息加载失败。");
     }
   }
 
@@ -246,6 +298,12 @@ export function Workbench() {
 
   /** @param conversationId 会话 ID。 @param replace 是否替换历史记录。 @returns void。 */
   function selectConversation(conversationId: string, replace = false): void {
+    messageRequestController.current?.abort();
+    messageRequestGeneration.current += 1;
+    activeConversationIdRef.current = conversationId;
+    setMessages([]);
+    setMessageCursor(undefined);
+    setMessageState("loading");
     setActiveConversationId(conversationId);
     const target = `/?conversation=${encodeURIComponent(conversationId)}`;
     navigate(target, { replace });
@@ -265,6 +323,7 @@ export function Workbench() {
       setMessages([]);
       if (next) selectConversation(next.conversationId, true);
       else {
+        activeConversationIdRef.current = "";
         setActiveConversationId("");
         navigate("/", { replace: true });
       }
@@ -349,7 +408,11 @@ export function Workbench() {
       streamEvents: []
     };
 
-    setMessages((current) => [...current, userMessage, pendingMessage]);
+    setMessages((current) => [
+      ...current,
+      ...(current.some((item) => item.id === clientMessageId) ? [] : [userMessage]),
+      pendingMessage
+    ]);
     if (conversation.title === "新会话") {
       const title = createConversationTitle(trimmed);
       void updateConversationApi(submittedConversationId, { title }).then((result) => {
@@ -513,14 +576,7 @@ export function Workbench() {
             messages={messages}
             onLoadMore={() => {
               if (!activeConversationId) return;
-              void listConversationMessages(activeConversationId, messageCursor).then((result) => {
-                if (!result.ok) {
-                  setMessageError(formatApiError(result.error));
-                  return;
-                }
-                setMessages((current) => mergeMessages(current, result.data.items.map(toUiMessage)));
-                setMessageCursor(result.data.nextCursor);
-              });
+              void loadMessagePage(activeConversationId, messageCursor, true);
             }}
             onApprovalDecision={handleApprovalDecision}
             onOpenRunDetail={setSelectedRunDetail}

@@ -124,6 +124,8 @@ async function start(): Promise<void> {
 // graceful shutdown：先停止接收新 Run 并有限 drain，未完成任务落库为 interrupted，
 // 再由 onClose 关闭 event subscribers（SSE 连接随 server close 结束）、QQ channel、storage 与连接池。
 const shutdownDrainMs = Number(process.env.SHUTDOWN_DRAIN_MS ?? 10_000);
+// app.close 的上限：异常 SSE 长连接不能无限阻塞关闭，超时后强制退出交给编排层重启。
+const shutdownCloseTimeoutMs = Number(process.env.SHUTDOWN_CLOSE_TIMEOUT_MS ?? 15_000);
 let shutdownStarted = false;
 
 /**
@@ -134,14 +136,22 @@ async function gracefulShutdown(signal: string): Promise<void> {
   if (shutdownStarted) return;
   shutdownStarted = true;
   app.log.info({ signal }, "shutdown started");
+  // 失败或超时都必须以非零码退出，让编排层识别这不是一次干净停机。
+  let exitCode = 0;
+  const forceExitTimer = setTimeout(() => {
+    app.log.error("shutdown timed out, forcing exit");
+    process.exit(1);
+  }, shutdownDrainMs + shutdownCloseTimeoutMs);
   try {
     const { interrupted } = await app.aiagentRunService.shutdown({ drainMs: shutdownDrainMs });
     app.log.info({ interrupted }, "run drain finished");
     await app.close();
   } catch (error) {
+    exitCode = 1;
     app.log.error(error);
   } finally {
-    process.exit(0);
+    clearTimeout(forceExitTimer);
+    process.exit(exitCode);
   }
 }
 

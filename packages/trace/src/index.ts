@@ -585,7 +585,10 @@ export function createInMemoryTraceStore(): TraceStore {
     async finalize(context, trace) {
       const stored = traces.get(context.requestId);
       if (!stored || stored.context.userId !== context.userId || stored.context.runId !== context.runId) return;
-      stored.trace = sanitizeValue({ ...trace, events: stored.events }) as Trace;
+      // 事件在 append 时已逐条脱敏，这里不再整体 sanitize：
+      // 账号号段正则可能命中 requestId 等十六进制身份字段中的长数字串，
+      // 把查询键改成 "[redacted:account]" 会破坏 store 的按键读取契约。
+      stored.trace = { ...trace, events: stored.events };
     },
     /** @param userId 当前用户。 @param requestId 请求标识。 @returns 完整 Trace。 */
     async getByRequestId(userId, requestId) {

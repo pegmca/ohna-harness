@@ -521,9 +521,8 @@ async function main() {
   });
 
   // 9. 故障注入：PostgreSQL 停止 → readiness 503 + 结构化错误无泄漏 → 恢复 200。
-  // 注意：这里断言的是目标契约。当前实现存在已知缺陷——pg.Pool 未挂 'error' 监听，
-  // postgres 停止时空闲连接收到 "terminating connection due to administrator command" 会
-  // 触发未处理的 pool error 事件使 API 进程崩溃（见最终报告），因此本检查预期 FAIL。
+  // 目标契约：pool 级 error 事件已被兜底监听，API 在依赖故障时必须保持存活，
+  // readiness 用 503 表达，业务接口只返回 ok:false 稳定信封，进程不崩溃。
   let faultEvidence = {};
   await check("9a. PostgreSQL 停止后 API 存活且 /ready 返回 503", async () => {
     await startApi();
@@ -544,7 +543,7 @@ async function main() {
       const apiDied = !apiChild || apiChild.exitCode !== null;
       faultEvidence = { ready503, connectionFailed, apiDied, exitCode: apiChild?.exitCode };
       // 目标契约：API 必须在依赖故障时保持存活并用 503 表达 readiness。
-      assert(!apiDied, `API 进程在 postgres 停止后崩溃 exitCode=${faultEvidence.exitCode}（pg Pool 未处理 idle client error 事件）`);
+      assert(!apiDied, `API 进程在 postgres 停止后崩溃 exitCode=${faultEvidence.exitCode}（pool error 兜底失效）`);
       assert(ready503, "postgres 停止后 /ready 未返回 503");
     } finally {
       // 无论成败都先恢复 postgres，避免影响后续检查与本机其他验证。
@@ -553,8 +552,7 @@ async function main() {
   });
 
   await check("9b. 故障窗口内业务接口为稳定结构化错误且无敏感泄漏", async () => {
-    // API 若已因 9a 的缺陷崩溃，则在 postgres 已恢复的前提下重启，再模拟“依赖曾故障”的响应契约：
-    // 直接以 stop→请求→start 的最短窗口验证错误信封（若进程再次崩溃则如实 FAIL）。
+    // 9a 已保证进程存活；这里在 stop→请求→start 的最短窗口内验证错误信封契约。
     await ensureApi();
     await execFileAsync("docker", ["compose", "stop", "postgres"], { cwd: repoRoot });
     try {
@@ -565,9 +563,8 @@ async function main() {
         `rag/search 故障响应非 ok:false 结构: ${search.text.slice(0, 300)}`);
       const run = await api("GET", `/api/runs/${accepted1.runId}`, { cookie: cookieA });
       assert(run.json && typeof run.json === "object", `run 故障响应非 JSON: ${run.text.slice(0, 200)}`);
-      // run 读取允许 ok:false 信封或 Fastify 通用 500 结构，但都必须是稳定话术。
-      const runStructured = (run.json.ok === false && typeof run.json.error?.code === "string")
-        || (run.status === 500 && run.json.error === "Internal Server Error");
+      // 全局 setErrorHandler 与认证 fail-closed 已统一稳定信封，只接受 ok:false 结构化响应。
+      const runStructured = run.json.ok === false && typeof run.json.error?.code === "string";
       assert(runStructured, `run 故障响应结构不稳定: ${run.text.slice(0, 300)}`);
       for (const body of [search.text, run.text]) {
         for (const pattern of leakPatterns) {
@@ -580,7 +577,7 @@ async function main() {
   });
 
   await check("9c. PostgreSQL 恢复后 /ready 回到 200", async () => {
-    // API 若已在故障窗口崩溃，重启进程验证端到端恢复；存活则直接验证。
+    // 进程在故障窗口保持存活，postgres 恢复后 readiness 应自行回到 200。
     await ensureApi();
     let recovered = false;
     for (let attempt = 0; attempt < 30; attempt += 1) {

@@ -5,6 +5,7 @@ import type { LlmClient } from "@aiagent/types";
 import type {
   AgentRunAcceptedDto,
   AgentRunCreateRequestDto,
+  AgentRunEventInputDto,
   AgentRunResponseDto,
   AgentRunSnapshotDto,
   AgentRunStatusDto,
@@ -17,6 +18,7 @@ import type {
   TraceDto
 } from "@aiagent/types";
 import { createObservableTraceRecorder, redactSensitiveValue } from "@aiagent/trace";
+import { createHash, randomUUID } from "node:crypto";
 import type { RunEventBus, RunExecutionRegistry, RunScheduler, RunStore } from "./run-ports.js";
 
 type RunEventPayload =
@@ -45,9 +47,11 @@ export interface RunServiceDependencies {
 
 export interface RunApplicationService {
   create(request: AgentRunCreateRequestDto, userId: string): Promise<AgentRunAcceptedDto>;
-  get(runId: string): Promise<AgentRunSnapshotDto | undefined>;
-  cancel(runId: string): Promise<AgentRunSnapshotDto | undefined>;
+  get(userId: string, runId: string): Promise<AgentRunSnapshotDto | undefined>;
+  cancel(userId: string, runId: string): Promise<AgentRunSnapshotDto | undefined>;
+  listEvents(userId: string, runId: string, afterSequence: number): Promise<AgentRunStreamEventDto[] | undefined>;
   subscribe(runId: string, listener: (event: AgentRunStreamEventDto) => void): () => void;
+  recoverStale(before: string): Promise<number>;
 }
 
 export interface ReportPersistenceContext {
@@ -66,54 +70,31 @@ export interface ReportPersistenceContext {
 export function createRunApplicationService(dependencies: RunServiceDependencies): RunApplicationService {
   const now = dependencies.now ?? (() => new Date());
   const createId = dependencies.createId ?? defaultCreateId;
-  let publishQueue: Promise<void> = Promise.resolve();
-
-  async function publishNow(runId: string, payload: RunEventPayload): Promise<AgentRunStreamEventDto> {
-    const current = await dependencies.store.findById(runId);
+  async function publish(userId: string, runId: string, payload: RunEventPayload): Promise<AgentRunStreamEventDto | undefined> {
+    const current = await dependencies.store.findById(userId, runId);
     if (!current) throw new Error(`Run not found: ${runId}`);
-    const event = redactSensitiveValue({
+    const eventInput = redactSensitiveValue({
       ...payload,
-      eventId: `${runId}_${current.events.length + 1}`,
-      sequence: current.events.length + 1,
       runId,
       requestId: current.requestId,
       traceId: `trace_${runId}`,
       conversationId: current.conversationId,
       createdAt: now().toISOString()
-    }) as AgentRunStreamEventDto;
-    await dependencies.store.save({
-      ...current,
-      updatedAt: event.createdAt,
-      events: [...current.events, event],
-      status: statusFromEvent(event, current.status),
-      result: event.type === "run_result" ? event.result : current.result,
-      error: event.type === "run_error" ? event.error : current.error
-    });
-    dependencies.eventBus.publish(event);
+    }) as AgentRunEventInputDto;
+    const event = await dependencies.store.append(userId, runId, eventInput);
+    // live fan-out 只能发生在 adapter 的数据库事务提交之后。
+    if (event) dependencies.eventBus.publish(event);
     return event;
-  }
-
-  /**
-   * 串行化 append + publish，防止同步 trace burst 读取到相同 sequence。
-   *
-   * @param runId Run 标识。
-   * @param payload 待封装事件。
-   * @returns 已持久化事件。
-   */
-  function publish(runId: string, payload: RunEventPayload): Promise<AgentRunStreamEventDto> {
-    const next = publishQueue.then(() => publishNow(runId, payload));
-    publishQueue = next.then(() => undefined, () => undefined);
-    return next;
   }
 
   async function execute(runId: string, request: AgentRunCreateRequestDto, userId: string): Promise<void> {
     const controller = dependencies.executionRegistry.get(runId);
     if (!controller) return;
-    await publish(runId, { type: "run_status", status: "running", message: "Agent 已开始分析研究任务。" });
-    const snapshot = await dependencies.store.findById(runId);
+    await publish(userId, runId, { type: "run_status", status: "running", message: "Agent 已开始分析研究任务。" });
+    const snapshot = await dependencies.store.findById(userId, runId);
     if (!snapshot) return;
     const trace = createObservableTraceRecorder(`trace_${runId}`, snapshot.requestId);
-    const unsubscribe = trace.subscribe((event) => { void publish(runId, { type: "trace_event", event }); });
+    const unsubscribe = trace.subscribe((event) => { void publish(userId, runId, { type: "trace_event", event }); });
     try {
       const response = await runAgent({
         message: request.message.trim(),
@@ -128,9 +109,9 @@ export function createRunApplicationService(dependencies: RunServiceDependencies
       dependencies.sink.saveTrace(response.trace);
       const result = redactSensitiveValue(toResponseDto(runId, response, request, snapshot.requestId, workflow));
       registerApprovals(runId, result.trace, dependencies.sink);
-      await publish(runId, { type: "run_result", result });
+      await publish(userId, runId, { type: "run_result", result });
     } catch (caught) {
-      await publish(runId, {
+      await publish(userId, runId, {
         type: "run_error",
         error: toRunError(caught, snapshot.requestId, controller.signal.aborted)
       });
@@ -143,19 +124,23 @@ export function createRunApplicationService(dependencies: RunServiceDependencies
   return {
     async create(request, userId) {
       const runId = createId("run");
-      const requestId = createId("api_req");
+      // 浏览器幂等键按用户命名空间化，既满足全局唯一约束，也不会产生跨用户冲突侧信道。
+      const requestId = request.clientMessageId
+        ? `req_${createHash("sha256").update(`${userId}\0${request.clientMessageId}`).digest("hex")}`
+        : createId("api_req");
       const createdAt = now().toISOString();
-      await dependencies.store.insert({
-        runId,
-        requestId,
-        conversationId: request.conversationId,
-        status: "queued",
-        createdAt,
-        updatedAt: createdAt,
-        events: []
+      const created = await dependencies.store.create({
+        runId, requestId, userId, conversationId: request.conversationId,
+        message: request.message.trim(), clientMessageId: request.clientMessageId ?? requestId,
+        mode: request.mode, source: request.source, traceId: `trace_${runId}`, createdAt
       });
+      const actual = created.snapshot;
+      if (!created.created) return {
+        runId: actual.runId, requestId: actual.requestId, conversationId: actual.conversationId,
+        status: actual.status, eventsUrl: `/api/runs/${actual.runId}/events`, snapshotUrl: `/api/runs/${actual.runId}`
+      };
       dependencies.executionRegistry.create(runId);
-      await publish(runId, { type: "run_status", status: "queued", message: "研究任务已进入队列。" });
+      await publish(userId, runId, { type: "run_status", status: "queued", message: "研究任务已进入队列。" });
       dependencies.scheduler.schedule(() => execute(runId, request, userId));
       return {
         runId,
@@ -166,17 +151,23 @@ export function createRunApplicationService(dependencies: RunServiceDependencies
         snapshotUrl: `/api/runs/${runId}`
       };
     },
-    get: (runId) => dependencies.store.findById(runId),
-    async cancel(runId) {
-      const snapshot = await dependencies.store.findById(runId);
+    get: (userId, runId) => dependencies.store.findById(userId, runId),
+    async cancel(userId, runId) {
+      const snapshot = await dependencies.store.findById(userId, runId);
       if (!snapshot) return undefined;
       if (["queued", "running", "waiting_approval"].includes(snapshot.status)) {
         dependencies.executionRegistry.get(runId)?.abort();
-        await publish(runId, { type: "run_status", status: "cancelled", message: "用户已请求取消研究任务。" });
+        await publish(userId, runId, { type: "run_status", status: "cancelled", message: "用户已请求取消研究任务。" });
       }
-      return dependencies.store.findById(runId);
+      return dependencies.store.findById(userId, runId);
     },
-    subscribe: (runId, listener) => dependencies.eventBus.subscribe(runId, listener)
+    listEvents: (userId, runId, afterSequence) => dependencies.store.listEvents(userId, runId, afterSequence),
+    subscribe: (runId, listener) => dependencies.eventBus.subscribe(runId, listener),
+    async recoverStale(before) {
+      const events = await dependencies.store.recoverStale(before, now().toISOString());
+      for (const event of events) dependencies.eventBus.publish(event);
+      return events.length;
+    }
   };
 }
 
@@ -274,19 +265,12 @@ function toWorkflowDto(result: Awaited<ReturnType<typeof runReportWorkflow>>): R
   return { run: result.run, artifact };
 }
 
-function statusFromEvent(event: AgentRunStreamEventDto, current: AgentRunStatusDto): AgentRunStatusDto {
-  if (event.type === "run_status") return event.status;
-  if (event.type === "run_error") return event.error.code === "request_cancelled" ? "cancelled" : "failed";
-  if (event.type === "run_result") return event.result.ok ? "succeeded" : "failed";
-  return current;
-}
-
 function toRunError(caught: unknown, requestId: string, cancelled: boolean): ApiError {
+  void caught;
   return {
     code: cancelled ? "request_cancelled" : "internal_error",
     message: cancelled ? "Agent run 已取消。" : "Agent 服务暂时不可用，请稍后重试。",
-    requestId,
-    details: { cause: caught instanceof Error ? caught.message : "unknown" }
+    requestId
   };
 }
 
@@ -317,5 +301,6 @@ function createReportDemoDocuments() {
 }
 
 function defaultCreateId(prefix: string): string {
-  return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+  void prefix;
+  return randomUUID();
 }

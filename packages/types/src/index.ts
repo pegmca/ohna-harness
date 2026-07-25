@@ -49,6 +49,7 @@ export type ApiErrorCode =
   | "tool_failed"
   | "trace_failed"
   | "request_cancelled"
+  | "run_interrupted"
   | "internal_error";
 
 export interface ApiError {
@@ -359,6 +360,7 @@ export interface AgentRunCreateRequestDto {
   conversationId: string;
   mode: "auto" | "report";
   source: "composer" | "report_button";
+  clientMessageId?: string;
 }
 
 /** Agent runtime 内部兼容请求；浏览器创建新 Run 时使用 AgentRunCreateRequestDto。 */
@@ -451,6 +453,14 @@ export type AgentRunStreamEventDto =
       type: "run_error";
       error: ApiError;
     };
+
+/** 持久化 adapter 分配 eventId/sequence 前的 canonical event 输入。 */
+export type AgentRunEventInputDto =
+  AgentRunStreamEventDto extends infer TEvent
+    ? TEvent extends AgentRunStreamEventDto
+      ? Omit<TEvent, "eventId" | "sequence">
+      : never
+    : never;
 
 /** 供刷新和 SSE 断线恢复使用的 run 快照。 */
 export interface AgentRunSnapshotDto {

@@ -176,8 +176,13 @@ importers:
         specifier: 1.0.4
         version: 1.0.4
 
+  packages/conversation: {}
+
   packages/database:
     dependencies:
+      '@aiagent/conversation':
+        specifier: workspace:*
+        version: link:../conversation
       '@aiagent/identity':
         specifier: workspace:*
         version: link:../identity

@@ -1,5 +1,11 @@
 import type { DataSourceIngestRequestDto } from "@aiagent/types";
-import { createDataSourceRuntime, type DataSourceRuntime } from "@aiagent/rag";
+import {
+  createDataSourceRuntime,
+  createDeterministicMockEmbeddingClient,
+  createInMemoryRagDocumentRepository,
+  createInMemoryVectorStoreFactory,
+  type DataSourceRuntime
+} from "@aiagent/rag";
 import type { RagEvalCase } from "./types.js";
 
 /**
@@ -393,7 +399,11 @@ export const RAG_EVAL_CASES: RagEvalCase[] = [
  * @returns 已 ingest 全部 demo 文档的 runtime。
  */
 export async function createDemoRagRuntime(): Promise<DataSourceRuntime> {
-  const runtime = createDataSourceRuntime();
+  const runtime = createDataSourceRuntime({
+    repository: createInMemoryRagDocumentRepository(),
+    embeddingClient: createDeterministicMockEmbeddingClient(),
+    vectorStoreFactory: createInMemoryVectorStoreFactory()
+  });
 
   for (const document of DEMO_DOCUMENTS) {
     const result = await runtime.ingest(document);

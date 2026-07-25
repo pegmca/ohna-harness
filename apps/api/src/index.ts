@@ -688,7 +688,7 @@ export function createApiServer(options: ApiServerOptions = {}): FastifyInstance
 
     const result = await dataSourceRuntime.search(parsed.data.query.trim(), {
       topK: parsed.data.topK
-    });
+    }, { ownerUserId: identityByRequest.get(request)?.userId ?? null });
 
     if (!result.ok) {
       reply.code(400);
@@ -723,7 +723,7 @@ export function createApiServer(options: ApiServerOptions = {}): FastifyInstance
 
     const result = await dataSourceRuntime.answer(parsed.data.question.trim(), {
       topK: parsed.data.topK
-    });
+    }, { ownerUserId: identityByRequest.get(request)?.userId ?? null });
 
     if (!result.ok) {
       reply.code(400);

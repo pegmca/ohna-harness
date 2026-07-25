@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { bigint, check, index, integer, jsonb, pgTable, text, timestamp, unique, uniqueIndex, uuid } from "drizzle-orm/pg-core";
+import { bigint, check, customType, index, integer, jsonb, pgTable, text, timestamp, unique, uniqueIndex, uuid } from "drizzle-orm/pg-core";
 
 export const users = pgTable("users", {
   id: uuid("id").primaryKey(),
@@ -215,6 +215,29 @@ export const chunks = pgTable("chunks", {
 }, (table) => [
   uniqueIndex("chunks_document_version_id_chunker_version_chunk_index_key").on(table.documentVersionId, table.chunkerVersion, table.chunkIndex),
   index("chunks_document_version_idx").on(table.documentVersionId)
+]);
+
+const vector32 = customType<{ data: number[]; driverData: string }>({
+  dataType() {
+    return "public.vector(32)";
+  }
+});
+
+// pgvector 表镜像 0060_rag_vectors.sql；HNSW operator class 由 migration 明确声明。
+export const chunkEmbeddings = pgTable("chunk_embeddings", {
+  id: uuid("id").primaryKey(),
+  chunkId: uuid("chunk_id").notNull().references(() => chunks.id, { onDelete: "cascade" }),
+  embeddingProvider: text("embedding_provider").notNull(),
+  embeddingModel: text("embedding_model").notNull(),
+  dimensions: integer("dimensions").notNull(),
+  embedding: vector32("embedding").notNull(),
+  chunkContentChecksum: text("chunk_content_checksum").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true, mode: "string" }).notNull()
+}, (table) => [
+  uniqueIndex("chunk_embeddings_chunk_model_dimensions_uq").on(table.chunkId, table.embeddingModel, table.dimensions),
+  index("chunk_embeddings_model_dimensions_idx").on(table.embeddingModel, table.dimensions),
+  check("chunk_embeddings_model_check", sql`${table.embeddingModel} = 'deterministic-mock-embedding-v1'`),
+  check("chunk_embeddings_dimensions_check", sql`${table.dimensions} = 32`)
 ]);
 
 export const conversations = pgTable("conversations", {

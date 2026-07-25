@@ -1,4 +1,9 @@
-import { createDataSourceRuntime } from "@aiagent/rag";
+import {
+  createDataSourceRuntime,
+  createDeterministicMockEmbeddingClient,
+  createInMemoryRagDocumentRepository,
+  createInMemoryVectorStoreFactory
+} from "@aiagent/rag";
 import { createDefaultToolRegistry } from "@aiagent/tools";
 import type {
   FinancialMetricsInput,
@@ -40,7 +45,11 @@ export interface McpFinancialToolRuntime {
  * @returns 三个金融研究工具的结构化执行入口。
  */
 export function createMcpFinancialToolRuntime(): McpFinancialToolRuntime {
-  const ragRuntime = createDataSourceRuntime();
+  const ragRuntime = createDataSourceRuntime({
+    repository: createInMemoryRagDocumentRepository(),
+    embeddingClient: createDeterministicMockEmbeddingClient(),
+    vectorStoreFactory: createInMemoryVectorStoreFactory()
+  });
   const toolRegistry = createDefaultToolRegistry();
   let seedPromise: Promise<void> | undefined;
 

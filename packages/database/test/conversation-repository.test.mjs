@@ -52,6 +52,33 @@ test("Conversation 与 Message PostgreSQL adapter 满足归属、分页、归档
     );
     assert.equal(new Set([...firstPage.items, ...secondPage.items].map((item) => item.id)).size, 3);
 
+    const precisionUser = "30000000-0000-4000-8000-000000000003";
+    await context.pool.query(
+      "insert into users(id,created_at,updated_at,last_seen_at) values ($1,$2,$2,$2)",
+      [precisionUser, now]
+    );
+    const precisionIds = [
+      "30000000-0000-4000-8000-000000000001",
+      "30000000-0000-4000-8000-000000000002",
+      "30000000-0000-4000-8000-000000000003"
+    ];
+    for (const [index, id] of precisionIds.entries()) {
+      await conversationRepository.create(precisionUser, {
+        id,
+        title: `微秒会话 ${index + 1}`,
+        now: `2026-07-25T08:00:00.123${9 - index}00Z`
+      });
+    }
+    const precisionPages = [];
+    let precisionCursor;
+    do {
+      const page = await conversationRepository.list(precisionUser, { limit: 1, cursor: precisionCursor });
+      precisionPages.push(...page.items);
+      precisionCursor = page.nextCursor;
+    } while (precisionCursor);
+    assert.deepEqual(precisionPages.map((item) => item.id), precisionIds);
+    assert.equal(new Set(precisionPages.map((item) => item.id)).size, precisionIds.length);
+
     const archivedOnce = await conversationRepository.archive(userOne, conversationIds[0], "2026-07-25T09:00:00.000Z");
     const archivedTwice = await conversationRepository.archive(userOne, conversationIds[0], "2026-07-25T10:00:00.000Z");
     assert.equal(archivedOnce.archivedAt, archivedTwice.archivedAt);

@@ -72,8 +72,8 @@ class PostgresConversationRepository implements ConversationRepository {
     const limit = normalizeLimit(input.limit);
     const cursor = input.cursor ? decodeConversationCursor(input.cursor) : undefined;
     try {
-      const result = await this.pool.query<ConversationRow>(
-        `select * from conversations
+      const result = await this.pool.query<ConversationListRow>(
+        `select *,last_message_at::text as cursor_last_message_at from conversations
           where user_id=$1 and status=$2
             and ($3::timestamptz is null or (last_message_at,id) < ($3::timestamptz,$4::uuid))
           order by last_message_at desc,id desc
@@ -81,11 +81,15 @@ class PostgresConversationRepository implements ConversationRepository {
         [userId, input.status ?? "active", cursor?.lastMessageAt ?? null, cursor?.id ?? null, limit + 1]
       );
       const hasMore = result.rows.length > limit;
-      const items = result.rows.slice(0, limit).map(mapConversation);
-      const last = items.at(-1);
+      const pageRows = result.rows.slice(0, limit);
+      const items = pageRows.map(mapConversation);
+      const last = pageRows.at(-1);
       return {
         items,
-        nextCursor: hasMore && last ? encodeCursor({ lastMessageAt: last.lastMessageAt, id: last.id }) : undefined
+        // cursor 必须使用数据库原始排序键；转成 JavaScript Date 会截断 timestamptz 的微秒。
+        nextCursor: hasMore && last
+          ? encodeCursor({ lastMessageAt: last.cursor_last_message_at, id: last.id })
+          : undefined
       };
     } catch (cause) {
       throw mapRepositoryError(cause);
@@ -272,6 +276,10 @@ interface ConversationRow {
   updated_at: Date | string;
   last_message_at: Date | string;
   archived_at: Date | string | null;
+}
+
+interface ConversationListRow extends ConversationRow {
+  cursor_last_message_at: string;
 }
 
 interface MessageRow {

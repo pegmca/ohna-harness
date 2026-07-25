@@ -31,7 +31,7 @@ export interface RunServiceSink {
   saveTrace(trace: TraceDto): void;
   saveWorkflow(workflow: ReportWorkflowResponseDto, context: ReportPersistenceContext): Promise<void>;
   saveArtifact(artifact: ReportArtifactDto, context: ReportPersistenceContext): Promise<void>;
-  saveApproval(approval: ToolApprovalRequestDto, runId: string): void;
+  saveApproval(approval: ToolApprovalRequestDto, context: ApprovalPersistenceContext): Promise<void>;
 }
 
 export interface RunServiceDependencies {
@@ -59,6 +59,12 @@ export interface ReportPersistenceContext {
   conversationId: string;
   agentRunId: string;
   planId: string;
+}
+
+/** Approval 持久化归属上下文；userId 必须来自 Run 创建时的服务端身份。 */
+export interface ApprovalPersistenceContext {
+  runId: string;
+  userId: string;
 }
 
 /**
@@ -108,7 +114,7 @@ export function createRunApplicationService(dependencies: RunServiceDependencies
       response.trace = trace.getTrace();
       dependencies.sink.saveTrace(response.trace);
       const result = redactSensitiveValue(toResponseDto(runId, response, request, snapshot.requestId, workflow));
-      registerApprovals(runId, result.trace, dependencies.sink);
+      registerApprovals(runId, userId, result.trace, dependencies.sink);
       await publish(userId, runId, { type: "run_result", result });
     } catch (caught) {
       await publish(userId, runId, {
@@ -189,7 +195,7 @@ async function maybeRunReport(
   const workflow = redactSensitiveValue(toWorkflowDto(result));
   const context = { userId, conversationId, agentRunId: runId, planId: response.reportPlan.planId };
   await sink.saveWorkflow(workflow, context);
-  if (workflow.run.approvalRequest) sink.saveApproval(workflow.run.approvalRequest, runId);
+  if (workflow.run.approvalRequest) await sink.saveApproval(workflow.run.approvalRequest, { runId, userId });
   if (workflow.artifact) await sink.saveArtifact(workflow.artifact, context);
   return workflow;
 }
@@ -274,10 +280,11 @@ function toRunError(caught: unknown, requestId: string, cancelled: boolean): Api
   };
 }
 
-function registerApprovals(runId: string, trace: TraceDto, sink: RunServiceSink): void {
+function registerApprovals(runId: string, userId: string, trace: TraceDto, sink: RunServiceSink): void {
   for (const event of trace.events) {
     if (event.type !== "approval" || event.status !== "requested") continue;
-    sink.saveApproval({
+    // 审批登记失败只影响该审批的可操作性，不应把整个 Run 标记为失败；逐条隔离处理。
+    void sink.saveApproval({
       approvalId: event.approvalId,
       traceId: event.traceId,
       requestId: event.requestId,
@@ -287,7 +294,7 @@ function registerApprovals(runId: string, trace: TraceDto, sink: RunServiceSink)
       inputPreview: event.inputPreview,
       inputDigest: event.inputDigest,
       permissionLevel: "needs_approval"
-    }, runId);
+    }, { runId, userId }).catch(() => undefined);
   }
 }
 

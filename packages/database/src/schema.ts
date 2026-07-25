@@ -299,6 +299,34 @@ export const agentRuns = pgTable("agent_runs", {
   completedAt: timestamp("completed_at", { withTimezone: true, mode: "string" })
 });
 
+// Approval 表镜像 0040_approval.sql；状态与决定由 CHECK 与 repository CAS 共同保证。
+export const toolApprovals = pgTable("tool_approvals", {
+  id: text("id").primaryKey(),
+  runId: uuid("run_id").notNull().references(() => agentRuns.id, { onDelete: "cascade" }),
+  requestId: text("request_id").notNull(),
+  traceId: text("trace_id").notNull(),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  toolName: text("tool_name"),
+  permissionLevel: text("permission_level"),
+  reason: text("reason"),
+  reasonCode: text("reason_code"),
+  inputDigest: text("input_digest").notNull(),
+  inputPreview: jsonb("input_preview"),
+  status: text("status").notNull(),
+  decision: text("decision"),
+  requestedAt: timestamp("requested_at", { withTimezone: true, mode: "string" }).notNull(),
+  decidedAt: timestamp("decided_at", { withTimezone: true, mode: "string" }),
+  expiresAt: timestamp("expires_at", { withTimezone: true, mode: "string" }),
+  reviewerUserId: uuid("reviewer_user_id"),
+  reviewerNote: text("reviewer_note")
+}, (table) => [
+  check("tool_approvals_permission_level_check", sql`${table.permissionLevel} in ('safe','needs_approval','blocked')`),
+  check("tool_approvals_status_check", sql`${table.status} in ('pending','approved','rejected','expired')`),
+  check("tool_approvals_decision_check", sql`${table.decision} in ('approved','rejected')`),
+  index("tool_approvals_user_status_requested_idx").on(table.userId, table.status, table.requestedAt),
+  index("tool_approvals_run_idx").on(table.runId)
+]);
+
 export const runEvents = pgTable("run_events", {
   id: uuid("id").primaryKey(),
   runId: uuid("run_id").notNull().references(() => agentRuns.id, { onDelete: "cascade" }),

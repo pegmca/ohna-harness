@@ -128,6 +128,7 @@ export function Workbench() {
   const activeConversationIdRef = useRef(activeConversationId);
   const messageRequestController = useRef<AbortController | undefined>(undefined);
   const messageRequestGeneration = useRef(0);
+  const skipInitialHistoryConversationId = useRef<string | undefined>(undefined);
 
   const activeConversation = useMemo(
     () => conversations.find((conversation) => conversation.conversationId === activeConversationId),
@@ -144,6 +145,9 @@ export function Workbench() {
 
   useEffect(() => {
     if (!activeConversationId) {
+      return;
+    }
+    if (skipInitialHistoryConversationId.current === activeConversationId) {
       return;
     }
     void loadMessagePage(activeConversationId);
@@ -278,7 +282,7 @@ export function Workbench() {
       return;
     }
     setConversations((current) => [result.data, ...current]);
-    selectConversation(result.data.conversationId);
+    selectConversation(result.data.conversationId, false, true);
     setInput("");
     setComposerError(undefined);
     setIsSidebarOpen(false);
@@ -296,14 +300,26 @@ export function Workbench() {
     setIsSidebarOpen(false);
   }
 
-  /** @param conversationId 会话 ID。 @param replace 是否替换历史记录。 @returns void。 */
-  function selectConversation(conversationId: string, replace = false): void {
+  /**
+   * 切换当前会话；当前页面刚创建的空会话可跳过首次历史请求，避免与首个 Run 写消息竞态。
+   *
+   * @param conversationId 会话 ID。
+   * @param replace 是否替换历史记录。
+   * @param skipInitialHistory 是否跳过已知为空的首次历史请求。
+   * @returns void。
+   */
+  function selectConversation(
+    conversationId: string,
+    replace = false,
+    skipInitialHistory = false
+  ): void {
     messageRequestController.current?.abort();
     messageRequestGeneration.current += 1;
     activeConversationIdRef.current = conversationId;
+    skipInitialHistoryConversationId.current = skipInitialHistory ? conversationId : undefined;
     setMessages([]);
     setMessageCursor(undefined);
-    setMessageState("loading");
+    setMessageState(skipInitialHistory ? "ready" : "loading");
     setActiveConversationId(conversationId);
     const target = `/?conversation=${encodeURIComponent(conversationId)}`;
     navigate(target, { replace });
@@ -381,7 +397,7 @@ export function Workbench() {
       }
       conversation = created.data;
       setConversations((current) => [created.data, ...current]);
-      selectConversation(created.data.conversationId);
+      selectConversation(created.data.conversationId, false, true);
     }
 
     const submittedConversationId = conversation.conversationId;

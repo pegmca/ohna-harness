@@ -110,8 +110,8 @@ describe("Workbench conversation history", () => {
     expect(screen.queryByText("迟到分页消息")).toBeNull();
   });
 
-  it("preserves live messages when an empty conversation history response arrives late", async () => {
-    const delayedHistory = deferred<Response>();
+  it("skips the known-empty initial history so a newly persisted user message cannot duplicate live state", async () => {
+    let historyRequests = 0;
     const { createAndStreamRun } = await import("../../shared/api/run-stream-client");
     vi.mocked(createAndStreamRun).mockResolvedValue({
       ok: false,
@@ -122,7 +122,10 @@ describe("Workbench conversation history", () => {
       const url = String(input);
       if (url === "/api/conversations?limit=30") return ok({ items: [] });
       if (url === "/api/conversations") return ok(conversation("created", "首次问题"));
-      if (url.includes("/created/messages")) return delayedHistory.promise;
+      if (url.includes("/created/messages")) {
+        historyRequests += 1;
+        return ok({ items: [message("persisted", "created", "首次问题")] });
+      }
       throw new Error(`Unexpected fetch: ${url}`);
     }));
 
@@ -132,8 +135,11 @@ describe("Workbench conversation history", () => {
     fireEvent.change(textbox, { target: { value: "首次问题" } });
     fireEvent.submit(textbox.closest("form")!);
     await screen.findByText("首次问题");
-    await act(async () => delayedHistory.resolve(ok({ items: [] })));
+    await waitFor(() => expect(createAndStreamRun).toHaveBeenCalledTimes(1));
+    expect(historyRequests).toBe(0);
     expect(container.querySelector(".message-text")?.textContent).toBe("首次问题");
+    expect([...container.querySelectorAll(".message-text")]
+      .filter((element) => element.textContent === "首次问题")).toHaveLength(1);
   });
 
   it("reuses the same clientMessageId when the user retries an identical failed submission", async () => {

@@ -87,7 +87,8 @@ export function createInMemoryExecutionRegistry(): RunExecutionRegistry {
       return controller;
     },
     get: (runId) => controllers.get(runId),
-    delete: (runId) => { controllers.delete(runId); }
+    delete: (runId) => { controllers.delete(runId); },
+    list: () => [...controllers.keys()]
   };
 }
 

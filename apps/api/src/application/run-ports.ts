@@ -25,6 +25,8 @@ export interface RunExecutionRegistry {
   create(runId: string): AbortController;
   get(runId: string): AbortController | undefined;
   delete(runId: string): void;
+  /** @returns 仍在执行中的 runId 列表，供 graceful shutdown drain 与批量中断使用。 */
+  list(): string[];
 }
 
 export interface RunScheduler {

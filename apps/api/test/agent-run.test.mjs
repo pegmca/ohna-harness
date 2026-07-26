@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createApiServer } from "../dist/index.js";
-import { createInMemoryApprovalRepository } from "../dist/adapters/in-memory-approval-repository.js";
 import { createInMemoryRunStore } from "../dist/adapters/in-memory-run-runtime.js";
+import { createInMemoryApiTestRuntime } from "../dist/adapters/in-memory-test-runtime.js";
 
 const runRequest = {
   message: "帮我查询 000001.SZ 最近一期净利润和 ROE。",
@@ -31,6 +31,7 @@ async function waitForTerminal(app, snapshotUrl, headers = {}) {
 
 test("health and readiness separate liveness from dependency readiness", async () => {
   const app = createApiServer({
+    ...createInMemoryApiTestRuntime(),
     readiness: async () => ({ ok: false, dependency: "test-provider", message: "not configured" })
   });
   assert.equal((await app.inject({ method: "GET", url: "/health" })).statusCode, 200);
@@ -39,7 +40,7 @@ test("health and readiness separate liveness from dependency readiness", async (
 });
 
 test("POST /api/runs validates the new run creation contract", async () => {
-  const app = createApiServer();
+  const app = createApiServer(createInMemoryApiTestRuntime());
   const invalid = await app.inject({
     method: "POST",
     url: "/api/runs",
@@ -51,7 +52,7 @@ test("POST /api/runs validates the new run creation contract", async () => {
 });
 
 test("run application service exposes ordered events and a terminal snapshot", async () => {
-  const app = createApiServer();
+  const app = createApiServer(createInMemoryApiTestRuntime());
   const acceptedResponse = await app.inject({ method: "POST", url: "/api/runs", payload: runRequest });
   assert.equal(acceptedResponse.statusCode, 202);
   const accepted = acceptedResponse.json().data;
@@ -69,7 +70,7 @@ test("run application service exposes ordered events and a terminal snapshot", a
 });
 
 test("Trace API 按 session user 隔离 requestId", async () => {
-  const app = createApiServer({ requireIdentity: true });
+  const app = createApiServer({ ...createInMemoryApiTestRuntime(), requireIdentity: true });
   const ownerCookie = await bootstrap(app, "visitor-trace-owner-0001");
   const foreignCookie = await bootstrap(app, "visitor-trace-owner-0002");
   const accepted = (await app.inject({
@@ -98,7 +99,7 @@ test("Trace 持久化失败不打断 Agent，并在最终结果留下结构化�
     async getByRequestId() { return undefined; },
     async listEvents() { return undefined; }
   };
-  const app = createApiServer({ traceStore: unavailableTraceStore });
+  const app = createApiServer({ ...createInMemoryApiTestRuntime(), traceStore: unavailableTraceStore });
   const accepted = (await app.inject({ method: "POST", url: "/api/runs", payload: runRequest })).json().data;
   const snapshot = await waitForTerminal(app, accepted.snapshotUrl);
   assert.equal(snapshot.status, "succeeded");
@@ -116,7 +117,7 @@ test("Trace 持久化失败不打断 Agent，并在最终结果留下结构化�
 });
 
 test("SSE 终态 replay 支持 Last-Event-ID 与 afterSequence，且不重复业务事件", async () => {
-  const app = createApiServer();
+  const app = createApiServer(createInMemoryApiTestRuntime());
   const accepted = (await app.inject({ method: "POST", url: "/api/runs", payload: runRequest })).json().data;
   const snapshot = await waitForTerminal(app, accepted.snapshotUrl);
   const after = Math.max(0, snapshot.events.length - 3);
@@ -136,7 +137,7 @@ test("SSE 终态 replay 支持 Last-Event-ID 与 afterSequence，且不重复业
 });
 
 test("重复 clientMessageId 复用同一 Run，且 Run API 对用户隐藏其他用户资源", async () => {
-  const app = createApiServer({ requireIdentity: true });
+  const app = createApiServer({ ...createInMemoryApiTestRuntime(), requireIdentity: true });
   const cookieOne = await bootstrap(app, "visitor-run-owner-0001");
   const cookieTwo = await bootstrap(app, "visitor-run-owner-0002");
   const payload = { ...runRequest, clientMessageId: "client-idempotency-1" };
@@ -160,7 +161,7 @@ test("重复 clientMessageId 复用同一 Run，且 Run API 对用户隐藏其�
 });
 
 test("run snapshot returns structured not_found errors", async () => {
-  const app = createApiServer();
+  const app = createApiServer(createInMemoryApiTestRuntime());
   const response = await app.inject({ method: "GET", url: "/api/runs/missing" });
   assert.equal(response.statusCode, 404);
   assert.equal(response.json().error.code, "not_found");
@@ -168,7 +169,7 @@ test("run snapshot returns structured not_found errors", async () => {
 });
 
 test("report mode is orchestrated inside the canonical run", async () => {
-  const app = createApiServer();
+  const app = createApiServer(createInMemoryApiTestRuntime());
   const accepted = (await app.inject({
     method: "POST",
     url: "/api/runs",
@@ -189,7 +190,7 @@ test("report mode is orchestrated inside the canonical run", async () => {
 });
 
 test("approval decision is bound to its run and input digest", async () => {
-  const app = createApiServer();
+  const app = createApiServer(createInMemoryApiTestRuntime());
   const accepted = (await app.inject({
     method: "POST",
     url: "/api/runs",
@@ -223,9 +224,9 @@ test("approval decision is bound to its run and input digest", async () => {
 
 test("approval decision 在 API 重启后仍可执行，且支持幂等重试与冲突检测", async () => {
   // 两个 server 实例共享同一份 repository/runStore，等价于重启后连接同一数据库。
-  const approvalRepository = createInMemoryApprovalRepository();
   const runStore = createInMemoryRunStore();
-  const appOne = createApiServer({ approvalRepository, runStore });
+  const runtime = createInMemoryApiTestRuntime({ runStore });
+  const appOne = createApiServer(runtime);
   const accepted = (await appOne.inject({
     method: "POST",
     url: "/api/runs",
@@ -242,7 +243,7 @@ test("approval decision 在 API 重启后仍可执行，且支持幂等重试与
   );
   await appOne.close();
 
-  const appTwo = createApiServer({ approvalRepository, runStore });
+  const appTwo = createApiServer(runtime);
   const url = `/api/runs/${accepted.runId}/approvals/${approval.approvalId}/decision`;
   const decided = await appTwo.inject({
     method: "POST",
@@ -271,9 +272,8 @@ test("approval decision 在 API 重启后仍可执行，且支持幂等重试与
 
 test("approval decision 拒绝其他已认证用户，reviewer 身份只来自服务端 session", async () => {
   const app = createApiServer({
-    requireIdentity: true,
-    approvalRepository: createInMemoryApprovalRepository(),
-    runStore: createInMemoryRunStore()
+    ...createInMemoryApiTestRuntime(),
+    requireIdentity: true
   });
   const cookieOne = await bootstrap(app, "visitor-approval-owner-1");
   const cookieTwo = await bootstrap(app, "visitor-approval-other-2");
@@ -325,8 +325,7 @@ test("workflow PDF 审批带确定性 digest，可经 decision endpoint 决定�
     async deletePdf(key) { written.delete(key); }
   };
   const app = createApiServer({
-    approvalRepository: createInMemoryApprovalRepository(),
-    runStore: createInMemoryRunStore(),
+    ...createInMemoryApiTestRuntime(),
     artifactStorage
   });
   const accepted = (await app.inject({
@@ -361,7 +360,7 @@ test("workflow PDF 审批带确定性 digest，可经 decision endpoint 决定�
 });
 
 test("data sources and RAG routes retain structured DTO boundaries", async () => {
-  const app = createApiServer();
+  const app = createApiServer(createInMemoryApiTestRuntime());
   const ingest = await app.inject({
     method: "POST",
     url: "/api/data-sources/ingest",
@@ -399,7 +398,7 @@ test("data sources and RAG routes retain structured DTO boundaries", async () =>
 });
 
 test("data sources ingest rejects unsafe source identifiers", async () => {
-  const app = createApiServer();
+  const app = createApiServer(createInMemoryApiTestRuntime());
   const unsafeSources = ["/etc/passwd", "file:///etc/passwd", "../x", "C:\\data\\x.md", "~/secret.md"];
 
   for (const source of unsafeSources) {
@@ -422,7 +421,7 @@ test("data sources ingest rejects unsafe source identifiers", async () => {
 });
 
 test("data sources list routes validate pagination query and page through results", async () => {
-  const app = createApiServer();
+  const app = createApiServer(createInMemoryApiTestRuntime());
   for (let index = 0; index < 3; index += 1) {
     const ingest = await app.inject({
       method: "POST",
@@ -457,7 +456,7 @@ test("data sources list routes validate pagination query and page through result
 });
 
 test("product evidence routes remain readable", async () => {
-  const app = createApiServer();
+  const app = createApiServer(createInMemoryApiTestRuntime());
   const evalResponse = await app.inject({ method: "GET", url: "/api/product/eval-report" });
   const architecture = await app.inject({ method: "GET", url: "/api/product/architecture" });
   assert.equal(evalResponse.json().data.caseCount, 31);

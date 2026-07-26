@@ -58,6 +58,15 @@ export interface RunApplicationService {
   listEvents(userId: string, runId: string, afterSequence: number): Promise<AgentRunStreamEventDto[] | undefined>;
   subscribe(runId: string, listener: (event: AgentRunStreamEventDto) => void): () => void;
   recoverStale(before: string): Promise<number>;
+  /** @returns 是否已进入 shutdown，新 Run 必须被拒绝。 */
+  isShuttingDown(): boolean;
+  /**
+   * 优雅关闭：停止接收新 Run，中断在途执行并有限 drain，最后把仍未终态的 Run 标记为 interrupted。
+   *
+   * @param options.drainMs 等待在途 Run 收尾的最长时间。
+   * @returns 被标记为 interrupted 的 Run 数量。
+   */
+  shutdown(options: { drainMs: number }): Promise<{ interrupted: number }>;
 }
 
 export interface ReportPersistenceContext {
@@ -82,6 +91,13 @@ export interface ApprovalPersistenceContext {
 export function createRunApplicationService(dependencies: RunServiceDependencies): RunApplicationService {
   const now = dependencies.now ?? (() => new Date());
   const createId = dependencies.createId ?? defaultCreateId;
+  // shutdown 期间拒绝新 Run，避免关闭窗口内写入无法 drain 的任务。
+  let shuttingDown = false;
+  async function recoverStale(before: string): Promise<number> {
+    const events = await dependencies.store.recoverStale(before, now().toISOString());
+    for (const event of events) dependencies.eventBus.publish(event);
+    return events.length;
+  }
   async function publish(userId: string, runId: string, payload: RunEventPayload): Promise<AgentRunStreamEventDto | undefined> {
     const current = await dependencies.store.findById(userId, runId);
     if (!current) throw new Error(`Run not found: ${runId}`);
@@ -198,6 +214,7 @@ export function createRunApplicationService(dependencies: RunServiceDependencies
 
   return {
     async create(request, userId) {
+      if (shuttingDown) throw new RunServiceShuttingDownError();
       const runId = createId("run");
       // 浏览器幂等键按用户命名空间化，既满足全局唯一约束，也不会产生跨用户冲突侧信道。
       const requestId = request.clientMessageId
@@ -238,12 +255,31 @@ export function createRunApplicationService(dependencies: RunServiceDependencies
     },
     listEvents: (userId, runId, afterSequence) => dependencies.store.listEvents(userId, runId, afterSequence),
     subscribe: (runId, listener) => dependencies.eventBus.subscribe(runId, listener),
-    async recoverStale(before) {
-      const events = await dependencies.store.recoverStale(before, now().toISOString());
-      for (const event of events) dependencies.eventBus.publish(event);
-      return events.length;
+    recoverStale,
+    isShuttingDown: () => shuttingDown,
+    async shutdown({ drainMs }) {
+      shuttingDown = true;
+      // 先中断在途执行，执行体观察到 abort 后自行走取消收尾并退出 registry。
+      for (const runId of dependencies.executionRegistry.list()) {
+        dependencies.executionRegistry.get(runId)?.abort();
+      }
+      const deadline = Date.now() + drainMs;
+      while (dependencies.executionRegistry.list().length > 0 && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      // drain 窗口内仍未终态的 Run 统一落库为可解释的 interrupted，与重启恢复语义一致。
+      const interrupted = await recoverStale(now().toISOString());
+      return { interrupted };
     }
   };
+}
+
+/** shutdown 期间拒绝新 Run 的结构化错误；API 层映射为 503，不泄漏内部状态。 */
+export class RunServiceShuttingDownError extends Error {
+  constructor() {
+    super("Run service is shutting down.");
+    this.name = "RunServiceShuttingDownError";
+  }
 }
 
 async function maybeRunReport(

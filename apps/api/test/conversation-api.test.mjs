@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { ConversationRepositoryError } from "@aiagent/conversation";
 import { createIdentityService, createInMemoryIdentityRepository } from "@aiagent/identity";
 import { createApiServer } from "../dist/index.js";
+import { createInMemoryApiTestRuntime } from "../dist/adapters/in-memory-test-runtime.js";
 
 function createRepositories() {
   const conversations = [];
@@ -93,6 +94,7 @@ async function createSession(app, visitorId) {
 test("conversation API creates, paginates, archives, validates cursors and isolates users", async () => {
   const repositories = createRepositories();
   const app = createApiServer({
+    ...createInMemoryApiTestRuntime(),
     ...repositories,
     requireIdentity: true,
     identityService: createIdentityService(createInMemoryIdentityRepository(), { fingerprintPepper: "conversation-api-test" })
@@ -141,6 +143,7 @@ test("conversation API creates, paginates, archives, validates cursors and isola
 test("run submission persists one idempotent user message for repeated clientMessageId", async () => {
   const repositories = createRepositories();
   const app = createApiServer({
+    ...createInMemoryApiTestRuntime(),
     ...repositories,
     requireIdentity: true,
     identityService: createIdentityService(createInMemoryIdentityRepository(), { fingerprintPepper: "conversation-run-test" })

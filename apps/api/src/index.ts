@@ -1,24 +1,24 @@
 import {
-  createIdentityService,
-  createInMemoryIdentityRepository,
   type IdentityService,
   type IdentitySnapshot
 } from "@aiagent/identity";
 import type { LlmClient } from "@aiagent/types";
 import type { ConversationRepository, MessageRepository } from "@aiagent/conversation";
 import { ConversationRepositoryError } from "@aiagent/conversation";
-import { createDataSourceRuntime, isSafeRagSourceUri, type DataSourceRuntime } from "@aiagent/rag";
+import { isSafeRagSourceUri, type DataSourceRuntime } from "@aiagent/rag";
 import { createLocalArtifactStorage, renderResearchReportPdf } from "@aiagent/report";
 import type { ArtifactRepository, ArtifactStorage, WorkflowRepository } from "@aiagent/report";
 import type { RagStructuredError } from "@aiagent/rag";
-import { createInMemoryTraceStore, redactSensitiveValue, type TraceStore } from "@aiagent/trace";
-import type { ApprovalRecord, ApprovalRepository } from "@aiagent/tools";
+import { redactSensitiveValue, type TraceStore } from "@aiagent/trace";
+import type { ApprovalDecideResult, ApprovalDecisionInput, ApprovalRecord, ApprovalRepository } from "@aiagent/tools";
 import { APPROVAL_REQUEST_TTL_MS } from "@aiagent/tools";
+import type { TraceRunEventProjection } from "@aiagent/trace";
 import type {
   AgentRunAcceptedDto,
   AgentRunCreateRequestDto,
   AgentRunEventInputDto,
   AgentRunSnapshotDto,
+  AgentRunStreamEventDto,
   ApiError,
   ApiResult,
   ConversationDto,
@@ -47,14 +47,11 @@ import { z } from "zod";
 import {
   createInMemoryExecutionRegistry,
   createInMemoryRunEventBus,
-  createInMemoryRunStore,
   createMicrotaskRunScheduler
 } from "./adapters/in-memory-run-runtime.js";
-import { createRunApplicationService } from "./application/run-service.js";
+import { createRunApplicationService, RunServiceShuttingDownError } from "./application/run-service.js";
 import type { RunStore } from "./application/run-ports.js";
 import { createOrderedRunEventStream, isTerminalRunStatus } from "./application/ordered-run-event-stream.js";
-import { createInMemoryReportRepositories } from "./adapters/in-memory-report-persistence.js";
-import { createInMemoryApprovalRepository } from "./adapters/in-memory-approval-repository.js";
 import { publishArtifactPdf } from "./application/artifact-service.js";
 import { createConversationApplicationService } from "./application/conversation-service.js";
 
@@ -115,22 +112,37 @@ const approvalDecisionRequestSchema = z.object({
 export interface ApiServerOptions {
   llmClient?: LlmClient;
   readiness?: () => Promise<{ ok: boolean; dependency: string; message?: string }>;
-  identityService?: IdentityService;
-  dataSourceRuntime?: DataSourceRuntime;
+  identityService: IdentityService;
+  dataSourceRuntime: DataSourceRuntime;
   requireIdentity?: boolean;
   qqBotQrUrl?: string;
   qqBotEnabled?: boolean;
   qqBotStatus?: () => IdentityMeDto["qqBot"]["status"];
   cookieSecure?: boolean;
-  workflowRepository?: WorkflowRepository;
-  artifactRepository?: ArtifactRepository;
+  workflowRepository: WorkflowRepository;
+  artifactRepository: ArtifactRepository;
   artifactStorage?: ArtifactStorage;
   conversationRepository?: ConversationRepository;
   messageRepository?: MessageRepository;
-  runStore?: RunStore;
-  traceStore?: TraceStore;
+  runStore: RunStore;
+  traceStore: TraceStore;
   staleRunThresholdMs?: number;
-  approvalRepository?: ApprovalRepository;
+  approvalRepository: ApprovalRepository;
+  /**
+   * 生产注入的审批决定组合服务：决定与 approval decided trace event 在同一数据库事务提交。
+   * 不注入时退回 endpoint 旁路 append，仅用于纯内存测试 composition。
+   */
+  approvalDecisionService?: (input: ApprovalDecisionInput) => Promise<{
+    result: ApprovalDecideResult;
+    event?: TraceRunEventProjection;
+  }>;
+}
+
+declare module "fastify" {
+  interface FastifyInstance {
+    /** composition 内部共享的 Run 用例服务；server.ts 用它执行 graceful shutdown。 */
+    aiagentRunService: ReturnType<typeof createRunApplicationService>;
+  }
 }
 
 /**
@@ -138,38 +150,21 @@ export interface ApiServerOptions {
  *
  * @returns 已注册路由的 Fastify 实例。
  */
-export function createApiServer(options: ApiServerOptions = {}): FastifyInstance {
+export function createApiServer(options: ApiServerOptions): FastifyInstance {
   const app = Fastify({
     logger: true
   });
-  const dataSourceRuntime = options.dataSourceRuntime ?? createDataSourceRuntime();
-  // 未注入时退回进程内 adapter，仅供本地 dev 与单测；生产必须注入 PostgreSQL adapter，重启后审批不丢失。
-  const approvalRepository = options.approvalRepository ?? createInMemoryApprovalRepository();
-  const inMemoryReport = createInMemoryReportRepositories();
-  const workflowRepository = options.workflowRepository ?? inMemoryReport.workflowRepository;
-  const artifactRepository = options.artifactRepository ?? inMemoryReport.artifactRepository;
+  // 事实源 repository 一律由 composition root 注入；内存 adapter 只能由测试显式创建，
+  // 这里不再提供任何默认 fallback，避免生产意外退回进程内 Map。
+  const dataSourceRuntime = options.dataSourceRuntime;
+  const approvalRepository = options.approvalRepository;
+  const workflowRepository = options.workflowRepository;
+  const artifactRepository = options.artifactRepository;
   const artifactStorage = options.artifactStorage ?? createLocalArtifactStorage(
     process.env.ARTIFACT_STORAGE_ROOT ?? `${process.cwd()}/.artifacts-test`
   );
-  const runStore = options.runStore ?? createInMemoryRunStore();
-  const baseTraceStore = createInMemoryTraceStore();
-  const traceStore = options.traceStore ?? {
-    ...baseTraceStore,
-    /** @param context Trace 归属上下文。 @param event canonical event。 @returns Run 投影。 */
-    async append(context, event) {
-      await baseTraceStore.append(context, event);
-      const projection = await runStore.append(context.userId, context.runId, {
-        type: "trace_event",
-        event,
-        runId: context.runId,
-        requestId: context.requestId,
-        traceId: context.traceId,
-        conversationId: context.conversationId,
-        createdAt: event.createdAt
-      });
-      return projection?.type === "trace_event" ? projection : undefined;
-    }
-  };
+  const runStore = options.runStore;
+  const traceStore = options.traceStore;
   const runEventBus = createInMemoryRunEventBus();
   const runService = createRunApplicationService({
     store: runStore,
@@ -221,10 +216,8 @@ export function createApiServer(options: ApiServerOptions = {}): FastifyInstance
       }
     }
   });
-  const identityService = options.identityService ?? createIdentityService(
-    createInMemoryIdentityRepository(),
-    { fingerprintPepper: "test-only-identity-pepper" }
-  );
+  const identityService = options.identityService;
+  app.decorate("aiagentRunService", runService);
   const identityByRequest = new WeakMap<object, IdentitySnapshot>();
   const conversationService = options.conversationRepository && options.messageRepository
     ? createConversationApplicationService({
@@ -245,7 +238,17 @@ export function createApiServer(options: ApiServerOptions = {}): FastifyInstance
       || request.url === "/ready"
       || request.url === "/api/identity/bootstrap";
     if (isPublic) return;
-    const identity = await identityService.authenticate(readCookie(request.headers.cookie, "aiagent_session"));
+    let identity: IdentitySnapshot | undefined;
+    try {
+      identity = await identityService.authenticate(readCookie(request.headers.cookie, "aiagent_session"));
+    } catch (error) {
+      // session 查询依赖数据库；故障时必须 fail-closed 且只返回稳定信封，
+      // 不能让 pg 原始异常（连接地址、错误码）经 Fastify 默认序列化泄漏给客户端。
+      app.log.warn({ err: error }, "identity authenticate failed");
+      const requestId = createRequestId();
+      reply.code(503).send(fail(toApiError("internal_error", "身份服务暂时不可用，请稍后重试。", requestId), requestId));
+      return;
+    }
     if (identity) {
       identityByRequest.set(request, identity);
       return;
@@ -254,6 +257,13 @@ export function createApiServer(options: ApiServerOptions = {}): FastifyInstance
       const requestId = createRequestId();
       reply.code(401).send(fail(toApiError("unauthorized", "身份 session 无效，请重新识别浏览器。", requestId), requestId));
     }
+  });
+
+  // 兜底错误处理：任何未被路由显式映射的异常统一为稳定信封，不序列化原始 message/code。
+  app.setErrorHandler((error, request, reply) => {
+    app.log.error({ err: error, url: request.url }, "unhandled route error");
+    const requestId = createRequestId();
+    void reply.code(500).send(fail(toApiError("internal_error", "服务暂时不可用，请稍后重试。", requestId), requestId));
   });
 
   /**
@@ -501,6 +511,10 @@ export function createApiServer(options: ApiServerOptions = {}): FastifyInstance
       }), requestId);
     }
     const identity = identityByRequest.get(request);
+    if (runService.isShuttingDown()) {
+      reply.code(503);
+      return fail(toApiError("internal_error", "服务正在关闭，暂时无法接收新的研究任务。", requestId, { reasonCode: "run_service_shutting_down" }), requestId);
+    }
     if (identity && conversationService && parsed.data.clientMessageId) {
       try {
         await conversationService.persistUserMessage(identity.userId, {
@@ -512,10 +526,19 @@ export function createApiServer(options: ApiServerOptions = {}): FastifyInstance
         return conversationFailure(reply, requestId, error);
       }
     }
-    const accepted = await runService.create(
-      parsed.data satisfies AgentRunCreateRequestDto,
-      identity?.userId ?? anonymousUserId
-    );
+    let accepted: AgentRunAcceptedDto;
+    try {
+      accepted = await runService.create(
+        parsed.data satisfies AgentRunCreateRequestDto,
+        identity?.userId ?? anonymousUserId
+      );
+    } catch (error) {
+      if (error instanceof RunServiceShuttingDownError) {
+        reply.code(503);
+        return fail(toApiError("internal_error", "服务正在关闭，暂时无法接收新的研究任务。", requestId, { reasonCode: "run_service_shutting_down" }), requestId);
+      }
+      throw error;
+    }
     reply.code(202);
     return { ok: true, requestId: accepted.requestId, data: accepted };
   });
@@ -808,15 +831,43 @@ export function createApiServer(options: ApiServerOptions = {}): FastifyInstance
       return fail(error, requestId);
     }
 
-    const result = await approvalRepository.decide({
-      approvalId: request.params.approvalId,
-      runId: request.params.runId,
-      reviewerUserId: requestUserId(request),
-      decision: parsed.data.decision,
-      expectedInputDigest: parsed.data.inputDigest,
-      reviewerNote: parsed.data.reviewerNote?.trim(),
-      decidedAt: new Date().toISOString()
-    });
+    let result: ApprovalDecideResult;
+    try {
+      if (options.approvalDecisionService) {
+        // 生产路径：决定与 approval decided trace event 在同一数据库事务提交，
+        // 提交后才把事件投影 fan-out 给 live SSE 订阅者。
+        const outcome = await options.approvalDecisionService({
+          approvalId: request.params.approvalId,
+          runId: request.params.runId,
+          reviewerUserId: requestUserId(request),
+          decision: parsed.data.decision,
+          expectedInputDigest: parsed.data.inputDigest,
+          reviewerNote: parsed.data.reviewerNote?.trim(),
+          decidedAt: new Date().toISOString()
+        });
+        result = outcome.result;
+        if (outcome.event) runEventBus.publish(outcome.event as AgentRunStreamEventDto);
+      } else {
+        // 纯内存测试 composition：单进程内旁路 append 等价于生产的事务语义。
+        result = await approvalRepository.decide({
+          approvalId: request.params.approvalId,
+          runId: request.params.runId,
+          reviewerUserId: requestUserId(request),
+          decision: parsed.data.decision,
+          expectedInputDigest: parsed.data.inputDigest,
+          reviewerNote: parsed.data.reviewerNote?.trim(),
+          decidedAt: new Date().toISOString()
+        });
+        if (result.ok && !result.idempotent) {
+          await appendApprovalDecisionTraceEvent(result.record);
+        }
+      }
+    } catch (error) {
+      // repository 已映射为结构化错误；这里只返回稳定话术，不向客户端泄漏内部异常。
+      app.log.warn({ err: error, approvalId: request.params.approvalId }, "approval decision failed");
+      reply.code(503);
+      return fail(toApiError("internal_error", "Approval 服务暂时不可用，请稍后重试。", requestId), requestId);
+    }
 
     if (!result.ok) {
       if (result.code === "conflict" && result.conflictReason === "decision") {
@@ -833,10 +884,6 @@ export function createApiServer(options: ApiServerOptions = {}): FastifyInstance
     }
 
     const record = result.record;
-    if (!result.idempotent) {
-      // 决定已提交后追加 approval decided trace event；append 失败只记录日志，不回滚决定。
-      await appendApprovalDecisionTraceEvent(record);
-    }
 
     return {
       ok: true,
@@ -852,7 +899,7 @@ export function createApiServer(options: ApiServerOptions = {}): FastifyInstance
   });
 
   /**
-   * 在 decide 成功提交后向同一 Run 追加 approval decided trace event。
+   * 纯内存测试 composition 的旁路事件追加；生产由 approvalDecisionService 在同一事务完成。
    * Run 已终态或事件写入失败不影响已持久化的决定，只记录日志。
    *
    * @param record 已决定的审批记录。

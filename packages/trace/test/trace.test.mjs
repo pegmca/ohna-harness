@@ -55,6 +55,22 @@ test("stores and retrieves a trace by requestId without sharing mutation", async
   assert.equal(await store.getByRequestId("user_2", "req_3"), undefined);
 });
 
+test("finalize 不脱敏 requestId 等身份字段，含长数字串时仍可按键读回", async () => {
+  // 回归：sha256 派生的 requestId 可能含 16-19 位连续数字，命中银行卡号正则；
+  // finalize 曾整体 sanitize 导致 requestId 被改成 "[redacted:account]"，按键读取契约被破坏。
+  const requestId = "req_c7ddfe914af4dc1fdea281afb3683109214924225f4a71140ad6297fea47fe1f";
+  const recorder = createInMemoryTraceRecorder("trace_digits", requestId);
+  const store = createInMemoryTraceStore();
+  const context = {
+    userId: "user_digits", runId: "run_digits", conversationId: "conversation_digits",
+    traceId: recorder.traceId, requestId, startedAt: new Date().toISOString()
+  };
+  await store.initialize(context);
+  await store.finalize(context, recorder.getTrace());
+  const found = await store.getByRequestId("user_digits", requestId);
+  assert.equal(found?.requestId, requestId);
+});
+
 test("incremental event query keeps partial events separate from the complete trace summary", async () => {
   const recorder = createInMemoryTraceRecorder("trace_cursor", "req_cursor");
   const store = createInMemoryTraceStore();

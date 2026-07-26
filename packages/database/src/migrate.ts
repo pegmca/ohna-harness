@@ -47,6 +47,24 @@ export async function runMigrations(pool: pg.Pool, migrationsDir = DEFAULT_MIGRA
 }
 
 /**
+ * 列出尚未应用的 migration 文件名，供 API 启动前做 schema 就绪检查。
+ *
+ * 只读不执行：migration 记录表不存在时视为全部 pending，让启动检查在空库上直接失败。
+ *
+ * @param pool 执行检查的 PostgreSQL 连接池。
+ * @param migrationsDir migration 文件目录。
+ * @returns 按文件名排序的 pending migration 列表；为空表示 schema 已就绪。
+ */
+export async function listPendingMigrations(pool: pg.Pool, migrationsDir = DEFAULT_MIGRATIONS_DIR): Promise<string[]> {
+  const files = (await readdir(migrationsDir)).filter((file) => file.endsWith(".sql")).sort();
+  const applied = await pool.query<{ name: string }>(
+    `select name from __aiagent_migrations`
+  ).catch(() => ({ rows: [] as { name: string }[] }));
+  const appliedNames = new Set(applied.rows.map((row) => row.name));
+  return files.filter((file) => !appliedNames.has(file));
+}
+
+/**
  * 获取数据库范围的 migration 事务锁，覆盖清单初始化、已执行检查与 SQL 执行。
  *
  * @param client 当前事务持有的 PostgreSQL client。

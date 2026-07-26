@@ -55,43 +55,7 @@ class PostgresApprovalRepository implements ApprovalRepository {
   /** @param input 决定内容与绑定校验。 @returns 决定结果；幂等/conflict/过期语义见 port 文档。 */
   async decide(input: ApprovalDecisionInput): Promise<ApprovalDecideResult> {
     try {
-      return await withTransaction(this.pool, async (client) => {
-        // 过期转移与决定写入都是单行原子 UPDATE，并发 approve/reject 只有一个能命中。
-        const updated = await client.query<ApprovalRow>(
-          `update tool_approvals
-              set status=$4, decision=$4, decided_at=$5, reviewer_user_id=$1, reviewer_note=$6
-            where id=$3 and run_id=$2 and user_id=$1 and input_digest=$7
-              and status='pending' and (expires_at is null or expires_at > now())
-            returning *`,
-          [input.reviewerUserId, input.runId, input.approvalId, input.decision,
-            input.decidedAt, input.reviewerNote ?? null, input.expectedInputDigest]
-        );
-        if (updated.rows[0]) return { ok: true, idempotent: false, record: mapRow(updated.rows[0]) };
-
-        const existing = await client.query<ApprovalRow>(
-          "select * from tool_approvals where id=$1 and run_id=$2 and user_id=$3",
-          [input.approvalId, input.runId, input.reviewerUserId]
-        );
-        const row = existing.rows[0];
-        // 不存在与归属不符统一 not_found，避免泄漏资源是否存在。
-        if (!row) return { ok: false, code: "not_found" as const };
-        if (row.input_digest !== input.expectedInputDigest) {
-          return { ok: false, code: "conflict" as const, conflictReason: "digest" as const, record: mapRow(row) };
-        }
-        if (row.status === "pending") {
-          // pending 但未命中 CAS 只可能是已过期；先原子转 expired 再报告。
-          const expired = await client.query<ApprovalRow>(
-            `update tool_approvals set status='expired'
-              where id=$1 and run_id=$2 and user_id=$3 and status='pending' returning *`,
-            [input.approvalId, input.runId, input.reviewerUserId]
-          );
-          return { ok: false, code: "expired" as const, record: mapRow(expired.rows[0] ?? row) };
-        }
-        if (row.decision === input.decision && row.reviewer_user_id === input.reviewerUserId) {
-          return { ok: true, idempotent: true, record: mapRow(row) };
-        }
-        return { ok: false, code: "conflict" as const, conflictReason: "decision" as const, record: mapRow(row) };
-      });
+      return await withTransaction(this.pool, async (client) => decideApprovalWithClient(client, input));
     } catch (cause) {
       throw mapApprovalError(cause);
     }
@@ -117,6 +81,51 @@ class PostgresApprovalRepository implements ApprovalRepository {
       throw mapApprovalError(cause);
     }
   }
+}
+
+/**
+ * 在已有事务内执行审批决定 CAS；package 内部共享给「决定 + 事件同事务」的组合服务。
+ *
+ * @param client 当前事务持有的 PostgreSQL client。
+ * @param input 决定内容与绑定校验。
+ * @returns 决定结果；幂等/conflict/过期语义见 port 文档。
+ */
+export async function decideApprovalWithClient(client: pg.PoolClient, input: ApprovalDecisionInput): Promise<ApprovalDecideResult> {
+  // 过期转移与决定写入都是单行原子 UPDATE，并发 approve/reject 只有一个能命中。
+  const updated = await client.query<ApprovalRow>(
+    `update tool_approvals
+        set status=$4, decision=$4, decided_at=$5, reviewer_user_id=$1, reviewer_note=$6
+      where id=$3 and run_id=$2 and user_id=$1 and input_digest=$7
+        and status='pending' and (expires_at is null or expires_at > now())
+      returning *`,
+    [input.reviewerUserId, input.runId, input.approvalId, input.decision,
+      input.decidedAt, input.reviewerNote ?? null, input.expectedInputDigest]
+  );
+  if (updated.rows[0]) return { ok: true, idempotent: false, record: mapRow(updated.rows[0]) };
+
+  const existing = await client.query<ApprovalRow>(
+    "select * from tool_approvals where id=$1 and run_id=$2 and user_id=$3",
+    [input.approvalId, input.runId, input.reviewerUserId]
+  );
+  const row = existing.rows[0];
+  // 不存在与归属不符统一 not_found，避免泄漏资源是否存在。
+  if (!row) return { ok: false, code: "not_found" as const };
+  if (row.input_digest !== input.expectedInputDigest) {
+    return { ok: false, code: "conflict" as const, conflictReason: "digest" as const, record: mapRow(row) };
+  }
+  if (row.status === "pending") {
+    // pending 但未命中 CAS 只可能是已过期；先原子转 expired 再报告。
+    const expired = await client.query<ApprovalRow>(
+      `update tool_approvals set status='expired'
+        where id=$1 and run_id=$2 and user_id=$3 and status='pending' returning *`,
+      [input.approvalId, input.runId, input.reviewerUserId]
+    );
+    return { ok: false, code: "expired" as const, record: mapRow(expired.rows[0] ?? row) };
+  }
+  if (row.decision === input.decision && row.reviewer_user_id === input.reviewerUserId) {
+    return { ok: true, idempotent: true, record: mapRow(row) };
+  }
+  return { ok: false, code: "conflict" as const, conflictReason: "decision" as const, record: mapRow(row) };
 }
 
 interface ApprovalRow {

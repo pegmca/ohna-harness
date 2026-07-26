@@ -30,6 +30,10 @@ Keep package boundaries explicit. Do not move runtime behavior into `apps/web` w
 - Do not add production dependencies unless they are necessary for the task.
 - Return structured errors from agent, tool, model, and trace boundaries instead of leaking raw exceptions to UI callers.
 - Keep public interfaces small and stable. If an interface changes, update callers and related docs in the same task.
+- 单文件职责单一，控制在约 500 行以内；超过时按内聚领域拆分为同目录模块（types / format / 子组件 / 路由域 / 节点实现等）。
+- 拆分文件时保持公共 API 不变：原入口文件退化为 barrel re-export 或壳组件，导出符号一个不少、签名不动，导入方零修改。
+- 包内模块引用使用带 `.js` 后缀的 ESM 相对导入；共享 helper 抽到低层模块，保持依赖单向，避免循环依赖（纯 `import type` 的循环除外）。
+- React 组件文件只保留状态编排壳；纯展示子组件、纯函数工具、类型定义分别归入独立文件。
 - This repository is for learning. Add concise explanatory comments in Chinese for important abstractions, package boundaries, agent/model/tool control flow, structured error handling, timeout/retry behavior, and any non-obvious implementation tradeoff. Every function and method should have standard Chinese JSDoc, including `@param`, `@returns`, and `@template` when they add useful context. Prefer comments that explain why the code exists or how the learning concept works; do not comment trivial assignments or repeat what the code already says.
 
 ## Database Rules

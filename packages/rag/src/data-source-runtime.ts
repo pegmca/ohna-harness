@@ -1,0 +1,425 @@
+import { detectFilingFileType, ingestFiling } from "@aiagent/filings";
+import type {
+  DataSourceDocumentDto,
+  DataSourceIngestRequestDto,
+  DataSourceIngestResponseDto
+} from "@aiagent/types";
+import {
+  createInMemoryRagDocumentRepository,
+  validateRagOwnerScope,
+  type RagDocumentRepository,
+  type SaveRagIngestionInput,
+  type SaveRagIngestionResult
+} from "./document-repository.js";
+import {
+  createRetrievalResultFromRetrievedChunk,
+  synthesizeRagAnswer
+} from "./answer.js";
+import { chunkIngestedFilingDocument } from "./chunking.js";
+import { createDeterministicMockEmbeddingClient } from "./embedding.js";
+import { createHybridRetriever } from "./retrieval.js";
+import {
+  createRagContentChecksum,
+  createTraceRetrievalEvent,
+  isSafeRagSourceUri,
+  normalizeRagSourceUri,
+  ragChunkRecordToChunk,
+  resolveRagSourceType,
+  toNewChunkRecord
+} from "./source-uri.js";
+import {
+  RAG_CHUNKER_VERSION,
+  RAG_PARSER_VERSION,
+  type DataSourceIngestContext,
+  type DataSourceListChunksOptions,
+  type DataSourceListOptions,
+  type DataSourceRetrievalContext,
+  type DataSourceRuntime,
+  type DataSourceRuntimeOptions,
+  type DataSourceRuntimeResult,
+  type EmbeddingClient,
+  type RagAnswerRuntimeResponse,
+  type RagChunk,
+  type RagPackageSummary,
+  type RagSearchRuntimeResponse,
+  type RagStructuredError,
+  type RetrievalOptions,
+  type Retriever,
+  type VectorStore
+} from "./types.js";
+import { createInMemoryVectorStoreFactory } from "./vector-store.js";
+
+/**
+ * 创建 RAG package 的边界摘要，明确本阶段只提供骨架和稳定类型。
+ *
+ * @returns RAG package 的职责边界和当前实现状态。
+ */
+export function createRagPackageSummary(): RagPackageSummary {
+  return {
+    packageName: "@aiagent/rag",
+    boundary: "chunking_embedding_retrieval_citation_answer",
+    runtimeState: "hybrid_retrieval_ready"
+  };
+}
+
+/**
+ * 创建 Data Sources runtime。
+ *
+ * 文档 lineage、embedding client 与按 owner 绑定的 VectorStore 均可由 composition root 注入。
+ * 零配置仅用于兼容本地测试；生产 server 必须显式注入 PostgreSQL repository/store factory。
+ *
+ * @param options repository、embedding client 与 owner-bound VectorStore factory。
+ * @returns 可执行 ingest、list、search 和 grounded answer 的 runtime。
+ */
+export function createDataSourceRuntime(options: DataSourceRuntimeOptions = {}): DataSourceRuntime {
+  return new DataSourceRuntimeService({
+    repository: options.repository ?? createInMemoryRagDocumentRepository(),
+    embeddingClient: options.embeddingClient ?? createDeterministicMockEmbeddingClient(),
+    vectorStoreFactory: options.vectorStoreFactory ?? createInMemoryVectorStoreFactory()
+  });
+}
+
+/**
+ * Data Sources runtime 实现，负责把 filings ingestion、lineage 持久化和 RAG 检索链路串起来。
+ *
+ * 文档/版本/chunk 事实源是注入的 repository；VectorStore factory 按当前 owner 绑定具体 adapter。
+ */
+class DataSourceRuntimeService implements DataSourceRuntime {
+  private readonly embeddingClient: EmbeddingClient;
+  private readonly vectorStoreFactory: (ownerUserId: string | null) => VectorStore;
+  private readonly repository: RagDocumentRepository;
+
+  /**
+   * 创建 runtime 实例。
+   *
+   * @param options 显式 adapter 依赖。
+   */
+  public constructor(options: Required<DataSourceRuntimeOptions>) {
+    this.repository = options.repository;
+    this.embeddingClient = options.embeddingClient;
+    this.vectorStoreFactory = options.vectorStoreFactory;
+  }
+
+  /**
+   * ingest Markdown/TXT 文档：解析、切块、持久化 lineage、生成 embedding 并写入内存向量库。
+   *
+   * 持久化语义：
+   * - externalId 是 source/fileName/fileType 的 SHA-256，同来源重复 ingest 落到同一文档；
+   * - contentChecksum 相同的已 indexed 版本直接幂等命中（deduplicated），不重复建版本和 chunk，
+   *   但仍用 repository 返回的 chunks 重新 embed 并 upsert，保证同进程 search 可用；
+   * - 解析或切块失败也落 failed 版本（结构化错误），修复内容后可重试产生新版本。
+   *
+   * @param request API 校验后的 data source ingestion 请求。
+   * @param context owner 与 scope；缺省匿名落 shared scope。
+   * @returns 文档、chunks、版本号、幂等标记和索引数量；失败时返回结构化 RAG 错误。
+   */
+  public async ingest(
+    request: DataSourceIngestRequestDto,
+    context: DataSourceIngestContext = {}
+  ): Promise<DataSourceRuntimeResult<DataSourceIngestResponseDto>> {
+    const ownerUserId = context.ownerUserId ?? null;
+    const scope = context.scope ?? (ownerUserId ? "private" : "shared");
+    const ownerScopeViolation = validateRagOwnerScope({ ownerUserId, scope });
+
+    if (ownerScopeViolation !== undefined) {
+      return {
+        ok: false,
+        error: {
+          code: "ingestion_failed",
+          message: "ingest 请求的 owner/scope 组合非法。",
+          details: { reason: ownerScopeViolation }
+        }
+      };
+    }
+
+    if (!isSafeRagSourceUri(request.source)) {
+      return {
+        ok: false,
+        error: {
+          code: "ingestion_failed",
+          message: "Data source 标识不合法：仅支持 http(s) URL、mock:/demo: URI 或相对逻辑标识。",
+          details: { reason: "unsafe_source_uri" }
+        }
+      };
+    }
+
+    // sourceUri 是脱敏后的逻辑标识：http(s) URL 剥离 query/fragment，
+    // 同一文档带不带 token 命中同一 lineage，落库与 DTO 返回值永远不含敏感参数。
+    const sourceUri = normalizeRagSourceUri(request.source);
+    const fileType = detectFilingFileType(request.fileName, request.contentType);
+    const externalId = createRagContentChecksum(`${sourceUri}|${request.fileName}|${fileType ?? "unknown"}`);
+    const contentChecksum = createRagContentChecksum(request.content);
+    const contentType = request.contentType?.trim() || "unknown";
+    const now = new Date().toISOString();
+    const lineageBase = {
+      ownerUserId,
+      scope,
+      sourceType: resolveRagSourceType(sourceUri),
+      externalId,
+      sourceUri,
+      contentType,
+      contentChecksum,
+      content: request.content,
+      parserVersion: RAG_PARSER_VERSION,
+      chunkerVersion: RAG_CHUNKER_VERSION,
+      now
+    } as const;
+
+    const ingestionResult = ingestFiling({
+      source: sourceUri,
+      fileName: request.fileName,
+      contentType: request.contentType,
+      content: request.content
+    });
+
+    if (!ingestionResult.ok) {
+      const error = {
+        code: "ingestion_failed" as const,
+        message: ingestionResult.error.message,
+        details: {
+          filingCode: ingestionResult.error.code,
+          ...ingestionResult.error.details
+        }
+      };
+      await this.saveLineage({
+        ...lineageBase,
+        title: request.fileName,
+        outcome: {
+          status: "failed",
+          error: { code: ingestionResult.error.code, message: ingestionResult.error.message, details: ingestionResult.error.details }
+        }
+      });
+      return { ok: false, error };
+    }
+
+    const chunkingResult = chunkIngestedFilingDocument(ingestionResult.document);
+
+    if (!chunkingResult.ok) {
+      await this.saveLineage({
+        ...lineageBase,
+        title: ingestionResult.document.title,
+        outcome: {
+          status: "failed",
+          error: { code: chunkingResult.error.code, message: chunkingResult.error.message, details: chunkingResult.error.details }
+        }
+      });
+      return { ok: false, error: chunkingResult.error };
+    }
+
+    const saved = await this.saveLineage({
+      ...lineageBase,
+      title: ingestionResult.document.title,
+      outcome: {
+        status: "indexed",
+        chunks: chunkingResult.chunks.map(toNewChunkRecord)
+      }
+    });
+
+    if (!saved.ok) {
+      return { ok: false, error: saved.error };
+    }
+
+    // 统一从 repository 返回的记录重建 RagChunkDto，幂等命中与新建版本走完全相同的形状。
+    const chunks = saved.result.chunks.map(ragChunkRecordToChunk);
+    const embeddingResult = await this.embeddingClient.embedTexts(chunks.map((chunk) => chunk.text));
+
+    if (!embeddingResult.ok) {
+      return { ok: false, error: embeddingResult.error };
+    }
+
+    const embeddedChunks = chunks.map((chunk, index) => ({
+      ...chunk,
+      embedding: embeddingResult.embeddings[index].vector,
+      embeddingModel: embeddingResult.model
+    }));
+    const upsertResult = await this.vectorStoreFactory(ownerUserId).upsertChunks(embeddedChunks);
+
+    if (!upsertResult.ok) {
+      return {
+        ok: false,
+        error: {
+          code: "indexing_failed",
+          message: upsertResult.error.message,
+          details: upsertResult.error.details
+        }
+      };
+    }
+
+    return {
+      ok: true,
+      data: {
+        document: { ...ingestionResult.document, documentId: saved.result.document.id },
+        chunks,
+        indexedChunkCount: embeddedChunks.length,
+        documentVersion: saved.result.version.version,
+        deduplicated: saved.result.kind === "existing"
+      }
+    };
+  }
+
+  /**
+   * 经 repository 分页列出可见文档摘要。
+   *
+   * @param options owner、cursor 与 limit；缺省匿名第一页。
+   * @returns 文档摘要页与下一页 cursor。
+   */
+  public async listDocuments(
+    options: DataSourceListOptions = {}
+  ): Promise<{ documents: DataSourceDocumentDto[]; nextCursor: string | null }> {
+    return this.repository.listDocuments({
+      ownerUserId: options.ownerUserId ?? null,
+      ...(options.cursor !== undefined ? { cursor: options.cursor } : {}),
+      ...(options.limit !== undefined ? { limit: options.limit } : {})
+    });
+  }
+
+  /**
+   * 经 repository 分页列出可见 chunks，并重建为不暴露向量的 RagChunkDto。
+   *
+   * @param options owner、可选 documentId、cursor 与 limit。
+   * @returns chunk 页与下一页 cursor。
+   */
+  public async listChunks(
+    options: DataSourceListChunksOptions = {}
+  ): Promise<{ chunks: RagChunk[]; nextCursor: string | null }> {
+    const page = await this.repository.listChunks({
+      ownerUserId: options.ownerUserId ?? null,
+      ...(options.documentId !== undefined ? { documentId: options.documentId } : {}),
+      ...(options.cursor !== undefined ? { cursor: options.cursor } : {}),
+      ...(options.limit !== undefined ? { limit: options.limit } : {})
+    });
+
+    return {
+      chunks: page.chunks.map(ragChunkRecordToChunk),
+      nextCursor: page.nextCursor
+    };
+  }
+
+  /**
+   * 执行 RAG search，并返回带 citation 的 retrieval results。
+   *
+   * @param query 用户查询。
+   * @param options topK、mode 等检索选项。
+   * @returns search 结果和脱敏 trace event。
+   */
+  public async search(
+    query: string,
+    options: RetrievalOptions = {},
+    context: DataSourceRetrievalContext = {}
+  ): Promise<DataSourceRuntimeResult<RagSearchRuntimeResponse>> {
+    const retriever = await this.createRetriever(context.ownerUserId ?? null);
+    if (!retriever.ok) return retriever;
+    const retrievalResult = await retriever.retriever.retrieve(query, options);
+    const trace = createTraceRetrievalEvent(query, retrievalResult);
+
+    if (!retrievalResult.ok) {
+      return {
+        ok: false,
+        error: retrievalResult.error
+      };
+    }
+
+    return {
+      ok: true,
+      data: {
+        results: retrievalResult.results.map(createRetrievalResultFromRetrievedChunk),
+        trace
+      }
+    };
+  }
+
+  /**
+   * 基于召回结果合成短研究摘要；证据不足时明确返回未知，不编造结论。
+   *
+   * @param question 用户问题。
+   * @param options topK、mode 等检索选项。
+   * @returns grounded answer 和 retrieval trace。
+   */
+  public async answer(
+    question: string,
+    options: RetrievalOptions = {},
+    context: DataSourceRetrievalContext = {}
+  ): Promise<DataSourceRuntimeResult<RagAnswerRuntimeResponse>> {
+    const retriever = await this.createRetriever(context.ownerUserId ?? null);
+    if (!retriever.ok) return retriever;
+    const retrievalResult = await retriever.retriever.retrieve(question, options);
+    const trace = createTraceRetrievalEvent(question, retrievalResult);
+
+    if (!retrievalResult.ok) {
+      return {
+        ok: false,
+        error: retrievalResult.error
+      };
+    }
+
+    return {
+      ok: true,
+      data: {
+        answer: synthesizeRagAnswer(question, retrievalResult.results),
+        trace
+      }
+    };
+  }
+
+  /**
+   * 持久化 ingestion 终态；repository 异常映射为结构化错误，不向调用方泄漏原始异常。
+   *
+   * @param input saveIngestion 输入。
+   * @returns 成功时返回 saveIngestion 结果，失败时返回结构化错误。
+   */
+  private async saveLineage(
+    input: SaveRagIngestionInput
+  ): Promise<{ ok: true; result: SaveRagIngestionResult } | { ok: false; error: RagStructuredError }> {
+    try {
+      return { ok: true, result: await this.repository.saveIngestion(input) };
+    } catch {
+      return {
+        ok: false,
+        error: {
+          code: "indexing_failed",
+          message: "RAG 文档 lineage 持久化失败，请稍后重试。"
+        }
+      };
+    }
+  }
+
+  /**
+   * 从持久化 repository 分页加载当前 owner 可见 chunks，并创建 hybrid retriever。
+   *
+   * @param ownerUserId 当前调用身份。
+   * @returns 绑定持久化向量库和 keyword candidates 的 retriever。
+   */
+  private async createRetriever(
+    ownerUserId: string | null
+  ): Promise<{ ok: true; retriever: Retriever } | { ok: false; error: RagStructuredError }> {
+    try {
+      const chunks: RagChunk[] = [];
+      let cursor: string | undefined;
+      do {
+        const page = await this.repository.listChunks({ ownerUserId, limit: 100, ...(cursor ? { cursor } : {}) });
+        chunks.push(...page.chunks.map(ragChunkRecordToChunk));
+        cursor = page.nextCursor ?? undefined;
+      } while (cursor !== undefined);
+      const embeddingResult = await this.embeddingClient.embedTexts(chunks.map((chunk) => chunk.text));
+      if (!embeddingResult.ok) return embeddingResult;
+      const embeddedChunks = chunks.map((chunk, index) => ({
+        ...chunk,
+        embedding: embeddingResult.embeddings[index].vector,
+        embeddingModel: embeddingResult.model
+      }));
+      return {
+        ok: true,
+        retriever: createHybridRetriever({
+          embeddingClient: this.embeddingClient,
+          vectorStore: this.vectorStoreFactory(ownerUserId),
+          chunks: embeddedChunks
+        })
+      };
+    } catch {
+      return {
+        ok: false,
+        error: { code: "retrieval_failed", message: "RAG 持久化候选读取失败，请稍后重试。" }
+      };
+    }
+  }
+}

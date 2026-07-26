@@ -61,7 +61,7 @@ import {
 
 type MessageRole = "user" | "assistant";
 type MessageStatus = "complete" | "pending" | "failed";
-type WorkspaceView = "chat" | "data-sources" | "workflow" | "citations" | "eval" | "architecture" | "settings";
+type WorkspaceView = "chat" | "scheduled-tasks" | "data-sources" | "workflow" | "citations" | "eval" | "architecture" | "settings";
 
 interface UiMessage {
   id: string;
@@ -612,6 +612,8 @@ export function Workbench() {
         </section>
       ) : workspaceView === "data-sources" ? (
         <DataSourcesWorkspace onMenuClick={() => setIsSidebarOpen(true)} />
+      ) : workspaceView === "scheduled-tasks" ? (
+        <ScheduledTasksWorkspace onMenuClick={() => setIsSidebarOpen(true)} />
       ) : workspaceView === "settings" ? (
         <SettingsPage onMenuClick={() => setIsSidebarOpen(true)} />
       ) : (
@@ -682,24 +684,12 @@ function ConversationSidebar(props: ConversationSidebarProps) {
             <span>Immersive</span>
           </button>
           <button
-            className={props.workspaceView === "data-sources" ? "is-active" : ""}
-            onClick={() => props.onSelectView("data-sources")}
+            className={props.workspaceView === "scheduled-tasks" ? "is-active" : ""}
+            onClick={() => props.onSelectView("scheduled-tasks")}
             type="button"
           >
-            <Database className="icon-size" />
-            <span>Data Sources</span>
-          </button>
-          <button className={props.workspaceView === "workflow" ? "is-active" : ""} onClick={() => props.onSelectView("workflow")} type="button">
-            <Activity className="icon-size" /><span>Report Workflow</span>
-          </button>
-          <button className={props.workspaceView === "citations" ? "is-active" : ""} onClick={() => props.onSelectView("citations")} type="button">
-            <ShieldCheck className="icon-size" /><span>Citation Checker</span>
-          </button>
-          <button className={props.workspaceView === "eval" ? "is-active" : ""} onClick={() => props.onSelectView("eval")} type="button">
-            <BarChart3 className="icon-size" /><span>Eval Report</span>
-          </button>
-          <button className={props.workspaceView === "architecture" ? "is-active" : ""} onClick={() => props.onSelectView("architecture")} type="button">
-            <Network className="icon-size" /><span>Architecture</span>
+            <Clock3 className="icon-size" />
+            <span>定时任务</span>
           </button>
         </nav>
 
@@ -740,19 +730,100 @@ function ConversationSidebar(props: ConversationSidebarProps) {
           ) : null}
         </div>
 
-        <footer className="sidebar-footer">
-          <button className={props.workspaceView === "settings" ? "is-active" : ""} onClick={() => props.onSelectView("settings")} type="button">
-            <Settings className="icon-size" /><span>Settings</span>
-          </button>
-          <span>{props.conversations.length} chats</span>
-        </footer>
+        <SidebarProfileFooter
+          onSelectView={props.onSelectView}
+          workspaceView={props.workspaceView}
+        />
       </aside>
     </>
   );
 }
 
+/** 二级入口中的工作区视图；点击一级头像入口后从上方弹出。 */
+const PROFILE_MENU_VIEWS: ReadonlyArray<{ view: WorkspaceView; label: string; icon: ReactNode }> = [
+  { view: "data-sources", label: "Data Sources", icon: <Database className="icon-size" /> },
+  { view: "workflow", label: "Report Workflow", icon: <Activity className="icon-size" /> },
+  { view: "citations", label: "Citation Checker", icon: <ShieldCheck className="icon-size" /> },
+  { view: "eval", label: "Eval Report", icon: <BarChart3 className="icon-size" /> },
+  { view: "architecture", label: "Architecture", icon: <Network className="icon-size" /> },
+  { view: "settings", label: "Settings", icon: <Settings className="icon-size" /> }
+];
+
+/** 默认头像；昵称头像当前只做展示占位，不提供编辑功能。 */
+const DEFAULT_AVATAR_URL = "http://43.130.49.34/cdn/img/march7-avatar-300.jpg";
+const NICKNAME_STORAGE_KEY = "immersive:nickname";
+const NICKNAME_POOL = ["捡垃圾的小帅", "不化妆的小美"] as const;
+
+/**
+ * 读取当前浏览器的展示昵称；首次访问时从固定昵称池随机挑一个写入 localStorage。
+ *
+ * @returns 稳定昵称。
+ */
+function useNickname(): string {
+  const [nickname] = useState(() => {
+    const existing = window.localStorage.getItem(NICKNAME_STORAGE_KEY);
+    if (existing) return existing;
+    const picked = NICKNAME_POOL[Math.floor(Math.random() * NICKNAME_POOL.length)];
+    window.localStorage.setItem(NICKNAME_STORAGE_KEY, picked);
+    return picked;
+  });
+  return nickname;
+}
+
+/**
+ * 侧栏底部一级入口：头像 + 昵称；点击后向上弹出二级入口菜单。
+ *
+ * @param props 当前视图与视图切换回调。
+ * @returns 底部用户信息区。
+ */
+function SidebarProfileFooter(props: { onSelectView: (view: WorkspaceView) => void; workspaceView: WorkspaceView }) {
+  const nickname = useNickname();
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const isMenuViewActive = PROFILE_MENU_VIEWS.some((item) => item.view === props.workspaceView);
+
+  return (
+    <footer className="sidebar-footer">
+      {isMenuOpen ? (
+        <button aria-label="关闭菜单" className="profile-menu-backdrop" onClick={() => setIsMenuOpen(false)} type="button" />
+      ) : null}
+      <div className="profile-menu-anchor">
+        <button
+          aria-expanded={isMenuOpen}
+          aria-haspopup="menu"
+          className={`profile-trigger ${isMenuOpen || isMenuViewActive ? "is-active" : ""}`}
+          onClick={() => setIsMenuOpen((open) => !open)}
+          type="button"
+        >
+          <img alt="" className="profile-avatar" src={DEFAULT_AVATAR_URL} />
+          <span className="profile-nickname">{nickname}</span>
+          <ChevronDown className={`icon-size profile-chevron ${isMenuOpen ? "is-open" : ""}`} />
+        </button>
+        {isMenuOpen ? (
+          <div aria-label="工作区二级入口" className="profile-menu" role="menu">
+            {PROFILE_MENU_VIEWS.map((item) => (
+              <button
+                className={props.workspaceView === item.view ? "is-active" : ""}
+                key={item.view}
+                onClick={() => {
+                  setIsMenuOpen(false);
+                  props.onSelectView(item.view);
+                }}
+                role="menuitem"
+                type="button"
+              >
+                {item.icon}
+                <span>{item.label}</span>
+              </button>
+            ))}
+          </div>
+        ) : null}
+      </div>
+    </footer>
+  );
+}
+
 /** 展示 Workflow、Citation、Eval 与 Architecture 产品视图；所有内容均来自 API DTO 或当前 Agent run。 */
-function ProductWorkspace(props: { latestRun?: AgentRunResponseDto; onMenuClick: () => void; view: Exclude<WorkspaceView, "chat" | "data-sources" | "settings"> }) {
+function ProductWorkspace(props: { latestRun?: AgentRunResponseDto; onMenuClick: () => void; view: Exclude<WorkspaceView, "chat" | "scheduled-tasks" | "data-sources" | "settings"> }) {
   const [evalReport, setEvalReport] = useState<ProductEvalReportDto>();
   const [architecture, setArchitecture] = useState<ProductArchitectureDto>();
   const [error, setError] = useState<string>();
@@ -819,6 +890,26 @@ function formatMetric(value: number | undefined): string { return value === unde
  * @param props 组件属性。
  * @returns Data Sources 产品功能页。
  */
+/**
+ * 定时任务占位工作区；后续将在这里拓展定时创建研究任务、查看执行历史等能力。
+ *
+ * @param props 移动端打开侧栏回调。
+ * @returns 占位页面。
+ */
+function ScheduledTasksWorkspace(props: { onMenuClick: () => void }) {
+  return (
+    <section className="data-sources-main product-main" aria-label="定时任务">
+      <header className="data-header"><div className="header-title-group">
+        <button className="icon-button mobile-only" onClick={props.onMenuClick} type="button" aria-label="打开导航"><Menu className="icon-size" /></button>
+        <div><p className="md-label">Immersive Product</p><h2 className="chat-title">定时任务</h2></div>
+      </div></header>
+      <div className="product-content">
+        <ProductEmpty text="定时任务功能即将上线：届时可以按周期自动发起研究、生成研报并推送结果。" />
+      </div>
+    </section>
+  );
+}
+
 function DataSourcesWorkspace(props: { onMenuClick: () => void }) {
   const [source, setSource] = useState("demo");
   const [fileName, setFileName] = useState("annual-report.md");
@@ -2249,6 +2340,7 @@ function createUiId(prefix: string): string {
 function getWorkspaceView(pathname: string): WorkspaceView {
   const routes: Record<string, WorkspaceView> = {
     "/": "chat",
+    "/scheduled-tasks": "scheduled-tasks",
     "/data-sources": "data-sources",
     "/workflow": "workflow",
     "/citations": "citations",

@@ -21,6 +21,9 @@ export interface UiMessage {
 export interface SelectedRunDetail {
   run?: AgentRunResponseDto;
   event?: AgentRunStreamEventDto;
+  section?: RunDetailSection;
 }
+
+export type RunDetailSection = "summary" | "steps" | "tools" | "trace" | "report" | "approvals";
 
 export type TraceEventDto = AgentRunResponseDto["trace"]["events"][number];

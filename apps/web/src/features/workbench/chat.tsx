@@ -167,7 +167,13 @@ export function ChatMessage(props: {
           {message.status === "pending" ? <StatusBadge tone="info">running</StatusBadge> : null}
           {message.status === "failed" ? <StatusBadge tone="danger">failed</StatusBadge> : null}
         </div>
-        <p className="message-text">{message.content}</p>
+        {message.run ? (
+          <RunDetails
+            onOpen={(section) => props.onOpenRunDetail({ run: message.run, section })}
+            reportMode={message.run.intent === "report_skill"}
+            run={message.run}
+          />
+        ) : null}
         {message.status === "pending" ? (
           <div className="message-progress run-progress-list">
             <Loader2 className="icon-size spin" />
@@ -181,13 +187,7 @@ export function ChatMessage(props: {
             </div>
           </div>
         ) : null}
-        {message.run ? (
-          <RunDetails
-            onOpen={() => props.onOpenRunDetail({ run: message.run })}
-            reportMode={message.run.intent === "report_skill"}
-            run={message.run}
-          />
-        ) : null}
+        <p className="message-text">{message.content}</p>
       </div>
     </article>
   );

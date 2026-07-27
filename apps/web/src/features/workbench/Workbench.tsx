@@ -13,6 +13,7 @@ import { SettingsPage } from "../settings";
 import { createAndStreamRun } from "../../shared/api/run-stream-client";
 import {
   createConversation,
+  getRunSnapshot,
   listConversationMessages,
   listConversations,
   updateConversation as updateConversationApi
@@ -179,7 +180,20 @@ export function Workbench() {
         setMessageError(formatApiError(result.error));
         return;
       }
-      const incoming = result.data.items.map(toUiMessage);
+      const incoming = await Promise.all(result.data.items.map(async (message) => {
+        const uiMessage = toUiMessage(message);
+        if (message.role !== "assistant" || !message.runId) return uiMessage;
+        // Run 是持久化事实源；历史消息只携带关联 ID，因此在进入时间线时恢复终态运行详情。
+        const snapshot = await getRunSnapshot(message.runId, controller.signal).catch(() => undefined);
+        return snapshot?.ok && snapshot.data.result
+          ? { ...uiMessage, run: snapshot.data.result }
+          : uiMessage;
+      }));
+      if (
+        controller.signal.aborted
+        || generation !== messageRequestGeneration.current
+        || activeConversationIdRef.current !== conversationId
+      ) return;
       setMessages((current) => append
         ? mergeMessages(current, incoming)
         : mergeMessages(incoming, current));
@@ -251,6 +265,12 @@ export function Workbench() {
     replace = false,
     skipInitialHistory = false
   ): void {
+    // 重复点击当前会话时 React 不会触发 ID effect；若仍重置 loading，会导致历史页永久卡住。
+    if (conversationId === activeConversationIdRef.current) {
+      const target = `/?conversation=${encodeURIComponent(conversationId)}`;
+      navigate(target, { replace });
+      return;
+    }
     messageRequestController.current?.abort();
     messageRequestGeneration.current += 1;
     activeConversationIdRef.current = conversationId;

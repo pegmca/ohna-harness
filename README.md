@@ -77,7 +77,7 @@ Immersive Playground 已演进为带实时执行过程的研究 Workbench：
 - 会话 API 提供创建、稳定游标分页、终态消息读取、改标题与归档。所有 route 从 HttpOnly session 取得 `userId`，不存在与越权统一返回 `not_found`。
 - 每次提交先调用 `POST /api/runs` 获得 `runId`，请求字段为 `message`、`conversationId`、稳定的 `clientMessageId`、`mode: auto | report` 和 `source: composer | report_button`；网络重试复用同一个 client ID，再订阅 `GET /api/runs/:runId/events`。
 - `GET /api/runs/:runId` 提供 PostgreSQL 可恢复快照，`DELETE /api/runs/:runId` 取消尚未结束的运行。SSE 支持 `Last-Event-ID` 或 `afterSequence` 持久回放；最终回答作为终态事件一次提交。
-- run state、工具调用和 trace 从 assistant 消息进入右侧详情面板；桌面端压缩主区，移动端覆盖显示，不设置常驻调试侧栏。
+- run state、工具调用和 trace 以“分类过程入口 → 最终答案”的顺序归属于对应 assistant 消息；Summary、Steps、Tools、Trace、Report 与 Approvals 分别打开右侧对应类型，不混排全部详情。历史消息通过 `runId` 恢复 PostgreSQL Run 快照，刷新后仍可查看。桌面端压缩主区，移动端覆盖显示，不设置常驻调试侧栏。
 - 行情工具返回稳定的 60 根 mock OHLCV，详情面板使用 A 股红涨绿跌 K 线；图表按 lightweight-charts 要求保留 TradingView attribution。
 - `/`、`/data-sources`、`/workflow`、`/citations`、`/eval`、`/architecture`、`/settings` 均为可刷新路由；设置页支持浅色、深色和跟随系统。
 

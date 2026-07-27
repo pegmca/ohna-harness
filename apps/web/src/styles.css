@@ -258,6 +258,48 @@ textarea:disabled {
 .run-details-trigger { width: 100%; text-align: left; }
 .run-details-summary { display: flex; width: 100%; align-items: center; gap: var(--md-space-3); }
 
+.run-detail-types {
+  display: grid;
+  gap: var(--md-space-2);
+  padding: var(--md-space-3);
+}
+
+.run-detail-types-status,
+.run-detail-type-actions {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--md-space-2);
+}
+
+.run-detail-type-actions button {
+  display: inline-flex;
+  min-height: 32px;
+  align-items: center;
+  gap: var(--md-space-2);
+  border: 1px solid var(--md-color-border-subtle);
+  border-radius: var(--md-radius-md);
+  background: var(--md-color-surface);
+  padding: var(--md-space-1) var(--md-space-2);
+  color: var(--md-color-text-secondary);
+}
+
+.run-detail-type-actions button:hover {
+  border-color: var(--md-color-border);
+  background: var(--md-color-elevated);
+  color: var(--md-color-text-primary);
+}
+
+.run-detail-type-actions small {
+  color: var(--md-color-text-muted);
+  font-family: var(--md-font-mono);
+}
+
+.run-detail-type-actions .details-chevron {
+  transform: rotate(-90deg);
+}
+
 .run-progress-list { align-items: flex-start; }
 .run-progress-list > div { display: grid; flex: 1; gap: var(--md-space-1); }
 .run-progress-list button {
@@ -1014,6 +1056,11 @@ textarea:disabled {
   overflow: hidden;
 }
 
+.chat-message.is-assistant .message-content {
+  flex: 1 1 auto;
+  width: 0;
+}
+
 .is-user .message-content {
   background: var(--md-color-primary);
   color: var(--md-color-text-inverse);
@@ -1744,6 +1791,10 @@ textarea:disabled {
   }
 
   .message-content {
+    width: 100%;
+  }
+
+  .chat-message.is-assistant .message-content {
     width: 100%;
   }
 

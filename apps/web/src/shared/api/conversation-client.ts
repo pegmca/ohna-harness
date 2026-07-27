@@ -1,5 +1,6 @@
 import type {
   ApiResult,
+  AgentRunSnapshotDto,
   ConversationDto,
   ConversationMessageDto,
   CreateConversationRequestDto,
@@ -41,6 +42,14 @@ export async function listConversationMessages(
     `/api/conversations/${encodeURIComponent(conversationId)}/messages?${query}`,
     { signal }
   ));
+}
+
+/** @param runId Run ID。 @param signal 取消信号。 @returns 持久化 Run 快照。 */
+export async function getRunSnapshot(
+  runId: string,
+  signal?: AbortSignal
+): Promise<ApiResult<AgentRunSnapshotDto>> {
+  return parseApiResult(await fetch(`/api/runs/${encodeURIComponent(runId)}`, { signal }));
 }
 
 /** @param conversationId 会话 ID。 @param input 标题或归档操作。 @returns 更新后会话。 */

@@ -31,7 +31,7 @@ import {
   getApprovalRequests,
   parseApiResult
 } from "./format";
-import type { SelectedRunDetail, TraceEventDto } from "./types";
+import type { RunDetailSection, SelectedRunDetail, TraceEventDto } from "./types";
 
 /**
  * 渲染 assistant 消息内的 run 派生详情，默认折叠减少调试信息干扰。
@@ -40,7 +40,7 @@ import type { SelectedRunDetail, TraceEventDto } from "./types";
  * @returns run 详情折叠区。
  */
 export function RunDetails(props: {
-  onOpen: () => void;
+  onOpen: (section: RunDetailSection) => void;
   reportMode: boolean;
   run: AgentRunResponseDto;
 }) {
@@ -49,25 +49,36 @@ export function RunDetails(props: {
   const toolEvents = run.trace.events.filter(
     (event) => event.type === "tool_call" || event.type === "mcp_tool_call"
   );
+  const approvalRequests = getApprovalRequests(run);
+  const sections: Array<{ section: RunDetailSection; label: string; count?: number }> = [
+    { section: "summary", label: "运行摘要" },
+    { section: "steps", label: "Steps", count: run.steps.length },
+    { section: "tools", label: "Tools", count: toolEvents.length },
+    { section: "trace", label: "Trace", count: run.trace.events.length },
+    ...(run.reportPlan || run.reportWorkflow ? [{ section: "report" as const, label: "Report" }] : []),
+    ...(approvalRequests.length > 0
+      ? [{ section: "approvals" as const, label: "Approvals", count: approvalRequests.length }]
+      : [])
+  ];
 
   return (
-    <button className="run-details run-details-trigger" onClick={props.onOpen} type="button">
-      <span className="run-details-summary">
-        <span className="summary-title">
-          <Activity className="icon-size" />
-          查看运行过程
-        </span>
-        <span className="summary-badges">
-          <StatusBadge tone="neutral">{run.intent}</StatusBadge>
-          <StatusBadge tone={run.ok ? "success" : "danger"}>{run.ok ? "ok" : "failed"}</StatusBadge>
-          <StatusBadge tone={props.reportMode ? "info" : "neutral"}>{props.reportMode ? "report" : "chat"}</StatusBadge>
-          <StatusBadge tone="neutral">{run.steps.length} steps</StatusBadge>
-          <StatusBadge tone="neutral">{toolEvents.length} tools</StatusBadge>
-          <StatusBadge tone="neutral">{run.trace.events.length} trace</StatusBadge>
-        </span>
-        <ChevronDown className="details-chevron" />
-      </span>
-    </button>
+    <div className="run-details run-detail-types">
+      <div className="run-detail-types-status">
+        <Activity className="icon-size" />
+        <StatusBadge tone="neutral">{run.intent}</StatusBadge>
+        <StatusBadge tone={run.ok ? "success" : "danger"}>{run.ok ? "ok" : "failed"}</StatusBadge>
+        <StatusBadge tone={props.reportMode ? "info" : "neutral"}>{props.reportMode ? "report" : "chat"}</StatusBadge>
+      </div>
+      <div className="run-detail-type-actions">
+        {sections.map((item) => (
+          <button key={item.section} onClick={() => props.onOpen(item.section)} type="button">
+            <span>{item.label}</span>
+            {item.count !== undefined ? <small>{item.count}</small> : null}
+            <ChevronDown className="details-chevron" />
+          </button>
+        ))}
+      </div>
+    </div>
   );
 }
 
@@ -86,13 +97,14 @@ export function RunDetailPanel(props: {
   if (!props.detail) return null;
   const run = props.detail?.run;
   const event = props.detail?.event;
+  const section = props.detail.section ?? "summary";
   const toolEvents = run?.trace.events.filter((item) => item.type === "tool_call" || item.type === "mcp_tool_call") ?? [];
   const approvalRequests = run ? getApprovalRequests(run) : [];
   const marketSeries = findMarketSeries(event ?? run);
   return (
     <aside aria-label="运行详情" className="run-detail-panel is-open">
       <header className="run-detail-header">
-        <div><p className="md-label">Agent activity</p><h2>{event?.type === "trace_event" ? formatEventTitle(event.event) : "运行过程"}</h2></div>
+        <div><p className="md-label">Agent activity</p><h2>{event?.type === "trace_event" ? formatEventTitle(event.event) : detailSectionTitle(section)}</h2></div>
         <button className="icon-button" onClick={props.onClose} type="button" aria-label="关闭运行详情"><X className="icon-size" /></button>
       </header>
       <div className="run-detail-scroll">
@@ -100,21 +112,41 @@ export function RunDetailPanel(props: {
         {event ? <><p className="detail-lead">{formatRunProgress(event)}</p><JsonDetails title="event json" value={event} /></> : null}
         {run ? (
           <>
-            <div className="run-identifiers"><span>requestId: {run.requestId}</span><span>traceId: {run.traceId}</span></div>
-            <TraceSummaryPanel summary={run.trace.summary} />
-            {run.error ? <ErrorBlock error={run.error} /> : null}
-            {run.reportPlan ? <ReportPlanPanel plan={run.reportPlan} /> : null}
-            {run.reportWorkflow ? <ReportWorkflowPanel workflow={run.reportWorkflow} /> : null}
-            <ApprovalRequestsPanel approvalStatusById={props.approvalStatusById} onApprovalDecision={props.onApprovalDecision} requests={approvalRequests} />
-            <RunStepsList steps={run.steps} />
-            <ToolCallsList events={toolEvents} />
-            <TraceTimeline events={run.trace.events} />
-            <JsonDetails title="run json" value={run} />
+            {section === "summary" ? (
+              <>
+                <div className="run-identifiers"><span>requestId: {run.requestId}</span><span>traceId: {run.traceId}</span></div>
+                <TraceSummaryPanel summary={run.trace.summary} />
+                {run.error ? <ErrorBlock error={run.error} /> : null}
+              </>
+            ) : null}
+            {section === "report" ? (
+              <>
+                {run.reportPlan ? <ReportPlanPanel plan={run.reportPlan} /> : null}
+                {run.reportWorkflow ? <ReportWorkflowPanel workflow={run.reportWorkflow} /> : null}
+              </>
+            ) : null}
+            {section === "approvals" ? <ApprovalRequestsPanel approvalStatusById={props.approvalStatusById} onApprovalDecision={props.onApprovalDecision} requests={approvalRequests} /> : null}
+            {section === "steps" ? <RunStepsList steps={run.steps} /> : null}
+            {section === "tools" ? <ToolCallsList events={toolEvents} /> : null}
+            {section === "trace" ? <TraceTimeline events={run.trace.events} /> : null}
           </>
         ) : null}
       </div>
     </aside>
   );
+}
+
+/** @param section 当前详情类型。 @returns 右侧面板标题。 */
+function detailSectionTitle(section: RunDetailSection): string {
+  const titles: Record<RunDetailSection, string> = {
+    summary: "运行摘要",
+    steps: "Agent Steps",
+    tools: "Tool Calls",
+    trace: "Trace Timeline",
+    report: "Report Workflow",
+    approvals: "Approvals"
+  };
+  return titles[section];
 }
 
 /**

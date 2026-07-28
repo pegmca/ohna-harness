@@ -74,6 +74,22 @@ test("permanent model errors do not retry", async () => {
   assert.equal(result.ok, false); assert.equal(calls, 1);
 });
 
+test("reliable model preserves the client timeout when no request deadline is provided", async () => {
+  let seenTimeout;
+  const handler = async (request) => {
+    seenTimeout = request.timeoutMs;
+    return { ok: true, data: { content: "ok", model: "primary" } };
+  };
+  const client = { chat: handler, streamChat: handler, jsonChat: handler, toolChat: handler };
+  const result = await chatWithReliability(
+    { messages: [{ role: "user", content: "test" }] },
+    { primary: { name: "primary", capabilities: { structuredOutput: true, toolCalling: true }, client } }
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(seenTimeout, undefined);
+});
+
 test("reliable model returns structured retry exhaustion", async () => {
   let calls = 0;
   const handler = async () => { calls += 1; return { ok: false, error: { code: "network_error", message: "offline" } }; };

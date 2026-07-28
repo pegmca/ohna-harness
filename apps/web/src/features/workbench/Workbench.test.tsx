@@ -479,6 +479,88 @@ describe("Workbench conversation history", () => {
     expect([...container.querySelectorAll(".message-text")]
       .filter((element) => element.textContent === "同一问题")).toHaveLength(1);
   });
+
+  it("creates a new Run with the original model when a failed message retry is clicked", async () => {
+    const runRequests: Array<{ clientMessageId?: string; message: string; modelId?: string }> = [];
+    const { createAndStreamRun } = await import("../../shared/api/run-stream-client");
+    vi.mocked(createAndStreamRun).mockImplementation(async (request) => {
+      runRequests.push(request);
+      return {
+        ok: false,
+        requestId: `run_failed_${runRequests.length}`,
+        error: {
+          code: "agent_failed",
+          message: "LLM request timed out.",
+          requestId: `run_failed_${runRequests.length}`
+        }
+      };
+    });
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith("/api/conversations?")) return ok({ items: [conversation("c1", "已有会话")] });
+      if (url.includes("/messages")) return ok({ items: [] });
+      throw new Error(`Unexpected fetch: ${url}`);
+    }));
+
+    render(<MemoryRouter><Workbench /></MemoryRouter>);
+    await screen.findByRole("heading", { name: "已有会话" });
+    const textbox = screen.getByRole("textbox");
+    fireEvent.change(textbox, { target: { value: "解释 ROE" } });
+    fireEvent.submit(textbox.closest("form")!);
+    await waitFor(() => expect(runRequests).toHaveLength(1));
+
+    fireEvent.click(await screen.findByRole("button", { name: "重试" }));
+    await waitFor(() => expect(runRequests).toHaveLength(2));
+
+    expect(runRequests[1].clientMessageId).not.toBe(runRequests[0].clientMessageId);
+    expect(runRequests[1].message).toBe(runRequests[0].message);
+    expect(runRequests[1].modelId).toBe(runRequests[0].modelId);
+  });
+
+  it("shows retry for a failed message restored from conversation history", async () => {
+    const runRequests: Array<{ message: string; modelId?: string }> = [];
+    const { createAndStreamRun } = await import("../../shared/api/run-stream-client");
+    vi.mocked(createAndStreamRun).mockImplementation(async (request) => {
+      runRequests.push(request);
+      return failureResult("agent_failed", "still unavailable");
+    });
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith("/api/conversations?")) return ok({ items: [conversation("c1", "已有会话")] });
+      if (url.includes("/c1/messages")) {
+        return ok({
+          items: [
+            message("user-1", "c1", "历史失败问题"),
+            { ...assistantMessage("assistant-1", "c1", "agent_failed", "run-1"), status: "failed", sequence: 2 }
+          ]
+        });
+      }
+      if (url === "/api/runs/run-1") {
+        const result = {
+          ...runResult("run-1", "c1", "agent_failed"),
+          modelId: "mock",
+          ok: false,
+          error: { code: "agent_failed", message: "LLM request timed out." }
+        };
+        return ok({
+          runId: "run-1",
+          requestId: result.requestId,
+          conversationId: "c1",
+          status: "failed",
+          createdAt: "2026-07-25T00:00:00.000Z",
+          updatedAt: "2026-07-25T00:00:01.000Z",
+          events: [],
+          result
+        });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    }));
+
+    render(<MemoryRouter initialEntries={["/?conversation=c1"]}><Workbench /></MemoryRouter>);
+    fireEvent.click(await screen.findByRole("button", { name: "重试" }));
+    await waitFor(() => expect(runRequests).toHaveLength(1));
+    expect(runRequests[0]).toMatchObject({ message: "历史失败问题", modelId: "mock" });
+  });
 });
 
 function conversation(conversationId: string, title: string) {
@@ -543,6 +625,14 @@ function runResult(runId: string, conversationId: string, answer: string) {
       events: []
     },
     tracePersistence: { status: "complete" }
+  };
+}
+
+function failureResult(code: "agent_failed", messageText: string) {
+  return {
+    ok: false as const,
+    requestId: "request_failed",
+    error: { code, message: messageText, requestId: "request_failed" }
   };
 }
 

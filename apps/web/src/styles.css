@@ -1092,6 +1092,15 @@ textarea:disabled {
   line-height: 1.65;
 }
 
+.message-actions {
+  display: flex;
+  margin-top: var(--md-space-3);
+}
+
+.message-actions .secondary-button {
+  min-height: 34px;
+}
+
 .message-progress,
 .composer-progress {
   gap: var(--md-space-2);

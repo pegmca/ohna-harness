@@ -9,6 +9,7 @@ import {
   FileText,
   Loader2,
   Menu,
+  RotateCcw,
   User
 } from "lucide-react";
 import { type FormEvent } from "react";
@@ -75,6 +76,7 @@ interface ChatTimelineProps {
   onLoadMore: () => void;
   onApprovalDecision: (request: ToolApprovalRequestDto, decision: ToolApprovalDecisionDto["decision"]) => Promise<void>;
   onOpenRunDetail: (detail: SelectedRunDetail) => void;
+  onRetryMessage: (message: UiMessage) => void;
   onUsePrompt: (prompt: string) => void;
 }
 
@@ -108,13 +110,17 @@ export function ChatTimeline(props: ChatTimelineProps) {
     <section className="chat-timeline" aria-label="消息列表">
       <div className="timeline-inner">
         {props.hasMore ? <button className="secondary-button timeline-load-more" onClick={props.onLoadMore} type="button">加载更多消息</button> : null}
-        {props.messages.map((message) => (
+        {props.messages.map((message, index) => (
           <ChatMessage
             approvalStatusById={props.approvalStatusById}
+            canRetry={message.status === "failed"
+              && props.messages.slice(0, index).some((candidate) => candidate.role === "user")}
+            isSubmitting={props.isSubmitting}
             key={message.id}
             message={message}
             onApprovalDecision={props.onApprovalDecision}
             onOpenRunDetail={props.onOpenRunDetail}
+            onRetryMessage={props.onRetryMessage}
           />
         ))}
       </div>
@@ -130,9 +136,12 @@ export function ChatTimeline(props: ChatTimelineProps) {
  */
 export function ChatMessage(props: {
   approvalStatusById: Record<string, string>;
+  canRetry: boolean;
+  isSubmitting: boolean;
   message: UiMessage;
   onApprovalDecision: (request: ToolApprovalRequestDto, decision: ToolApprovalDecisionDto["decision"]) => Promise<void>;
   onOpenRunDetail: (detail: SelectedRunDetail) => void;
+  onRetryMessage: (message: UiMessage) => void;
 }) {
   const { message } = props;
   const isUser = message.role === "user";
@@ -180,6 +189,18 @@ export function ChatMessage(props: {
           </div>
         ) : null}
         <p className="message-text">{message.content}</p>
+        {message.status === "failed" && props.canRetry ? (
+          <div className="message-actions">
+            <button
+              className="secondary-button"
+              disabled={props.isSubmitting}
+              onClick={() => props.onRetryMessage(message)}
+              type="button"
+            >
+              <RotateCcw className="icon-size" />重试
+            </button>
+          </div>
+        ) : null}
       </div>
     </article>
   );

@@ -20,6 +20,15 @@ export interface UiMessage {
   streamEvents?: AgentRunStreamEventDto[];
   attachments?: Array<ChatAttachmentDto | MessageAttachmentDto>;
   modelId?: string;
+  retryContext?: RetryRunContext;
+}
+
+/** 失败消息重试所需的不可变 Run 输入快照，避免读取已变化的 Composer 状态。 */
+export interface RetryRunContext {
+  message: string;
+  modelId: string;
+  reportMode: boolean;
+  attachments: MessageAttachmentDto[];
 }
 
 export type DraftAttachmentStatus = "uploading" | "indexed" | "failed";

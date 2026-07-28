@@ -33,7 +33,7 @@ import {
 } from "./format";
 import { RunDetailPanel } from "./run-details";
 import { ConversationSidebar } from "./sidebar";
-import type { DraftAttachment, SelectedRunDetail, UiMessage } from "./types";
+import type { DraftAttachment, RetryRunContext, SelectedRunDetail, UiMessage } from "./types";
 import { useComposerState } from "./use-composer-state";
 import { DataSourcesWorkspace, ProductWorkspace, ScheduledTasksWorkspace } from "./workspace-views";
 
@@ -348,6 +348,36 @@ export function Workbench() {
     await submitAgentMessage(message);
   }
 
+  /**
+   * 使用失败消息保存的输入快照创建新 Run，避免幂等键命中原失败终态。
+   *
+   * @param message 带重试上下文的失败 assistant 消息。
+   * @returns 请求完成 Promise。
+   */
+  async function retryFailedMessage(message: UiMessage): Promise<void> {
+    if (isSubmitting) return;
+    const messageIndex = messages.findIndex((candidate) => candidate.id === message.id);
+    const sourceMessage = messageIndex < 0
+      ? undefined
+      : messages.slice(0, messageIndex).reverse().find((candidate) => candidate.role === "user");
+    const restoredAttachments = sourceMessage?.attachments?.map((attachment, ordinal) => ({
+      attachmentId: "attachmentId" in attachment ? attachment.attachmentId : attachment.clientAttachmentId,
+      documentId: attachment.documentId,
+      fileName: attachment.fileName,
+      contentType: attachment.contentType,
+      sizeBytes: attachment.sizeBytes,
+      ordinal
+    })) ?? [];
+    const retryContext = message.retryContext ?? (sourceMessage ? {
+      message: sourceMessage.content,
+      modelId: message.run?.modelId ?? message.modelId ?? composer.selectedModelId,
+      reportMode: message.run?.intent === "report_skill",
+      attachments: restoredAttachments
+    } : undefined);
+    if (!retryContext?.modelId) return;
+    retrySubmission.current = undefined;
+    await submitAgentMessage(retryContext.message, undefined, retryContext);
+  }
 
   /**
    * 发送用户输入并把 run 结果挂到对应 assistant 消息，避免使用全局右侧调试状态。
@@ -356,14 +386,27 @@ export function Workbench() {
    * @param triggerSource 可选 Report Skill 显式触发来源。
    * @returns 请求完成 Promise。
    */
-  async function submitAgentMessage(message: string, triggerSource?: ReportTriggerSourceDto): Promise<void> {
+  async function submitAgentMessage(
+    message: string,
+    triggerSource?: ReportTriggerSourceDto,
+    retryContext?: RetryRunContext
+  ): Promise<void> {
     const trimmed = message.trim();
     const indexedAttachments = composer.attachments.filter(
       (attachment): attachment is DraftAttachment & { documentId: string } =>
         attachment.status === "indexed" && Boolean(attachment.documentId)
     );
-    if (!trimmed || isSubmitting || !composer.selectedModelId
-      || indexedAttachments.length !== composer.attachments.length) {
+    const submittedModelId = retryContext?.modelId ?? composer.selectedModelId;
+    const submittedAttachments = retryContext?.attachments ?? indexedAttachments.map((attachment, ordinal) => ({
+      attachmentId: attachment.clientAttachmentId,
+      documentId: attachment.documentId,
+      fileName: attachment.fileName,
+      contentType: attachment.contentType,
+      sizeBytes: attachment.sizeBytes,
+      ordinal
+    }));
+    if (!trimmed || isSubmitting || !submittedModelId
+      || (!retryContext && indexedAttachments.length !== composer.attachments.length)) {
       return;
     }
     let conversation = activeConversation;
@@ -379,9 +422,9 @@ export function Workbench() {
     }
 
     const submittedConversationId = conversation.conversationId;
-    const submittedReportMode = reportMode;
+    const submittedReportMode = retryContext?.reportMode ?? reportMode;
     const pendingMessageId = createUiId("assistant");
-    const clientMessageId = retrySubmission.current?.message === trimmed
+    const clientMessageId = !retryContext && retrySubmission.current?.message === trimmed
       ? retrySubmission.current.clientMessageId
       : crypto.randomUUID();
     retrySubmission.current = { message: trimmed, clientMessageId };
@@ -393,14 +436,7 @@ export function Workbench() {
       createdAt: now,
       status: "complete"
       ,
-      attachments: indexedAttachments.map((attachment, ordinal) => ({
-        attachmentId: attachment.clientAttachmentId,
-        documentId: attachment.documentId,
-        fileName: attachment.fileName,
-        contentType: attachment.contentType,
-        sizeBytes: attachment.sizeBytes,
-        ordinal
-      }))
+      attachments: submittedAttachments
     };
     const pendingMessage: UiMessage = {
       id: pendingMessageId,
@@ -408,7 +444,14 @@ export function Workbench() {
       content: "Agent 正在分析问题、路由意图并准备回答。",
       createdAt: now,
       status: "pending",
-      streamEvents: []
+      streamEvents: [],
+      modelId: submittedModelId,
+      retryContext: {
+        message: trimmed,
+        modelId: submittedModelId,
+        reportMode: submittedReportMode,
+        attachments: submittedAttachments
+      }
     };
 
     setMessages((current) => [
@@ -435,8 +478,8 @@ export function Workbench() {
         submittedReportMode || triggerSource === "button",
         submittedConversationId,
         clientMessageId,
-        composer.selectedModelId,
-        indexedAttachments.map((attachment) => attachment.documentId),
+        submittedModelId,
+        submittedAttachments.map((attachment) => attachment.documentId),
         triggerSource,
         (event) => {
           replaceMessage(submittedConversationId, pendingMessageId, {
@@ -467,7 +510,9 @@ export function Workbench() {
           }
           // 只清理由本次 accepted Run 消费的草稿，避免迟到回调删除用户随后输入或新增的附件。
           setInput((current) => current === trimmed ? "" : current);
-          composer.clearAttachments(indexedAttachments.map((attachment) => attachment.clientAttachmentId));
+          if (!retryContext) {
+            composer.clearAttachments(indexedAttachments.map((attachment) => attachment.clientAttachmentId));
+          }
         },
         runController.signal
       );
@@ -623,6 +668,7 @@ export function Workbench() {
             }}
             onApprovalDecision={handleApprovalDecision}
             onOpenRunDetail={setSelectedRunDetail}
+            onRetryMessage={(message) => void retryFailedMessage(message)}
             onUsePrompt={setInput}
           />
 

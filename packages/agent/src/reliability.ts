@@ -34,7 +34,9 @@ export async function chatWithReliability(request: LlmChatRequest, options: Reli
       if (options.signal?.aborted) return { ok: false, attempts, error: { code: "request_timeout", message: "Model call cancelled.", details: { terminationReason: "cancelled" } } };
       const remaining = options.deadlineAtMs === undefined ? undefined : options.deadlineAtMs - (options.now ?? Date.now)();
       if (remaining !== undefined && remaining <= 0) return { ok: false, attempts, error: { code: "request_timeout", message: "Model deadline exceeded.", details: { terminationReason: "deadline_exceeded" } } };
-      const result = await candidate.client.chat({ ...request, timeoutMs: Math.min(request.timeoutMs ?? Number.POSITIVE_INFINITY, remaining ?? Number.POSITIVE_INFINITY) });
+      const timeoutMs = resolveAttemptTimeout(request.timeoutMs, remaining);
+      // 没有请求级 timeout 或总 deadline 时不写入 Infinity，让 client 保留环境配置的默认超时。
+      const result = await candidate.client.chat(timeoutMs === undefined ? request : { ...request, timeoutMs });
       recordModelAttempt(options.trace, candidate.name, attempts, localAttempt, candidateIndex, result, fallbackReason);
       if (result.ok) return { ok: true, data: result.data, model: candidate.name, degraded: candidateIndex > 0, fallbackReason, attempts };
       lastError = result.error;
@@ -58,6 +60,21 @@ export function isRetryableModelError(error: LlmError): boolean {
 
 /** 判断候选模型是否覆盖本次调用需要的能力。 */
 function supports(actual: ModelCapabilities, required: Partial<ModelCapabilities> | undefined): boolean { return (!required?.structuredOutput || actual.structuredOutput) && (!required?.toolCalling || actual.toolCalling); }
+/**
+ * 合并单次请求超时与剩余总 deadline，未设置时保持 undefined 以免覆盖 client 默认值。
+ *
+ * @param requestTimeoutMs 单次请求显式超时。
+ * @param remainingDeadlineMs 当前 Run 剩余时间。
+ * @returns 本次 attempt 应覆盖的有限超时；两者都缺失时返回 undefined。
+ */
+function resolveAttemptTimeout(
+  requestTimeoutMs: number | undefined,
+  remainingDeadlineMs: number | undefined
+): number | undefined {
+  if (requestTimeoutMs === undefined) return remainingDeadlineMs;
+  if (remainingDeadlineMs === undefined) return requestTimeoutMs;
+  return Math.min(requestTimeoutMs, remainingDeadlineMs);
+}
 /** 计算带 jitter 的有界指数退避。 */
 function backoff(attempt: number, policy: ModelRetryPolicy, random: () => number): number { const base = Math.min(policy.maxDelayMs, policy.baseDelayMs * 2 ** (attempt - 1)); return Math.max(0, Math.round(base * (1 + (random() * 2 - 1) * policy.jitterRatio))); }
 /** 默认 sleeper 支持取消，测试可注入无等待实现。 */

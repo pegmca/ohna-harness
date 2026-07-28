@@ -318,6 +318,23 @@ interface KeywordCandidate {
 function normalizeRetrievalOptions(
   options: RetrievalOptions
 ): { ok: true; mode: RetrievalMode; topK: number; candidateLimit: number; filter?: VectorSearchOptions["filter"]; vectorWeight: number; keywordWeight: number; rerank: boolean } | { ok: false; error: RagStructuredError } {
+  if (
+    options.filter?.documentIds !== undefined
+    && (
+      options.filter.documentIds.length === 0
+      || options.filter.documentIds.length > 5
+      || new Set(options.filter.documentIds).size !== options.filter.documentIds.length
+      || options.filter.documentId !== undefined
+    )
+  ) {
+    return {
+      ok: false,
+      error: {
+        code: "invalid_retrieval_options",
+        message: "documentIds 必须包含 1 到 5 个不重复文档，且不能与 documentId 同时使用。"
+      }
+    };
+  }
   const topKResult = normalizeTopK(options.topK);
 
   if (!topKResult.ok) {

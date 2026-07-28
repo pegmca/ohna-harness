@@ -10,7 +10,7 @@ import type {
 import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { SettingsPage } from "../settings";
-import { createAndStreamRun } from "../../shared/api/run-stream-client";
+import { cancelRun, createAndStreamRun } from "../../shared/api/run-stream-client";
 import {
   createConversation,
   getRunSnapshot,
@@ -33,7 +33,8 @@ import {
 } from "./format";
 import { RunDetailPanel } from "./run-details";
 import { ConversationSidebar } from "./sidebar";
-import type { SelectedRunDetail, UiMessage } from "./types";
+import type { DraftAttachment, SelectedRunDetail, UiMessage } from "./types";
+import { useComposerState } from "./use-composer-state";
 import { DataSourcesWorkspace, ProductWorkspace, ScheduledTasksWorkspace } from "./workspace-views";
 
 /**
@@ -63,7 +64,12 @@ export function Workbench() {
   const [approvalStatusById, setApprovalStatusById] = useState<Record<string, string>>({});
   const [selectedRunDetail, setSelectedRunDetail] = useState<SelectedRunDetail>();
   const [reportMode, setReportMode] = useState(false);
+  const [activeRunId, setActiveRunId] = useState<string>();
+  const composer = useComposerState(setComposerError);
   const retrySubmission = useRef<{ message: string; clientMessageId: string } | undefined>(undefined);
+  const activeRunController = useRef<AbortController | undefined>(undefined);
+  const activeRunIdRef = useRef<string | undefined>(undefined);
+  const cancelRequested = useRef(false);
   const activeConversationIdRef = useRef(activeConversationId);
   const messageRequestController = useRef<AbortController | undefined>(undefined);
   const messageRequestGeneration = useRef(0);
@@ -74,7 +80,6 @@ export function Workbench() {
     [activeConversationId, conversations]
   );
   const latestRun = [...messages].reverse().find((message) => message.run)?.run;
-  const isEmpty = messages.length === 0;
 
   useEffect(() => {
     const controller = new AbortController();
@@ -221,6 +226,25 @@ export function Workbench() {
     await submitMessage(input);
   }
 
+  /** @returns 取消当前服务端 Run 的 Promise。 */
+  async function handleStop(): Promise<void> {
+    const runId = activeRunIdRef.current;
+    if (!runId) {
+      // 不能 abort 创建请求：服务端可能已经提交 Run，只是 202 尚未到达浏览器。
+      cancelRequested.current = true;
+      setComposerError("正在等待服务端确认任务，确认后将立即停止；草稿会保留。");
+      return;
+    }
+    const result = await cancelRun(runId);
+    if (!result.ok) {
+      setComposerError(formatApiError(result.error));
+      return;
+    }
+    // 已取消 Run 的 clientMessageId 不能用于原文重试，否则服务端会返回相同取消终态。
+    retrySubmission.current = undefined;
+    activeRunController.current?.abort();
+  }
+
   /**
    * 创建新的浏览器本地会话，并切换到该会话。
    *
@@ -324,15 +348,6 @@ export function Workbench() {
     await submitAgentMessage(message);
   }
 
-  /**
-   * 从按钮显式触发 Report Skill，和自然语言、Report Mode 开关复用同一个 API activation 边界。
-   *
-   * @returns 请求完成 Promise。
-   */
-  async function handleGenerateReport(): Promise<void> {
-    const message = input.trim() || "帮我生成一份公司研究报告 PDF。";
-    await submitAgentMessage(message, "button");
-  }
 
   /**
    * 发送用户输入并把 run 结果挂到对应 assistant 消息，避免使用全局右侧调试状态。
@@ -343,7 +358,12 @@ export function Workbench() {
    */
   async function submitAgentMessage(message: string, triggerSource?: ReportTriggerSourceDto): Promise<void> {
     const trimmed = message.trim();
-    if (!trimmed || isSubmitting) {
+    const indexedAttachments = composer.attachments.filter(
+      (attachment): attachment is DraftAttachment & { documentId: string } =>
+        attachment.status === "indexed" && Boolean(attachment.documentId)
+    );
+    if (!trimmed || isSubmitting || !composer.selectedModelId
+      || indexedAttachments.length !== composer.attachments.length) {
       return;
     }
     let conversation = activeConversation;
@@ -372,6 +392,15 @@ export function Workbench() {
       content: trimmed,
       createdAt: now,
       status: "complete"
+      ,
+      attachments: indexedAttachments.map((attachment, ordinal) => ({
+        attachmentId: attachment.clientAttachmentId,
+        documentId: attachment.documentId,
+        fileName: attachment.fileName,
+        contentType: attachment.contentType,
+        sizeBytes: attachment.sizeBytes,
+        ordinal
+      }))
     };
     const pendingMessage: UiMessage = {
       id: pendingMessageId,
@@ -394,9 +423,11 @@ export function Workbench() {
           current.map((item) => item.conversationId === submittedConversationId ? result.data : item));
       });
     }
-    setInput("");
     setComposerError(undefined);
     setIsSubmitting(true);
+    const runController = new AbortController();
+    cancelRequested.current = false;
+    activeRunController.current = runController;
 
     try {
       const result = await runAgent(
@@ -404,6 +435,8 @@ export function Workbench() {
         submittedReportMode || triggerSource === "button",
         submittedConversationId,
         clientMessageId,
+        composer.selectedModelId,
+        indexedAttachments.map((attachment) => attachment.documentId),
         triggerSource,
         (event) => {
           replaceMessage(submittedConversationId, pendingMessageId, {
@@ -412,17 +445,43 @@ export function Workbench() {
           setMessages((current) => current.map((item) => item.id === pendingMessageId
             ? { ...item, streamEvents: [...(item.streamEvents ?? []), event] }
             : item));
-        }
+        },
+        async (runId) => {
+          // ref 必须先于 React state 更新，Stop 不依赖下一次 render 才能看到 accepted Run。
+          activeRunIdRef.current = runId;
+          setActiveRunId(runId);
+          if (cancelRequested.current) {
+            const cancelled = await cancelRun(runId);
+            if (!cancelled.ok) {
+              cancelRequested.current = false;
+              setComposerError(formatApiError(cancelled.error));
+              // 取消失败后继续消费既有 Run，因此恢复正常 accepted 语义并清理本次已提交草稿。
+            }
+            if (cancelled.ok) {
+              // 此次 accepted Run 已被取消；下次重试必须使用新 clientMessageId，不能命中取消终态。
+              retrySubmission.current = undefined;
+              setComposerError("已停止服务端任务，输入和附件草稿已保留。");
+              runController.abort();
+              return;
+            }
+          }
+          // 只清理由本次 accepted Run 消费的草稿，避免迟到回调删除用户随后输入或新增的附件。
+          setInput((current) => current === trimmed ? "" : current);
+          composer.clearAttachments(indexedAttachments.map((attachment) => attachment.clientAttachmentId));
+        },
+        runController.signal
       );
 
       if (!result.ok) {
         const messageText = formatApiError(result.error);
         replaceMessage(submittedConversationId, pendingMessageId, {
           content: messageText,
-          status: "failed",
+          status: result.error.code === "request_cancelled" ? "cancelled" : "failed",
           ok: false
         });
-        setComposerError("请求失败，已把结构化错误写入当前 assistant 消息。");
+        if (result.error.code !== "request_cancelled") {
+          setComposerError("请求失败，已把结构化错误写入当前 assistant 消息。");
+        }
         return;
       }
 
@@ -430,7 +489,7 @@ export function Workbench() {
       retrySubmission.current = undefined;
       replaceMessage(submittedConversationId, pendingMessageId, {
         content: run.answer,
-        status: run.ok ? "complete" : "failed",
+        status: run.ok ? "complete" : run.error?.code === "request_cancelled" ? "cancelled" : "failed",
         ok: run.ok,
         run,
         streamEvents: undefined
@@ -440,6 +499,15 @@ export function Workbench() {
         setComposerError(formatApiError(run.error));
       }
     } catch (caught) {
+      if (runController.signal.aborted) {
+        replaceMessage(submittedConversationId, pendingMessageId, {
+          content: "已停止本次生成。",
+          status: "cancelled",
+          ok: false,
+          streamEvents: undefined
+        });
+        return;
+      }
       const messageText = caught instanceof Error ? caught.message : "请求失败，请检查 API 服务是否已启动。";
       replaceMessage(submittedConversationId, pendingMessageId, {
         content: messageText,
@@ -449,6 +517,10 @@ export function Workbench() {
       setComposerError("请求失败，请确认 apps/api 和 apps/web 已通过 pnpm dev 启动。");
     } finally {
       setIsSubmitting(false);
+      setActiveRunId(undefined);
+      activeRunIdRef.current = undefined;
+      activeRunController.current = undefined;
+      cancelRequested.current = false;
     }
   }
 
@@ -461,7 +533,7 @@ export function Workbench() {
    * @returns void。
    */
   function replaceMessage(conversationId: string, messageId: string, patch: Partial<UiMessage>): void {
-    if (conversationId !== activeConversationId) return;
+    if (conversationId !== activeConversationIdRef.current) return;
     setMessages((current) => current.map((messageItem) =>
       messageItem.id === messageId ? { ...messageItem, ...patch } : messageItem
     ));
@@ -535,10 +607,7 @@ export function Workbench() {
             conversationTitle={activeConversation?.title ?? "新会话"}
             isSubmitting={isSubmitting}
             latestRun={latestRun}
-            onGenerateReport={handleGenerateReport}
             onMenuClick={() => setIsSidebarOpen(true)}
-            onReportModeChange={handleReportModeChange}
-            reportMode={reportMode}
           />
 
           <ChatTimeline
@@ -558,14 +627,25 @@ export function Workbench() {
           />
 
           <ChatComposer
+            attachments={composer.attachments}
             error={composerError}
             input={input}
-            isEmpty={isEmpty}
             isSubmitting={isSubmitting}
+            models={composer.models}
+            modelCatalogStatus={composer.modelCatalogStatus}
+            modelCatalogError={composer.modelCatalogError}
+            onFilesSelected={composer.onFilesSelected}
             onInputChange={setInput}
+            onRemoveAttachment={composer.removeAttachment}
+            onReportModeChange={handleReportModeChange}
+            onRetryAttachment={composer.retryAttachment}
+            onRetryModels={composer.retryModels}
+            onSelectModel={composer.selectModel}
+            onStop={() => void handleStop()}
             onSubmit={handleSubmit}
             onUsePrompt={setInput}
             reportMode={reportMode}
+            selectedModelId={composer.selectedModelId}
           />
         </section>
       ) : workspaceView === "data-sources" ? (
@@ -594,6 +674,8 @@ export function Workbench() {
  * @param reportMode Report Mode 占位开关状态。
  * @param conversationId 可选会话标识。
  * @param clientMessageId 用户消息幂等键。
+ * @param modelId 模型目录 ID。
+ * @param attachmentDocumentIds 当前消息允许检索的附件文档 ID。
  * @param reportTriggerSource 显式研报触发来源。
  * @param onEvent 实时事件回调。
  * @returns terminal API 运行结果。
@@ -603,16 +685,22 @@ async function runAgent(
   reportMode: boolean,
   conversationId: string | undefined,
   clientMessageId: string,
+  modelId: string,
+  attachmentDocumentIds: string[],
   reportTriggerSource?: ReportTriggerSourceDto,
-  onEvent?: (event: AgentRunStreamEventDto) => void
+  onEvent?: (event: AgentRunStreamEventDto) => void,
+  onAccepted?: (runId: string) => void | Promise<void>,
+  signal?: AbortSignal
 ): Promise<ApiResult<AgentRunResponseDto>> {
   return createAndStreamRun({
     message,
     conversationId: conversationId ?? createUiId("conversation"),
     clientMessageId,
+    modelId,
+    attachmentDocumentIds,
     mode: reportMode ? "report" : "auto",
     source: reportTriggerSource === "button" ? "report_button" : "composer"
-  }, { onEvent });
+  }, { onEvent, onAccepted: (accepted) => onAccepted?.(accepted.runId), signal });
 }
 
 /**

@@ -15,8 +15,6 @@ import { parseChatResponse, parseJsonObject, parseSseStream } from "./llm/parsin
 import { mapToolChoice } from "./llm/mapping.js";
 import { traceModelCall } from "./llm/tracing.js";
 
-export { createLlmClientFromEnv } from "./llm/env.js";
-
 /**
  * 使用显式配置创建统一 LLM client，并把供应商配置固定在 client 闭包中。
  *

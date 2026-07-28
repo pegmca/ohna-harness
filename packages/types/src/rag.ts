@@ -119,6 +119,25 @@ export interface DataSourceIngestRequestDto {
   content: string;
 }
 
+/** Composer 文件上传请求；clientAttachmentId 让网络重试保持同一逻辑文档。 */
+export interface ChatAttachmentUploadRequestDto {
+  clientAttachmentId: string;
+  fileName: string;
+  contentType: string;
+  sizeBytes: number;
+  content: string;
+}
+
+/** 上传完成后的草稿附件，发送消息时通过 documentId 绑定。 */
+export interface ChatAttachmentDto {
+  documentId: string;
+  clientAttachmentId: string;
+  fileName: string;
+  contentType: string;
+  sizeBytes: number;
+  status: "indexed";
+}
+
 /**
  * RAG 文档可见范围 DTO：private 仅 owner 可见，shared/demo 对所有调用方可见。
  */

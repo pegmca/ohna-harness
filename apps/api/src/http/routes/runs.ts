@@ -8,7 +8,11 @@ import type {
 import type { FastifyInstance } from "fastify";
 import type { createConversationApplicationService } from "../../application/conversation-service.js";
 import { createOrderedRunEventStream, isTerminalRunStatus } from "../../application/ordered-run-event-stream.js";
-import { RunServiceShuttingDownError, type createRunApplicationService } from "../../application/run-service.js";
+import {
+  RunModelNotFoundError,
+  RunServiceShuttingDownError,
+  type createRunApplicationService
+} from "../../application/run-service.js";
 import { conversationFailure, createRequestId, fail, toApiError } from "../errors.js";
 import { anonymousUserId, requestUserId } from "../hooks/auth.js";
 import { agentRunRequestSchema, runEventsQuerySchema } from "../schemas.js";
@@ -64,6 +68,12 @@ export function registerRunRoutes(app: FastifyInstance, deps: RunRoutesDeps): vo
       if (error instanceof RunServiceShuttingDownError) {
         reply.code(503);
         return fail(toApiError("internal_error", "服务正在关闭，暂时无法接收新的研究任务。", requestId, { reasonCode: "run_service_shutting_down" }), requestId);
+      }
+      if (error instanceof RunModelNotFoundError) {
+        reply.code(400);
+        return fail(toApiError("validation_failed", "所选模型不可用，请刷新模型列表后重试。", requestId, {
+          modelId: error.modelId
+        }), requestId);
       }
       throw error;
     }

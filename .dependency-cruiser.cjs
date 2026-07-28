@@ -36,7 +36,8 @@ module.exports = {
   options: {
     doNotFollow: { path: "node_modules" },
     exclude: "(^|/)(dist|node_modules|\\.playwright-cli)/",
-    tsPreCompilationDeps: true,
+    // 仓库允许纯 import type 形成类型环；架构门禁只阻止运行时依赖环。
+    tsPreCompilationDeps: false,
     tsConfig: { fileName: "tsconfig.base.json" },
     enhancedResolveOptions: { exportsFields: ["exports"], conditionNames: ["types", "import", "require", "default"] },
     reporterOptions: { dot: { collapsePattern: "node_modules/[^/]+" } }

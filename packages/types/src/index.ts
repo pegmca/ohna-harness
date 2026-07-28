@@ -11,3 +11,4 @@ export * from "./filings.js";
 export * from "./rag.js";
 export * from "./eval.js";
 export * from "./llm.js";
+export * from "./models.js";

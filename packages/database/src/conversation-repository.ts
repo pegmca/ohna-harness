@@ -234,7 +234,9 @@ class PostgresMessageRepository implements MessageRepository {
         [input.conversationId, userId, cursor?.sequence ?? null, cursor?.id ?? null, limit + 1]
       );
       const hasMore = result.rows.length > limit;
-      const items = result.rows.slice(0, limit).map(mapMessage);
+      const rows = result.rows.slice(0, limit);
+      const attachments = await loadAttachments(this.pool, userId, rows.map((row) => row.id));
+      const items = rows.map((row) => mapMessage(row, attachments.get(row.id) ?? []));
       const last = items.at(-1);
       return {
         items,
@@ -260,7 +262,9 @@ class PostgresMessageRepository implements MessageRepository {
          where m.id=$1 and m.user_id=$2 and c.user_id=$2`,
         [messageId, userId]
       );
-      return result.rows[0] ? mapMessage(result.rows[0]) : undefined;
+      if (!result.rows[0]) return undefined;
+      const attachments = await loadAttachments(this.pool, userId, [result.rows[0].id]);
+      return mapMessage(result.rows[0], attachments.get(result.rows[0].id) ?? []);
     } catch (cause) {
       throw mapRepositoryError(cause);
     }
@@ -294,6 +298,16 @@ interface MessageRow {
   sequence: string | number;
   created_at: Date | string;
   completed_at: Date | string | null;
+}
+
+interface MessageAttachmentRow {
+  id: string;
+  message_id: string;
+  document_id: string;
+  file_name: string;
+  content_type: string;
+  size_bytes: string | number;
+  ordinal: number;
 }
 
 /**
@@ -370,7 +384,7 @@ function mapConversation(row: ConversationRow): Conversation {
 }
 
 /** @param row PostgreSQL 消息行。 @returns 领域消息。 */
-function mapMessage(row: MessageRow): Message {
+function mapMessage(row: MessageRow, attachments: Message["attachments"] = []): Message {
   return {
     id: row.id,
     conversationId: row.conversation_id,
@@ -382,8 +396,46 @@ function mapMessage(row: MessageRow): Message {
     clientMessageId: row.client_message_id ?? undefined,
     sequence: Number(row.sequence),
     createdAt: postgresTimestampToIso(row.created_at),
-    completedAt: row.completed_at ? postgresTimestampToIso(row.completed_at) : undefined
+    completedAt: row.completed_at ? postgresTimestampToIso(row.completed_at) : undefined,
+    attachments
   };
+}
+
+/**
+ * 批量读取消息附件，避免历史页按消息产生 N+1 查询。
+ *
+ * @param executor PostgreSQL 查询执行器。
+ * @param userId 当前用户。
+ * @param messageIds 当前页消息 ID。
+ * @returns 按消息 ID 分组的附件。
+ */
+async function loadAttachments(
+  executor: Pick<pg.Pool | pg.PoolClient, "query">,
+  userId: string,
+  messageIds: string[]
+): Promise<Map<string, Message["attachments"]>> {
+  if (messageIds.length === 0) return new Map();
+  const result = await executor.query<MessageAttachmentRow>(
+    `select id,message_id,document_id,file_name,content_type,size_bytes,ordinal
+       from message_attachments
+      where user_id=$1 and message_id=any($2::uuid[])
+      order by message_id,ordinal`,
+    [userId, messageIds]
+  );
+  const grouped = new Map<string, Message["attachments"]>();
+  for (const row of result.rows) {
+    const current = grouped.get(row.message_id) ?? [];
+    current.push({
+      id: row.id,
+      documentId: row.document_id,
+      fileName: row.file_name,
+      contentType: row.content_type,
+      sizeBytes: Number(row.size_bytes),
+      ordinal: row.ordinal
+    });
+    grouped.set(row.message_id, current);
+  }
+  return grouped;
 }
 
 /** @param value 游标内容。 @returns 不透明 base64url 游标。 */

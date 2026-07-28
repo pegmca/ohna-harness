@@ -30,7 +30,8 @@ test("Trace 持久化保证原子 Run 投影、用户隔离、并发 sequence �
     const traceId = "trace-1";
     await createPostgresRunRepository(context.pool).create({
       runId, requestId, userId: userOne, conversationId: conversation.id, message: "研究问题",
-      clientMessageId: "trace-client-1", mode: "auto", source: "composer", traceId, createdAt: now
+      clientMessageId: "trace-client-1", mode: "auto", source: "composer", traceId, createdAt: now,
+      modelId: "mock", attachmentDocumentIds: []
     });
     const store = createPostgresTraceStore(context.pool);
     const traceContext = { userId: userOne, runId, conversationId: conversation.id, traceId, requestId, startedAt: now };

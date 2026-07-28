@@ -85,6 +85,7 @@ export interface VectorSearchOptions {
   topK?: number;
   filter?: {
     documentId?: string;
+    documentIds?: string[];
     source?: string;
   };
 }

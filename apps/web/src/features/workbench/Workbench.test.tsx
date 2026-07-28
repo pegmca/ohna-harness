@@ -1,10 +1,31 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import type { AgentRunResponseDto } from "@aiagent/types";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Workbench } from "./Workbench";
 
 vi.mock("../../shared/api/run-stream-client", () => ({
-  createAndStreamRun: vi.fn()
+  createAndStreamRun: vi.fn(),
+  cancelRun: vi.fn()
+}));
+
+vi.mock("../../shared/api/composer-client", () => ({
+  listModels: vi.fn(async () => ({
+    ok: true,
+    requestId: "models",
+    data: {
+      defaultModelId: "mock",
+      models: [{
+        id: "mock",
+        label: "Mock Agent",
+        provider: "mock",
+        description: "Test model",
+        isDefault: true,
+        capabilities: { structuredOutput: true, toolCalling: true }
+      }]
+    }
+  })),
+  uploadChatAttachment: vi.fn()
 }));
 
 const conversations = [
@@ -19,6 +40,38 @@ afterEach(() => {
 });
 
 describe("Workbench conversation history", () => {
+  it("shows a retry action when the model catalog cannot be loaded", async () => {
+    const { listModels } = await import("../../shared/api/composer-client");
+    vi.mocked(listModels)
+      .mockRejectedValueOnce(new Error("catalog unavailable"))
+      .mockResolvedValueOnce({
+        ok: true,
+        requestId: "models-retry",
+        data: {
+          defaultModelId: "mock",
+          models: [{
+            id: "mock",
+            label: "Mock Agent",
+            provider: "mock",
+            description: "Test model",
+            isDefault: true,
+            capabilities: { structuredOutput: true, toolCalling: true }
+          }]
+        }
+      });
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith("/api/conversations?")) return ok({ items: [] });
+      throw new Error(`Unexpected fetch: ${url}`);
+    }));
+
+    render(<MemoryRouter><Workbench /></MemoryRouter>);
+    await screen.findByText("模型目录不可用。");
+    fireEvent.click(screen.getByRole("button", { name: "重试加载" }));
+    await waitFor(() => expect(screen.queryByText("模型目录不可用。")).toBeNull());
+    expect(listModels).toHaveBeenCalledTimes(2);
+  });
+
   it("keeps loaded history when the active conversation is selected again", async () => {
     let historyRequests = 0;
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
@@ -192,10 +245,207 @@ describe("Workbench conversation history", () => {
     fireEvent.submit(textbox.closest("form")!);
     await screen.findByText("首次问题");
     await waitFor(() => expect(createAndStreamRun).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect((textbox as HTMLTextAreaElement).disabled).toBe(false));
+    expect((textbox as HTMLTextAreaElement).value).toBe("首次问题");
     expect(historyRequests).toBe(0);
     expect(container.querySelector(".message-text")?.textContent).toBe("首次问题");
     expect([...container.querySelectorAll(".message-text")]
       .filter((element) => element.textContent === "首次问题")).toHaveLength(1);
+  });
+
+  it("clears the submitted input only after the server accepts the Run", async () => {
+    const { createAndStreamRun } = await import("../../shared/api/run-stream-client");
+    vi.mocked(createAndStreamRun).mockImplementation(async (_request, options) => {
+      options?.onAccepted?.({
+        runId: "run-accepted",
+        requestId: "request-accepted",
+        conversationId: "c1",
+        modelId: "mock",
+        status: "queued",
+        eventsUrl: "/events",
+        snapshotUrl: "/snapshot"
+      });
+      return {
+        ok: false,
+        requestId: "stream_failed",
+        error: { code: "internal_error", message: "stream failed", requestId: "stream_failed" }
+      };
+    });
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith("/api/conversations?")) return ok({ items: [conversation("c1", "已有会话")] });
+      if (url.includes("/messages")) return ok({ items: [] });
+      throw new Error(`Unexpected fetch: ${url}`);
+    }));
+
+    render(<MemoryRouter><Workbench /></MemoryRouter>);
+    await screen.findByRole("heading", { name: "已有会话" });
+    const textbox = screen.getByRole("textbox");
+    fireEvent.change(textbox, { target: { value: "已接受问题" } });
+    fireEvent.submit(textbox.closest("form")!);
+    await waitFor(() => expect((textbox as HTMLTextAreaElement).value).toBe(""));
+  });
+
+  it("cancels a server-created Run when stop was requested before its delayed accepted response", async () => {
+    const { cancelRun, createAndStreamRun } = await import("../../shared/api/run-stream-client");
+    let acceptedHook: (() => void | Promise<void>) | undefined;
+    let createSignal: AbortSignal | undefined;
+    vi.mocked(cancelRun).mockResolvedValue({
+      ok: true,
+      requestId: "cancel-request",
+      data: {
+        runId: "run-created",
+        requestId: "run-request",
+        conversationId: "c1",
+        modelId: "mock",
+        status: "cancelled",
+        createdAt: "2026-07-25T00:00:00.000Z",
+        updatedAt: "2026-07-25T00:00:01.000Z",
+        events: []
+      }
+    });
+    vi.mocked(createAndStreamRun).mockImplementation(async (_request, options) =>
+      new Promise((_resolve, reject) => {
+        createSignal = options?.signal;
+        acceptedHook = () => options?.onAccepted?.({
+          runId: "run-created",
+          requestId: "run-request",
+          conversationId: "c1",
+          modelId: "mock",
+          status: "queued",
+          eventsUrl: "/events",
+          snapshotUrl: "/snapshot"
+        });
+        options?.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")));
+      }));
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith("/api/conversations?")) return ok({ items: [conversation("c1", "已有会话")] });
+      if (url.includes("/messages")) return ok({ items: [] });
+      throw new Error(`Unexpected fetch: ${url}`);
+    }));
+
+    render(<MemoryRouter><Workbench /></MemoryRouter>);
+    await screen.findByRole("heading", { name: "已有会话" });
+    const textbox = screen.getByRole("textbox") as HTMLTextAreaElement;
+    fireEvent.change(textbox, { target: { value: "尚未接受的问题" } });
+    fireEvent.submit(textbox.closest("form")!);
+    fireEvent.click(await screen.findByRole("button", { name: "停止生成" }));
+    expect(createSignal?.aborted).toBe(false);
+    expect(screen.getByText(/正在等待服务端确认任务/)).toBeTruthy();
+    await act(async () => acceptedHook?.());
+    await waitFor(() => expect(cancelRun).toHaveBeenCalledWith("run-created"));
+    await waitFor(() => expect(textbox.disabled).toBe(false));
+    expect(textbox.value).toBe("尚未接受的问题");
+    expect(screen.getByText("已停止服务端任务，输入和附件草稿已保留。")).toBeTruthy();
+  });
+
+  it("clears the submitted draft and completes the Run when pre-accepted cancellation fails", async () => {
+    const { cancelRun, createAndStreamRun } = await import("../../shared/api/run-stream-client");
+    let finishAcceptedRun: (() => Promise<void>) | undefined;
+    vi.mocked(cancelRun).mockResolvedValue({
+      ok: false,
+      requestId: "cancel-failed",
+      error: { code: "internal_error", message: "取消服务暂不可用", requestId: "cancel-failed" }
+    });
+    vi.mocked(createAndStreamRun).mockImplementation(async (_request, options) =>
+      new Promise((resolve) => {
+        finishAcceptedRun = async () => {
+          await options?.onAccepted?.({
+            runId: "run-continues",
+            requestId: "request-continues",
+            conversationId: "c1",
+            modelId: "mock",
+            status: "queued",
+            eventsUrl: "/events",
+            snapshotUrl: "/snapshot"
+          });
+          resolve({
+            ok: true,
+            requestId: "terminal",
+            data: runResult("run-continues", "c1", "继续执行完成") as AgentRunResponseDto
+          });
+        };
+      }));
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith("/api/conversations?")) return ok({ items: [conversation("c1", "已有会话")] });
+      if (url.includes("/messages")) return ok({ items: [] });
+      throw new Error(`Unexpected fetch: ${url}`);
+    }));
+
+    render(<MemoryRouter><Workbench /></MemoryRouter>);
+    await screen.findByRole("heading", { name: "已有会话" });
+    const textbox = screen.getByRole("textbox") as HTMLTextAreaElement;
+    fireEvent.change(textbox, { target: { value: "取消失败仍执行" } });
+    fireEvent.submit(textbox.closest("form")!);
+    fireEvent.click(await screen.findByRole("button", { name: "停止生成" }));
+    await act(async () => finishAcceptedRun?.());
+
+    await screen.findByText("继续执行完成");
+    expect(textbox.value).toBe("");
+    expect(screen.getByText(/取消服务暂不可用/)).toBeTruthy();
+  });
+
+  it("uses a new clientMessageId when the same text is retried after an accepted Run is stopped", async () => {
+    const runRequests: Array<{ clientMessageId?: string }> = [];
+    const { cancelRun, createAndStreamRun } = await import("../../shared/api/run-stream-client");
+    vi.mocked(cancelRun).mockResolvedValue({
+      ok: true,
+      requestId: "cancel-normal",
+      data: {
+        runId: "run-normal",
+        requestId: "request-normal",
+        conversationId: "c1",
+        modelId: "mock",
+        status: "cancelled",
+        createdAt: "2026-07-25T00:00:00.000Z",
+        updatedAt: "2026-07-25T00:00:01.000Z",
+        events: []
+      }
+    });
+    vi.mocked(createAndStreamRun).mockImplementation(async (request, options) => {
+      runRequests.push(request);
+      if (runRequests.length > 1) {
+        return {
+          ok: false,
+          requestId: "retry-failed",
+          error: { code: "internal_error", message: "test complete", requestId: "retry-failed" }
+        };
+      }
+      await options?.onAccepted?.({
+        runId: "run-normal",
+        requestId: "request-normal",
+        conversationId: "c1",
+        modelId: "mock",
+        status: "queued",
+        eventsUrl: "/events",
+        snapshotUrl: "/snapshot"
+      });
+      return new Promise((_resolve, reject) => {
+        options?.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")));
+      });
+    });
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith("/api/conversations?")) return ok({ items: [conversation("c1", "已有会话")] });
+      if (url.includes("/messages")) return ok({ items: [] });
+      throw new Error(`Unexpected fetch: ${url}`);
+    }));
+
+    render(<MemoryRouter><Workbench /></MemoryRouter>);
+    await screen.findByRole("heading", { name: "已有会话" });
+    const textbox = screen.getByRole("textbox") as HTMLTextAreaElement;
+    fireEvent.change(textbox, { target: { value: "停止后重试" } });
+    fireEvent.submit(textbox.closest("form")!);
+    await waitFor(() => expect(textbox.value).toBe(""));
+    fireEvent.click(screen.getByRole("button", { name: "停止生成" }));
+    await waitFor(() => expect(textbox.disabled).toBe(false));
+
+    fireEvent.change(textbox, { target: { value: "停止后重试" } });
+    fireEvent.submit(textbox.closest("form")!);
+    await waitFor(() => expect(runRequests).toHaveLength(2));
+    expect(runRequests[1].clientMessageId).not.toBe(runRequests[0].clientMessageId);
   });
 
   it("reuses the same clientMessageId when the user retries an identical failed submission", async () => {
@@ -216,7 +466,7 @@ describe("Workbench conversation history", () => {
       throw new Error(`Unexpected fetch: ${url}`);
     }));
 
-    render(<MemoryRouter><Workbench /></MemoryRouter>);
+    const { container } = render(<MemoryRouter><Workbench /></MemoryRouter>);
     await screen.findByRole("heading", { name: "已有会话" });
     const textbox = screen.getByRole("textbox");
     fireEvent.change(textbox, { target: { value: "同一问题" } });
@@ -226,7 +476,8 @@ describe("Workbench conversation history", () => {
     fireEvent.submit(textbox.closest("form")!);
     await waitFor(() => expect(runRequests).toHaveLength(2));
     expect(runRequests[1].clientMessageId).toBe(runRequests[0].clientMessageId);
-    expect(screen.getAllByText("同一问题")).toHaveLength(1);
+    expect([...container.querySelectorAll(".message-text")]
+      .filter((element) => element.textContent === "同一问题")).toHaveLength(1);
   });
 });
 
@@ -265,6 +516,7 @@ function runResult(runId: string, conversationId: string, answer: string) {
   return {
     runId,
     conversationId,
+    modelId: "mock",
     requestId: `request_${runId}`,
     traceId: `trace_${runId}`,
     ok: true,

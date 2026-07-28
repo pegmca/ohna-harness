@@ -1,4 +1,4 @@
-import { createLlmClientFromEnv } from "@aiagent/agent";
+import { createLlmClientForProfile } from "@aiagent/agent";
 import { runAgent } from "@aiagent/agent";
 import { createQqBotChannel } from "@aiagent/channels";
 import { createDatabaseRuntime, createPostgresVectorStore } from "@aiagent/database";
@@ -7,6 +7,7 @@ import { createIdentityService } from "@aiagent/identity";
 import { createDataSourceRuntime, createDeterministicMockEmbeddingClient } from "@aiagent/rag";
 import { stat } from "node:fs/promises";
 import { createApiServer } from "./index.js";
+import { createModelRuntimeRegistry } from "./application/model-registry.js";
 
 /**
  * 唯一生产 composition root：所有事实源 adapter 在此注入，领域 package 不读取 DATABASE_URL。
@@ -15,9 +16,51 @@ import { createApiServer } from "./index.js";
 const port = Number(process.env.PORT ?? 3001);
 const host = process.env.HOST ?? "0.0.0.0";
 const providerMode = process.env.AIAGENT_PROVIDER_MODE ?? "mock";
-const llmResult = providerMode === "real" ? createLlmClientFromEnv() : undefined;
+const deepseekResult = providerMode === "real" ? createLlmClientForProfile("deepseek") : undefined;
+const openrouterResult = providerMode === "real" ? createLlmClientForProfile("openrouter") : undefined;
+const modelRegistry = providerMode === "real"
+  ? createModelRuntimeRegistry([
+      {
+        option: {
+          id: "deepseek",
+          label: "DeepSeek",
+          provider: "deepseek",
+          description: "快速、稳定的金融研究对话",
+          isDefault: true,
+          capabilities: { structuredOutput: true, toolCalling: true }
+        },
+        client: deepseekResult?.ok ? deepseekResult.data : undefined
+      },
+      {
+        option: {
+          id: "openrouter",
+          label: "OpenRouter",
+          provider: "openrouter",
+          description: "通过 OpenRouter 调用配置模型",
+          isDefault: false,
+          capabilities: { structuredOutput: true, toolCalling: true }
+        },
+        client: openrouterResult?.ok ? openrouterResult.data : undefined
+      }
+    ], "deepseek")
+  : createModelRuntimeRegistry([{
+      option: {
+        id: "mock",
+        label: "Mock Agent",
+        provider: "mock",
+        description: "本地确定性学习运行时",
+        isDefault: true,
+        capabilities: { structuredOutput: true, toolCalling: true }
+      },
+      clientlessRuntime: true
+    }], "mock");
 const database = createDatabaseRuntime(process.env.DATABASE_URL ?? "");
 const artifactStorageRoot = process.env.ARTIFACT_STORAGE_ROOT ?? "./var/artifacts";
+const attachmentOrphanTtlHours = Math.max(
+  1,
+  Number(process.env.AIAGENT_ATTACHMENT_ORPHAN_TTL_HOURS ?? 24)
+);
+let attachmentCleanupTimer: NodeJS.Timeout | undefined;
 const identityService = createIdentityService(database.identityRepository, {
   fingerprintPepper: process.env.IDENTITY_FINGERPRINT_PEPPER ?? "",
   sessionTtlDays: Number(process.env.IDENTITY_SESSION_TTL_DAYS ?? 30)
@@ -29,7 +72,7 @@ const qqChannel = createQqBotChannel({
   appSecret: process.env.QQBOT_APP_SECRET,
   identityService,
   async answerAgent(_userId, message) {
-    const response = await runAgent({ message }, { llmClient: llmResult?.ok ? llmResult.data : undefined });
+    const response = await runAgent({ message }, { llmClient: modelRegistry.resolve(modelRegistry.defaultModelId) });
     return response.answer;
   },
   logger: {
@@ -39,13 +82,17 @@ const qqChannel = createQqBotChannel({
   }
 });
 const app = createApiServer({
-  llmClient: llmResult?.ok ? llmResult.data : undefined,
+  modelRegistry,
+  mockStepDelayMs: providerMode === "mock"
+    ? Math.max(0, Math.min(3_000, Number(process.env.AIAGENT_MOCK_STEP_DELAY_MS ?? 500)))
+    : 0,
   identityService,
   dataSourceRuntime: createDataSourceRuntime({
     repository: database.ragDocumentRepository,
     embeddingClient: createDeterministicMockEmbeddingClient(),
     vectorStoreFactory: (ownerUserId) => createPostgresVectorStore(database.pool, { ownerUserId })
   }),
+  attachmentRepository: database.attachmentRepository,
   requireIdentity: true,
   qqBotEnabled,
   qqBotQrUrl: process.env.QQBOT_PUBLIC_QR_URL,
@@ -64,8 +111,12 @@ const app = createApiServer({
     if (providerMode !== "mock" && providerMode !== "real") {
       return { ok: false, dependency: "provider-config", message: "AIAGENT_PROVIDER_MODE must be mock or real." };
     }
-    if (providerMode === "real" && !llmResult?.ok) {
-      return { ok: false, dependency: "llm-provider-config", message: llmResult?.error.message ?? "LLM provider is not configured." };
+    if (providerMode === "real" && (!deepseekResult?.ok || !openrouterResult?.ok)) {
+      return {
+        ok: false,
+        dependency: "llm-provider-config",
+        message: llmConfigurationError(deepseekResult, openrouterResult)
+      };
     }
     if (!await database.ping()) {
       return { ok: false, dependency: "postgresql", message: "PostgreSQL is not reachable." };
@@ -76,6 +127,22 @@ const app = createApiServer({
     return { ok: true, dependency: providerMode === "real" ? "postgresql,artifact-storage,llm-provider-config" : "postgresql,artifact-storage,mock-runtime" };
   }
 });
+
+/**
+ * 从两个模型配置结果中提取稳定的就绪错误，避免可选链破坏联合类型收窄。
+ *
+ * @param deepseek DeepSeek 客户端结果。
+ * @param openrouter OpenRouter 客户端结果。
+ * @returns 首个配置错误消息。
+ */
+function llmConfigurationError(
+  deepseek: typeof deepseekResult,
+  openrouter: typeof openrouterResult
+): string {
+  if (deepseek && !deepseek.ok) return deepseek.error.message;
+  if (openrouter && !openrouter.ok) return openrouter.error.message;
+  return "LLM provider is not configured.";
+}
 
 /**
  * 检查 artifact 存储根目录可写，readiness 与 PDF 下载共用同一事实源。
@@ -114,10 +181,33 @@ async function start(): Promise<void> {
   try {
     await assertSchemaCurrent();
     await app.listen({ port, host });
+    void cleanupAttachmentOrphans();
+    attachmentCleanupTimer = setInterval(() => void cleanupAttachmentOrphans(), 60 * 60_000);
+    attachmentCleanupTimer.unref();
     if (qqBotEnabled) void qqChannel.start().catch((error) => app.log.error(error));
   } catch (error) {
     app.log.error(error);
     process.exitCode = 1;
+  }
+}
+
+/** @returns 完成一轮有界孤儿附件清理。 */
+async function cleanupAttachmentOrphans(): Promise<void> {
+  const before = new Date(Date.now() - attachmentOrphanTtlHours * 60 * 60_000).toISOString();
+  let cleaned = 0;
+  try {
+    while (cleaned < 1_000) {
+      const count = await database.attachmentRepository.cleanupOrphans(
+        before,
+        Math.min(100, 1_000 - cleaned),
+        new Date().toISOString()
+      );
+      cleaned += count;
+      if (count < 100) break;
+    }
+    if (cleaned > 0) app.log.info({ cleaned }, "orphan chat attachments cleaned");
+  } catch (error) {
+    app.log.warn({ err: error }, "orphan chat attachment cleanup failed");
   }
 }
 
@@ -159,6 +249,7 @@ process.on("SIGTERM", () => void gracefulShutdown("SIGTERM"));
 process.on("SIGINT", () => void gracefulShutdown("SIGINT"));
 
 app.addHook("onClose", async () => {
+  if (attachmentCleanupTimer) clearInterval(attachmentCleanupTimer);
   qqChannel.stop();
   await database.close();
 });

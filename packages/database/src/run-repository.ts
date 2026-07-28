@@ -11,12 +11,14 @@ const TERMINAL = new Set<AgentRunStatusDto>(["succeeded", "failed", "cancelled"]
 export interface CreateRunInput {
   runId: string; requestId: string; userId: string; conversationId: string;
   message: string; clientMessageId: string; mode: "auto" | "report";
-  source: "composer" | "report_button"; traceId: string; createdAt: string;
+  source: "composer" | "report_button"; modelId: string; attachmentDocumentIds: string[];
+  traceId: string; createdAt: string;
 }
 
 export interface RunRepository {
   create(input: CreateRunInput): Promise<{ snapshot: AgentRunSnapshotDto; created: boolean }>;
   findById(userId: string, runId: string): Promise<AgentRunSnapshotDto | undefined>;
+  listAttachmentDocumentIds(userId: string, runId: string): Promise<string[] | undefined>;
   append(userId: string, runId: string, event: AgentRunEventInputDto): Promise<AgentRunStreamEventDto | undefined>;
   listEvents(userId: string, runId: string, afterSequence: number): Promise<AgentRunStreamEventDto[] | undefined>;
   recoverStale(before: string, occurredAt: string): Promise<AgentRunStreamEventDto[]>;
@@ -49,16 +51,20 @@ class PostgresRunRepository implements RunRepository {
           "select * from agent_runs where request_id=$1 and user_id=$2",
           [input.requestId, input.userId]
         );
-        if (existing.rows[0]) return { snapshot: await loadSnapshot(client, existing.rows[0]), created: false };
+        if (existing.rows[0]) {
+          await assertIdempotentRunInput(client, existing.rows[0], input);
+          return { snapshot: await loadSnapshot(client, existing.rows[0]), created: false };
+        }
 
         const userMessage = await findOrInsertUserMessage(client, input);
+        await bindMessageAttachments(client, input, userMessage.id);
         const assistantMessageId = randomUUID();
         await client.query(
           `insert into agent_runs(
-             id,request_id,user_id,conversation_id,user_message_id,mode,source,status,trace_id,created_at,updated_at
-           ) values ($1,$2,$3,$4,$5,$6,$7,'queued',$8,$9,$9)`,
+             id,request_id,user_id,conversation_id,user_message_id,mode,source,model_id,status,trace_id,created_at,updated_at
+           ) values ($1,$2,$3,$4,$5,$6,$7,$8,'queued',$9,$10,$10)`,
           [input.runId, input.requestId, input.userId, input.conversationId, userMessage.id,
-            input.mode, input.source, input.traceId, input.createdAt]
+            input.mode, input.source, input.modelId ?? "mock", input.traceId, input.createdAt]
         );
         const nextSequence = await messageSequence(client, input.conversationId);
         await client.query(
@@ -83,6 +89,25 @@ class PostgresRunRepository implements RunRepository {
     try {
       const result = await this.pool.query<RunRow>("select * from agent_runs where id=$1 and user_id=$2", [runId, userId]);
       return result.rows[0] ? loadSnapshot(this.pool, result.rows[0]) : undefined;
+    } catch (cause) {
+      throw mapRunError(cause);
+    }
+  }
+
+  /** @param userId 当前用户。 @param runId Run 标识。 @returns 持久化用户消息绑定的附件集合。 */
+  async listAttachmentDocumentIds(userId: string, runId: string): Promise<string[] | undefined> {
+    try {
+      const owned = await this.pool.query("select 1 from agent_runs where id=$1 and user_id=$2", [runId, userId]);
+      if (!owned.rowCount) return undefined;
+      const result = await this.pool.query<{ document_id: string }>(
+        `select ma.document_id
+           from agent_runs r
+           join message_attachments ma on ma.message_id=r.user_message_id and ma.user_id=r.user_id
+          where r.id=$1 and r.user_id=$2
+          order by ma.ordinal`,
+        [runId, userId]
+      );
+      return result.rows.map((row) => row.document_id);
     } catch (cause) {
       throw mapRunError(cause);
     }
@@ -182,6 +207,103 @@ class PostgresRunRepository implements RunRepository {
   }
 }
 
+/**
+ * 把已授权且 indexed 的私有文档绑定到幂等用户消息。
+ *
+ * @param client 当前事务。
+ * @param input Run 创建输入。
+ * @param messageId 用户消息 ID。
+ * @returns 绑定完成。
+ */
+async function bindMessageAttachments(
+  client: pg.PoolClient,
+  input: CreateRunInput,
+  messageId: string
+): Promise<void> {
+  const attachmentDocumentIds = input.attachmentDocumentIds ?? [];
+  if (attachmentDocumentIds.length === 0) return;
+  const result = await client.query<{
+    document_id: string;
+    file_name: string;
+    content_type: string;
+    size_bytes: string | number;
+  }>(
+    `select d.id as document_id,u.file_name,u.content_type,u.size_bytes
+       from chat_attachment_uploads u
+       join documents d on d.id=u.document_id
+       join lateral (
+         select status
+           from document_versions
+          where document_id=d.id
+          order by version desc
+          limit 1
+       ) v on true
+      where d.id=any($1::uuid[]) and u.user_id=$2 and d.owner_user_id=$2 and d.scope='private'
+        and u.status='indexed' and u.bound_message_id is null
+        and d.deleted_at is null and v.status='indexed'
+      order by d.id
+      for update of u,d`,
+    [attachmentDocumentIds, input.userId]
+  );
+  if (result.rows.length !== attachmentDocumentIds.length) {
+    throw new RepositoryError("not_found", "One or more attachments were not found.");
+  }
+  const byId = new Map(result.rows.map((row) => [row.document_id, row]));
+  for (const [ordinal, documentId] of attachmentDocumentIds.entries()) {
+    const row = byId.get(documentId);
+    if (!row) throw new RepositoryError("not_found", "One or more attachments were not found.");
+    await client.query(
+      `insert into message_attachments(
+         id,user_id,message_id,document_id,ordinal,file_name,content_type,size_bytes,created_at
+       ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+      [randomUUID(), input.userId, messageId, documentId, ordinal, row.file_name,
+        row.content_type, row.size_bytes, input.createdAt]
+    );
+    const bound = await client.query(
+      `update chat_attachment_uploads set bound_message_id=$3,updated_at=$4
+        where user_id=$1 and document_id=$2 and bound_message_id is null`,
+      [input.userId, documentId, messageId, input.createdAt]
+    );
+    if (bound.rowCount !== 1) {
+      throw new RepositoryError("conflict", "Attachment is already bound to another message.");
+    }
+  }
+}
+
+/**
+ * 幂等重试必须保持模型、模式、来源和附件集合一致，防止同一 requestId 被改写语义。
+ *
+ * @param client 当前事务。
+ * @param existing 已存在 Run。
+ * @param input 本次请求。
+ * @returns 输入一致时完成，否则抛 conflict。
+ */
+async function assertIdempotentRunInput(
+  client: pg.PoolClient,
+  existing: RunRow,
+  input: CreateRunInput
+): Promise<void> {
+  const attachments = await client.query<{ document_id: string }>(
+    `select ma.document_id
+       from message_attachments ma
+       join agent_runs r on r.user_message_id=ma.message_id
+      where r.id=$1 and ma.user_id=$2
+      order by ma.ordinal`,
+    [existing.id, input.userId]
+  );
+  const actualIds = attachments.rows.map((row) => row.document_id);
+  const expectedIds = input.attachmentDocumentIds ?? [];
+  if (
+    existing.model_id !== (input.modelId ?? "mock")
+    || existing.mode !== input.mode
+    || existing.source !== input.source
+    || actualIds.length !== expectedIds.length
+    || actualIds.some((id, index) => id !== expectedIds[index])
+  ) {
+    throw new RepositoryError("conflict", "Idempotent Run input does not match the existing request.");
+  }
+}
+
 /** @param client 当前事务。 @param input Run 创建输入。 @returns 幂等用户消息行。 */
 async function findOrInsertUserMessage(client: pg.PoolClient, input: CreateRunInput): Promise<{ id: string }> {
   const existing = await client.query<{ id: string }>(
@@ -215,10 +337,11 @@ async function loadSnapshot(executor: Pick<pg.Pool | pg.PoolClient, "query">, ro
     [row.id]
   );
   return {
-    runId: row.id, requestId: row.request_id, conversationId: row.conversation_id, status: row.status,
+    runId: row.id, requestId: row.request_id, conversationId: row.conversation_id, modelId: row.model_id, status: row.status,
     createdAt: postgresTimestampToIso(row.created_at), updatedAt: postgresTimestampToIso(row.updated_at),
     events: events.rows.map((item) => item.payload),
-    result: row.result ?? undefined, error: row.error ?? undefined
+    result: row.result ? { ...row.result, modelId: row.model_id } : undefined,
+    error: row.error ?? undefined
   };
 }
 
@@ -282,6 +405,8 @@ function canTransition(current: AgentRunStatusDto, next: AgentRunStatusDto): boo
 
 interface RunRow {
   id: string; request_id: string; user_id: string; conversation_id: string;
+  model_id: string;
+  mode: "auto" | "report"; source: "composer" | "report_button";
   assistant_message_id: string | null; trace_id: string; status: AgentRunStatusDto;
   version: string | number; result: AgentRunSnapshotDto["result"] | null; error: ApiError | null;
   created_at: Date | string; updated_at: Date | string;

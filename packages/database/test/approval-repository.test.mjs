@@ -32,6 +32,8 @@ test("Approval repository 保证幂等创建、CAS 决定、绑定校验、过�
       clientMessageId: "client-approval",
       mode: "auto",
       source: "composer",
+      modelId: "mock",
+      attachmentDocumentIds: [],
       traceId: "trace-approval-1",
       createdAt: now
     });

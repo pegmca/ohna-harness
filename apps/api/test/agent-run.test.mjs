@@ -39,6 +39,15 @@ test("health and readiness separate liveness from dependency readiness", async (
   await app.close();
 });
 
+test("model catalog exposes stable provider but not provider model name", async () => {
+  const app = createApiServer(createInMemoryApiTestRuntime());
+  const response = await app.inject({ method: "GET", url: "/api/models" });
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.json().data.models[0].provider, "mock");
+  assert.equal("model" in response.json().data.models[0], false);
+  await app.close();
+});
+
 test("POST /api/runs validates the new run creation contract", async () => {
   const app = createApiServer(createInMemoryApiTestRuntime());
   const invalid = await app.inject({

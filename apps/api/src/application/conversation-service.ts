@@ -117,5 +117,14 @@ function toMessageDto(message: Message & { status: "completed" | "failed" }): Co
     sequence: message.sequence,
     createdAt: message.createdAt,
     completedAt: message.completedAt
+    ,
+    attachments: message.attachments.map((attachment) => ({
+      attachmentId: attachment.id,
+      documentId: attachment.documentId,
+      fileName: attachment.fileName,
+      contentType: attachment.contentType,
+      sizeBytes: attachment.sizeBytes,
+      ordinal: attachment.ordinal
+    }))
   };
 }

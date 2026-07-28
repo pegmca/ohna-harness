@@ -45,6 +45,8 @@ export {
   type PostgresApprovalDecisionOutcome
 } from "./approval-decision.js";
 import { listPendingMigrations } from "./migrate.js";
+import { createPostgresAttachmentRepository, type AttachmentRepository } from "./attachment-repository.js";
+export { createPostgresAttachmentRepository, type AttachmentRepository } from "./attachment-repository.js";
 export { listPendingMigrations, runMigrations, MigrationError } from "./migrate.js";
 
 const { Pool } = pg;
@@ -62,6 +64,7 @@ export interface DatabaseRuntime {
   approvalRepository: import("@aiagent/tools").ApprovalRepository;
   approvalDecisionService: ApprovalDecisionService;
   traceStore: import("@aiagent/trace").TraceStore;
+  attachmentRepository: AttachmentRepository;
   close(): Promise<void>;
   ping(): Promise<boolean>;
   /** @returns 未应用的 migration 文件名；非空表示 schema 未就绪，启动必须失败。 */
@@ -95,6 +98,7 @@ export function createDatabaseRuntime(databaseUrl: string): DatabaseRuntime {
     approvalRepository: createPostgresApprovalRepository(pool),
     approvalDecisionService: createPostgresApprovalDecisionService(pool),
     traceStore: createPostgresTraceStore(pool),
+    attachmentRepository: createPostgresAttachmentRepository(pool),
     async close() { await pool.end(); },
     async listPendingMigrations() { return listPendingMigrations(pool); },
     async ping() {

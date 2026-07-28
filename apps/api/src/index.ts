@@ -9,6 +9,7 @@ import type { ApprovalDecideResult, ApprovalDecisionInput, ApprovalRepository } 
 import { APPROVAL_REQUEST_TTL_MS } from "@aiagent/tools";
 import type { TraceRunEventProjection } from "@aiagent/trace";
 import type { IdentityMeDto } from "@aiagent/types";
+import type { AttachmentRepository } from "@aiagent/database";
 import Fastify, { type FastifyInstance } from "fastify";
 import {
   createInMemoryExecutionRegistry,
@@ -30,12 +31,21 @@ import { registerRagRoutes } from "./http/routes/rag.js";
 import { registerApprovalRoutes } from "./http/routes/approvals.js";
 import { registerReportRoutes } from "./http/routes/reports.js";
 import { registerProductRoutes } from "./http/routes/product.js";
+import { registerModelRoutes } from "./http/routes/models.js";
+import { registerAttachmentRoutes } from "./http/routes/attachments.js";
+import {
+  createModelRuntimeRegistry,
+  type ModelRuntimeRegistry
+} from "./application/model-registry.js";
 
 export interface ApiServerOptions {
   llmClient?: LlmClient;
+  modelRegistry?: ModelRuntimeRegistry;
+  mockStepDelayMs?: number;
   readiness?: () => Promise<{ ok: boolean; dependency: string; message?: string }>;
   identityService: IdentityService;
   dataSourceRuntime: DataSourceRuntime;
+  attachmentRepository?: AttachmentRepository;
   requireIdentity?: boolean;
   qqBotQrUrl?: string;
   qqBotEnabled?: boolean;
@@ -88,12 +98,29 @@ export function createApiServer(options: ApiServerOptions): FastifyInstance {
   const runStore = options.runStore;
   const traceStore = options.traceStore;
   const runEventBus = createInMemoryRunEventBus();
+  const modelRegistry = options.modelRegistry ?? createModelRuntimeRegistry([{
+    option: {
+      id: "mock",
+      label: "Mock Agent",
+      provider: "mock",
+      description: "Deterministic local runtime",
+      isDefault: true,
+      capabilities: { structuredOutput: true, toolCalling: true }
+    },
+    client: options.llmClient,
+    clientlessRuntime: !options.llmClient
+  }], "mock");
   const runService = createRunApplicationService({
     store: runStore,
     eventBus: runEventBus,
     executionRegistry: createInMemoryExecutionRegistry(),
     scheduler: createMicrotaskRunScheduler(),
     llmClient: options.llmClient,
+    resolveLlmClient: (modelId) => modelRegistry.resolve(modelId),
+    hasModel: (modelId) => modelRegistry.has(modelId),
+    defaultModelId: modelRegistry.defaultModelId,
+    dataSourceRuntime,
+    mockStepDelayMs: options.mockStepDelayMs,
     traceStore,
     recordInternalWarning: (warning) => {
       app.log.warn(warning, "Trace persistence degraded");
@@ -157,6 +184,7 @@ export function createApiServer(options: ApiServerOptions): FastifyInstance {
   registerErrorHandler(app);
 
   registerHealthRoutes(app, { readiness: options.readiness });
+  registerModelRoutes(app, modelRegistry);
   registerIdentityRoutes(app, {
     identityService,
     identityByRequest,
@@ -175,6 +203,13 @@ export function createApiServer(options: ApiServerOptions): FastifyInstance {
   });
 
   registerDataSourceRoutes(app, { dataSourceRuntime, identityByRequest });
+  if (options.attachmentRepository) {
+    registerAttachmentRoutes(app, {
+      dataSourceRuntime,
+      attachmentRepository: options.attachmentRepository,
+      identityByRequest
+    });
+  }
   registerRagRoutes(app, { dataSourceRuntime, identityByRequest });
   registerApprovalRoutes(app, {
     approvalRepository,

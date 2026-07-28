@@ -11,6 +11,7 @@ import { parseApiResult } from "./http-client";
 export interface RunStreamOptions {
   signal?: AbortSignal;
   onEvent?: (event: AgentRunStreamEventDto) => void;
+  onAccepted?: (accepted: AgentRunAcceptedDto) => void | Promise<void>;
   maxReconnects?: number;
 }
 
@@ -33,6 +34,8 @@ export async function createAndStreamRun(
   });
   const accepted = await parseApiResult<AgentRunAcceptedDto>(acceptedResponse);
   if (!accepted.ok) return accepted;
+  // accepted hook 可先提交取消等控制操作，再进入 SSE，避免创建响应与用户停止之间遗留后台 Run。
+  await options.onAccepted?.(accepted.data);
 
   let lastSequence = 0;
   const maxReconnects = options.maxReconnects ?? 3;
@@ -104,6 +107,7 @@ async function readTerminalSnapshot(accepted: AgentRunAcceptedDto): Promise<ApiR
   if (!snapshot.ok) return snapshot;
   if (snapshot.data.result) return { ok: true, data: snapshot.data.result, requestId: snapshot.data.requestId };
   if (snapshot.data.error) return { ok: false, error: snapshot.data.error, requestId: snapshot.data.requestId };
+  if (snapshot.data.status === "cancelled") return cancelled(snapshot.data.requestId);
   return {
     ok: false,
     requestId: snapshot.data.requestId,

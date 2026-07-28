@@ -1,10 +1,12 @@
 import type {
   AgentRunResponseDto,
-  AgentRunStreamEventDto
+  AgentRunStreamEventDto,
+  ChatAttachmentDto,
+  MessageAttachmentDto
 } from "@aiagent/types";
 
 export type MessageRole = "user" | "assistant";
-export type MessageStatus = "complete" | "pending" | "failed";
+export type MessageStatus = "complete" | "pending" | "failed" | "cancelled";
 export type WorkspaceView = "chat" | "scheduled-tasks" | "data-sources" | "workflow" | "citations" | "eval" | "architecture" | "settings";
 
 export interface UiMessage {
@@ -16,6 +18,21 @@ export interface UiMessage {
   ok?: boolean;
   run?: AgentRunResponseDto;
   streamEvents?: AgentRunStreamEventDto[];
+  attachments?: Array<ChatAttachmentDto | MessageAttachmentDto>;
+  modelId?: string;
+}
+
+export type DraftAttachmentStatus = "uploading" | "indexed" | "failed";
+
+export interface DraftAttachment {
+  clientAttachmentId: string;
+  fileName: string;
+  contentType: string;
+  sizeBytes: number;
+  status: DraftAttachmentStatus;
+  documentId?: string;
+  error?: string;
+  file: File;
 }
 
 export interface SelectedRunDetail {

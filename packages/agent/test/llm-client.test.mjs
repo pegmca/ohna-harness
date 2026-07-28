@@ -1,7 +1,21 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createInMemoryTraceRecorder } from "@aiagent/trace";
-import { chatWithReliability, createLlmClient } from "../dist/index.js";
+import { chatWithReliability, createLlmClient, createLlmClientForProfile } from "../dist/index.js";
+
+test("named model directory profiles never fall back to generic provider configuration", () => {
+  const result = createLlmClientForProfile("deepseek", {
+    AIAGENT_LLM_API_KEY: "generic-key",
+    AIAGENT_LLM_BASE_URL: "https://generic.example/v1",
+    AIAGENT_LLM_MODEL: "generic-model",
+    AIAGENT_LLM_API_KEY_DEEPSEEK: undefined,
+    AIAGENT_LLM_BASE_URL_DEEPSEEK: undefined,
+    AIAGENT_LLM_MODEL_DEEPSEEK: undefined
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.error.code, "configuration_error");
+  assert.match(result.error.message, /deepseek/);
+});
 
 test("chat sends an OpenAI compatible request and returns normalized content", async () => {
   const seen = {};

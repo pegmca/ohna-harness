@@ -8,9 +8,11 @@ export interface RunStore {
   create(input: {
     runId: string; requestId: string; userId: string; conversationId: string;
     message: string; clientMessageId: string; mode: "auto" | "report";
-    source: "composer" | "report_button"; traceId: string; createdAt: string;
+    source: "composer" | "report_button"; modelId: string; attachmentDocumentIds: string[];
+    traceId: string; createdAt: string;
   }): Promise<{ snapshot: AgentRunSnapshotDto; created: boolean }>;
   findById(userId: string, runId: string): Promise<AgentRunSnapshotDto | undefined>;
+  listAttachmentDocumentIds(userId: string, runId: string): Promise<string[] | undefined>;
   append(userId: string, runId: string, event: AgentRunEventInputDto): Promise<AgentRunStreamEventDto | undefined>;
   listEvents(userId: string, runId: string, afterSequence: number): Promise<AgentRunStreamEventDto[] | undefined>;
   recoverStale(before: string, occurredAt: string): Promise<AgentRunStreamEventDto[]>;

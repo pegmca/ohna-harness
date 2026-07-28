@@ -53,6 +53,10 @@ export interface AgentStep {
 
 export interface AgentRequest {
   message: string;
+  /** 已授权检索 adapter 生成的非可信证据上下文；只用于回答，不参与 intent 路由。 */
+  groundingContext?: string;
+  /** groundingContext 对应的稳定引用。 */
+  groundingCitations?: CitationDto[];
   reportMode?: boolean;
   reportTriggerSource?: "toggle" | "button" | "natural_language";
   maxSteps?: number;

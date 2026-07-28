@@ -1,26 +1,26 @@
-import * as Switch from "@radix-ui/react-switch";
 import type {
   AgentRunResponseDto,
+  ModelOptionDto,
   ToolApprovalDecisionDto,
   ToolApprovalRequestDto
 } from "@aiagent/types";
 import {
   AlertTriangle,
-  FilePlus2,
+  FileText,
   Loader2,
   Menu,
-  Send,
   User
 } from "lucide-react";
 import { type FormEvent } from "react";
 import {
   formatEventSummary,
-  formatEventTitle,
   formatRunStatus,
   formatTime
 } from "./format";
 import { RunDetails, StatusBadge } from "./run-details";
-import type { SelectedRunDetail, UiMessage } from "./types";
+import { ComposerControls } from "./composer-controls";
+import type { DraftAttachment, SelectedRunDetail, UiMessage } from "./types";
+import { projectLiveRun } from "./live-run-projection";
 
 export const demoPrompts = [
   "这家公司最近两年的营收变化如何？",
@@ -34,10 +34,7 @@ interface ChatHeaderProps {
   conversationTitle: string;
   isSubmitting: boolean;
   latestRun: AgentRunResponseDto | undefined;
-  onGenerateReport: () => void;
   onMenuClick: () => void;
-  onReportModeChange: (checked: boolean) => void;
-  reportMode: boolean;
 }
 
 /**
@@ -60,21 +57,6 @@ export function ChatHeader(props: ChatHeaderProps) {
       </div>
 
       <div className="header-actions">
-        <button aria-label="生成研报" className="secondary-button" disabled={props.isSubmitting} onClick={props.onGenerateReport} type="button">
-          <FilePlus2 className="icon-size" />
-          <span>生成研报</span>
-        </button>
-        <div className="report-switch">
-          <span>Report Mode</span>
-          <Switch.Root
-            aria-label="Report Mode"
-            checked={props.reportMode}
-            className="switch-root"
-            onCheckedChange={props.onReportModeChange}
-          >
-            <Switch.Thumb className="switch-thumb" />
-          </Switch.Root>
-        </div>
         <StatusBadge tone={props.isSubmitting ? "info" : props.latestRun?.ok === false ? "danger" : "success"}>
           {props.isSubmitting ? "running" : formatRunStatus(props.latestRun)}
         </StatusBadge>
@@ -157,7 +139,7 @@ export function ChatMessage(props: {
 
   return (
     <article className={`chat-message ${isUser ? "is-user" : "is-assistant"}`}>
-      <div className="message-avatar" aria-hidden="true">
+      <div className={`message-avatar ${message.status === "pending" ? "is-thinking" : ""}`} aria-hidden="true">
         {isUser ? <User className="icon-size" /> : <span className="brand-mark message-brand-mark" />}
       </div>
       <div className="message-content">
@@ -166,7 +148,17 @@ export function ChatMessage(props: {
           <span>{formatTime(message.createdAt)}</span>
           {message.status === "pending" ? <StatusBadge tone="info">running</StatusBadge> : null}
           {message.status === "failed" ? <StatusBadge tone="danger">failed</StatusBadge> : null}
+          {message.status === "cancelled" ? <StatusBadge tone="neutral">cancelled</StatusBadge> : null}
         </div>
+        {message.attachments && message.attachments.length > 0 ? (
+          <div className="message-attachments">
+            {message.attachments.map((attachment) => (
+              <span key={"attachmentId" in attachment ? attachment.attachmentId : attachment.clientAttachmentId}>
+                <FileText className="icon-size" />{attachment.fileName}
+              </span>
+            ))}
+          </div>
+        ) : null}
         {message.run ? (
           <RunDetails
             onOpen={(section) => props.onOpenRunDetail({ run: message.run, section })}
@@ -178,10 +170,10 @@ export function ChatMessage(props: {
           <div className="message-progress run-progress-list">
             <Loader2 className="icon-size spin" />
             <div>
-              {(message.streamEvents ?? []).filter((event) => event.type === "trace_event").slice(-4).map((event) => (
-                <button key={event.eventId} onClick={() => props.onOpenRunDetail({ event })} type="button">
-                  <span>{event.type === "trace_event" ? formatEventTitle(event.event) : event.type}</span>
-                  <small>{event.type === "trace_event" ? formatEventSummary(event.event) : ""}</small>
+              {projectLiveRun(message.streamEvents ?? []).map((activity) => (
+                <button key={activity.category} onClick={() => props.onOpenRunDetail({ event: activity.event })} type="button">
+                  <span>{activity.label}</span>
+                  <small>{formatEventSummary(activity.event.event)} · {activity.count} · {activity.status}</small>
                 </button>
               ))}
             </div>
@@ -194,14 +186,25 @@ export function ChatMessage(props: {
 }
 
 interface ChatComposerProps {
+  attachments: DraftAttachment[];
   error: string | undefined;
   input: string;
-  isEmpty: boolean;
   isSubmitting: boolean;
+  models: ModelOptionDto[];
+  modelCatalogStatus: "loading" | "ready" | "failed";
+  modelCatalogError?: string;
+  onFilesSelected: (files: FileList) => void;
   onInputChange: (value: string) => void;
+  onRemoveAttachment: (clientAttachmentId: string) => void;
+  onReportModeChange: (checked: boolean) => void;
+  onRetryAttachment: (clientAttachmentId: string) => void;
+  onRetryModels: () => void;
+  onSelectModel: (modelId: string) => void;
+  onStop: () => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
   onUsePrompt: (prompt: string) => void;
   reportMode: boolean;
+  selectedModelId: string;
 }
 
 /**
@@ -211,40 +214,7 @@ interface ChatComposerProps {
  * @returns 输入区表单。
  */
 export function ChatComposer(props: ChatComposerProps) {
-  return (
-    <form className="chat-composer" onSubmit={props.onSubmit}>
-      {!props.isEmpty ? <StarterPrompts disabled={props.isSubmitting} onUsePrompt={props.onUsePrompt} compact /> : null}
-      {props.error ? (
-        <div className="composer-error" role="status">
-          <AlertTriangle className="icon-size" />
-          <span>{props.error}</span>
-        </div>
-      ) : null}
-      <div className="composer-box">
-        <textarea
-          className="composer-textarea"
-          disabled={props.isSubmitting}
-          onChange={(event) => props.onInputChange(event.target.value)}
-          placeholder="输入金融研究问题..."
-          value={props.input}
-        />
-        <div className="composer-actions">
-          <StatusBadge tone={props.reportMode ? "info" : "neutral"}>
-            {props.reportMode ? "report" : "chat"}
-          </StatusBadge>
-          <button
-            className="send-button"
-            disabled={props.isSubmitting || !props.input.trim()}
-            type="submit"
-            aria-label="发送"
-          >
-            {props.isSubmitting ? <Loader2 className="icon-size spin" /> : <Send className="icon-size" />}
-          </button>
-        </div>
-      </div>
-      {props.isSubmitting ? <p className="composer-progress">Agent 正在分析 / routing / calling tool / finalizing</p> : null}
-    </form>
-  );
+  return <ComposerControls {...props} prompts={demoPrompts} />;
 }
 
 /**

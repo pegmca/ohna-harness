@@ -299,7 +299,8 @@ export function toUiMessage(message: ConversationMessageDto): UiMessage {
     content: message.content,
     createdAt: message.createdAt,
     status: message.status === "failed" ? "failed" : "complete",
-    ok: message.status === "completed"
+    ok: message.status === "completed",
+    attachments: message.attachments ?? []
   };
 }
 

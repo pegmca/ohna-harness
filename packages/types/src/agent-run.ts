@@ -8,6 +8,10 @@ import type { AgentIntentDto, AgentStepDto, TraceDto, TraceEventDto } from "./tr
 export interface AgentRunCreateRequestDto {
   message: string;
   conversationId: string;
+  /** 服务端模型目录中的稳定 ID；旧客户端缺省时使用目录默认模型。 */
+  modelId?: string;
+  /** 已上传且属于当前用户的文档 ID；带附件时检索严格限定在该集合。 */
+  attachmentDocumentIds?: string[];
   /** 浏览器生成的用户消息幂等键；同一次网络重试必须复用。 */
   clientMessageId?: string;
   mode: "auto" | "report";
@@ -32,6 +36,7 @@ export interface RunApprovalDecisionRequestDto {
 export interface AgentRunResponseDto {
   runId: string;
   conversationId: string;
+  modelId: string;
   requestId: string;
   traceId: string;
   ok: boolean;
@@ -62,6 +67,7 @@ export interface AgentRunAcceptedDto {
   runId: string;
   requestId: string;
   conversationId: string;
+  modelId: string;
   status: AgentRunStatusDto;
   eventsUrl: string;
   snapshotUrl: string;
@@ -128,6 +134,7 @@ export interface AgentRunSnapshotDto {
   runId: string;
   requestId: string;
   conversationId: string;
+  modelId: string;
   status: AgentRunStatusDto;
   createdAt: ISODateTimeString;
   updatedAt: ISODateTimeString;

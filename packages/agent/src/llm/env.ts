@@ -15,7 +15,22 @@ let projectEnvLoaded = false;
 export function createLlmClientFromEnv(env: Record<string, string | undefined> = getDefaultEnv()): LlmResult<LlmClient> {
   loadProjectEnv();
   const mergedEnv = mergeProcessEnv(env);
-  const profile = resolveProfile(mergedEnv);
+  return createLlmClientForProfile(resolveProfile(mergedEnv), mergedEnv);
+}
+
+/**
+ * 从指定 profile 创建 LLM client，供服务端模型目录同时组合多个供应商。
+ *
+ * @param profile 模型 profile 稳定标识。
+ * @param env 可注入的环境变量集合，默认读取当前进程环境。
+ * @returns 成功时返回 LLM client，失败时返回配置错误。
+ */
+export function createLlmClientForProfile(
+  profile: string,
+  env: Record<string, string | undefined> = getDefaultEnv()
+): LlmResult<LlmClient> {
+  loadProjectEnv();
+  const mergedEnv = mergeProcessEnv(env);
   const rawConfig = resolveProfileConfig(mergedEnv, profile);
   const timeoutResult = parseTimeoutMs(mergedEnv.AIAGENT_LLM_TIMEOUT_MS);
 
@@ -41,6 +56,17 @@ export function createLlmClientFromEnv(env: Record<string, string | undefined> =
         code: "configuration_error",
         message: `Missing LLM model for ${profile}.`,
         details: { profile, supportedEnv: rawConfig.supportedModelEnv }
+      }
+    };
+  }
+
+  if (!rawConfig.baseUrl) {
+    return {
+      ok: false,
+      error: {
+        code: "configuration_error",
+        message: `Missing LLM base URL for ${profile}.`,
+        details: { profile, supportedEnv: [`AIAGENT_LLM_BASE_URL_${toEnvSuffix(profile)}`] }
       }
     };
   }
@@ -116,6 +142,17 @@ function resolveProfileConfig(env: Record<string, string | undefined>, profile: 
 
   if (profile === "kimi") {
     return resolveKimiProfileConfig(env, profileApiKeyEnv, profileBaseUrlEnv, profileModelEnv);
+  }
+
+  // 目录中的具名 profile 必须使用自己的完整配置，禁止两个选项共同回退到通用 provider。
+  if (profile === "deepseek" || profile === "openrouter") {
+    return {
+      apiKey: env[profileApiKeyEnv],
+      baseUrl: env[profileBaseUrlEnv] ?? "",
+      model: env[profileModelEnv],
+      supportedApiKeyEnv: [profileApiKeyEnv],
+      supportedModelEnv: [profileModelEnv, profileBaseUrlEnv]
+    };
   }
 
   return {

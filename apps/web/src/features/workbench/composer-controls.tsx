@@ -56,6 +56,7 @@ export function ComposerControls(props: ComposerControlsProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [ideaOpen, setIdeaOpen] = useState(false);
+  const [modelOpen, setModelOpen] = useState(false);
   const selectedModel = props.models.find((model) => model.id === props.selectedModelId);
   const hasBlockingAttachment = props.attachments.some((item) => item.status !== "indexed");
   const canSend = props.input.trim().length > 0
@@ -170,8 +171,6 @@ export function ComposerControls(props: ComposerControlsProps) {
                 <button
                   aria-label="研究灵感"
                   className="composer-icon-button"
-                  onFocus={() => setIdeaOpen(true)}
-                  onMouseEnter={() => setIdeaOpen(true)}
                   type="button"
                 ><Lightbulb className="icon-size" /></button>
               </Popover.Trigger>
@@ -179,8 +178,6 @@ export function ComposerControls(props: ComposerControlsProps) {
                 <Popover.Content
                   align="start"
                   className="composer-popover idea-popover"
-                  onMouseEnter={() => setIdeaOpen(true)}
-                  onMouseLeave={() => setIdeaOpen(false)}
                   sideOffset={8}
                 >
                   <p className="md-label">研究灵感</p>
@@ -204,7 +201,7 @@ export function ComposerControls(props: ComposerControlsProps) {
           </div>
 
           <div className="composer-toolbar-group">
-            <Popover.Root>
+            <Popover.Root onOpenChange={setModelOpen} open={modelOpen}>
               <Popover.Trigger asChild>
                 <button className="model-selector" disabled={props.isSubmitting} type="button">
                   <span>{selectedModel?.label ?? "选择模型"}</span>
@@ -228,7 +225,10 @@ export function ComposerControls(props: ComposerControlsProps) {
                     <button
                       className="model-option"
                       key={model.id}
-                      onClick={() => props.onSelectModel(model.id)}
+                      onClick={() => {
+                        props.onSelectModel(model.id);
+                        setModelOpen(false);
+                      }}
                       type="button"
                     >
                       <span><strong>{model.label}</strong><small>{model.description}</small></span>

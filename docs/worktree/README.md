@@ -1,166 +1,170 @@
-# PostgreSQL 持久化与 Agent Chat 多 Worktree 实施总览
+# 工程化改造总览：对齐 pi-mono 的 Agent 架构重构
 
-## 1. 目标
+本目录是一套面向实现的改造方案文档（01～07），目标是把本项目的 agent 内核从
+"单轮意图路由流水线"重构为参照 badlogic/pi-mono 的 "多轮 ReAct loop + 统一 LLM 抽象"
+架构。参照对象为 `https://github.com/badlogic/pi-mono`（badlogic/pi-mono 浅克隆），文中所有
+pi 侧路径均已对照该仓库核实。
 
-本目录把 PostgreSQL 持久化和后续 Agent Chat 体验工作拆成 16 个独立 PR。每份文档对应
-一个 Implementation Agent、一个 worktree、一个分支和一个 PR；实现者不需要自行决定任务
-边界、依赖、migration 编号或验收方式。
+## 改造动机
 
-最终运行时不再把 Conversation、Run、Trace、Approval、Workflow、Artifact metadata、
-RAG document/chunk/vector 的内存 `Map` 当作事实源。内存仅保留 live event fan-out、
-`AbortController` 和单元测试 adapter 等瞬时状态。
+### 现状：单轮三分支流水线
 
-PR-00～PR-10 是数据库阶段：不引入 Redis/队列，不承诺 API 重启后自动续跑，不实现长期
-Memory，也不把 PDF bytes 写入 PostgreSQL。PR-11～PR-15 是 Agent Chat 阶段：不引入 token
-streaming、PDF/OCR 上传、动态模型管理、多模型并行或永久右侧调试栏。
+本项目当前 agent 内核在 `packages/agent/src/agent-loop.ts`（`runAgent`，约 867 行）：
 
-## 2. 任务与依赖
+1. `route_intent` 步调用 `createIntentRouter`（`packages/agent/src/intent-router.ts`）
+   把用户消息分类为 `chat` / `explain` / `report_skill` 三种意图之一；
+2. 按意图进入三个各自硬编码的分支（报告分支见 `agent-loop.ts:146` 起的
+   `route.intent === "report_skill"`）；
+3. 每个分支内部以"最多 N 步"的方式串工具调用和 LLM 调用，最后汇入
+   `final_response` 收尾。
+
+这个结构的根本局限：
+
+- **模型不主导流程**。走哪个分支由意图分类器预先决定，LLM 不能在对话中自主决定
+  "再查一次数据"还是"可以回答了"，多轮工具交互被压进分支内部的固定骨架里。
+- **消息模型不统一**。意图、步骤、工具结果以 `AgentStep` / trace 事件表达，而不是
+  统一的 `Message` 序列，导致上下文裁剪、压缩、续跑都要为每个分支单独发明。
+- **LLM 调用面分散**。`packages/agent/src/llm-client.ts` 与 `reliability.ts` 自行封装
+  chat 调用，没有 provider 差异归一化层，换模型/换 provider 成本高。
+
+### 参照：pi 的多轮 ReAct loop
+
+pi-mono 的内核是经典 ReAct（Reasoning + Acting）循环
+（`packages/agent/src/agent-loop.ts`，`agentLoop` / `runAgentLoop`）：
+
+- 每一轮（turn）调用一次 LLM；模型返回的 `AssistantMessage` 里若含 `toolCall`
+  内容块，loop 就执行对应 `AgentTool`，把 `ToolResultMessage` 追加进上下文，
+  然后开始下一轮；直到模型不再发起工具调用（或 `shouldStopAfterTurn` 判定停止）。
+- 意图选择、工具选择、回答时机全部由模型在多轮中自主完成，没有预定义的意图分支。
+- 上层通过 `transformContext` / `convertToLlm` / `beforeToolCall` / `afterToolCall` /
+  `prepareNextTurn` / `shouldStopAfterTurn` 等 hook
+  （`packages/agent/src/types.ts` 的 `AgentLoopConfig`）定制行为，而不是改 loop 本体。
+- LLM 层由独立的 pi-ai 包承担：`stream` / `streamSimple`
+  （`packages/ai/src/compat.ts:250,275`）屏蔽各 provider 差异，统一产出
+  `AssistantMessageEvent` 事件流（`packages/ai/src/utils/event-stream.ts`）。
+
+差距一句话概括：**本项目是"分类器选流水线"，pi 是"模型开循环"**。改造就是把前者
+推倒，换成后者，并把本项目特有的能力（RAG grounding、report/workflow、MCP、eval）
+作为工具和能力包挂回新 loop 上。
+
+## 已确认决策（全套文档口径一致）
+
+- **LLM 层完全按 pi-ai 改造**，内部命名与 pi 保持一致：`Message` / `UserMessage` /
+  `AssistantMessage` / `ToolResultMessage`、`stream` / `streamSimple`、`compat`、
+  `AssistantMessageEvent`、`EventStream`、`agentLoop` / `agentLoopContinue`、
+  `AgentTool`、`transformContext` / `convertToLlm` / `beforeToolCall` / `afterToolCall` /
+  `prepareNextTurn` / `shouldStopAfterTurn` 等。
+- **会话存储**：线性消息表 + run 表，Postgres schema 推倒重来，不采用 pi 的 entry 树
+  结构。Compaction 以一种特殊 message 类型落在线性表中。
+- **彻底删除 approval/permission 体系**：executor 权限门、approval-repository、
+  审批 HTTP API、相关 trace 事件、前端审批 UI 全部移除。`beforeToolCall` 仅作为
+  观测 / block 的挂载点保留。
+- **保留能力**：RAG 附件 grounding、report/workflow（含 PDF 导出）、MCP 工具接入、
+  eval。工具继续用 zod 校验参数并保留超时/重试/deadline（schema 仍用 zod，接口形状
+  对齐 pi 的 `AgentTool`）。
+- 用户接受**完全不兼容**改造，不留旧接口兼容层。
+
+## 目标架构分层
 
 ```text
-PR-00 数据库工程基线
-  ├── PR-01 Conversation / Message
-  │     ├── PR-02 Conversation API / Web
-  │     └── PR-03 Run / RunEvent / SSE
-  │             ├── PR-04 Trace
-  │             └── PR-05 Approval
-  ├── PR-06 RAG Document / Version / Chunk
-  │     └── PR-07 pgvector / Retrieval
-  │             └── PR-08 Citation（同时依赖 PR-03）
-  └── PR-09 Workflow / Artifact
+┌─────────────────────────────────────────────────────────┐
+│ apps/web                                                 │
+│   Agent Chat UI：会话列表 / 时间线 / composer /           │
+│   run 过程展开（assistant 消息派生，无右侧常驻栏）          │
+└───────────────────────▲─────────────────────────────────┘
+                        │ HTTP + SSE
+┌───────────────────────┴─────────────────────────────────┐
+│ apps/api（应用层）                                        │
+│   会话/run API、SSE 推送、鉴权、用例编排、DTO 映射          │
+│   组装 composition root：注入 repository、streamFn、工具集 │
+└───────────▲──────────────────────────▲──────────────────┘
+            │                          │
+┌───────────┴───────────┐   ┌──────────┴──────────────────┐
+│ packages/agent         │   │ packages/database           │
+│ ≈ pi-agent-core        │   │   线性 message + run 表、     │
+│   agentLoop /          │   │   compaction message、       │
+│   agentLoopContinue、  │   │   trace 持久化               │
+│   AgentTool 执行、     │   └─────────────────────────────┘
+│   loop hooks           │
+└───────────▲────────────┘
+            │ stream(model, context, options)
+┌───────────┴─────────────────────────────────────────────┐
+│ packages/ai（新建，≈ pi-ai）                              │
+│   Message 类型族、stream / streamSimple、provider 适配、  │
+│   compat 归一化、AssistantMessageEvent / EventStream      │
+└─────────────────────────────────────────────────────────┘
 
-PR-02 至 PR-09 全部合并
-  └── PR-10 Runtime integration / recovery
-
-PR-10 合并
-  ├── PR-11 Model catalog / routing
-  ├── PR-12 Attachment lifecycle / private RAG
-  └── PR-13 Progressive Run projection
-
-PR-11、PR-12 合并
-  └── PR-14 Composer interactions
-
-PR-11 至 PR-14 全部合并
-  └── PR-15 Cancellation / UX integration closeout
+能力包（保留并回迁到新 loop 的工具/上下文挂载点上）：
+  packages/tools（zod schema + 超时/重试/deadline，接口对齐 AgentTool）
+  packages/rag（附件 grounding，经 transformContext / 工具接入）
+  packages/report、packages/workflow（报告生成与 PDF，作为工具/子流程）
+  packages/mcp（MCP 工具桥接为 AgentTool）
+  packages/eval（评测，跑在新 loop 之上）
+  packages/trace（观测事件，挂 agentLoop 事件流）
 ```
 
-| PR | 文档 | 分支 | Migration |
+依赖方向严格向下：`packages/ai` 不依赖任何本项目包；`packages/agent` 只依赖
+`packages/ai` 和类型包；能力包被 `apps/api` 组装，不被内核反向依赖。
+
+## 文档阅读顺序
+
+按依赖顺序阅读，前一篇是后一篇的前提：
+
+1. [01 目标架构](01-target-architecture.md) — 总体分层、包边界、迁移后的目录形态。
+2. [02 LLM 抽象（packages/ai）](02-llm-abstraction.md) — Message 类型族、
+   stream/streamSimple、compat、事件流，对照 pi-ai。
+3. [03 Agent Loop（packages/agent）](03-agent-loop.md) — agentLoop/agentLoopContinue、
+   AgentTool、loop hooks、事件模型，对照 pi-agent-core。
+4. [04 扩展机制](04-extension-mechanism.md) — transformContext/convertToLlm/
+   beforeToolCall/afterToolCall/prepareNextTurn/shouldStopAfterTurn 各 hook 的
+   本项目用法（观测、block、compaction 触发、RAG 注入）。
+5. [05 Postgres 持久化](05-postgres-persistence.md) — 线性消息 + run 的新 schema、
+   compaction message、trace 落库、旧 schema 废弃。
+6. [06 能力包接入](06-capability-packages.md) — RAG、report/workflow、MCP、eval
+   如何挂到新 loop 与工具接口上。
+7. [07 分阶段实施计划](07-phased-plan.md) — 6 个阶段的任务拆分、依赖、验收标准。
+
+除 README 与 07 外，每篇结构统一为：`## 现状` → `## pi 参照` → `## 目标设计`
+（含关键类型/接口签名草案）→ `## 取舍论证` → `## 删除清单`。
+
+## 阶段划分索引
+
+与 07 的 6 个阶段一一对应，阶段间严格串行（每阶段交付可验证的中间态）：
+
+| 阶段 | 内容 | 主要落地文档 |
+| --- | --- | --- |
+| 1 | 新建 `packages/ai`：LLM 抽象层 | 02 |
+| 2 | agent loop + tool：`packages/agent` 重写为 ReAct 内核 | 03、04 |
+| 3 | Postgres 新 schema + API/SSE 改造 | 05 |
+| 4 | 前端：会话/run UI 对接新 API 与事件流 | 01、03 |
+| 5 | 能力包回迁：RAG、report/workflow、MCP、eval | 06 |
+| 6 | 删除遗留代码 + 文档同步 | 各篇删除清单 |
+
+阶段 6 的删除清单汇总自 02～06 各篇，重点包括：旧 intent-router 三分支流水线、
+approval/permission 全链路（executor 权限门、approval-repository、审批 API、审批 UI、
+相关 trace 事件）、旧 `LlmClient` 封装、旧会话 schema。
+
+## 术语表（中英对照，对齐 pi 命名）
+
+| 中文 | 英文 / 符号 | 出处 | 含义 |
 | --- | --- | --- | --- |
-| 00 | [数据库工程基线](PR-00-database-foundation.md) | `chore/postgres-foundation` | 无业务 migration |
-| 01 | [Conversation / Message](PR-01-conversation-message.md) | `feat/postgres-conversation` | `0010_conversation.sql` |
-| 02 | [Conversation API / Web](PR-02-conversation-api-web.md) | `feat/conversation-history-ui` | 无 |
-| 03 | [Run / Event / SSE](PR-03-run-events-sse.md) | `feat/postgres-run-events` | `0020_runs.sql` |
-| 04 | [Trace](PR-04-trace-persistence.md) | `feat/postgres-trace` | `0030_trace.sql` |
-| 05 | [Approval](PR-05-approval-persistence.md) | `feat/postgres-approval` | `0040_approval.sql` |
-| 06 | [RAG Document / Chunk](PR-06-rag-document-chunk.md) | `feat/postgres-rag-documents` | `0050_rag_documents.sql` |
-| 07 | [pgvector / Retrieval](PR-07-pgvector-retrieval.md) | `feat/postgres-pgvector` | `0060_rag_vectors.sql` |
-| 08 | [Citation](PR-08-citation-persistence.md) | `feat/postgres-citations` | `0080_citations.sql` |
-| 09 | [Workflow / Artifact](PR-09-workflow-artifact.md) | `feat/postgres-report-artifacts` | `0070_report.sql` |
-| 10 | [Runtime integration](PR-10-runtime-integration.md) | `feat/postgres-runtime-integration` | 仅必要的兼容 migration |
-
-数据库阶段之后，Agent Chat 体验优化继续沿用相同拆分方式：
-
-| PR | 文档 | 分支 | Migration |
-| --- | --- | --- | --- |
-| 11 | [模型目录与服务端路由](PR-11-chat-model-routing.md) | `feat/chat-model-routing` | `0090_run_model.sql` |
-| 12 | [附件生命周期、消息绑定与私有 RAG](PR-12-chat-attachments.md) | `feat/chat-attachments` | `0100_message_attachments.sql` |
-| 13 | [渐进式运行过程](PR-13-progressive-run-events.md) | `feat/progressive-run-events` | 无 |
-| 14 | [Composer 快捷交互](PR-14-composer-interactions.md) | `feat/composer-interactions` | 无 |
-| 15 | [停止、动效与体验收口](PR-15-chat-experience-polish.md) | `feat/chat-experience-polish` | 无 |
-
-PR-11、PR-12、PR-13 从 PR-10 合并后的同一基线分别开发。PR-11 与 PR-12 都会触及共享
-types/schema 入口，后合并者必须从最新 `master` rebase 并解决显式导出冲突，不得通过复制
-未合并分支建立隐式依赖。PR-14 只有在 PR-11、PR-12 合并后启动；PR-15 只有在 PR-11～PR-14
-全部合并后启动。
-
-Agent Chat 阶段的 Web 所有权固定为：PR-11、PR-12 只交付无状态 API client，不创建 Composer
-hook、控件或样式；PR-14 独占模型偏好、附件草稿、模型选择器、附件 chips 和 Composer 布局。
-PR-14 发现前置契约缺口时退回对应 PR 修复，不能在集成 PR 内重新定义 API/DTO。
-
-PR-00 合并后可并行启动 PR-01、PR-06、PR-09。后续任务只有在表中列出的依赖已经合并到
-`master` 后才能从最新 `origin/master` 创建 worktree，不使用未合并分支作为隐式基线。
-
-## 3. Agent 协作方式
-
-### Implementation Agent
-
-每个 Implementation Agent：
-
-1. 从最新 `origin/master` 创建独立 worktree。
-2. 只实现对应任务文档，不顺手实现相邻 PR。
-3. 在自己的 worktree 完成测试、typecheck 和必要 build。
-4. 自查 diff、migration、中文字段注释和敏感信息。
-5. commit、push 并使用 `gh pr create` 创建 PR。
-6. Review Agent 提出问题后，在原 worktree 修复、复测并 push 新 commit。
-
-### Review Agent
-
-Review Agent 由用户在 `master` 主工作区启动：
-
-- 通过 `gh pr view`、`gh pr diff` 和 GitHub Checks 审查。
-- 不切换主工作区分支，不在主工作区修改 PR 代码，不代替 Implementation Agent 跑测试。
-- 按严重度输出带文件位置的 findings；没有问题时明确说明剩余风险。
-- 所有修复退回原 Implementation Agent。
-
-### 收口 Agent
-
-PR-10 Agent 在全部依赖合并后执行根级 typecheck、test、build、Compose smoke、API 重启、
-SSE replay、越权、备份恢复等数据库全链路验证。
-
-PR-15 Agent 是 Agent Chat 阶段收口 Agent：不得重新设计 PR-11～PR-14 的契约；负责取消
-竞争、真实模型选择、附件上传/绑定/检索、SSE replay 投影、响应式和无障碍的组合验证。
-PR-15 未通过前，不得把单个前置 PR 的定向测试当作完整 Composer 流程验收。
-
-## 4. 数据库与代码规则
-
-- 领域 package 声明 repository port；`packages/database` 实现 PostgreSQL adapter。
-- `apps/api` 只做鉴权、校验、用例调用和 DTO 映射；`apps/web` 不访问数据库。
-- 核心归属、状态、时间、排序、模型、维度使用独立列；只有扩展 payload/metadata 使用 JSONB。
-- 所有用户资源查询从 repository 方法签名上要求 `userId` 或显式 scope。
-- 所有状态同时使用 TypeScript union 和数据库 `CHECK`。
-- 每个写链路明确事务、幂等键、唯一约束和并发策略。
-- 不泄漏 `pg` 原始异常；adapter 映射为结构化领域错误。
-- 新建或修改字段必须在同一个 migration 中逐列执行中文 `COMMENT ON COLUMN`。
-- 不修改已合并或已执行的历史 migration。
-
-高冲突入口包括 `packages/database/src/index.ts`、`packages/database/src/schema.ts`、
-`packages/types/src/index.ts`、`apps/api/src/index.ts`、`apps/api/src/server.ts`。
-实现时优先按领域拆分 adapter、DTO 和 route 文件，公共入口只保留导出或组装。
-
-## 5. Worktree 与 PR 统一流程
-
-```bash
-git fetch origin
-git worktree add ../aiagent-prXX -b <task-branch> origin/master
-cd ../aiagent-prXX
-```
-
-完成后：
-
-```bash
-git status --short
-git diff --check
-git add -A
-git commit -m "<conventional commit>"
-git push -u origin <task-branch>
-gh pr create --base master --head <task-branch> --title "<title>" --body-file <pr-body-file>
-```
-
-PR 描述必须包含：目标、包含/排除范围、依赖、migration、schema/API 变化、测试结果、权限
-与安全、兼容/回滚、剩余风险。若 `gh` 或网络不可用，只能报告阻塞，不得声称已创建 PR。
-
-## 6. Review 统一清单
-
-- repository 是否强制用户/scope 归属，是否存在先查 ID 后补授权。
-- migration 是否独立、可从空库执行，每个字段是否有中文注释。
-- 唯一约束和事务是否真正覆盖并发幂等。
-- 状态是否可能从终态回退，CAS/行锁是否正确。
-- JSONB 是否吞掉应查询和索引的核心字段。
-- 分页是否使用稳定 cursor 和 ID tie-break。
-- 删除、软删除、级联和审计保留是否一致。
-- 模型目录路由 ID、provider model 和实际 attempt 是否保持不同语义。
-- 上传附件是否有持久化幂等身份、orphan 清理和消息绑定事务；执行期检索是否只信任持久化绑定。
-- UI 事件投影是否有确定映射，完整流与 replay 是否产生相同状态。
-- 取消是否复用 `run_error/request_cancelled`，并由数据库 CAS 决定唯一终态。
-- 错误和日志是否泄漏连接串、token、secret、PII、完整 prompt 或文档正文。
-- adapter 是否通过 composition root 注入。
-- 测试证据和文档同步是否与改动相符。
+| 消息 | `Message` | `packages/ai/src/types.ts` | LLM 上下文中的统一消息类型（user/assistant/toolResult 的联合） |
+| 用户消息 | `UserMessage` | 同上 | 用户输入消息 |
+| 助手消息 | `AssistantMessage` | 同上 | 模型输出，content 为文本/thinking/toolCall 块数组 |
+| 工具结果消息 | `ToolResultMessage` | 同上 | 工具执行结果，回填进上下文 |
+| 流式调用 | `stream` / `streamSimple` | `packages/ai/src/compat.ts` | 统一 LLM 流式入口，simple 版屏蔽 provider 细项 |
+| 兼容层 | `compat` | `packages/ai/src/compat.ts` | 各 provider 请求/响应差异归一化 |
+| 助手消息事件 | `AssistantMessageEvent` | `packages/ai/src/types.ts` | 流式过程中产出的增量事件（文本增量、toolCall 等） |
+| 事件流 | `EventStream` / `AssistantMessageEventStream` | `packages/ai/src/utils/event-stream.ts` | 可异步迭代的事件流，带最终结果 |
+| Agent 循环 | `agentLoop` / `agentLoopContinue` | `packages/agent/src/agent-loop.ts` | 多轮 ReAct 循环入口；continue 用于不重加消息的续跑/重试 |
+| Agent 工具 | `AgentTool` | `packages/agent/src/types.ts` | 带执行函数的工具定义（本项目 schema 仍用 zod） |
+| 上下文转换 | `transformContext` | `AgentLoopConfig` | 送 LLM 前对消息序列做变换（裁剪/compaction/RAG 注入挂载点） |
+| LLM 消息转换 | `convertToLlm` | `AgentLoopConfig` | 把 agent 消息序列转成可发 LLM 的 `Message[]` |
+| 工具调用前钩子 | `beforeToolCall` | `AgentLoopConfig` | 工具执行前拦截；本项目仅作观测/block，不做审批 |
+| 工具调用后钩子 | `afterToolCall` | `AgentLoopConfig` | 工具执行后可改写结果 |
+| 下一轮准备 | `prepareNextTurn` | `AgentLoopConfig` | 每轮结束后调整上下文 |
+| 停止判定 | `shouldStopAfterTurn` | `AgentLoopConfig` | 自定义 loop 终止条件 |
+| 轮次 | turn | — | 一次 LLM 调用 + 其触发的工具执行 |
+| 运行 | run | 本项目 | 一次用户消息触发的完整 agentLoop 执行（持久化单位） |
+| 压缩 | compaction | 本项目 | 上下文超长时摘要压缩，以特殊 message 类型落线性表 |
+| 流函数 | `StreamFn` | `packages/agent/src/types.ts` | 注入 loop 的 LLM 流式函数类型，便于测试替换 |

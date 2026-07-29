@@ -1317,12 +1317,17 @@ textarea:disabled {
   transform: translateX(18px);
 }
 
+/* 无障碍隐藏元素：用 fixed 钉在视口原点，absolute 的静态位置会把页面撑出滚动条（clip 只裁视觉，不免除滚动溢出）。 */
 .visually-hidden {
-  position: absolute;
+  position: fixed;
+  top: 0;
+  left: 0;
   width: 1px;
   height: 1px;
+  margin: -1px;
   overflow: hidden;
   clip: rect(0, 0, 0, 0);
+  clip-path: inset(50%);
   white-space: nowrap;
 }
 

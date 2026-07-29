@@ -2,6 +2,7 @@ import { runAgent } from "@aiagent/agent";
 import type { AgentResponse, AgentStep } from "@aiagent/agent";
 import { runReportWorkflow } from "@aiagent/report";
 import type { LlmClient } from "@aiagent/types";
+import type { DataSourceRuntime } from "@aiagent/rag";
 import type {
   AgentRunAcceptedDto,
   AgentRunCreateRequestDto,
@@ -25,6 +26,7 @@ import {
 } from "@aiagent/trace";
 import { createHash, randomUUID } from "node:crypto";
 import type { RunEventBus, RunExecutionRegistry, RunScheduler, RunStore } from "./run-ports.js";
+import { createPacedTraceRecorder } from "../adapters/paced-trace-recorder.js";
 
 type RunEventPayload =
   | { type: "run_status"; status: AgentRunStatusDto; message: string }
@@ -46,6 +48,12 @@ export interface RunServiceDependencies {
   sink: RunServiceSink;
   traceStore: TraceStore;
   llmClient?: LlmClient;
+  resolveLlmClient?: (modelId: string) => LlmClient | undefined;
+  hasModel?: (modelId: string) => boolean;
+  defaultModelId?: string;
+  dataSourceRuntime?: DataSourceRuntime;
+  /** 仅 mock composition 注入；按首次语义类别节流 live Trace，测试默认 0。 */
+  mockStepDelayMs?: number;
   now?: () => Date;
   createId?: (prefix: string) => string;
   recordInternalWarning?: (warning: { code: "trace_persistence_degraded"; runId: string; requestId: string }) => void;
@@ -123,6 +131,10 @@ export function createRunApplicationService(dependencies: RunServiceDependencies
     if (!snapshot) return;
     const traceStartedAt = now().toISOString();
     const trace = createObservableTraceRecorder(`trace_${runId}`, snapshot.requestId, [], traceStartedAt);
+    const pacedTrace = dependencies.mockStepDelayMs
+      ? createPacedTraceRecorder(trace, dependencies.mockStepDelayMs, controller.signal)
+      : undefined;
+    const executionTrace = pacedTrace ?? trace;
     const traceContext: TracePersistenceContext = {
       userId, runId, conversationId: snapshot.conversationId, traceId: trace.traceId,
       requestId: trace.requestId, startedAt: traceStartedAt
@@ -156,15 +168,33 @@ export function createRunApplicationService(dependencies: RunServiceDependencies
       });
     });
     try {
+      const persistedAttachmentIds = await dependencies.store.listAttachmentDocumentIds(userId, runId) ?? [];
+      const grounding = persistedAttachmentIds.length
+        ? await retrieveAttachmentGrounding(
+            dependencies.dataSourceRuntime,
+            request.message.trim(),
+            persistedAttachmentIds,
+            userId,
+            executionTrace
+          )
+        : undefined;
       const response = await runAgent({
         message: request.message.trim(),
+        groundingContext: grounding?.context,
+        groundingCitations: grounding?.citations,
         reportMode: request.mode === "report",
         reportTriggerSource: request.mode === "report"
           ? request.source === "report_button" ? "button" : "toggle"
           : undefined,
         signal: controller.signal
-      }, { traceRecorder: trace, llmClient: dependencies.llmClient });
-      const workflow = await maybeRunReport(runId, userId, request.conversationId, response, trace, controller.signal, dependencies.sink);
+      }, {
+        traceRecorder: executionTrace,
+        llmClient: dependencies.resolveLlmClient?.(snapshot.modelId) ?? dependencies.llmClient
+      });
+      const workflow = await maybeRunReport(
+        runId, userId, request.conversationId, response, executionTrace, controller.signal, dependencies.sink
+      );
+      await pacedTrace?.flush();
       response.trace = trace.getTrace();
       await persistenceQueue;
       if (!tracePersistenceDegraded) {
@@ -175,7 +205,7 @@ export function createRunApplicationService(dependencies: RunServiceDependencies
         }
       }
       const result = redactSensitiveValue(toResponseDto(
-        runId, response, request, snapshot.requestId, workflow, tracePersistenceDegraded
+        runId, response, request, snapshot.modelId, snapshot.requestId, workflow, tracePersistenceDegraded
       ));
       registerApprovals(runId, userId, result.trace, dependencies.sink);
       await publish(userId, runId, { type: "run_result", result });
@@ -215,6 +245,10 @@ export function createRunApplicationService(dependencies: RunServiceDependencies
   return {
     async create(request, userId) {
       if (shuttingDown) throw new RunServiceShuttingDownError();
+      const modelId = request.modelId ?? dependencies.defaultModelId ?? "mock";
+      if (dependencies.hasModel && !dependencies.hasModel(modelId)) {
+        throw new RunModelNotFoundError(modelId);
+      }
       const runId = createId("run");
       // 浏览器幂等键按用户命名空间化，既满足全局唯一约束，也不会产生跨用户冲突侧信道。
       const requestId = request.clientMessageId
@@ -224,12 +258,15 @@ export function createRunApplicationService(dependencies: RunServiceDependencies
       const created = await dependencies.store.create({
         runId, requestId, userId, conversationId: request.conversationId,
         message: request.message.trim(), clientMessageId: request.clientMessageId ?? requestId,
-        mode: request.mode, source: request.source, traceId: `trace_${runId}`, createdAt
+        mode: request.mode, source: request.source, modelId,
+        attachmentDocumentIds: request.attachmentDocumentIds ?? [],
+        traceId: `trace_${runId}`, createdAt
       });
       const actual = created.snapshot;
       if (!created.created) return {
         runId: actual.runId, requestId: actual.requestId, conversationId: actual.conversationId,
-        status: actual.status, eventsUrl: `/api/runs/${actual.runId}/events`, snapshotUrl: `/api/runs/${actual.runId}`
+        modelId: actual.modelId, status: actual.status,
+        eventsUrl: `/api/runs/${actual.runId}/events`, snapshotUrl: `/api/runs/${actual.runId}`
       };
       dependencies.executionRegistry.create(runId);
       await publish(userId, runId, { type: "run_status", status: "queued", message: "研究任务已进入队列。" });
@@ -238,6 +275,7 @@ export function createRunApplicationService(dependencies: RunServiceDependencies
         runId,
         requestId,
         conversationId: request.conversationId,
+        modelId,
         status: "queued",
         eventsUrl: `/api/runs/${runId}/events`,
         snapshotUrl: `/api/runs/${runId}`
@@ -249,7 +287,15 @@ export function createRunApplicationService(dependencies: RunServiceDependencies
       if (!snapshot) return undefined;
       if (["queued", "running", "waiting_approval"].includes(snapshot.status)) {
         dependencies.executionRegistry.get(runId)?.abort();
-        await publish(userId, runId, { type: "run_status", status: "cancelled", message: "用户已请求取消研究任务。" });
+        // 取消必须发布 terminal error；仅发送状态事件会让 SSE 消费端继续等待。
+        await publish(userId, runId, {
+          type: "run_error",
+          error: {
+            code: "request_cancelled",
+            message: "用户已停止本次生成。",
+            requestId: snapshot.requestId
+          }
+        });
       }
       return dependencies.store.findById(userId, runId);
     },
@@ -274,11 +320,57 @@ export function createRunApplicationService(dependencies: RunServiceDependencies
   };
 }
 
+/**
+ * 只从本轮附件构造 grounding context，并把 RAG trace 归一到当前 Run。
+ *
+ * @param runtime RAG runtime。
+ * @param question 用户问题。
+ * @param documentIds 本轮附件文档。
+ * @param userId 当前用户。
+ * @param trace 当前 Run trace recorder。
+ * @returns 模型上下文与引用。
+ */
+async function retrieveAttachmentGrounding(
+  runtime: DataSourceRuntime | undefined,
+  question: string,
+  documentIds: string[],
+  userId: string,
+  trace: ReturnType<typeof createObservableTraceRecorder>
+): Promise<{ context: string; citations: NonNullable<AgentResponse["citations"]> }> {
+  if (!runtime) throw new Error("Attachment retrieval runtime is not configured.");
+  const result = await runtime.search(question, {
+    topK: 5,
+    filter: { documentIds }
+  }, { ownerUserId: userId });
+  if (!result.ok) throw new Error(result.error.message);
+  trace.record({
+    ...result.data.trace,
+    id: `${trace.traceId}_attachment_retrieval`,
+    traceId: trace.traceId,
+    requestId: trace.requestId
+  });
+  return {
+    context: result.data.results.map((item, index) =>
+      `[${index + 1}] ${item.citation.heading ?? item.citation.source}\n${item.text}`
+    ).join("\n\n"),
+    citations: result.data.results.map((item) => item.citation)
+  };
+}
+
 /** shutdown 期间拒绝新 Run 的结构化错误；API 层映射为 503，不泄漏内部状态。 */
 export class RunServiceShuttingDownError extends Error {
   constructor() {
     super("Run service is shutting down.");
     this.name = "RunServiceShuttingDownError";
+  }
+}
+
+/** 请求引用了服务端目录之外的模型；route 将其映射为稳定 validation_failed。 */
+export class RunModelNotFoundError extends Error {
+  /** @param modelId 非法或不可用模型 ID。 */
+  constructor(readonly modelId: string) {
+    super(`Model is not available: ${modelId}`);
+    this.name = "RunModelNotFoundError";
   }
 }
 
@@ -319,6 +411,7 @@ function toResponseDto(
   runId: string,
   response: AgentResponse,
   request: AgentRunCreateRequestDto,
+  modelId: string,
   requestId: string,
   reportWorkflow: ReportWorkflowResponseDto | undefined,
   tracePersistenceDegraded: boolean
@@ -326,6 +419,7 @@ function toResponseDto(
   return {
     runId,
     conversationId: request.conversationId,
+    modelId,
     requestId: response.requestId || requestId,
     traceId: response.traceId,
     ok: response.ok,

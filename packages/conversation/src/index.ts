@@ -25,6 +25,17 @@ export interface Message {
   sequence: number;
   createdAt: string;
   completedAt?: string;
+  attachments: MessageAttachment[];
+}
+
+/** 消息与私有 RAG 文档的稳定绑定快照。 */
+export interface MessageAttachment {
+  id: string;
+  documentId: string;
+  fileName: string;
+  contentType: string;
+  sizeBytes: number;
+  ordinal: number;
 }
 
 export interface CursorPage<T> {

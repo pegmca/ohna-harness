@@ -3,14 +3,16 @@ import type { RunEventBus, RunExecutionRegistry, RunScheduler, RunStore } from "
 
 /** 创建阶段一的内存 Run store；接口保持异步以便阶段二替换为数据库。 */
 export function createInMemoryRunStore(): RunStore {
-  const snapshots = new Map<string, AgentRunSnapshotDto & { userId: string }>();
+  const snapshots = new Map<string, AgentRunSnapshotDto & { userId: string; attachmentDocumentIds: string[] }>();
   return {
     async create(input) {
       const existing = [...snapshots.values()].find((run) => run.userId === input.userId && run.requestId === input.requestId);
       if (existing) return { snapshot: structuredClone(existing), created: false };
       const snapshot = {
         runId: input.runId, requestId: input.requestId, conversationId: input.conversationId,
-        status: "queued" as const, createdAt: input.createdAt, updatedAt: input.createdAt, events: [], userId: input.userId
+        modelId: input.modelId, status: "queued" as const, createdAt: input.createdAt,
+        updatedAt: input.createdAt, events: [], userId: input.userId,
+        attachmentDocumentIds: [...input.attachmentDocumentIds]
       };
       snapshots.set(input.runId, snapshot);
       return { snapshot: structuredClone(snapshot), created: true };
@@ -18,6 +20,10 @@ export function createInMemoryRunStore(): RunStore {
     async findById(userId, runId) {
       const value = snapshots.get(runId);
       return value?.userId === userId ? structuredClone(value) : undefined;
+    },
+    async listAttachmentDocumentIds(userId, runId) {
+      const value = snapshots.get(runId);
+      return value?.userId === userId ? [...value.attachmentDocumentIds] : undefined;
     },
     async append(userId, runId, eventInput) {
       const current = snapshots.get(runId);

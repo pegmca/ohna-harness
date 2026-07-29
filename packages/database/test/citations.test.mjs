@@ -61,6 +61,7 @@ test("Citation 持久化：固定 chunk/version 回链、原子写入、用户�
     const runInput = {
       runId: randomUUID(), requestId: `${userA}:cite-1`, userId: userA, conversationId: conversation.id,
       message: "资产质量如何？", clientMessageId: "cite-1", mode: "auto", source: "composer",
+      modelId: "mock", attachmentDocumentIds: [],
       traceId: "trace-cite-1", createdAt: now
     };
     await runRepository.create(runInput);

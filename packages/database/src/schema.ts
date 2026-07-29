@@ -286,6 +286,7 @@ export const agentRuns = pgTable("agent_runs", {
   assistantMessageId: uuid("assistant_message_id"),
   mode: text("mode").notNull(),
   source: text("source").notNull(),
+  modelId: text("model_id").notNull(),
   status: text("status").notNull(),
   intent: text("intent"),
   traceId: text("trace_id").notNull(),
@@ -298,6 +299,42 @@ export const agentRuns = pgTable("agent_runs", {
   startedAt: timestamp("started_at", { withTimezone: true, mode: "string" }),
   completedAt: timestamp("completed_at", { withTimezone: true, mode: "string" })
 });
+
+export const messageAttachments = pgTable("message_attachments", {
+  id: uuid("id").primaryKey(),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  messageId: uuid("message_id").notNull().references(() => messages.id, { onDelete: "cascade" }),
+  documentId: uuid("document_id").notNull().references(() => documents.id, { onDelete: "restrict" }),
+  ordinal: integer("ordinal").notNull(),
+  fileName: text("file_name").notNull(),
+  contentType: text("content_type").notNull(),
+  sizeBytes: bigint("size_bytes", { mode: "number" }).notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true, mode: "string" }).notNull()
+}, (table) => [
+  uniqueIndex("message_attachments_message_document_uq").on(table.messageId, table.documentId),
+  uniqueIndex("message_attachments_message_ordinal_uq").on(table.messageId, table.ordinal),
+  index("message_attachments_user_message_idx").on(table.userId, table.messageId, table.ordinal)
+]);
+
+export const chatAttachmentUploads = pgTable("chat_attachment_uploads", {
+  id: uuid("id").primaryKey(),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  clientAttachmentId: text("client_attachment_id").notNull(),
+  contentChecksum: text("content_checksum").notNull(),
+  documentId: uuid("document_id").references(() => documents.id, { onDelete: "restrict" }),
+  boundMessageId: uuid("bound_message_id").references(() => messages.id, { onDelete: "restrict" }),
+  fileName: text("file_name").notNull(),
+  contentType: text("content_type").notNull(),
+  sizeBytes: bigint("size_bytes", { mode: "number" }).notNull(),
+  status: text("status").notNull(),
+  uploadedAt: timestamp("uploaded_at", { withTimezone: true, mode: "string" }).notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" }).notNull()
+}, (table) => [
+  uniqueIndex("chat_attachment_uploads_user_client_uq").on(table.userId, table.clientAttachmentId),
+  uniqueIndex("chat_attachment_uploads_document_uq").on(table.documentId),
+  uniqueIndex("chat_attachment_uploads_message_document_uq").on(table.boundMessageId, table.documentId),
+  index("chat_attachment_uploads_orphan_idx").on(table.uploadedAt, table.id)
+]);
 
 // Approval 表镜像 0040_approval.sql；状态与决定由 CHECK 与 repository CAS 共同保证。
 export const toolApprovals = pgTable("tool_approvals", {

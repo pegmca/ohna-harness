@@ -195,6 +195,10 @@ class PostgresVectorStore implements VectorStore {
       params.push(options.filter.documentId);
       filters.push(`and d.id = $${params.length}::uuid`);
     }
+    if (options.filter?.documentIds !== undefined) {
+      params.push(options.filter.documentIds);
+      filters.push(`and d.id = any($${params.length}::uuid[])`);
+    }
     if (options.filter?.source !== undefined) {
       params.push(options.filter.source);
       filters.push(`and v.source_uri = $${params.length}`);

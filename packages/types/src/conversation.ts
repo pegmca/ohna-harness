@@ -5,6 +5,16 @@ export type ResearchMode = "chat" | "report";
 export type ConversationStatusDto = "active" | "archived";
 export type ConversationMessageStatusDto = "completed" | "failed";
 
+/** 用户消息关联的私有研究附件摘要；正文仍只存在 RAG 文档版本中。 */
+export interface MessageAttachmentDto {
+  attachmentId: string;
+  documentId: string;
+  fileName: string;
+  contentType: string;
+  sizeBytes: number;
+  ordinal: number;
+}
+
 /** Web 可见的会话摘要；刻意排除 userId 等持久化内部字段。 */
 export interface ConversationDto {
   conversationId: string;
@@ -27,6 +37,7 @@ export interface ConversationMessageDto {
   sequence: number;
   createdAt: ISODateTimeString;
   completedAt?: ISODateTimeString;
+  attachments: MessageAttachmentDto[];
 }
 
 export interface CreateConversationRequestDto {

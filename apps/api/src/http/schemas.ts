@@ -4,6 +4,11 @@ import { z } from "zod";
 export const agentRunRequestSchema = z.object({
   message: z.string(),
   conversationId: z.string().min(1),
+  modelId: z.string().min(1).max(80).regex(/^[a-z0-9][a-z0-9_-]*$/).optional(),
+  attachmentDocumentIds: z.array(z.string().uuid()).max(5).refine(
+    (items) => new Set(items).size === items.length,
+    { message: "附件 documentId 不能重复" }
+  ).optional(),
   mode: z.enum(["auto", "report"]),
   source: z.enum(["composer", "report_button"]),
   clientMessageId: z.string().min(1).max(200).optional()
@@ -35,6 +40,16 @@ export const dataSourceIngestRequestSchema = z.object({
   contentType: z.string().min(1).optional(),
   content: z.string().min(1)
 });
+export const chatAttachmentUploadRequestSchema = z.object({
+  clientAttachmentId: z.string().uuid(),
+  fileName: z.string().trim().min(1).max(240).refine(
+    (value) => /\.(?:md|markdown|txt)$/i.test(value),
+    { message: "仅支持 Markdown 和 TXT 文件" }
+  ),
+  contentType: z.enum(["text/plain", "text/markdown"]),
+  sizeBytes: z.number().int().positive().max(10 * 1024 * 1024),
+  content: z.string().min(1)
+}).strict();
 export const dataSourceDocumentsQuerySchema = z.object({
   cursor: z.string().min(1).optional(),
   limit: z.coerce.number().int().positive().max(100).default(50)

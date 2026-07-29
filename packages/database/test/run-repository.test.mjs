@@ -33,6 +33,8 @@ test("Run repository 保证事务 sequence、幂等创建、终态 CAS、恢复�
       conversationId: conversationOne.id,
       message: "研究问题",
       clientMessageId: "client-1",
+      modelId: "mock",
+      attachmentDocumentIds: [],
       mode: "auto",
       source: "composer",
       traceId: "trace-1",
@@ -93,7 +95,7 @@ test("Run repository 保证事务 sequence、幂等创建、终态 CAS、恢复�
       `select table_name,column_name,col_description((quote_ident(table_schema)||'.'||quote_ident(table_name))::regclass::oid,ordinal_position) as comment
          from information_schema.columns where table_schema=current_schema() and table_name in ('agent_runs','run_events')`
     );
-    assert.equal(comments.rows.length, 28);
+    assert.equal(comments.rows.length, 29);
     assert.equal(comments.rows.every((row) => typeof row.comment === "string" && row.comment.length > 0), true);
   } finally {
     await context.cleanup();

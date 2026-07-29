@@ -1,17 +1,18 @@
-# PostgreSQL 持久化多 Worktree 实施总览
+# PostgreSQL 持久化与 Agent Chat 多 Worktree 实施总览
 
 ## 1. 目标
 
-本目录把 Conversation、Run、Trace、RAG、Workflow 等进程内状态迁移到 PostgreSQL 的
-工作拆成 11 个独立 PR。每份文档对应一个 Implementation Agent、一个 worktree、一个分支
-和一个 PR；实现者不需要自行决定任务边界、依赖、migration 编号或验收方式。
+本目录把 PostgreSQL 持久化和后续 Agent Chat 体验工作拆成 16 个独立 PR。每份文档对应
+一个 Implementation Agent、一个 worktree、一个分支和一个 PR；实现者不需要自行决定任务
+边界、依赖、migration 编号或验收方式。
 
 最终运行时不再把 Conversation、Run、Trace、Approval、Workflow、Artifact metadata、
 RAG document/chunk/vector 的内存 `Map` 当作事实源。内存仅保留 live event fan-out、
 `AbortController` 和单元测试 adapter 等瞬时状态。
 
-本阶段不引入 Redis/队列，不承诺 API 重启后自动续跑，不实现长期 Memory，也不把 PDF
-bytes 写入 PostgreSQL。
+PR-00～PR-10 是数据库阶段：不引入 Redis/队列，不承诺 API 重启后自动续跑，不实现长期
+Memory，也不把 PDF bytes 写入 PostgreSQL。PR-11～PR-15 是 Agent Chat 阶段：不引入 token
+streaming、PDF/OCR 上传、动态模型管理、多模型并行或永久右侧调试栏。
 
 ## 2. 任务与依赖
 
@@ -29,6 +30,17 @@ PR-00 数据库工程基线
 
 PR-02 至 PR-09 全部合并
   └── PR-10 Runtime integration / recovery
+
+PR-10 合并
+  ├── PR-11 Model catalog / routing
+  ├── PR-12 Attachment lifecycle / private RAG
+  └── PR-13 Progressive Run projection
+
+PR-11、PR-12 合并
+  └── PR-14 Composer interactions
+
+PR-11 至 PR-14 全部合并
+  └── PR-15 Cancellation / UX integration closeout
 ```
 
 | PR | 文档 | 分支 | Migration |
@@ -44,6 +56,25 @@ PR-02 至 PR-09 全部合并
 | 08 | [Citation](PR-08-citation-persistence.md) | `feat/postgres-citations` | `0080_citations.sql` |
 | 09 | [Workflow / Artifact](PR-09-workflow-artifact.md) | `feat/postgres-report-artifacts` | `0070_report.sql` |
 | 10 | [Runtime integration](PR-10-runtime-integration.md) | `feat/postgres-runtime-integration` | 仅必要的兼容 migration |
+
+数据库阶段之后，Agent Chat 体验优化继续沿用相同拆分方式：
+
+| PR | 文档 | 分支 | Migration |
+| --- | --- | --- | --- |
+| 11 | [模型目录与服务端路由](PR-11-chat-model-routing.md) | `feat/chat-model-routing` | `0090_run_model.sql` |
+| 12 | [附件生命周期、消息绑定与私有 RAG](PR-12-chat-attachments.md) | `feat/chat-attachments` | `0100_message_attachments.sql` |
+| 13 | [渐进式运行过程](PR-13-progressive-run-events.md) | `feat/progressive-run-events` | 无 |
+| 14 | [Composer 快捷交互](PR-14-composer-interactions.md) | `feat/composer-interactions` | 无 |
+| 15 | [停止、动效与体验收口](PR-15-chat-experience-polish.md) | `feat/chat-experience-polish` | 无 |
+
+PR-11、PR-12、PR-13 从 PR-10 合并后的同一基线分别开发。PR-11 与 PR-12 都会触及共享
+types/schema 入口，后合并者必须从最新 `master` rebase 并解决显式导出冲突，不得通过复制
+未合并分支建立隐式依赖。PR-14 只有在 PR-11、PR-12 合并后启动；PR-15 只有在 PR-11～PR-14
+全部合并后启动。
+
+Agent Chat 阶段的 Web 所有权固定为：PR-11、PR-12 只交付无状态 API client，不创建 Composer
+hook、控件或样式；PR-14 独占模型偏好、附件草稿、模型选择器、附件 chips 和 Composer 布局。
+PR-14 发现前置契约缺口时退回对应 PR 修复，不能在集成 PR 内重新定义 API/DTO。
 
 PR-00 合并后可并行启动 PR-01、PR-06、PR-09。后续任务只有在表中列出的依赖已经合并到
 `master` 后才能从最新 `origin/master` 创建 worktree，不使用未合并分支作为隐式基线。
@@ -73,7 +104,11 @@ Review Agent 由用户在 `master` 主工作区启动：
 ### 收口 Agent
 
 PR-10 Agent 在全部依赖合并后执行根级 typecheck、test、build、Compose smoke、API 重启、
-SSE replay、越权、备份恢复等全链路验证。
+SSE replay、越权、备份恢复等数据库全链路验证。
+
+PR-15 Agent 是 Agent Chat 阶段收口 Agent：不得重新设计 PR-11～PR-14 的契约；负责取消
+竞争、真实模型选择、附件上传/绑定/检索、SSE replay 投影、响应式和无障碍的组合验证。
+PR-15 未通过前，不得把单个前置 PR 的定向测试当作完整 Composer 流程验收。
 
 ## 4. 数据库与代码规则
 
@@ -122,7 +157,10 @@ PR 描述必须包含：目标、包含/排除范围、依赖、migration、sche
 - JSONB 是否吞掉应查询和索引的核心字段。
 - 分页是否使用稳定 cursor 和 ID tie-break。
 - 删除、软删除、级联和审计保留是否一致。
+- 模型目录路由 ID、provider model 和实际 attempt 是否保持不同语义。
+- 上传附件是否有持久化幂等身份、orphan 清理和消息绑定事务；执行期检索是否只信任持久化绑定。
+- UI 事件投影是否有确定映射，完整流与 replay 是否产生相同状态。
+- 取消是否复用 `run_error/request_cancelled`，并由数据库 CAS 决定唯一终态。
 - 错误和日志是否泄漏连接串、token、secret、PII、完整 prompt 或文档正文。
 - adapter 是否通过 composition root 注入。
 - 测试证据和文档同步是否与改动相符。
-

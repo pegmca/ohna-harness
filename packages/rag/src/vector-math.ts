@@ -157,6 +157,10 @@ export function matchesVectorSearchFilter(
     return false;
   }
 
+  if (filter.documentIds !== undefined && !filter.documentIds.includes(chunk.documentId)) {
+    return false;
+  }
+
   if (filter.source !== undefined && chunk.source !== filter.source) {
     return false;
   }

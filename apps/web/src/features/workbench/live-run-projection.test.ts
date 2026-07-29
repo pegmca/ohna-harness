@@ -1,6 +1,6 @@
-import type { AgentRunStreamEventDto } from "@aiagent/types";
+import type { AgentRunStreamEventDto, TraceEventDto } from "@aiagent/types";
 import { describe, expect, it } from "vitest";
-import { projectLiveRun } from "./live-run-projection";
+import { projectLiveRun, projectRunActivity } from "./live-run-projection";
 
 describe("projectLiveRun", () => {
   it("keeps first appearance order and reactivates an interleaved category", () => {
@@ -28,6 +28,21 @@ describe("projectLiveRun", () => {
 
   it("routes unknown future trace events to finalizing", () => {
     expect(projectLiveRun([trace(1, "future_event")])[0]?.category).toBe("finalizing");
+  });
+
+  it("projects terminal trace into user-facing Chinese activity categories", () => {
+    const events = [
+      terminalTrace("request_received"),
+      terminalTrace("retrieval", { ok: true }),
+      terminalTrace("tool_call", { ok: false }),
+      terminalTrace("final_response")
+    ];
+    expect(projectRunActivity(events).map(({ label, status }) => ({ label, status }))).toEqual([
+      { label: "理解问题", status: "completed" },
+      { label: "检索资料", status: "completed" },
+      { label: "查询数据", status: "failed" },
+      { label: "整理结果", status: "completed" }
+    ]);
   });
 });
 
@@ -65,4 +80,22 @@ function cancelled(sequence: number): AgentRunStreamEventDto {
     createdAt: "2026-07-28T00:00:00.000Z",
     error: { code: "request_cancelled", message: "cancelled", requestId: "request" }
   };
+}
+
+/**
+ * 创建只包含投影所需字段的终态 Trace 测试事件。
+ *
+ * @param type Trace 类型。
+ * @param extra 用于表达成功或失败的附加字段。
+ * @returns Trace 测试事件。
+ */
+function terminalTrace(type: string, extra: Record<string, unknown> = {}): TraceEventDto {
+  return {
+    type,
+    id: `trace-${type}`,
+    traceId: "trace",
+    requestId: "request",
+    createdAt: "2026-07-28T00:00:00.000Z",
+    ...extra
+  } as TraceEventDto;
 }

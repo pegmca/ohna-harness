@@ -11,7 +11,6 @@ import {
   Activity,
   AlertTriangle,
   Braces,
-  ChevronDown,
   Clock3,
   FilePlus2,
   FileText,
@@ -31,56 +30,10 @@ import {
   getApprovalRequests,
   parseApiResult
 } from "./format";
+import { formatRunDuration } from "./run-process";
 import type { RunDetailSection, SelectedRunDetail, TraceEventDto } from "./types";
 
-/**
- * 渲染 assistant 消息内的 run 派生详情，默认折叠减少调试信息干扰。
- *
- * @param props 组件属性。
- * @returns run 详情折叠区。
- */
-export function RunDetails(props: {
-  onOpen: (section: RunDetailSection) => void;
-  reportMode: boolean;
-  run: AgentRunResponseDto;
-}) {
-  const { run } = props;
-  // MCP 调用与本地 registry 调用共享消息内工具列表，但保留各自 trace 类型便于辨识边界。
-  const toolEvents = run.trace.events.filter(
-    (event) => event.type === "tool_call" || event.type === "mcp_tool_call"
-  );
-  const approvalRequests = getApprovalRequests(run);
-  const sections: Array<{ section: RunDetailSection; label: string; count?: number }> = [
-    { section: "summary", label: "运行摘要" },
-    { section: "steps", label: "Steps", count: run.steps.length },
-    { section: "tools", label: "Tools", count: toolEvents.length },
-    { section: "trace", label: "Trace", count: run.trace.events.length },
-    ...(run.reportPlan || run.reportWorkflow ? [{ section: "report" as const, label: "Report" }] : []),
-    ...(approvalRequests.length > 0
-      ? [{ section: "approvals" as const, label: "Approvals", count: approvalRequests.length }]
-      : [])
-  ];
-
-  return (
-    <div className="run-details run-detail-types">
-      <div className="run-detail-types-status">
-        <Activity className="icon-size" />
-        <StatusBadge tone="neutral">{run.intent}</StatusBadge>
-        <StatusBadge tone={run.ok ? "success" : "danger"}>{run.ok ? "ok" : "failed"}</StatusBadge>
-        <StatusBadge tone={props.reportMode ? "info" : "neutral"}>{props.reportMode ? "report" : "chat"}</StatusBadge>
-      </div>
-      <div className="run-detail-type-actions">
-        {sections.map((item) => (
-          <button key={item.section} onClick={() => props.onOpen(item.section)} type="button">
-            <span>{item.label}</span>
-            {item.count !== undefined ? <small>{item.count}</small> : null}
-            <ChevronDown className="details-chevron" />
-          </button>
-        ))}
-      </div>
-    </div>
-  );
-}
+export { RunDetails } from "./run-process";
 
 /**
  * 在右侧按需展示当前 assistant run 或实时事件，不形成永久调试侧栏。
@@ -114,9 +67,16 @@ export function RunDetailPanel(props: {
           <>
             {section === "summary" ? (
               <>
-                <div className="run-identifiers"><span>requestId: {run.requestId}</span><span>traceId: {run.traceId}</span></div>
-                <TraceSummaryPanel summary={run.trace.summary} />
+                <RunActivityOverview run={run} toolCount={toolEvents.length} />
                 {run.error ? <ErrorBlock error={run.error} /> : null}
+                <details className="developer-details">
+                  <summary>开发者详情</summary>
+                  <div className="run-identifiers"><span>requestId: {run.requestId}</span><span>traceId: {run.traceId}</span></div>
+                  <TraceSummaryPanel summary={run.trace.summary} />
+                  <RunStepsList steps={run.steps} />
+                  <ToolCallsList events={toolEvents} />
+                  <TraceTimeline events={run.trace.events} />
+                </details>
               </>
             ) : null}
             {section === "report" ? (
@@ -136,15 +96,36 @@ export function RunDetailPanel(props: {
   );
 }
 
+/**
+ * 用用户可理解的语言概括本次回答过程，原始事件留在开发者详情中。
+ *
+ * @param props Run 与工具调用数量。
+ * @returns 活动概览。
+ */
+function RunActivityOverview(props: { run: AgentRunResponseDto; toolCount: number }) {
+  const { run } = props;
+  return (
+    <section className="details-section run-activity-overview">
+      <h3><Activity className="icon-size" />回答过程</h3>
+      <p>{run.ok ? "已完成问题分析并生成回答。" : "运行未能完成，请查看错误信息或重新生成。"}</p>
+      <div className="summary-badges">
+        <StatusBadge tone={run.ok ? "success" : "danger"}>{run.ok ? "已完成" : "失败"}</StatusBadge>
+        {props.toolCount > 0 ? <StatusBadge tone="info">{props.toolCount} 个工具</StatusBadge> : null}
+        <StatusBadge tone="neutral">{formatRunDuration(run.trace.summary.durationMs)}</StatusBadge>
+      </div>
+    </section>
+  );
+}
+
 /** @param section 当前详情类型。 @returns 右侧面板标题。 */
 function detailSectionTitle(section: RunDetailSection): string {
   const titles: Record<RunDetailSection, string> = {
-    summary: "运行摘要",
+    summary: "回答过程",
     steps: "Agent Steps",
     tools: "Tool Calls",
     trace: "Trace Timeline",
-    report: "Report Workflow",
-    approvals: "Approvals"
+    report: "报告过程",
+    approvals: "操作确认"
   };
   return titles[section];
 }

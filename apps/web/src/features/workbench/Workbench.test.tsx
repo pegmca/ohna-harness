@@ -93,7 +93,12 @@ describe("Workbench conversation history", () => {
     expect(historyRequests).toBe(1);
   });
 
-  it("restores a persisted run and renders its process before the final answer", async () => {
+  it("restores a persisted run with a folded user-facing process before the final answer", async () => {
+    const writeText = vi.fn(async () => undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText }
+    });
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.startsWith("/api/conversations?")) return ok({ items: [conversations[0]] });
@@ -117,15 +122,22 @@ describe("Workbench conversation history", () => {
     }));
 
     render(<MemoryRouter initialEntries={["/?conversation=c1"]}><Workbench /></MemoryRouter>);
-    const process = await screen.findByRole("button", { name: /运行摘要/ });
+    const processLabel = await screen.findByText("已完成 · 1.0 秒");
+    const process = processLabel.closest("summary")!;
     const answer = screen.getByText("最终研究结论");
 
     expect(process.compareDocumentPosition(answer) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-
-    fireEvent.click(screen.getByRole("button", { name: /Steps/ }));
-    expect(await screen.findByRole("heading", { name: "Agent Steps" })).toBeTruthy();
-    expect(screen.queryByText("Trace summary")).toBeNull();
-    expect(screen.queryByText("Tool calls")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "复制回答" }));
+    expect(writeText).toHaveBeenCalledWith("最终研究结论");
+    expect(screen.getByRole("button", { name: "重新生成回答" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /Steps/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Tools/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Trace/ })).toBeNull();
+    fireEvent.click(process);
+    fireEvent.click(screen.getByRole("button", { name: "查看开发者详情" }));
+    expect(await screen.findByRole("heading", { level: 2, name: "回答过程" })).toBeTruthy();
+    const developerDetails = screen.getByText("开发者详情").closest("details");
+    expect(developerDetails?.open).toBe(false);
   });
 
   it("restores URL selection and ignores an aborted previous conversation response", async () => {
@@ -509,7 +521,7 @@ describe("Workbench conversation history", () => {
     fireEvent.submit(textbox.closest("form")!);
     await waitFor(() => expect(runRequests).toHaveLength(1));
 
-    fireEvent.click(await screen.findByRole("button", { name: "重试" }));
+    fireEvent.click(await screen.findByRole("button", { name: "重新生成回答" }));
     await waitFor(() => expect(runRequests).toHaveLength(2));
 
     expect(runRequests[1].clientMessageId).not.toBe(runRequests[0].clientMessageId);
@@ -557,7 +569,7 @@ describe("Workbench conversation history", () => {
     }));
 
     render(<MemoryRouter initialEntries={["/?conversation=c1"]}><Workbench /></MemoryRouter>);
-    fireEvent.click(await screen.findByRole("button", { name: "重试" }));
+    fireEvent.click(await screen.findByRole("button", { name: "重新生成回答" }));
     await waitFor(() => expect(runRequests).toHaveLength(1));
     expect(runRequests[0]).toMatchObject({ message: "历史失败问题", modelId: "mock" });
   });

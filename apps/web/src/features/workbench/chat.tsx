@@ -1,20 +1,22 @@
 import type {
   AgentRunResponseDto,
+  AgentRunStreamEventDto,
   ModelOptionDto,
   ToolApprovalDecisionDto,
   ToolApprovalRequestDto
 } from "@aiagent/types";
 import {
   AlertTriangle,
+  Check,
+  Copy,
   FileText,
   Loader2,
   Menu,
   RotateCcw,
   User
 } from "lucide-react";
-import { type FormEvent } from "react";
+import { type FormEvent, useState } from "react";
 import {
-  formatEventSummary,
   formatRunStatus,
   formatTime
 } from "./format";
@@ -113,7 +115,7 @@ export function ChatTimeline(props: ChatTimelineProps) {
         {props.messages.map((message, index) => (
           <ChatMessage
             approvalStatusById={props.approvalStatusById}
-            canRetry={message.status === "failed"
+            canRetry={message.role === "assistant" && message.status !== "pending"
               && props.messages.slice(0, index).some((candidate) => candidate.role === "user")}
             isSubmitting={props.isSubmitting}
             key={message.id}
@@ -145,6 +147,25 @@ export function ChatMessage(props: {
 }) {
   const { message } = props;
   const isUser = message.role === "user";
+  const [copied, setCopied] = useState(false);
+  const [copyFailed, setCopyFailed] = useState(false);
+
+  /**
+   * 复制当前回答正文，并用短暂状态反馈替代额外 toast。
+   *
+   * @returns 复制完成 Promise。
+   */
+  async function handleCopy(): Promise<void> {
+    try {
+      await navigator.clipboard.writeText(message.content);
+      setCopied(true);
+      setCopyFailed(false);
+      window.setTimeout(() => setCopied(false), 1_500);
+    } catch {
+      setCopyFailed(true);
+      window.setTimeout(() => setCopyFailed(false), 1_500);
+    }
+  }
 
   return (
     <article className={`chat-message ${isUser ? "is-user" : "is-assistant"}`}>
@@ -168,41 +189,75 @@ export function ChatMessage(props: {
             ))}
           </div>
         ) : null}
+        {message.status === "pending" ? (
+          <LiveRunProcess events={message.streamEvents ?? []} />
+        ) : null}
         {message.run ? (
           <RunDetails
             onOpen={(section) => props.onOpenRunDetail({ run: message.run, section })}
-            reportMode={message.run.intent === "report_skill"}
             run={message.run}
           />
         ) : null}
-        {message.status === "pending" ? (
-          <div className="message-progress run-progress-list">
-            <Loader2 className="icon-size spin" />
-            <div>
-              {projectLiveRun(message.streamEvents ?? []).map((activity) => (
-                <button key={activity.category} onClick={() => props.onOpenRunDetail({ event: activity.event })} type="button">
-                  <span>{activity.label}</span>
-                  <small>{formatEventSummary(activity.event.event)} · {activity.count} · {activity.status}</small>
-                </button>
-              ))}
-            </div>
-          </div>
-        ) : null}
-        <p className="message-text">{message.content}</p>
-        {message.status === "failed" && props.canRetry ? (
-          <div className="message-actions">
+        {message.status !== "pending" ? <p className="message-text">{message.content}</p> : null}
+        {!isUser && message.status !== "pending" ? (
+          <div className="message-actions" aria-label="回答操作">
             <button
-              className="secondary-button"
-              disabled={props.isSubmitting}
-              onClick={() => props.onRetryMessage(message)}
+              aria-label={copied ? "已复制" : "复制回答"}
+              className="message-action-button"
+              onClick={() => void handleCopy()}
+              title={copied ? "已复制" : "复制"}
               type="button"
             >
-              <RotateCcw className="icon-size" />重试
+              {copied ? <Check className="icon-size" /> : <Copy className="icon-size" />}
             </button>
+            <button
+              aria-label="重新生成回答"
+              className="message-action-button"
+              disabled={props.isSubmitting || !props.canRetry}
+              onClick={() => props.onRetryMessage(message)}
+              title="重新生成"
+              type="button"
+            >
+              <RotateCcw className="icon-size" />
+            </button>
+            <span aria-live="polite" className="visually-hidden">
+              {copied ? "回答已复制" : copyFailed ? "复制失败，请手动选择回答正文" : ""}
+            </span>
           </div>
         ) : null}
       </div>
     </article>
+  );
+}
+
+/**
+ * 用单行摘要和可折叠列表展示实时 Run，不把原始 trace 术语暴露给普通用户。
+ *
+ * @param props SSE 事件集合。
+ * @returns 实时回答过程。
+ */
+function LiveRunProcess(props: { events: AgentRunStreamEventDto[] }) {
+  const activities = projectLiveRun(props.events);
+  const active = [...activities].reverse().find((activity) => activity.status === "active");
+  return (
+    <details className="run-process live-run-process" open>
+      <summary className="run-process-trigger">
+        <Loader2 className="icon-size spin" />
+        <span>{active ? `正在${active.label}` : "正在准备回答"}</span>
+      </summary>
+      {activities.length > 0 ? (
+        <div className="run-process-body">
+          <ol className="run-activity-list">
+            {activities.map((activity) => (
+              <li className={`is-${activity.status}`} key={activity.category}>
+                <span aria-hidden="true" />
+                <strong>{activity.label}</strong>
+              </li>
+            ))}
+          </ol>
+        </div>
+      ) : null}
+    </details>
   );
 }
 

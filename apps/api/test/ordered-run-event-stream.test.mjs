@@ -5,8 +5,16 @@ import { createOrderedRunEventStream, isTerminalRunEvent } from "../dist/applica
 function status(sequence, value = "running") {
   return {
     eventId: `event-${sequence}`, sequence, runId: "run-1", requestId: "request-1",
-    traceId: "trace-1", conversationId: "conversation-1", createdAt: "2026-07-25T08:00:00.000Z",
-    type: "run_status", status: value, message: value
+    conversationId: "conversation-1", createdAt: "2026-07-25T08:00:00.000Z",
+    type: "run_status", payload: { status: value, message: value }
+  };
+}
+
+function terminal(sequence, type = "agent_end") {
+  return {
+    eventId: `event-${sequence}`, sequence, runId: "run-1", requestId: "request-1",
+    conversationId: "conversation-1", createdAt: "2026-07-25T08:00:00.000Z",
+    type, payload: type === "agent_end" ? { type: "agent_end", messages: [] } : { error: { code: "internal_error" } }
   };
 }
 
@@ -46,8 +54,11 @@ test("直接 live 观察到缺口时从数据库补齐后再发送高 sequence",
   assert.deepEqual(written, [1, 2, 3]);
 });
 
-test("cancelled 在 replay 与 live 路径都是关闭 SSE 的 canonical 终态", async () => {
-  assert.equal(isTerminalRunEvent(status(1, "cancelled")), true);
+test("agent_end / run_error / interrupted 在 replay 与 live 路径都是关闭 SSE 的终态", async () => {
+  assert.equal(isTerminalRunEvent(terminal(1, "agent_end")), true);
+  assert.equal(isTerminalRunEvent(terminal(1, "run_error")), true);
+  assert.equal(isTerminalRunEvent(status(1, "interrupted")), true);
+  assert.equal(isTerminalRunEvent(status(1, "running")), false);
 
   for (const path of ["replay", "live"]) {
     let closeCount = 0;
@@ -58,11 +69,11 @@ test("cancelled 在 replay 与 live 路径都是关闭 SSE 的 canonical 终态"
       close: () => { closeCount += 1; }
     });
     if (path === "replay") {
-      await stream.replay([status(1, "cancelled")]);
+      await stream.replay([status(1), terminal(2)]);
     } else {
-      await stream.replay([]);
+      await stream.replay([status(1)]);
       await stream.completeCatchUp([]);
-      await stream.acceptLive(status(1, "cancelled"));
+      await stream.acceptLive(terminal(2));
     }
     assert.equal(stream.isClosed(), true, path);
     assert.equal(closeCount, 1, path);

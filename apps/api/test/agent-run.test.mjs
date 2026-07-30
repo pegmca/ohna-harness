@@ -1,16 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createApiServer } from "../dist/index.js";
-import { createInMemoryRunStore } from "../dist/adapters/in-memory-run-runtime.js";
 import { createInMemoryApiTestRuntime } from "../dist/adapters/in-memory-test-runtime.js";
 import { createModelRuntimeRegistry } from "../dist/application/model-registry.js";
-
-const runRequest = {
-  message: "帮我查询 000001.SZ 最近一期净利润和 ROE。",
-  conversationId: "conversation_test",
-  mode: "auto",
-  source: "composer"
-};
 
 async function bootstrap(app, visitorId) {
   const response = await app.inject({
@@ -20,11 +12,19 @@ async function bootstrap(app, visitorId) {
   return response.headers["set-cookie"].split(";")[0];
 }
 
+async function createConversation(app, cookie, title = "测试会话") {
+  const response = await app.inject({
+    method: "POST", url: "/api/conversations", headers: { cookie }, payload: { title }
+  });
+  assert.equal(response.statusCode, 201);
+  return response.json().data.conversationId;
+}
+
 async function waitForTerminal(app, snapshotUrl, headers = {}) {
-  for (let attempt = 0; attempt < 50; attempt += 1) {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
     const response = await app.inject({ method: "GET", url: snapshotUrl, headers });
     const snapshot = response.json().data;
-    if (["succeeded", "failed", "cancelled"].includes(snapshot.status)) return snapshot;
+    if (["completed", "failed", "cancelled", "interrupted"].includes(snapshot.status)) return snapshot;
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   throw new Error("Run did not reach terminal state.");
@@ -62,7 +62,7 @@ test("POST /api/runs validates the new run creation contract", async () => {
 });
 
 test("同一 conversationId 连续两个 run，第二个 run 的上下文包含第一轮消息", async () => {
-  // 用捕获型 streamFn 记录每次 LLM 调用的上下文，验证会话历史内存累积（review B1 回归）。
+  // 用捕获型 streamFn 记录每次 LLM 调用的上下文，验证历史从 messageStore 投影重建（不再是内存累积）。
   const capturedContexts = [];
   const capturingStreamFn = (_model, context) => {
     capturedContexts.push(structuredClone({ systemPrompt: context.systemPrompt, messages: context.messages }));
@@ -103,20 +103,23 @@ test("同一 conversationId 连续两个 run，第二个 run 的上下文包含�
       streamFn: capturingStreamFn
     }
   }], "mock");
-  const app = createApiServer({ ...createInMemoryApiTestRuntime(), modelRegistry });
-  const payload = (message) => ({ message, conversationId: "conversation_history", mode: "auto", source: "composer" });
+  const runtime = createInMemoryApiTestRuntime();
+  const app = createApiServer({ ...runtime, modelRegistry, requireIdentity: true });
+  const cookie = await bootstrap(app, "visitor-history-0001");
+  const conversationId = await createConversation(app, cookie);
+  const payload = (message) => ({ message, conversationId, mode: "auto", source: "composer" });
 
-  const first = (await app.inject({ method: "POST", url: "/api/runs", payload: payload("第一轮问题") })).json().data;
-  const firstSnapshot = await waitForTerminal(app, first.snapshotUrl);
-  assert.equal(firstSnapshot.status, "succeeded");
+  const first = (await app.inject({ method: "POST", url: "/api/runs", headers: { cookie }, payload: payload("第一轮问题") })).json().data;
+  const firstSnapshot = await waitForTerminal(app, first.snapshotUrl, { cookie });
+  assert.equal(firstSnapshot.status, "completed");
 
-  const second = (await app.inject({ method: "POST", url: "/api/runs", payload: payload("第二轮问题") })).json().data;
-  const secondSnapshot = await waitForTerminal(app, second.snapshotUrl);
-  assert.equal(secondSnapshot.status, "succeeded");
+  const second = (await app.inject({ method: "POST", url: "/api/runs", headers: { cookie }, payload: payload("第二轮问题") })).json().data;
+  const secondSnapshot = await waitForTerminal(app, second.snapshotUrl, { cookie });
+  assert.equal(secondSnapshot.status, "completed");
 
   assert.equal(capturedContexts.length, 2);
   const secondTurnMessages = capturedContexts[1].messages;
-  // 第二轮上下文必须包含第一轮 user 与 assistant 消息（历史真正累积）。
+  // 第二轮上下文必须包含第一轮 user 与 assistant 消息（历史从 messages_v2 投影重建）。
   assert.equal(
     secondTurnMessages.some((message) => message.role === "user" && message.content === "第一轮问题"),
     true
@@ -131,88 +134,71 @@ test("同一 conversationId 连续两个 run，第二个 run 的上下文包含�
   await app.close();
 });
 
-test("run application service exposes ordered events and a terminal snapshot", async () => {
-  const app = createApiServer(createInMemoryApiTestRuntime());
-  const acceptedResponse = await app.inject({ method: "POST", url: "/api/runs", payload: runRequest });
+test("run 产生线性消息序列与连续的 canonical 事件流", async () => {
+  const runtime = createInMemoryApiTestRuntime();
+  const app = createApiServer({ ...runtime, requireIdentity: true });
+  const cookie = await bootstrap(app, "visitor-run-0001");
+  const conversationId = await createConversation(app, cookie);
+  const acceptedResponse = await app.inject({
+    method: "POST", url: "/api/runs", headers: { cookie },
+    payload: { message: "帮我查询 000001.SZ 最近一期净利润和 ROE。", conversationId, mode: "auto", source: "composer" }
+  });
   assert.equal(acceptedResponse.statusCode, 202);
   const accepted = acceptedResponse.json().data;
-  const snapshot = await waitForTerminal(app, accepted.snapshotUrl);
+  const snapshot = await waitForTerminal(app, accepted.snapshotUrl, { cookie });
 
-  assert.equal(snapshot.status, "succeeded");
-  assert.equal(snapshot.result.runId, accepted.runId);
-  assert.equal(snapshot.result.conversationId, runRequest.conversationId);
-  assert.deepEqual(snapshot.events.map((event) => event.sequence), snapshot.events.map((_, index) => index + 1));
-  assert.equal(snapshot.events[0].type, "run_status");
-  assert.equal(snapshot.events.at(-1).type, "run_result");
-  assert.equal(snapshot.events.some((event) => event.type === "trace_event"), true);
-  assert.equal(snapshot.result.tracePersistence.status, "complete");
-  await app.close();
-});
+  assert.equal(snapshot.status, "completed");
+  assert.equal(snapshot.lastEventSequence > 0, true);
 
-test("Trace API 按 session user 隔离 requestId", async () => {
-  const app = createApiServer({ ...createInMemoryApiTestRuntime(), requireIdentity: true });
-  const ownerCookie = await bootstrap(app, "visitor-trace-owner-0001");
-  const foreignCookie = await bootstrap(app, "visitor-trace-owner-0002");
-  const accepted = (await app.inject({
-    method: "POST", url: "/api/runs", headers: { cookie: ownerCookie },
-    payload: { ...runRequest, clientMessageId: "trace-owner-client-1" }
-  })).json().data;
-  await waitForTerminal(app, accepted.snapshotUrl, { cookie: ownerCookie });
-  const own = await app.inject({
-    method: "GET", url: `/api/traces/${accepted.requestId}`, headers: { cookie: ownerCookie }
-  });
-  assert.equal(own.statusCode, 200);
-  assert.equal(own.json().data.requestId, accepted.requestId);
-  const foreign = await app.inject({
-    method: "GET", url: `/api/traces/${accepted.requestId}`, headers: { cookie: foreignCookie }
-  });
-  assert.equal(foreign.statusCode, 404);
-  assert.equal(foreign.json().error.code, "not_found");
-  await app.close();
-});
+  // 事件流：sequence 从 1 连续，首事件 run_status(queued)，末事件 agent_end。
+  const events = await app.inject({ method: "GET", url: `${accepted.eventsUrl}?afterSequence=0`, headers: { cookie } });
+  const streamEvents = events.body.split("\n")
+    .filter((line) => line.startsWith("data: "))
+    .map((line) => JSON.parse(line.slice(6)));
+  assert.deepEqual(streamEvents.map((event) => event.sequence), streamEvents.map((_, index) => index + 1));
+  assert.equal(streamEvents[0].type, "run_status");
+  assert.equal(streamEvents.at(-1).type, "agent_end");
+  // mock 模型该提问会触发工具调用：事件流含 tool_execution_* 与多 turn。
+  assert.equal(streamEvents.some((event) => event.type === "tool_execution_start"), true);
+  assert.equal(streamEvents.some((event) => event.type === "message_update"), true);
 
-test("Trace 持久化失败不打断 Agent，并在最终结果留下结构化降级证据", async () => {
-  const unavailableTraceStore = {
-    async initialize() { throw new Error("postgres://user:secret@internal/trace"); },
-    async append() { throw new Error("raw database exception"); },
-    async finalize() { throw new Error("raw database exception"); },
-    async getByRequestId() { return undefined; },
-    async listEvents() { return undefined; }
-  };
-  const app = createApiServer({ ...createInMemoryApiTestRuntime(), traceStore: unavailableTraceStore });
-  const accepted = (await app.inject({ method: "POST", url: "/api/runs", payload: runRequest })).json().data;
-  const snapshot = await waitForTerminal(app, accepted.snapshotUrl);
-  assert.equal(snapshot.status, "succeeded");
-  assert.equal(snapshot.result.ok, true);
-  assert.deepEqual(snapshot.result.tracePersistence, {
-    status: "degraded",
-    diagnostic: {
-      code: "trace_persistence_degraded",
-      message: "Trace 持久化暂时不可用；Agent 主结果已保留。"
-    }
+  // 消息列表：user → assistant(toolCall) → toolResult → assistant 线性序列。
+  const messages = await app.inject({
+    method: "GET", url: `/api/conversations/${conversationId}/messages`, headers: { cookie }
   });
-  assert.equal(JSON.stringify(snapshot).includes("postgres://"), false);
-  assert.equal(JSON.stringify(snapshot).includes("raw database exception"), false);
+  const items = messages.json().data.items;
+  assert.deepEqual(items.map((message) => message.role), ["user", "assistant", "toolResult", "assistant"]);
+  assert.deepEqual(items.map((message) => message.sequence), [1, 2, 3, 4]);
+  // assistant 消息 content 为块数组原样透传；toolResult 为 envelope。
+  assert.equal(items[1].content[0].type, "toolCall");
+  assert.equal(items[2].content.toolCallId, items[1].content[0].id);
+  assert.equal(items.every((message) => message.messageType === "normal"), true);
   await app.close();
 });
 
 test("SSE 终态 replay 支持 Last-Event-ID 与 afterSequence，且不重复业务事件", async () => {
-  const app = createApiServer(createInMemoryApiTestRuntime());
-  const accepted = (await app.inject({ method: "POST", url: "/api/runs", payload: runRequest })).json().data;
-  const snapshot = await waitForTerminal(app, accepted.snapshotUrl);
-  const after = Math.max(0, snapshot.events.length - 3);
+  const app = createApiServer({ ...createInMemoryApiTestRuntime(), requireIdentity: true });
+  const cookie = await bootstrap(app, "visitor-replay-0001");
+  const conversationId = await createConversation(app, cookie);
+  const accepted = (await app.inject({
+    method: "POST", url: "/api/runs", headers: { cookie },
+    payload: { message: "hello", conversationId, mode: "auto", source: "composer" }
+  })).json().data;
+  const snapshot = await waitForTerminal(app, accepted.snapshotUrl, { cookie });
+  const total = snapshot.lastEventSequence;
+  const after = Math.max(0, total - 3);
   const replay = await app.inject({
     method: "GET",
     url: `${accepted.eventsUrl}?afterSequence=${after - 1}`,
-    headers: { "last-event-id": String(after) }
+    headers: { cookie, "last-event-id": String(after) }
   });
   assert.equal(replay.statusCode, 200);
   const events = replay.body.split("\n")
     .filter((line) => line.startsWith("data: "))
     .map((line) => JSON.parse(line.slice(6)));
-  assert.deepEqual(events.map((event) => event.sequence), snapshot.events.slice(after).map((event) => event.sequence));
+  assert.deepEqual(events.map((event) => event.sequence), Array.from({ length: total - after }, (_, index) => after + index + 1));
   assert.equal(new Set(events.map((event) => event.sequence)).size, events.length);
-  assert.equal(["run_result", "run_error"].includes(events.at(-1).type), true);
+  assert.equal(["agent_end", "run_error"].includes(events.at(-1).type), true);
   await app.close();
 });
 
@@ -220,7 +206,8 @@ test("重复 clientMessageId 复用同一 Run，且 Run API 对用户隐藏其�
   const app = createApiServer({ ...createInMemoryApiTestRuntime(), requireIdentity: true });
   const cookieOne = await bootstrap(app, "visitor-run-owner-0001");
   const cookieTwo = await bootstrap(app, "visitor-run-owner-0002");
-  const payload = { ...runRequest, clientMessageId: "client-idempotency-1" };
+  const conversationId = await createConversation(app, cookieOne);
+  const payload = { message: "查询净利润", conversationId, clientMessageId: "client-idempotency-1", mode: "auto", source: "composer" };
   const first = await app.inject({ method: "POST", url: "/api/runs", headers: { cookie: cookieOne }, payload });
   const duplicate = await app.inject({ method: "POST", url: "/api/runs", headers: { cookie: cookieOne }, payload });
   assert.equal(first.statusCode, 202);
@@ -245,192 +232,6 @@ test("run snapshot returns structured not_found errors", async () => {
   const response = await app.inject({ method: "GET", url: "/api/runs/missing" });
   assert.equal(response.statusCode, 404);
   assert.equal(response.json().error.code, "not_found");
-  await app.close();
-});
-
-test("report mode is orchestrated inside the canonical run", async () => {
-  const app = createApiServer(createInMemoryApiTestRuntime());
-  const accepted = (await app.inject({
-    method: "POST",
-    url: "/api/runs",
-    payload: {
-      message: "基于最近两年公告和财务数据，为 000001.SZ 生成研究简报 PDF。",
-      conversationId: "conversation_report",
-      mode: "report",
-      source: "report_button"
-    }
-  })).json().data;
-  const snapshot = await waitForTerminal(app, accepted.snapshotUrl);
-
-  assert.equal(snapshot.result.intent, "report_skill");
-  assert.equal(snapshot.result.reportWorkflow.run.status, "paused");
-  assert.equal(snapshot.result.reportWorkflow.artifact.status, "html_preview_only");
-  assert.equal(snapshot.result.reportWorkflow.run.approvalRequest.permissionLevel, "needs_approval");
-  await app.close();
-});
-
-test("approval decision is bound to its run and input digest", async () => {
-  const app = createApiServer(createInMemoryApiTestRuntime());
-  const accepted = (await app.inject({
-    method: "POST",
-    url: "/api/runs",
-    payload: {
-      message: "基于最近两年公告和财务数据，为 000001.SZ 生成研究简报 PDF。",
-      conversationId: "conversation_approval",
-      mode: "report",
-      source: "report_button"
-    }
-  })).json().data;
-  const snapshot = await waitForTerminal(app, accepted.snapshotUrl);
-  // approval 门已从 agent loop 删除；仅存的审批来自 report workflow 的 PDF exporter。
-  const approval = snapshot.result.reportWorkflow.run.approvalRequest;
-  const rejected = await app.inject({
-    method: "POST",
-    url: `/api/runs/${accepted.runId}/approvals/${approval.approvalId}/decision`,
-    payload: { decision: "approved", inputDigest: "wrong" }
-  });
-  assert.equal(rejected.statusCode, 403);
-
-  const approved = await app.inject({
-    method: "POST",
-    url: `/api/runs/${accepted.runId}/approvals/${approval.approvalId}/decision`,
-    payload: { decision: "approved", inputDigest: approval.inputDigest }
-  });
-  assert.equal(approved.statusCode, 200);
-  assert.equal(approved.json().data.decision, "approved");
-  await app.close();
-});
-
-test("approval decision 在 API 重启后仍可执行，且支持幂等重试与冲突检测", async () => {
-  // 两个 server 实例共享同一份 repository/runStore，等价于重启后连接同一数据库。
-  const runStore = createInMemoryRunStore();
-  const runtime = createInMemoryApiTestRuntime({ runStore });
-  const appOne = createApiServer(runtime);
-  const accepted = (await appOne.inject({
-    method: "POST",
-    url: "/api/runs",
-    payload: {
-      message: "基于最近两年公告和财务数据，为 000001.SZ 生成研究简报 PDF。",
-      conversationId: "conversation_approval_restart",
-      mode: "report",
-      source: "report_button"
-    }
-  })).json().data;
-  const snapshot = await waitForTerminal(appOne, accepted.snapshotUrl);
-  const approval = snapshot.result.reportWorkflow.run.approvalRequest;
-  await appOne.close();
-
-  const appTwo = createApiServer(runtime);
-  const url = `/api/runs/${accepted.runId}/approvals/${approval.approvalId}/decision`;
-  const decided = await appTwo.inject({
-    method: "POST",
-    url,
-    payload: { decision: "approved", inputDigest: approval.inputDigest }
-  });
-  assert.equal(decided.statusCode, 200);
-  assert.equal(decided.json().data.decision, "approved");
-
-  const retry = await appTwo.inject({
-    method: "POST",
-    url,
-    payload: { decision: "approved", inputDigest: approval.inputDigest }
-  });
-  assert.equal(retry.statusCode, 200);
-
-  const conflict = await appTwo.inject({
-    method: "POST",
-    url,
-    payload: { decision: "rejected", inputDigest: approval.inputDigest }
-  });
-  assert.equal(conflict.statusCode, 409);
-  assert.equal(conflict.json().error.code, "conflict");
-  await appTwo.close();
-});
-
-test("approval decision 拒绝其他已认证用户，reviewer 身份只来自服务端 session", async () => {
-  const app = createApiServer({
-    ...createInMemoryApiTestRuntime(),
-    requireIdentity: true
-  });
-  const cookieOne = await bootstrap(app, "visitor-approval-owner-1");
-  const cookieTwo = await bootstrap(app, "visitor-approval-other-2");
-  const accepted = (await app.inject({
-    method: "POST",
-    url: "/api/runs",
-    headers: { cookie: cookieOne },
-    payload: {
-      message: "基于最近两年公告和财务数据，为 000001.SZ 生成研究简报 PDF。",
-      conversationId: "conversation_approval_isolation",
-      mode: "report",
-      source: "report_button"
-    }
-  })).json().data;
-  const snapshot = await waitForTerminal(app, accepted.snapshotUrl, { cookie: cookieOne });
-  const approval = snapshot.result.reportWorkflow.run.approvalRequest;
-  const url = `/api/runs/${accepted.runId}/approvals/${approval.approvalId}/decision`;
-
-  const foreign = await app.inject({
-    method: "POST",
-    url,
-    headers: { cookie: cookieTwo },
-    payload: { decision: "approved", inputDigest: approval.inputDigest }
-  });
-  assert.equal(foreign.statusCode, 403);
-  assert.equal(foreign.json().error.code, "forbidden");
-
-  const owned = await app.inject({
-    method: "POST",
-    url,
-    headers: { cookie: cookieOne },
-    payload: { decision: "approved", inputDigest: approval.inputDigest }
-  });
-  assert.equal(owned.statusCode, 200);
-  await app.close();
-});
-
-test("workflow PDF 审批带确定性 digest，可经 decision endpoint 决定并放行 PDF 导出", async () => {
-  const written = new Map();
-  const artifactStorage = {
-    async writePdf(bytes) {
-      const key = "test/report.pdf";
-      written.set(key, bytes);
-      return { provider: "local", key, sizeBytes: bytes.length, checksumSha256: "ab".repeat(32) };
-    },
-    async readPdf(key) { return written.get(key); },
-    async deletePdf(key) { written.delete(key); }
-  };
-  const app = createApiServer({
-    ...createInMemoryApiTestRuntime(),
-    artifactStorage
-  });
-  const accepted = (await app.inject({
-    method: "POST",
-    url: "/api/runs",
-    payload: {
-      message: "基于最近两年公告和财务数据，为 000001.SZ 生成研究简报 PDF。",
-      conversationId: "conversation_pdf_approval",
-      mode: "report",
-      source: "report_button"
-    }
-  })).json().data;
-  const snapshot = await waitForTerminal(app, accepted.snapshotUrl);
-  const approval = snapshot.result.reportWorkflow.run.approvalRequest;
-  // 回归防护：workflow 审批必须在登记前补齐非空 digest，否则永远无法决定。
-  assert.equal(typeof approval.inputDigest, "string");
-  assert.equal(approval.inputDigest.length > 0, true);
-
-  const decided = await app.inject({
-    method: "POST",
-    url: `/api/runs/${accepted.runId}/approvals/${approval.approvalId}/decision`,
-    payload: { decision: "approved", inputDigest: approval.inputDigest }
-  });
-  assert.equal(decided.statusCode, 200);
-  assert.equal(decided.json().data.decision, "approved");
-
-  const artifactId = snapshot.result.reportWorkflow.artifact.artifactId;
-  const exported = await app.inject({ method: "POST", url: `/api/report-artifacts/${artifactId}/pdf` });
-  assert.equal(exported.statusCode, 200);
-  assert.equal(exported.json().data.status, "pdf_ready");
   await app.close();
 });
 

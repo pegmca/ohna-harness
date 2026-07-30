@@ -2,11 +2,10 @@ import type { IdentitySnapshot } from "@aiagent/identity";
 import type {
   AgentRunAcceptedDto,
   AgentRunCreateRequestDto,
-  AgentRunSnapshotDto,
-  ApiResult
+  ApiResult,
+  RunSnapshotDtoV2
 } from "@aiagent/types";
 import type { FastifyInstance } from "fastify";
-import type { createConversationApplicationService } from "../../application/conversation-service.js";
 import { createOrderedRunEventStream, isTerminalRunStatus } from "../../application/ordered-run-event-stream.js";
 import {
   RunModelNotFoundError,
@@ -14,23 +13,24 @@ import {
   type createRunApplicationService
 } from "../../application/run-service.js";
 import { conversationFailure, createRequestId, fail, toApiError } from "../errors.js";
+import { ConversationRepositoryError } from "@aiagent/conversation";
 import { anonymousUserId, requestUserId } from "../hooks/auth.js";
 import { agentRunRequestSchema, runEventsQuerySchema } from "../schemas.js";
 
 export interface RunRoutesDeps {
   runService: ReturnType<typeof createRunApplicationService>;
-  conversationService: ReturnType<typeof createConversationApplicationService> | undefined;
   identityByRequest: WeakMap<object, IdentitySnapshot>;
 }
 
 /**
  * 注册 Agent run 生命周期路由：创建、快照、取消与 SSE 事件流。
+ * 用户消息由 run store 在创建事务内幂等落库，不再需要独立 persist 调用。
  *
  * @param app Fastify 实例。
- * @param deps Run 用例服务、会话应用服务与共享 identity 映射。
+ * @param deps Run 用例服务与共享 identity 映射。
  */
 export function registerRunRoutes(app: FastifyInstance, deps: RunRoutesDeps): void {
-  const { runService, conversationService, identityByRequest } = deps;
+  const { runService, identityByRequest } = deps;
 
   /** 创建异步研究 run；真实执行在响应返回后开始。 */
   app.post("/api/runs", async (request, reply): Promise<ApiResult<AgentRunAcceptedDto>> => {
@@ -46,17 +46,6 @@ export function registerRunRoutes(app: FastifyInstance, deps: RunRoutesDeps): vo
     if (runService.isShuttingDown()) {
       reply.code(503);
       return fail(toApiError("internal_error", "服务正在关闭，暂时无法接收新的研究任务。", requestId, { reasonCode: "run_service_shutting_down" }), requestId);
-    }
-    if (identity && conversationService && parsed.data.clientMessageId) {
-      try {
-        await conversationService.persistUserMessage(identity.userId, {
-          conversationId: parsed.data.conversationId,
-          content: parsed.data.message.trim(),
-          clientMessageId: parsed.data.clientMessageId
-        });
-      } catch (error) {
-        return conversationFailure(reply, requestId, error);
-      }
     }
     let accepted: AgentRunAcceptedDto;
     try {
@@ -75,6 +64,10 @@ export function registerRunRoutes(app: FastifyInstance, deps: RunRoutesDeps): vo
           modelId: error.modelId
         }), requestId);
       }
+      // 会话不存在/越权与旧行为一致：统一映射为 not_found。
+      if (error instanceof ConversationRepositoryError) {
+        return conversationFailure(reply, requestId, error);
+      }
       throw error;
     }
     reply.code(202);
@@ -82,7 +75,7 @@ export function registerRunRoutes(app: FastifyInstance, deps: RunRoutesDeps): vo
   });
 
   /** 返回当前 run 快照，供刷新恢复和非流式诊断使用。 */
-  app.get<{ Params: { runId: string } }>("/api/runs/:runId", async (request, reply): Promise<ApiResult<AgentRunSnapshotDto>> => {
+  app.get<{ Params: { runId: string } }>("/api/runs/:runId", async (request, reply): Promise<ApiResult<RunSnapshotDtoV2>> => {
     const lookupRequestId = createRequestId();
     const run = await runService.get(requestUserId(identityByRequest, request), request.params.runId);
     if (!run) {
@@ -93,7 +86,7 @@ export function registerRunRoutes(app: FastifyInstance, deps: RunRoutesDeps): vo
   });
 
   /** 显式取消 run；浏览器断开 SSE 不会隐式终止后台任务。 */
-  app.delete<{ Params: { runId: string } }>("/api/runs/:runId", async (request, reply): Promise<ApiResult<AgentRunSnapshotDto>> => {
+  app.delete<{ Params: { runId: string } }>("/api/runs/:runId", async (request, reply): Promise<ApiResult<RunSnapshotDtoV2>> => {
     const lookupRequestId = createRequestId();
     const run = await runService.cancel(requestUserId(identityByRequest, request), request.params.runId);
     if (!run) {
@@ -103,7 +96,7 @@ export function registerRunRoutes(app: FastifyInstance, deps: RunRoutesDeps): vo
     return { ok: true, requestId: lookupRequestId, data: run };
   });
 
-  /** 以 SSE 重放历史事件并继续推送新增事件。 */
+  /** 以 SSE 重放历史事件并继续推送新增事件；Last-Event-ID 映射 run_events_v2.sequence。 */
   app.get<{ Params: { runId: string }; Querystring: { afterSequence?: string } }>("/api/runs/:runId/events", async (request, reply) => {
     const userId = requestUserId(identityByRequest, request);
     const parsedQuery = runEventsQuerySchema.safeParse(request.query);

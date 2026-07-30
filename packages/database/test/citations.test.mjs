@@ -6,9 +6,7 @@ import test from "node:test";
 import {
   createPostgresArtifactRepository,
   createPostgresCitationRepository,
-  createPostgresConversationRepositories,
-  createPostgresRagDocumentRepository,
-  createPostgresRunRepository
+  createPostgresRagDocumentRepository
 } from "../dist/index.js";
 import { runMigrations } from "../dist/migrate.js";
 import { createDatabaseTestContext } from "./helpers/database-test-helper.mjs";
@@ -54,36 +52,32 @@ test("Citation 持久化：固定 chunk/version 回链、原子写入、用户�
     assert.equal(ingestion.kind, "created");
     const chunk = ingestion.chunks[0];
 
-    // --- message citations：终态 run_result 与 assistant message 同事务写入 ---
-    const conversations = createPostgresConversationRepositories(context.pool).conversationRepository;
-    const conversation = await conversations.create(userA, { id: randomUUID(), title: "citations", now });
-    const runRepository = createPostgresRunRepository(context.pool);
-    const runInput = {
-      runId: randomUUID(), requestId: `${userA}:cite-1`, userId: userA, conversationId: conversation.id,
-      message: "资产质量如何？", clientMessageId: "cite-1", mode: "auto", source: "composer",
-      modelId: "mock", attachmentDocumentIds: [],
-      traceId: "trace-cite-1", createdAt: now
-    };
-    await runRepository.create(runInput);
-    const result = {
-      runId: runInput.runId, conversationId: conversation.id, requestId: runInput.requestId,
-      traceId: runInput.traceId, ok: true, intent: "chat", answer: "不良率稳定 [1]。", steps: [],
-      citations: [{
-        chunkId: chunk.chunkId, documentId: chunk.documentId, source: chunk.source,
-        heading: "资产质量", chunkIndex: 0, quote: "不良率保持稳定。", confidence: 0.87
-      }],
-      trace: { traceId: runInput.traceId, requestId: runInput.requestId, startedAt: now, status: "succeeded", events: [],
-        summary: { modelCalls: 0, toolCalls: 0, retrievalCalls: 0, workflowNodes: 0, durationMs: 0, tokenUsage: "unknown", errorCount: 0 } },
-      tracePersistence: { status: "complete" }
-    };
-    await runRepository.append(userA, runInput.runId, {
-      runId: runInput.runId, requestId: runInput.requestId, traceId: runInput.traceId,
-      conversationId: conversation.id, createdAt: "2026-07-25T08:01:00.000Z",
-      type: "run_result", result
-    });
-    const assistantMessageId = (await context.pool.query(
-      "select assistant_message_id from agent_runs where id=$1", [runInput.runId]
-    )).rows[0].assistant_message_id;
+    // --- message citations：旧 run 终态集成已随新 schema 移除（阶段 5 回迁），
+    // 这里直接用 SQL 播种旧 messages/message_citations 行，验证 citation 读取与状态机语义不变。
+    const conversationId = randomUUID();
+    const agentRunId = randomUUID();
+    await context.pool.query(
+      `insert into conversations(id,user_id,title,status,created_at,updated_at,last_message_at)
+       values ($1,$2,'citations','active',$3,$3,$3)`,
+      [conversationId, userA, now]
+    );
+    const assistantMessageId = randomUUID();
+    await context.pool.query(
+      `insert into messages(id,conversation_id,user_id,role,content,status,sequence,created_at)
+       values ($1,$2,$3,'assistant','不良率稳定 [1]。','completed',1,$4)`,
+      [assistantMessageId, conversationId, userA, now]
+    );
+    const chunkRow = (await context.pool.query(
+      `select c.id,c.document_version_id from chunks c
+        join document_versions v on v.id=c.document_version_id
+       where v.document_id=$1 order by c.chunk_index limit 1`,
+      [chunk.documentId]
+    )).rows[0];
+    await context.pool.query(
+      `insert into message_citations(id,user_id,message_id,chunk_id,document_version_id,ordinal,claim,quote,score,verifier_status,created_at)
+       values ($1,$2,$3,$4,$5,1,'资产质量','不良率保持稳定。',0.87,'unverified',$6)`,
+      [randomUUID(), userA, assistantMessageId, chunkRow.id, chunkRow.document_version_id, now]
+    );
 
     const citations = createPostgresCitationRepository(context.pool);
     const listed = await citations.listMessageCitations(userA, assistantMessageId);
@@ -141,7 +135,7 @@ test("Citation 持久化：固定 chunk/version 回链、原子写入、用户�
     // --- artifact citations：同事务写入、幂等重存、软删除级联 ---
     const artifactRepository = createPostgresArtifactRepository(context.pool);
     const artifact = {
-      userId: userA, conversationId: conversation.id, agentRunId: runInput.runId,
+      userId: userA, conversationId, agentRunId,
       kind: "research_report", mediaType: "text/html", metadata: {}, updatedAt: now,
       artifact: {
         artifactId: `artifact-${randomUUID()}`, reportId: "plan-1", workflowRunId: "workflow-1",
@@ -158,7 +152,7 @@ test("Citation 持久化：固定 chunk/version 回链、原子写入、用户�
     await context.pool.query(
       `insert into workflow_runs(id,user_id,conversation_id,agent_run_id,plan_id,workflow_name,status,snapshot,started_at,created_at,updated_at)
        values ('workflow-1',$1,$2,$3,'plan-1','report','succeeded','{}',$4,$4,$4)`,
-      [userA, conversation.id, runInput.runId, now]
+      [userA, conversationId, agentRunId, now]
     );
     await artifactRepository.save(artifact);
     const artifactListed = await citations.listArtifactCitations(userA, artifact.artifact.artifactId);

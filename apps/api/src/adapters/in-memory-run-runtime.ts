@@ -1,72 +1,149 @@
-import type { AgentRunSnapshotDto, AgentRunStreamEventDto } from "@aiagent/types";
+import type { RunEventInputDtoV2, RunSnapshotDtoV2, RunStatusDtoV2, RunStreamEventDtoV2 } from "@aiagent/types";
+import type { MessageStore } from "@aiagent/conversation";
 import type { RunEventBus, RunExecutionRegistry, RunScheduler, RunStore } from "../application/run-ports.js";
 
-/** 创建阶段一的内存 Run store；接口保持异步以便阶段二替换为数据库。 */
-export function createInMemoryRunStore(): RunStore {
-  const snapshots = new Map<string, AgentRunSnapshotDto & { userId: string; attachmentDocumentIds: string[] }>();
+const TERMINAL = new Set<RunStatusDtoV2>(["completed", "failed", "cancelled", "interrupted"]);
+
+/**
+ * 创建内存 Run store（仅测试显式使用）：语义对齐 Postgres adapter 的
+ * 幂等创建、sequence 分配、终态推导与单向状态机。
+ *
+ * @param options.messageStore 注入后在 create 事务语义内幂等落用户消息（对齐 Postgres 行为）。
+ * @returns 内存 RunStore。
+ */
+export function createInMemoryRunStore(options: { messageStore?: MessageStore } = {}): RunStore {
+  interface StoredRun {
+    snapshot: RunSnapshotDtoV2;
+    userId: string;
+    events: RunStreamEventDtoV2[];
+  }
+  const runs = new Map<string, StoredRun>();
   return {
     async create(input) {
-      const existing = [...snapshots.values()].find((run) => run.userId === input.userId && run.requestId === input.requestId);
-      if (existing) return { snapshot: structuredClone(existing), created: false };
-      const snapshot = {
-        runId: input.runId, requestId: input.requestId, conversationId: input.conversationId,
-        modelId: input.modelId, status: "queued" as const, createdAt: input.createdAt,
-        updatedAt: input.createdAt, events: [], userId: input.userId,
-        attachmentDocumentIds: [...input.attachmentDocumentIds]
+      const existing = [...runs.values()].find((run) => run.snapshot.requestId === input.requestId && run.userId === input.userId);
+      if (existing) return { snapshot: structuredClone(existing.snapshot), created: false };
+      // 对齐 Postgres create：触发 Run 的用户消息在同一创建语义内幂等落库。
+      if (options.messageStore) {
+        await options.messageStore.appendUserMessageIdempotently(input.userId, {
+          conversationId: input.conversationId,
+          runId: input.runId,
+          role: "user",
+          content: input.message,
+          clientMessageId: input.clientMessageId,
+          createdAt: input.createdAt
+        });
+      }
+      const snapshot: RunSnapshotDtoV2 = {
+        runId: input.runId,
+        requestId: input.requestId,
+        conversationId: input.conversationId,
+        modelId: input.modelId,
+        mode: input.mode,
+        source: input.source,
+        status: "queued",
+        lastEventSequence: 0,
+        createdAt: input.createdAt,
+        updatedAt: input.createdAt
       };
-      snapshots.set(input.runId, snapshot);
+      runs.set(input.runId, { snapshot, userId: input.userId, events: [] });
       return { snapshot: structuredClone(snapshot), created: true };
     },
     async findById(userId, runId) {
-      const value = snapshots.get(runId);
-      return value?.userId === userId ? structuredClone(value) : undefined;
+      const run = runs.get(runId);
+      return run?.userId === userId ? structuredClone(run.snapshot) : undefined;
     },
-    async listAttachmentDocumentIds(userId, runId) {
-      const value = snapshots.get(runId);
-      return value?.userId === userId ? [...value.attachmentDocumentIds] : undefined;
-    },
-    async append(userId, runId, eventInput) {
-      const current = snapshots.get(runId);
-      if (!current || current.userId !== userId || isTerminal(current.status)) return undefined;
-      const event = { ...eventInput, eventId: crypto.randomUUID(), sequence: current.events.length + 1 } as AgentRunStreamEventDto;
-      const status = event.type === "run_status" ? event.status
-        : event.type === "run_error" ? event.error.code === "request_cancelled" ? "cancelled" : "failed"
-        : event.type === "run_result" ? event.result.ok ? "succeeded" : "failed" : current.status;
-      if (!canTransition(current.status, status)) return undefined;
-      snapshots.set(runId, {
-        ...current, updatedAt: event.createdAt, status, events: [...current.events, event],
-        result: event.type === "run_result" ? event.result : current.result,
-        error: event.type === "run_error" ? event.error : current.error
-      });
+    async appendEvent(userId, runId, eventInput: RunEventInputDtoV2) {
+      const run = runs.get(runId);
+      if (!run || run.userId !== userId || TERMINAL.has(run.snapshot.status)) return undefined;
+      const nextStatus = statusFromEvent(eventInput, run.snapshot.status);
+      if (!canTransition(run.snapshot.status, nextStatus)) return undefined;
+      const event: RunStreamEventDtoV2 = {
+        ...structuredClone(eventInput),
+        eventId: crypto.randomUUID(),
+        sequence: run.events.length + 1
+      };
+      run.events.push(event);
+      run.snapshot = {
+        ...run.snapshot,
+        status: nextStatus,
+        updatedAt: event.createdAt,
+        lastEventSequence: event.sequence,
+        startedAt: nextStatus === "running" ? run.snapshot.startedAt ?? event.createdAt : run.snapshot.startedAt,
+        completedAt: TERMINAL.has(nextStatus) ? run.snapshot.completedAt ?? event.createdAt : run.snapshot.completedAt,
+        error: terminalError(eventInput, nextStatus) ?? run.snapshot.error
+      };
       return structuredClone(event);
     },
     async listEvents(userId, runId, afterSequence) {
-      const current = snapshots.get(runId);
-      return current?.userId === userId ? structuredClone(current.events.filter((event) => event.sequence > afterSequence)) : undefined;
+      const run = runs.get(runId);
+      return run?.userId === userId
+        ? structuredClone(run.events.filter((event) => event.sequence > afterSequence))
+        : undefined;
     },
-    async recoverStale() {
-      return [];
+    async recoverStale(before, occurredAt) {
+      const recovered: RunStreamEventDtoV2[] = [];
+      for (const run of runs.values()) {
+        if (TERMINAL.has(run.snapshot.status) || run.snapshot.updatedAt >= before) continue;
+        const event = await this.appendEvent(run.userId, run.snapshot.runId, {
+          type: "run_status",
+          runId: run.snapshot.runId,
+          requestId: run.snapshot.requestId,
+          conversationId: run.snapshot.conversationId,
+          createdAt: occurredAt,
+          payload: { status: "interrupted", message: "API 重启前的 Agent run 未完成，已标记为中断。" }
+        });
+        if (event) recovered.push(event);
+      }
+      return recovered;
     }
   };
 }
 
-/** @param status Run 状态。 @returns 是否已经进入不可回退的终态。 */
-function isTerminal(status: AgentRunSnapshotDto["status"]): boolean {
-  return status === "succeeded" || status === "failed" || status === "cancelled";
+/** @param event 事件输入。 @param current 当前状态。 @returns 推导后的状态（与 Postgres adapter 同规则）。 */
+function statusFromEvent(event: RunEventInputDtoV2, current: RunStatusDtoV2): RunStatusDtoV2 {
+  if (event.type === "run_status") {
+    return (event.payload as { status?: RunStatusDtoV2 }).status ?? current;
+  }
+  if (event.type === "run_error") {
+    return (event.payload as { error?: { code?: string } }).error?.code === "request_cancelled" ? "cancelled" : "failed";
+  }
+  if (event.type === "agent_end") {
+    const payload = event.payload as { error?: unknown; messages?: { role: string; stopReason?: string }[] };
+    if (payload.error) return "failed";
+    const lastAssistant = [...(payload.messages ?? [])].reverse().find((m) => m.role === "assistant");
+    if (lastAssistant?.stopReason === "aborted") return "cancelled";
+    if (lastAssistant?.stopReason === "error") return "failed";
+    return "completed";
+  }
+  return current;
+}
+
+/** @param event 事件输入。 @param nextStatus 推导后的状态。 @returns 终态结构化错误。 */
+function terminalError(event: RunEventInputDtoV2, nextStatus: RunStatusDtoV2): RunSnapshotDtoV2["error"] | undefined {
+  if (event.type === "run_error") return (event.payload as { error?: RunSnapshotDtoV2["error"] }).error;
+  if (event.type === "agent_end" && (nextStatus === "failed" || nextStatus === "cancelled")) {
+    const payload = event.payload as { error?: { code: string; message: string } };
+    if (payload.error) return { ...payload.error, requestId: event.requestId };
+    return {
+      code: nextStatus === "cancelled" ? "request_cancelled" : "agent_failed",
+      message: nextStatus === "cancelled" ? "Agent run 已取消。" : "Agent run 执行失败。",
+      requestId: event.requestId
+    };
+  }
+  return undefined;
 }
 
 /** @param current 当前状态。 @param next 目标状态。 @returns 是否为合法单向迁移。 */
-function canTransition(current: AgentRunSnapshotDto["status"], next: AgentRunSnapshotDto["status"]): boolean {
+function canTransition(current: RunStatusDtoV2, next: RunStatusDtoV2): boolean {
   if (current === next) return true;
-  if (current === "queued") return next === "running" || isTerminal(next);
-  if (current === "running") return next === "waiting_approval" || isTerminal(next);
-  if (current === "waiting_approval") return next === "running" || isTerminal(next);
+  if (current === "queued") return next === "running" || TERMINAL.has(next);
+  if (current === "running") return TERMINAL.has(next);
   return false;
 }
 
 /** 创建只负责实时 fan-out 的事件总线，不混入持久化职责。 */
 export function createInMemoryRunEventBus(): RunEventBus {
-  const listeners = new Map<string, Set<(event: AgentRunStreamEventDto) => void>>();
+  const listeners = new Map<string, Set<(event: RunStreamEventDtoV2) => void>>();
   return {
     publish(event) {
       for (const listener of listeners.get(event.runId) ?? []) listener(event);
@@ -83,7 +160,7 @@ export function createInMemoryRunEventBus(): RunEventBus {
   };
 }
 
-/** AbortController 属于进程执行态，不能写入可持久化 Run snapshot。 */
+/** 创建内存执行注册表；abort 只发信号，执行体自行收尾。 */
 export function createInMemoryExecutionRegistry(): RunExecutionRegistry {
   const controllers = new Map<string, AbortController>();
   return {
@@ -93,16 +170,20 @@ export function createInMemoryExecutionRegistry(): RunExecutionRegistry {
       return controller;
     },
     get: (runId) => controllers.get(runId),
-    delete: (runId) => { controllers.delete(runId); },
+    delete: (runId) => {
+      controllers.delete(runId);
+    },
     list: () => [...controllers.keys()]
   };
 }
 
-/** 当前 scheduler 使用 microtask；阶段二可在不改 application service 的情况下换成队列。 */
+/** 创建微任务调度器；生产语义是不阻塞 HTTP 响应。 */
 export function createMicrotaskRunScheduler(): RunScheduler {
   return {
     schedule(task) {
-      queueMicrotask(() => void task());
+      queueMicrotask(() => {
+        void task().catch(() => undefined);
+      });
     }
   };
 }

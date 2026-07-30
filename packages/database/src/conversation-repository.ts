@@ -1,38 +1,23 @@
 import type {
-  AppendMessageInput,
   Conversation,
   ConversationRepository,
   CursorPage,
-  IdempotentMessageResult,
-  ListConversationsInput,
-  ListMessagesInput,
-  Message,
-  MessageRepository
+  ListConversationsInput
 } from "@aiagent/conversation";
 import { ConversationRepositoryError } from "@aiagent/conversation";
 import { randomUUID } from "node:crypto";
 import type pg from "pg";
-import { isPostgresUniqueViolation, postgresTimestampToIso, withTransaction } from "./postgres.js";
-
-export interface PostgresConversationRepositories {
-  conversationRepository: ConversationRepository;
-  messageRepository: MessageRepository;
-}
+import { isPostgresUniqueViolation, postgresTimestampToIso } from "./postgres.js";
 
 /**
- * 创建共享同一连接池的 Conversation 与 Message PostgreSQL adapter。
- *
- * 两个 repository 共同依赖 conversation 行锁，确保消息幂等判断、sequence 分配与会话排序
- * 时间更新属于同一个事务边界。
+ * 创建会话主体（conversations_v2）的 PostgreSQL adapter。
+ * 消息职责已由 message-repository.ts（messages_v2 线性模型）承接。
  *
  * @param pool composition root 提供的 PostgreSQL 连接池。
- * @returns Conversation 与 Message repository。
+ * @returns Conversation repository。
  */
-export function createPostgresConversationRepositories(pool: pg.Pool): PostgresConversationRepositories {
-  return {
-    conversationRepository: new PostgresConversationRepository(pool),
-    messageRepository: new PostgresMessageRepository(pool)
-  };
+export function createPostgresConversationRepository(pool: pg.Pool): ConversationRepository {
+  return new PostgresConversationRepository(pool);
 }
 
 class PostgresConversationRepository implements ConversationRepository {
@@ -50,7 +35,7 @@ class PostgresConversationRepository implements ConversationRepository {
     const now = input.now ?? new Date().toISOString();
     try {
       const result = await this.pool.query<ConversationRow>(
-        `insert into conversations(id,user_id,title,status,created_at,updated_at,last_message_at)
+        `insert into conversations_v2(id,user_id,title,status,created_at,updated_at,last_message_at)
          values ($1,$2,$3,'active',$4,$4,$4)
          returning *`,
         [input.id ?? randomUUID(), userId, input.title, now]
@@ -73,7 +58,7 @@ class PostgresConversationRepository implements ConversationRepository {
     const cursor = input.cursor ? decodeConversationCursor(input.cursor) : undefined;
     try {
       const result = await this.pool.query<ConversationListRow>(
-        `select *,last_message_at::text as cursor_last_message_at from conversations
+        `select *,last_message_at::text as cursor_last_message_at from conversations_v2
           where user_id=$1 and status=$2
             and ($3::timestamptz is null or (last_message_at,id) < ($3::timestamptz,$4::uuid))
           order by last_message_at desc,id desc
@@ -106,7 +91,7 @@ class PostgresConversationRepository implements ConversationRepository {
   async find(userId: string, conversationId: string): Promise<Conversation | undefined> {
     try {
       const result = await this.pool.query<ConversationRow>(
-        "select * from conversations where id=$1 and user_id=$2",
+        "select * from conversations_v2 where id=$1 and user_id=$2",
         [conversationId, userId]
       );
       return result.rows[0] ? mapConversation(result.rows[0]) : undefined;
@@ -127,7 +112,7 @@ class PostgresConversationRepository implements ConversationRepository {
   async updateTitle(userId: string, conversationId: string, title: string, now = new Date().toISOString()): Promise<Conversation> {
     try {
       const result = await this.pool.query<ConversationRow>(
-        "update conversations set title=$3,updated_at=$4 where id=$1 and user_id=$2 returning *",
+        "update conversations_v2 set title=$3,updated_at=$4 where id=$1 and user_id=$2 returning *",
         [conversationId, userId, title, now]
       );
       if (!result.rows[0]) throw notFound();
@@ -148,7 +133,7 @@ class PostgresConversationRepository implements ConversationRepository {
   async archive(userId: string, conversationId: string, now = new Date().toISOString()): Promise<Conversation> {
     try {
       const result = await this.pool.query<ConversationRow>(
-        `update conversations
+        `update conversations_v2
             set status='archived',
                 archived_at=coalesce(archived_at,$3),
                 updated_at=case when status='archived' then updated_at else $3 end
@@ -158,113 +143,6 @@ class PostgresConversationRepository implements ConversationRepository {
       );
       if (!result.rows[0]) throw notFound();
       return mapConversation(result.rows[0]);
-    } catch (cause) {
-      throw mapRepositoryError(cause);
-    }
-  }
-}
-
-class PostgresMessageRepository implements MessageRepository {
-  /** @param pool PostgreSQL 连接池。 */
-  constructor(private readonly pool: pg.Pool) {}
-
-  /**
-   * 在会话行锁保护下分配下一个 sequence 并追加消息。
-   *
-   * @param userId 当前用户。
-   * @param input 消息内容与状态。
-   * @returns 新消息。
-   */
-  async append(userId: string, input: AppendMessageInput): Promise<Message> {
-    try {
-      return await withTransaction(this.pool, async (client) => {
-        await lockOwnedConversation(client, userId, input.conversationId);
-        return insertNextMessage(client, userId, input);
-      });
-    } catch (cause) {
-      throw mapRepositoryError(cause);
-    }
-  }
-
-  /**
-   * 在同一会话锁内检查 client ID，重复提交返回原消息而不新增 sequence。
-   *
-   * @param userId 当前用户。
-   * @param input 带客户端幂等键的用户消息。
-   * @returns created 或 existing 结果。
-   */
-  async appendUserMessageIdempotently(
-    userId: string,
-    input: AppendMessageInput & { role: "user"; clientMessageId: string }
-  ): Promise<IdempotentMessageResult> {
-    try {
-      return await withTransaction(this.pool, async (client) => {
-        await lockOwnedConversation(client, userId, input.conversationId);
-        const existing = await client.query<MessageRow>(
-          `select * from messages
-            where conversation_id=$1 and user_id=$2 and client_message_id=$3`,
-          [input.conversationId, userId, input.clientMessageId]
-        );
-        if (existing.rows[0]) return { outcome: "existing", message: mapMessage(existing.rows[0]) };
-        return { outcome: "created", message: await insertNextMessage(client, userId, input) };
-      });
-    } catch (cause) {
-      throw mapRepositoryError(cause);
-    }
-  }
-
-  /**
-   * 以 `(sequence,id)` 升序游标读取当前用户会话时间线。
-   *
-   * @param userId 当前用户。
-   * @param input 会话、页大小和游标。
-   * @returns 稳定消息页。
-   */
-  async list(userId: string, input: ListMessagesInput): Promise<CursorPage<Message>> {
-    const limit = normalizeLimit(input.limit);
-    const cursor = input.cursor ? decodeMessageCursor(input.cursor) : undefined;
-    try {
-      const result = await this.pool.query<MessageRow>(
-        `select m.* from messages m
-          join conversations c on c.id=m.conversation_id
-         where m.conversation_id=$1 and m.user_id=$2 and c.user_id=$2
-           and ($3::bigint is null or (m.sequence,m.id) > ($3::bigint,$4::uuid))
-         order by m.sequence asc,m.id asc
-         limit $5`,
-        [input.conversationId, userId, cursor?.sequence ?? null, cursor?.id ?? null, limit + 1]
-      );
-      const hasMore = result.rows.length > limit;
-      const rows = result.rows.slice(0, limit);
-      const attachments = await loadAttachments(this.pool, userId, rows.map((row) => row.id));
-      const items = rows.map((row) => mapMessage(row, attachments.get(row.id) ?? []));
-      const last = items.at(-1);
-      return {
-        items,
-        nextCursor: hasMore && last ? encodeCursor({ sequence: last.sequence, id: last.id }) : undefined
-      };
-    } catch (cause) {
-      throw mapRepositoryError(cause);
-    }
-  }
-
-  /**
-   * 按消息与用户归属读取，避免先按 ID 查询后再补授权。
-   *
-   * @param userId 当前用户。
-   * @param messageId 消息 ID。
-   * @returns 所属消息或 undefined。
-   */
-  async find(userId: string, messageId: string): Promise<Message | undefined> {
-    try {
-      const result = await this.pool.query<MessageRow>(
-        `select m.* from messages m
-          join conversations c on c.id=m.conversation_id
-         where m.id=$1 and m.user_id=$2 and c.user_id=$2`,
-        [messageId, userId]
-      );
-      if (!result.rows[0]) return undefined;
-      const attachments = await loadAttachments(this.pool, userId, [result.rows[0].id]);
-      return mapMessage(result.rows[0], attachments.get(result.rows[0].id) ?? []);
     } catch (cause) {
       throw mapRepositoryError(cause);
     }
@@ -286,89 +164,6 @@ interface ConversationListRow extends ConversationRow {
   cursor_last_message_at: string;
 }
 
-interface MessageRow {
-  id: string;
-  conversation_id: string;
-  user_id: string;
-  run_id: string | null;
-  role: "user" | "assistant" | "system" | "tool";
-  content: string;
-  status: "pending" | "streaming" | "completed" | "failed" | "cancelled";
-  client_message_id: string | null;
-  sequence: string | number;
-  created_at: Date | string;
-  completed_at: Date | string | null;
-}
-
-interface MessageAttachmentRow {
-  id: string;
-  message_id: string;
-  document_id: string;
-  file_name: string;
-  content_type: string;
-  size_bytes: string | number;
-  ordinal: number;
-}
-
-/**
- * 锁定属于当前用户的会话；归属校验直接进入 SQL，避免越权资源探测。
- *
- * @param client 当前事务连接。
- * @param userId 当前用户。
- * @param conversationId 会话 ID。
- * @returns 获得行锁后的 Promise。
- */
-async function lockOwnedConversation(client: pg.PoolClient, userId: string, conversationId: string): Promise<void> {
-  const result = await client.query(
-    "select id from conversations where id=$1 and user_id=$2 for update",
-    [conversationId, userId]
-  );
-  if (!result.rows[0]) throw notFound();
-}
-
-/**
- * 在已持有 conversation 行锁的事务中分配并写入消息。
- *
- * @param client 当前事务连接。
- * @param userId 消息所有者。
- * @param input 消息输入。
- * @returns 新消息。
- */
-async function insertNextMessage(client: pg.PoolClient, userId: string, input: AppendMessageInput): Promise<Message> {
-  const createdAt = input.createdAt ?? new Date().toISOString();
-  const sequenceResult = await client.query<{ sequence: string }>(
-    "select coalesce(max(sequence),0)+1 as sequence from messages where conversation_id=$1",
-    [input.conversationId]
-  );
-  const sequence = sequenceResult.rows[0]?.sequence ?? "1";
-  const result = await client.query<MessageRow>(
-    `insert into messages(
-       id,conversation_id,user_id,run_id,role,content,status,client_message_id,sequence,created_at,completed_at
-     ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
-     returning *`,
-    [
-      input.id ?? randomUUID(),
-      input.conversationId,
-      userId,
-      input.runId ?? null,
-      input.role,
-      input.content,
-      input.status,
-      input.clientMessageId ?? null,
-      sequence,
-      createdAt,
-      input.completedAt ?? null
-    ]
-  );
-  await client.query(
-    `update conversations
-        set last_message_at=greatest(last_message_at,$2::timestamptz),updated_at=greatest(updated_at,$2::timestamptz)
-      where id=$1 and user_id=$3`,
-    [input.conversationId, createdAt, userId]
-  );
-  return mapMessage(requireRow(result.rows[0]));
-}
-
 /** @param row PostgreSQL 会话行。 @returns 领域会话。 */
 function mapConversation(row: ConversationRow): Conversation {
   return {
@@ -381,61 +176,6 @@ function mapConversation(row: ConversationRow): Conversation {
     lastMessageAt: postgresTimestampToIso(row.last_message_at),
     archivedAt: row.archived_at ? postgresTimestampToIso(row.archived_at) : undefined
   };
-}
-
-/** @param row PostgreSQL 消息行。 @returns 领域消息。 */
-function mapMessage(row: MessageRow, attachments: Message["attachments"] = []): Message {
-  return {
-    id: row.id,
-    conversationId: row.conversation_id,
-    userId: row.user_id,
-    runId: row.run_id ?? undefined,
-    role: row.role,
-    content: row.content,
-    status: row.status,
-    clientMessageId: row.client_message_id ?? undefined,
-    sequence: Number(row.sequence),
-    createdAt: postgresTimestampToIso(row.created_at),
-    completedAt: row.completed_at ? postgresTimestampToIso(row.completed_at) : undefined,
-    attachments
-  };
-}
-
-/**
- * 批量读取消息附件，避免历史页按消息产生 N+1 查询。
- *
- * @param executor PostgreSQL 查询执行器。
- * @param userId 当前用户。
- * @param messageIds 当前页消息 ID。
- * @returns 按消息 ID 分组的附件。
- */
-async function loadAttachments(
-  executor: Pick<pg.Pool | pg.PoolClient, "query">,
-  userId: string,
-  messageIds: string[]
-): Promise<Map<string, Message["attachments"]>> {
-  if (messageIds.length === 0) return new Map();
-  const result = await executor.query<MessageAttachmentRow>(
-    `select id,message_id,document_id,file_name,content_type,size_bytes,ordinal
-       from message_attachments
-      where user_id=$1 and message_id=any($2::uuid[])
-      order by message_id,ordinal`,
-    [userId, messageIds]
-  );
-  const grouped = new Map<string, Message["attachments"]>();
-  for (const row of result.rows) {
-    const current = grouped.get(row.message_id) ?? [];
-    current.push({
-      id: row.id,
-      documentId: row.document_id,
-      fileName: row.file_name,
-      contentType: row.content_type,
-      sizeBytes: Number(row.size_bytes),
-      ordinal: row.ordinal
-    });
-    grouped.set(row.message_id, current);
-  }
-  return grouped;
 }
 
 /** @param value 游标内容。 @returns 不透明 base64url 游标。 */
@@ -455,21 +195,6 @@ function decodeConversationCursor(cursor: string): { lastMessageAt: string; id: 
     throw invalidCursor();
   }
   return { lastMessageAt: value.lastMessageAt, id: value.id };
-}
-
-/** @param cursor 不透明消息游标。 @returns 已校验的消息排序键。 */
-function decodeMessageCursor(cursor: string): { sequence: number; id: string } {
-  const value = decodeCursor(cursor);
-  if (
-    typeof value.sequence !== "number"
-    || !Number.isSafeInteger(value.sequence)
-    || value.sequence < 1
-    || typeof value.id !== "string"
-    || !isUuid(value.id)
-  ) {
-    throw invalidCursor();
-  }
-  return { sequence: value.sequence, id: value.id };
 }
 
 /** @param cursor base64url JSON 游标。 @returns 未知键值对象。 */

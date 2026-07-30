@@ -1,15 +1,15 @@
 import type {
   Conversation,
   ConversationRepository,
-  Message,
-  MessageRepository
+  MessageStore,
+  StoredMessage
 } from "@aiagent/conversation";
 import { ConversationRepositoryError } from "@aiagent/conversation";
 import type {
   ConversationDto,
-  ConversationMessageDto,
   CreateConversationRequestDto,
   CursorPageDto,
+  LinearMessageDto,
   UpdateConversationRequestDto
 } from "@aiagent/types";
 
@@ -19,23 +19,20 @@ export interface ConversationApplicationService {
   listMessages(
     userId: string,
     input: { conversationId: string; cursor?: string; limit: number }
-  ): Promise<CursorPageDto<ConversationMessageDto>>;
+  ): Promise<CursorPageDto<LinearMessageDto>>;
   update(userId: string, conversationId: string, input: UpdateConversationRequestDto): Promise<ConversationDto>;
-  persistUserMessage(
-    userId: string,
-    input: { conversationId: string; content: string; clientMessageId: string }
-  ): Promise<void>;
 }
 
 /**
  * 创建 Conversation 用例服务；HTTP adapter 不直接接触领域 row，也不持有第二份状态。
+ * 阶段 3：消息列表直接返回线性 Message DTO（content 块原样透传，含 compaction 行）。
  *
  * @param repositories 已注入的领域 repository。
  * @returns Conversation API 用例集合。
  */
 export function createConversationApplicationService(repositories: {
   conversationRepository: ConversationRepository;
-  messageRepository: MessageRepository;
+  messageStore: MessageStore;
 }): ConversationApplicationService {
   return {
     /** @param userId 当前用户。 @param input 创建输入。 @returns 会话 DTO。 */
@@ -55,19 +52,13 @@ export function createConversationApplicationService(repositories: {
       return { items: page.items.map(toConversationDto), nextCursor: page.nextCursor };
     },
 
-    /** @param userId 当前用户。 @param input 消息分页输入。 @returns 已完成或失败的消息 DTO 页。 */
+    /** @param userId 当前用户。 @param input 消息分页输入。 @returns 线性消息 DTO 页。 */
     async listMessages(userId, input) {
       if (!await repositories.conversationRepository.find(userId, input.conversationId)) {
         throw new ConversationRepositoryError("not_found", "Conversation resource was not found.");
       }
-      const page = await repositories.messageRepository.list(userId, input);
-      return {
-        items: page.items
-          .filter((message): message is Message & { status: "completed" | "failed" } =>
-            message.status === "completed" || message.status === "failed")
-          .map(toMessageDto),
-        nextCursor: page.nextCursor
-      };
+      const page = await repositories.messageStore.list(userId, input);
+      return { items: page.items.map(toLinearMessageDto), nextCursor: page.nextCursor };
     },
 
     /** @param userId 当前用户。 @param conversationId 会话 ID。 @param input 更新输入。 @returns 会话 DTO。 */
@@ -76,18 +67,6 @@ export function createConversationApplicationService(repositories: {
         ? await repositories.conversationRepository.updateTitle(userId, conversationId, input.title.trim())
         : await repositories.conversationRepository.archive(userId, conversationId);
       return toConversationDto(conversation);
-    },
-
-    /** @param userId 当前用户。 @param input 用户消息输入。 @returns 完成后无返回值。 */
-    async persistUserMessage(userId, input) {
-      await repositories.messageRepository.appendUserMessageIdempotently(userId, {
-        conversationId: input.conversationId,
-        role: "user",
-        content: input.content,
-        status: "completed",
-        clientMessageId: input.clientMessageId,
-        completedAt: new Date().toISOString()
-      });
     }
   };
 }
@@ -105,26 +84,19 @@ function toConversationDto(conversation: Conversation): ConversationDto {
   };
 }
 
-/** @param message 已收窄为终态的领域消息。 @returns 不含 userId/clientMessageId 的 API DTO。 */
-function toMessageDto(message: Message & { status: "completed" | "failed" }): ConversationMessageDto {
+/** @param message 领域存储消息。 @returns 不含 userId/clientMessageId 的线性消息 DTO。 */
+function toLinearMessageDto(message: StoredMessage): LinearMessageDto {
   return {
     messageId: message.id,
     conversationId: message.conversationId,
     runId: message.runId,
     role: message.role,
     content: message.content,
-    status: message.status,
+    messageType: message.messageType,
     sequence: message.sequence,
-    createdAt: message.createdAt,
-    completedAt: message.completedAt
-    ,
-    attachments: message.attachments.map((attachment) => ({
-      attachmentId: attachment.id,
-      documentId: attachment.documentId,
-      fileName: attachment.fileName,
-      contentType: attachment.contentType,
-      sizeBytes: attachment.sizeBytes,
-      ordinal: attachment.ordinal
-    }))
+    usage: message.usage,
+    modelId: message.modelId,
+    stopReason: message.stopReason,
+    createdAt: message.createdAt
   };
 }

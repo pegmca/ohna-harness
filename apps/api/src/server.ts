@@ -9,7 +9,7 @@ import { createDefaultToolRegistry } from "@aiagent/tools";
 import { stat } from "node:fs/promises";
 import { createApiServer } from "./index.js";
 import { createModelRuntimeRegistry, type ModelRuntime } from "./application/model-registry.js";
-import { BASE_SYSTEM_PROMPT } from "./application/agent-execution.js";
+import { BASE_SYSTEM_PROMPT } from "./application/run-service.js";
 import { createMockModelRuntime } from "./adapters/mock-model.js";
 
 /**
@@ -105,9 +105,6 @@ const qqChannel = createQqBotChannel({
 const app = createApiServer({
   modelRegistry,
   tools: agentTools,
-  mockStepDelayMs: providerMode === "mock"
-    ? Math.max(0, Math.min(3_000, Number(process.env.AIAGENT_MOCK_STEP_DELAY_MS ?? 500)))
-    : 0,
   identityService,
   dataSourceRuntime: createDataSourceRuntime({
     repository: database.ragDocumentRepository,
@@ -123,11 +120,10 @@ const app = createApiServer({
   workflowRepository: database.workflowRepository,
   artifactRepository: database.artifactRepository,
   conversationRepository: database.conversationRepository,
-  messageRepository: database.messageRepository,
+  messageStore: database.messageStore,
   artifactStorage: createLocalArtifactStorage(artifactStorageRoot),
   runStore: database.runRepository,
   approvalRepository: database.approvalRepository,
-  approvalDecisionService: database.approvalDecisionService,
   traceStore: database.traceStore,
   readiness: async () => {
     if (providerMode !== "mock" && providerMode !== "real") {

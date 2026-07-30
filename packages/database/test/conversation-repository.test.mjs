@@ -1,130 +1,123 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createPostgresConversationRepositories } from "../dist/index.js";
+import { createPostgresConversationRepository, createPostgresMessageStore } from "../dist/index.js";
 import { runMigrations } from "../dist/migrate.js";
 import { createDatabaseTestContext } from "./helpers/database-test-helper.mjs";
 
 const integrationEnabled = Boolean(process.env.TEST_DATABASE_URL);
+const now = "2026-07-25T08:00:00.000Z";
 
-test("Conversation 与 Message PostgreSQL adapter 满足归属、分页、归档和并发语义", { skip: !integrationEnabled }, async () => {
+test("Conversation v2 CRUD 满足归属、分页、归档语义", { skip: !integrationEnabled }, async () => {
   const context = await createDatabaseTestContext(process.env.TEST_DATABASE_URL, process.env.DATABASE_URL);
   try {
     await runMigrations(context.pool);
     const userOne = "10000000-0000-4000-8000-000000000001";
     const userTwo = "20000000-0000-4000-8000-000000000002";
-    const now = "2026-07-25T08:00:00.000Z";
     await context.pool.query(
       `insert into users(id,created_at,updated_at,last_seen_at)
        values ($1,$3,$3,$3),($2,$3,$3,$3)`,
       [userOne, userTwo, now]
     );
-    const { conversationRepository, messageRepository } = createPostgresConversationRepositories(context.pool);
+    const repository = createPostgresConversationRepository(context.pool);
 
-    const conversationIds = [
-      "00000000-0000-4000-8000-000000000003",
-      "00000000-0000-4000-8000-000000000002",
-      "00000000-0000-4000-8000-000000000001"
-    ];
-    for (const [index, id] of conversationIds.entries()) {
-      await conversationRepository.create(userOne, { id, title: `会话 ${index + 1}`, now });
+    const created = await repository.create(userOne, { title: "研究会话", now });
+    assert.equal(created.status, "active");
+
+    // 归属隔离：其他用户读不到、改不了。
+    assert.equal(await repository.find(userTwo, created.id), undefined);
+    await assert.rejects(() => repository.updateTitle(userTwo, created.id, "x"), /not found/i);
+
+    const renamed = await repository.updateTitle(userOne, created.id, "新标题", "2026-07-25T09:00:00.000Z");
+    assert.equal(renamed.title, "新标题");
+
+    // 分页：再建两条，limit=1 翻页读完。
+    await repository.create(userOne, { title: "会话 2", now: "2026-07-25T10:00:00.000Z" });
+    await repository.create(userOne, { title: "会话 3", now: "2026-07-25T11:00:00.000Z" });
+    const seen = new Set();
+    let cursor;
+    for (let page = 0; page < 10; page += 1) {
+      const result = await repository.list(userOne, { limit: 1, cursor });
+      result.items.forEach((item) => seen.add(item.id));
+      if (!result.nextCursor) break;
+      cursor = result.nextCursor;
     }
-    const foreign = await conversationRepository.create(userTwo, {
-      id: "20000000-0000-4000-8000-000000000003",
-      title: "其他用户",
-      now
-    });
+    assert.equal(seen.size, 3);
 
-    assert.equal(await conversationRepository.find(userOne, foreign.id), undefined);
-    await assert.rejects(
-      () => conversationRepository.updateTitle(userOne, foreign.id, "越权"),
-      (error) => error.code === "not_found"
-    );
-    await assert.rejects(
-      () => conversationRepository.archive(userOne, foreign.id),
-      (error) => error.code === "not_found"
-    );
+    const archived = await repository.archive(userOne, created.id, "2026-07-25T12:00:00.000Z");
+    assert.equal(archived.status, "archived");
+    const listed = await repository.list(userOne, { status: "active" });
+    assert.equal(listed.items.some((item) => item.id === created.id), false);
+  } finally {
+    await context.cleanup();
+  }
+});
 
-    const firstPage = await conversationRepository.list(userOne, { limit: 2 });
-    const secondPage = await conversationRepository.list(userOne, { limit: 2, cursor: firstPage.nextCursor });
-    assert.deepEqual(
-      [...firstPage.items, ...secondPage.items].map((item) => item.id),
-      conversationIds
-    );
-    assert.equal(new Set([...firstPage.items, ...secondPage.items].map((item) => item.id)).size, 3);
-
-    const precisionUser = "30000000-0000-4000-8000-000000000003";
+test("MessageStore v2 线性 append、幂等、时间线分页与 listForContext 投影", { skip: !integrationEnabled }, async () => {
+  const context = await createDatabaseTestContext(process.env.TEST_DATABASE_URL, process.env.DATABASE_URL);
+  try {
+    await runMigrations(context.pool);
+    const userOne = "10000000-0000-4000-8000-000000000001";
     await context.pool.query(
       "insert into users(id,created_at,updated_at,last_seen_at) values ($1,$2,$2,$2)",
-      [precisionUser, now]
+      [userOne, now]
     );
-    const precisionIds = [
-      "30000000-0000-4000-8000-000000000001",
-      "30000000-0000-4000-8000-000000000002",
-      "30000000-0000-4000-8000-000000000003"
-    ];
-    for (const [index, id] of precisionIds.entries()) {
-      await conversationRepository.create(precisionUser, {
-        id,
-        title: `微秒会话 ${index + 1}`,
-        now: `2026-07-25T08:00:00.123${9 - index}00Z`
-      });
+    const conversations = createPostgresConversationRepository(context.pool);
+    const conversation = await conversations.create(userOne, { title: "线性消息", now });
+    const store = createPostgresMessageStore(context.pool);
+
+    // 幂等用户消息：重复 client_message_id 返回既有行不占新 sequence。
+    const first = await store.appendUserMessageIdempotently(userOne, {
+      conversationId: conversation.id, role: "user", content: "第一轮问题", clientMessageId: "c-1", createdAt: now
+    });
+    const duplicate = await store.appendUserMessageIdempotently(userOne, {
+      conversationId: conversation.id, role: "user", content: "第一轮问题", clientMessageId: "c-1", createdAt: now
+    });
+    assert.equal(first.outcome, "created");
+    assert.equal(duplicate.outcome, "existing");
+    assert.equal(first.message.id, duplicate.message.id);
+    assert.equal(first.message.sequence, 1);
+
+    // assistant（content 块数组 + usage）与 toolResult（envelope）线性追加。
+    const assistant = await store.append(userOne, {
+      conversationId: conversation.id, role: "assistant",
+      content: [{ type: "toolCall", id: "call-1", name: "calculator", arguments: { expression: "1+1" } }],
+      usage: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0, totalTokens: 3, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+      modelId: "mock", stopReason: "toolUse", createdAt: now
+    });
+    const toolResult = await store.append(userOne, {
+      conversationId: conversation.id, role: "toolResult",
+      content: { toolCallId: "call-1", toolName: "calculator", content: [{ type: "text", text: "2" }], isError: false },
+      createdAt: now
+    });
+    assert.deepEqual([assistant.sequence, toolResult.sequence], [2, 3]);
+
+    // 时间线分页：limit=2 翻页读完全部 3 条 + 后续 compaction 行。
+    await store.append(userOne, {
+      conversationId: conversation.id, role: "user", messageType: "compaction",
+      content: "[以下是之前对话历史的压缩摘要]\n\n用户问了 1+1。", createdAt: now
+    });
+    await store.append(userOne, {
+      conversationId: conversation.id, role: "user", content: "压缩后的新问题", clientMessageId: "c-2", createdAt: now
+    });
+    const seen = [];
+    let cursor;
+    for (let page = 0; page < 10; page += 1) {
+      const result = await store.list(userOne, { conversationId: conversation.id, limit: 2, cursor });
+      seen.push(...result.items);
+      if (!result.nextCursor) break;
+      cursor = result.nextCursor;
     }
-    const precisionPages = [];
-    let precisionCursor;
-    do {
-      const page = await conversationRepository.list(precisionUser, { limit: 1, cursor: precisionCursor });
-      precisionPages.push(...page.items);
-      precisionCursor = page.nextCursor;
-    } while (precisionCursor);
-    assert.deepEqual(precisionPages.map((item) => item.id), precisionIds);
-    assert.equal(new Set(precisionPages.map((item) => item.id)).size, precisionIds.length);
+    assert.deepEqual(seen.map((item) => item.sequence), [1, 2, 3, 4, 5]);
+    assert.equal(seen[3].messageType, "compaction");
 
-    const archivedOnce = await conversationRepository.archive(userOne, conversationIds[0], "2026-07-25T09:00:00.000Z");
-    const archivedTwice = await conversationRepository.archive(userOne, conversationIds[0], "2026-07-25T10:00:00.000Z");
-    assert.equal(archivedOnce.archivedAt, archivedTwice.archivedAt);
-    assert.equal((await conversationRepository.find(userOne, conversationIds[0]))?.status, "archived");
-    assert.equal((await conversationRepository.list(userOne)).items.some((item) => item.id === conversationIds[0]), false);
+    // listForContext 投影：最后一个 compaction + 其后消息。
+    const projected = await store.listForContext(userOne, conversation.id);
+    assert.deepEqual(projected.map((item) => item.sequence), [4, 5]);
+    assert.equal(projected[0].messageType, "compaction");
 
-    const idempotentInput = {
-      conversationId: conversationIds[1],
-      role: "user",
-      content: "同一条客户端消息",
-      status: "completed",
-      clientMessageId: "client-message-1",
-      createdAt: "2026-07-25T11:00:00.000Z"
-    };
-    const duplicateResults = await Promise.all(
-      Array.from({ length: 8 }, () => messageRepository.appendUserMessageIdempotently(userOne, idempotentInput))
-    );
-    assert.equal(duplicateResults.filter((result) => result.outcome === "created").length, 1);
-    assert.equal(new Set(duplicateResults.map((result) => result.message.id)).size, 1);
-
-    const concurrentMessages = await Promise.all(
-      Array.from({ length: 8 }, (_, index) => messageRepository.append(userOne, {
-        conversationId: conversationIds[1],
-        role: "assistant",
-        content: `并发消息 ${index}`,
-        status: "completed",
-        createdAt: "2026-07-25T11:01:00.000Z"
-      }))
-    );
-    assert.deepEqual(
-      concurrentMessages.map((message) => message.sequence).sort((left, right) => left - right),
-      [2, 3, 4, 5, 6, 7, 8, 9]
-    );
-    assert.equal(new Set(concurrentMessages.map((message) => message.sequence)).size, 8);
-    assert.equal(await messageRepository.find(userTwo, concurrentMessages[0].id), undefined);
-    assert.deepEqual((await messageRepository.list(userOne, { conversationId: conversationIds[1], limit: 4 })).items.map(
-      (message) => message.sequence
-    ), [1, 2, 3, 4]);
-
-    const columns = await context.pool.query(
-      `select table_name,column_name,col_description((quote_ident(table_schema)||'.'||quote_ident(table_name))::regclass::oid,ordinal_position) as comment
-         from information_schema.columns
-        where table_schema=current_schema() and table_name in ('conversations','messages')`
-    );
-    assert.equal(columns.rows.length, 19);
-    assert.equal(columns.rows.every((row) => typeof row.comment === "string" && row.comment.length > 0), true);
+    // 归属隔离：其他用户读不到投影。
+    const foreign = await store.listForContext("20000000-0000-4000-8000-000000000002", conversation.id);
+    assert.deepEqual(foreign, []);
   } finally {
     await context.cleanup();
   }

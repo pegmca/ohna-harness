@@ -1,53 +1,56 @@
-import type { AgentMessage, AgentTool } from "@aiagent/agent";
-import { runReportWorkflow } from "@aiagent/report";
-import type { DataSourceRuntime } from "@aiagent/rag";
+/**
+ * Run application service（阶段 3 重写）：消费 packages/agent 的 agentLoop 事件流，
+ * 逐事件落 run_events_v2（先落库后广播）+ SSE fan-out；消息在 message_end 一次性落
+ * messages_v2（run 终态兜底补齐 toolResult 等未落消息）；compaction 由 transformContext
+ * 触发后以 role='user'、message_type='compaction' 落表，上下文重建走 listForContext 投影。
+ *
+ * 与旧版的差异：trace 旁路（traceStore/trace_event 投影）与 report 编排移出 run 主路径
+ * （阶段 5 回迁）；终态推导改为消费 agent_end / run_error；会话历史不再内存累积，
+ * 每次 run 从 messages_v2 的 listForContext 投影重建（跨进程生效）。
+ */
+import { agentLoop, createCompactionTransform, defaultConvertToLlm } from "@aiagent/agent";
+import type { AgentEvent, AgentMessage, AgentTool, StreamFn } from "@aiagent/agent";
+import type { CompactionSettings } from "@aiagent/agent";
+import type { Message } from "@aiagent/ai";
+import {
+  compactionStoredContent,
+  piMessageToAppendInput,
+  storedMessagesToPiMessages,
+  type MessageStore
+} from "@aiagent/conversation";
 import type {
   AgentRunAcceptedDto,
   AgentRunCreateRequestDto,
-  AgentRunEventInputDto,
-  AgentRunResponseDto,
-  AgentRunSnapshotDto,
-  AgentRunStatusDto,
-  AgentRunStreamEventDto,
   ApiError,
-  CitationDto,
-  ReportArtifactDto,
-  ReportPlanDto,
-  ReportWorkflowResponseDto,
-  ToolApprovalRequestDto,
-  TraceDto
+  RunSnapshotDtoV2,
+  RunStreamEventDtoV2
 } from "@aiagent/types";
-import {
-  createObservableTraceRecorder,
-  redactSensitiveValue,
-  type TracePersistenceContext,
-  type TraceStore
-} from "@aiagent/trace";
+import { redactSensitiveValue } from "@aiagent/trace";
 import { createHash, randomUUID } from "node:crypto";
 import type { RunEventBus, RunExecutionRegistry, RunScheduler, RunStore } from "./run-ports.js";
-import { createPacedTraceRecorder } from "../adapters/paced-trace-recorder.js";
-import { executeAgentLoop, type AgentExecutionResult } from "./agent-execution.js";
 import type { ModelRuntime } from "./model-registry.js";
 
-type RunEventPayload =
-  | { type: "run_status"; status: AgentRunStatusDto; message: string }
-  | { type: "trace_event"; event: TraceDto["events"][number] }
-  | { type: "run_result"; result: AgentRunResponseDto }
-  | { type: "run_error"; error: ApiError };
+/** 基础 system prompt；附件 grounding 由阶段 5 经 transformContext 回迁。 */
+export const BASE_SYSTEM_PROMPT =
+  "你是一个金融研究 Agent。可以自主调用提供的工具（财务指标、公告检索、计算器等）完成多步研究，"
+  + "拿到工具结果后用中文给出简洁、有依据的回答。报告类诉求由系统在 run 层编排，无需自行生成完整研报。";
 
-export interface RunServiceSink {
-  saveWorkflow(workflow: ReportWorkflowResponseDto, context: ReportPersistenceContext): Promise<void>;
-  saveArtifact(artifact: ReportArtifactDto, context: ReportPersistenceContext): Promise<void>;
-  saveApproval(approval: ToolApprovalRequestDto, context: ApprovalPersistenceContext): Promise<void>;
+/** 单 run 的最大 turn 数预算，防止真实模型陷入工具循环。 */
+export const DEFAULT_MAX_TURNS = 8;
+
+/** compaction 注入点：测试用小 contextWindow 触发压缩；summarizer 可替换为 LLM 摘要。 */
+export interface RunCompactionOptions {
+  contextWindow?: number;
+  settings?: Partial<CompactionSettings>;
+  summarizer?: (messages: AgentMessage[], previousSummary: string | undefined, signal?: AbortSignal) => Promise<string>;
 }
 
 export interface RunServiceDependencies {
   store: RunStore;
+  messageStore: MessageStore;
   eventBus: RunEventBus;
   executionRegistry: RunExecutionRegistry;
   scheduler: RunScheduler;
-  sink: RunServiceSink;
-  traceStore: TraceStore;
   /** 按目录模型 ID 解析可执行模型 runtime（MockModel 与真实 provider 同路径）。 */
   resolveModel: (modelId: string) => ModelRuntime | undefined;
   hasModel?: (modelId: string) => boolean;
@@ -56,20 +59,17 @@ export interface RunServiceDependencies {
   tools: AgentTool[];
   /** 单 run 最大 turn 数预算。 */
   maxTurns?: number;
-  dataSourceRuntime?: DataSourceRuntime;
-  /** 仅 mock composition 注入；按首次语义类别节流 live Trace，测试默认 0。 */
-  mockStepDelayMs?: number;
+  compaction?: RunCompactionOptions;
   now?: () => Date;
   createId?: (prefix: string) => string;
-  recordInternalWarning?: (warning: { code: "trace_persistence_degraded"; runId: string; requestId: string }) => void;
 }
 
 export interface RunApplicationService {
   create(request: AgentRunCreateRequestDto, userId: string): Promise<AgentRunAcceptedDto>;
-  get(userId: string, runId: string): Promise<AgentRunSnapshotDto | undefined>;
-  cancel(userId: string, runId: string): Promise<AgentRunSnapshotDto | undefined>;
-  listEvents(userId: string, runId: string, afterSequence: number): Promise<AgentRunStreamEventDto[] | undefined>;
-  subscribe(runId: string, listener: (event: AgentRunStreamEventDto) => void): () => void;
+  get(userId: string, runId: string): Promise<RunSnapshotDtoV2 | undefined>;
+  cancel(userId: string, runId: string): Promise<RunSnapshotDtoV2 | undefined>;
+  listEvents(userId: string, runId: string, afterSequence: number): Promise<RunStreamEventDtoV2[] | undefined>;
+  subscribe(runId: string, listener: (event: RunStreamEventDtoV2) => void): () => void;
   recoverStale(before: string): Promise<number>;
   /** @returns 是否已进入 shutdown，新 Run 必须被拒绝。 */
   isShuttingDown(): boolean;
@@ -82,62 +82,29 @@ export interface RunApplicationService {
   shutdown(options: { drainMs: number }): Promise<{ interrupted: number }>;
 }
 
-export interface ReportPersistenceContext {
-  userId: string;
-  conversationId: string;
-  agentRunId: string;
-  planId: string;
-}
-
-/** Approval 持久化归属上下文；userId 必须来自 Run 创建时的服务端身份。 */
-export interface ApprovalPersistenceContext {
-  runId: string;
-  userId: string;
-}
-
-/** 会话历史在内存中按 conversation 累积的上限，超出后裁剪最旧消息（持久化裁剪属后续阶段）。 */
-const MAX_HISTORY_MESSAGES = 200;
-
 /**
- * 裁剪会话历史到上限；切点不落在 toolResult 上（复用 compaction 的切点思路），
- * 保证 AssistantMessage.toolCalls 与其 ToolResultMessage 同进同出不被截断。
- *
- * @param history 会话历史数组（就地裁剪）。
- */
-function trimConversationHistory(history: AgentMessage[]): void {
-  if (history.length <= MAX_HISTORY_MESSAGES) return;
-  let cut = history.length - MAX_HISTORY_MESSAGES;
-  while (cut < history.length && history[cut].role === "toolResult") {
-    cut += 1;
-  }
-  history.splice(0, cut);
-}
-
-/**
- * 创建 Run application service，集中管理状态机、canonical event 与执行生命周期。
- * run 执行走 packages/agent 的 agentLoop（pi 形态多轮 ReAct），见 agent-execution.ts。
+ * 创建 Run application service。
  *
  * @param dependencies 可替换端口和 runtime adapter。
  * @returns Run 用例接口。
  */
 export function createRunApplicationService(dependencies: RunServiceDependencies): RunApplicationService {
   const now = dependencies.now ?? (() => new Date());
-  const createId = dependencies.createId ?? defaultCreateId;
+  const createId = dependencies.createId ?? (() => randomUUID());
   // shutdown 期间拒绝新 Run，避免关闭窗口内写入无法 drain 的任务。
   let shuttingDown = false;
-  // 会话历史内存累积：key 为 userId + conversationId；不建新表，进程重启即丢失（阶段内可接受）。
-  const conversationHistories = new Map<string, AgentMessage[]>();
   // 同一 conversation 的 run 串行化链：并发创建的同会话 run 按 promise 链排队执行，
   // 避免历史交错与工具结果乱序（跨 conversation 不互相阻塞）。
   const conversationRunChains = new Map<string, Promise<void>>();
+
   async function recoverStale(before: string): Promise<number> {
     const events = await dependencies.store.recoverStale(before, now().toISOString());
     for (const event of events) dependencies.eventBus.publish(event);
     return events.length;
   }
+
   /**
    * 把同一会话的 run 挂到该会话的执行链尾部，实现 per-conversation 串行。
-   * 链上失败不阻断后续排队任务（每个任务自行收尾）。
    *
    * @param key 会话键（userId:conversationId）。
    * @param task run 执行体。
@@ -148,158 +115,140 @@ export function createRunApplicationService(dependencies: RunServiceDependencies
     conversationRunChains.set(key, next.catch(() => undefined));
     return next;
   }
-  async function publish(userId: string, runId: string, payload: RunEventPayload): Promise<AgentRunStreamEventDto | undefined> {
-    const current = await dependencies.store.findById(userId, runId);
-    if (!current) throw new Error(`Run not found: ${runId}`);
-    const eventInput = redactSensitiveValue({
-      ...payload,
-      runId,
-      requestId: current.requestId,
-      traceId: `trace_${runId}`,
-      conversationId: current.conversationId,
-      createdAt: now().toISOString()
-    }) as AgentRunEventInputDto;
-    const event = await dependencies.store.append(userId, runId, eventInput);
-    // live fan-out 只能发生在 adapter 的数据库事务提交之后。
+
+  /**
+   * 先落库后广播：事件只有在 store 事务提交后才进入 SSE fan-out。
+   *
+   * @param userId 当前用户。
+   * @param snapshot 当前 Run 快照（提供 envelope 归属字段）。
+   * @param type 事件类型。
+   * @param payload 事件载荷（loop 事件本体或生命周期载荷）。
+   * @returns 已提交事件；已终态时为 undefined。
+   */
+  async function publish(
+    userId: string,
+    snapshot: RunSnapshotDtoV2,
+    type: RunStreamEventDtoV2["type"],
+    payload: unknown
+  ): Promise<RunStreamEventDtoV2 | undefined> {
+    const event = await dependencies.store.appendEvent(userId, snapshot.runId, {
+      type,
+      runId: snapshot.runId,
+      requestId: snapshot.requestId,
+      conversationId: snapshot.conversationId,
+      createdAt: now().toISOString(),
+      payload: redactSensitiveValue(payload)
+    });
     if (event) dependencies.eventBus.publish(event);
     return event;
   }
 
+  /**
+   * 执行一次 run：重建上下文 → 跑 agentLoop → 逐事件落库广播 → 终态补落消息。
+   *
+   * @param runId Run 标识。
+   * @param request 创建请求。
+   * @param userId 当前用户。
+   * @returns 执行完成 Promise。
+   */
   async function execute(runId: string, request: AgentRunCreateRequestDto, userId: string): Promise<void> {
     const controller = dependencies.executionRegistry.get(runId);
     if (!controller) return;
-    await publish(userId, runId, { type: "run_status", status: "running", message: "Agent 已开始分析研究任务。" });
     const snapshot = await dependencies.store.findById(userId, runId);
     if (!snapshot) return;
-    const traceStartedAt = now().toISOString();
-    const trace = createObservableTraceRecorder(`trace_${runId}`, snapshot.requestId, [], traceStartedAt);
-    const pacedTrace = dependencies.mockStepDelayMs
-      ? createPacedTraceRecorder(trace, dependencies.mockStepDelayMs, controller.signal)
-      : undefined;
-    const executionTrace = pacedTrace ?? trace;
-    const traceContext: TracePersistenceContext = {
-      userId, runId, conversationId: snapshot.conversationId, traceId: trace.traceId,
-      requestId: trace.requestId, startedAt: traceStartedAt
-    };
-    let tracePersistenceDegraded = false;
-    let persistenceQueue = Promise.resolve();
-    /** 将 Trace 旁路故障收敛为一次结构化告警，避免原始异常进入 Run result。 */
-    const degradeTracePersistence = (): void => {
-      if (tracePersistenceDegraded) return;
-      tracePersistenceDegraded = true;
-      dependencies.recordInternalWarning?.({
-        code: "trace_persistence_degraded", runId, requestId: snapshot.requestId
-      });
-    };
     try {
-      await dependencies.traceStore.initialize(traceContext);
-    } catch {
-      degradeTracePersistence();
-    }
-    const unsubscribe = trace.subscribe((event) => {
-      if (tracePersistenceDegraded) return;
-      persistenceQueue = persistenceQueue.then(async () => {
-        const projection = await dependencies.traceStore.append(traceContext, event);
-        if (!projection) {
-          degradeTracePersistence();
-          return;
-        }
-        dependencies.eventBus.publish(projection as AgentRunStreamEventDto);
-      }).catch(() => {
-        degradeTracePersistence();
-      });
-    });
-    try {
+      await publish(userId, snapshot, "run_status", { status: "running", message: "Agent 已开始分析研究任务。" });
       const runtime = dependencies.resolveModel(snapshot.modelId);
       if (!runtime) throw new RunModelNotFoundError(snapshot.modelId);
-      const persistedAttachmentIds = await dependencies.store.listAttachmentDocumentIds(userId, runId) ?? [];
-      const grounding = persistedAttachmentIds.length
-        ? await retrieveAttachmentGrounding(
-            dependencies.dataSourceRuntime,
-            request.message.trim(),
-            persistedAttachmentIds,
-            userId,
-            executionTrace
-          )
-        : undefined;
-      // 会话历史内存累积：loop 保持纯函数（不就地改 history），
-      // 本次 run 新消息由 executeAgentLoop 返回值带回，run 结束后追加再裁剪。
-      const historyKey = `${userId}:${request.conversationId}`;
-      let history = conversationHistories.get(historyKey);
-      if (!history) {
-        history = [];
-        conversationHistories.set(historyKey, history);
-      }
-      const execution = await executeAgentLoop({
-        message: request.message.trim(),
-        reportMode: request.mode === "report",
-        reportTriggerSource: request.mode === "report"
-          ? request.source === "report_button" ? "button" : "toggle"
-          : undefined,
-        groundingContext: grounding?.context,
-        groundingCitations: grounding?.citations,
-        history,
-        runtime,
-        tools: dependencies.tools,
-        signal: controller.signal,
-        trace: executionTrace,
-        maxTurns: dependencies.maxTurns,
-        now
-      });
-      history.push(...execution.newMessages);
-      trimConversationHistory(history);
-      const workflow = await maybeRunReport(
-        runId, userId, request.conversationId, execution.reportPlan, executionTrace, controller.signal, dependencies.sink
-      );
-      await pacedTrace?.flush();
-      await persistenceQueue;
-      if (!tracePersistenceDegraded) {
-        try {
-          await dependencies.traceStore.finalize(traceContext, trace.getTrace());
-        } catch {
-          degradeTracePersistence();
-        }
-      }
-      if (execution.error?.code === "request_cancelled") {
-        await publish(userId, runId, {
-          type: "run_error",
-          error: toRunError(undefined, snapshot.requestId, true)
+
+      // 上下文重建：listForContext 投影（最后一个 compaction + 其后消息）→ pi Message[]。
+      const storedHistory = await dependencies.messageStore.listForContext(userId, request.conversationId);
+      const history: AgentMessage[] = storedMessagesToPiMessages(storedHistory);
+      const prompt: AgentMessage = { role: "user", content: request.message.trim(), timestamp: now().getTime() };
+
+      // 已落库消息按对象引用跟踪：prompt 在 store.create 时已落库；
+      // loop 对 assistant / toolResult / steering 消息都会发 message_end（落库点），
+      // agent_end 兜底补齐任何未落消息（如流中断）。
+      const persistedMessages = new Set<AgentMessage>();
+      const persistMessage = async (message: AgentMessage): Promise<void> => {
+        if (message.role === "compaction" || persistedMessages.has(message)) return;
+        persistedMessages.add(message);
+        const mapped = piMessageToAppendInput(message as Message);
+        await dependencies.messageStore.append(userId, {
+          ...mapped,
+          conversationId: request.conversationId,
+          runId,
+          createdAt: now().toISOString()
         });
-        return;
-      }
-      const result = redactSensitiveValue(toResponseDto(
-        runId, execution, trace.getTrace(), request, snapshot.modelId, snapshot.requestId, workflow, tracePersistenceDegraded
-      ));
-      await publish(userId, runId, { type: "run_result", result });
-    } catch (caught) {
-      trace.record({
-        type: "final_response",
-        id: `${trace.traceId}_persistence_failure_terminal`,
-        traceId: trace.traceId,
-        requestId: trace.requestId,
-        answerPreview: "",
-        ok: false,
-        error: {
-          code: controller.signal.aborted ? "request_cancelled" : "internal_error",
-          message: controller.signal.aborted ? "Agent run 已取消。" : "Agent run 执行失败。",
-          stage: "final_response"
-        },
-        createdAt: now().toISOString()
+      };
+      // 首个 user message_end 即 create 时已落库的 prompt，仅标记不重复写。
+      let promptMarked = false;
+
+      // compaction 检测：transformContext 就地写回后，队首出现新 CompactionMessage 即落表
+      // （role='user'、message_type='compaction'，content 为已包裹摘要文本）。
+      const seenCompactionTimestamps = new Set<number>();
+      const compactionTransform = createCompactionTransform({
+        model: runtime.model,
+        contextWindow: dependencies.compaction?.contextWindow,
+        settings: dependencies.compaction?.settings,
+        summarizer: dependencies.compaction?.summarizer ?? defaultSummarizer
       });
-      await persistenceQueue;
-      if (!tracePersistenceDegraded) {
-        try {
-          await dependencies.traceStore.finalize(traceContext, trace.getTrace());
-        } catch {
-          degradeTracePersistence();
+      const transformContext = async (messages: AgentMessage[], signal?: AbortSignal): Promise<AgentMessage[]> => {
+        const transformed = await compactionTransform(messages, signal);
+        const head = transformed[0];
+        if (head?.role === "compaction" && !seenCompactionTimestamps.has(head.timestamp)) {
+          seenCompactionTimestamps.add(head.timestamp);
+          await dependencies.messageStore.append(userId, {
+            conversationId: request.conversationId,
+            runId,
+            role: "user",
+            messageType: "compaction",
+            content: compactionStoredContent(head.summary),
+            createdAt: now().toISOString()
+          });
+        }
+        return transformed;
+      };
+
+      const maxTurns = dependencies.maxTurns ?? DEFAULT_MAX_TURNS;
+      const stream = agentLoop(
+        [prompt],
+        { systemPrompt: BASE_SYSTEM_PROMPT, messages: history, tools: dependencies.tools },
+        {
+          model: runtime.model,
+          apiKey: runtime.apiKey,
+          convertToLlm: defaultConvertToLlm,
+          transformContext,
+          shouldStopAfterTurn: ({ newMessages }) =>
+            newMessages.filter((message) => message.role === "assistant").length >= maxTurns
+        },
+        controller.signal,
+        runtime.streamFn as StreamFn | undefined
+      );
+
+      // 顺序消费事件流：逐事件落库（先落库后广播由 publish 保证），message_end 落终态消息。
+      let terminalMessages: AgentMessage[] = [];
+      for await (const event of stream) {
+        await publish(userId, snapshot, event.type, event);
+        if (event.type === "message_end") {
+          if (!promptMarked && event.message.role === "user") {
+            promptMarked = true;
+            persistedMessages.add(event.message);
+          } else {
+            await persistMessage(event.message);
+          }
+        }
+        if (event.type === "agent_end") {
+          terminalMessages = event.messages;
         }
       }
-      await publish(userId, runId, {
-        type: "run_error",
-        error: toRunError(caught, snapshot.requestId, controller.signal.aborted)
-      });
+      // 终态兜底：遗漏的消息一次性补落（保持 run 内顺序）。
+      for (const message of terminalMessages) {
+        await persistMessage(message);
+      }
+    } catch (caught) {
+      await publish(userId, snapshot, "run_error", { error: toRunError(caught, snapshot.requestId, controller.signal.aborted) });
     } finally {
-      unsubscribe();
       dependencies.executionRegistry.delete(runId);
     }
   }
@@ -316,26 +265,35 @@ export function createRunApplicationService(dependencies: RunServiceDependencies
       const requestId = request.clientMessageId
         ? `req_${createHash("sha256").update(`${userId}\0${request.clientMessageId}`).digest("hex")}`
         : createId("api_req");
-      const createdAt = now().toISOString();
       const created = await dependencies.store.create({
-        runId, requestId, userId, conversationId: request.conversationId,
-        message: request.message.trim(), clientMessageId: request.clientMessageId ?? requestId,
-        mode: request.mode, source: request.source, modelId,
-        attachmentDocumentIds: request.attachmentDocumentIds ?? [],
-        traceId: `trace_${runId}`, createdAt
+        runId,
+        requestId,
+        userId,
+        conversationId: request.conversationId,
+        message: request.message.trim(),
+        clientMessageId: request.clientMessageId ?? requestId,
+        mode: request.mode,
+        source: request.source,
+        modelId,
+        createdAt: now().toISOString()
       });
       const actual = created.snapshot;
-      if (!created.created) return {
-        runId: actual.runId, requestId: actual.requestId, conversationId: actual.conversationId,
-        modelId: actual.modelId, status: actual.status,
-        eventsUrl: `/api/runs/${actual.runId}/events`, snapshotUrl: `/api/runs/${actual.runId}`
-      };
+      if (!created.created) {
+        return {
+          runId: actual.runId,
+          requestId: actual.requestId,
+          conversationId: actual.conversationId,
+          modelId: actual.modelId,
+          status: "queued",
+          eventsUrl: `/api/runs/${actual.runId}/events`,
+          snapshotUrl: `/api/runs/${actual.runId}`
+        };
+      }
       dependencies.executionRegistry.create(runId);
-      await publish(userId, runId, { type: "run_status", status: "queued", message: "研究任务已进入队列。" });
-      dependencies.scheduler.schedule(() => enqueueConversationRun(
-        `${userId}:${request.conversationId}`,
-        () => execute(runId, request, userId)
-      ));
+      await publish(userId, actual, "run_status", { status: "queued", message: "研究任务已进入队列。" });
+      dependencies.scheduler.schedule(() =>
+        enqueueConversationRun(`${userId}:${request.conversationId}`, () => execute(runId, request, userId))
+      );
       return {
         runId,
         requestId,
@@ -350,17 +308,9 @@ export function createRunApplicationService(dependencies: RunServiceDependencies
     async cancel(userId, runId) {
       const snapshot = await dependencies.store.findById(userId, runId);
       if (!snapshot) return undefined;
-      if (["queued", "running", "waiting_approval"].includes(snapshot.status)) {
+      if (snapshot.status === "queued" || snapshot.status === "running") {
+        // abort 后 loop 以 stopReason='aborted' 收尾，agent_end 落库时由 store 推导 cancelled。
         dependencies.executionRegistry.get(runId)?.abort();
-        // 取消必须发布 terminal error；仅发送状态事件会让 SSE 消费端继续等待。
-        await publish(userId, runId, {
-          type: "run_error",
-          error: {
-            code: "request_cancelled",
-            message: "用户已停止本次生成。",
-            requestId: snapshot.requestId
-          }
-        });
       }
       return dependencies.store.findById(userId, runId);
     },
@@ -386,39 +336,42 @@ export function createRunApplicationService(dependencies: RunServiceDependencies
 }
 
 /**
- * 只从本轮附件构造 grounding context，并把 RAG trace 归一到当前 Run。
+ * 默认确定性摘要器（无 LLM 调用）：拼接被裁消息的文本并截断。
+ * 学习阶段的简化实现；生产可替换为基于 streamSimple 的 LLM 摘要。
  *
- * @param runtime RAG runtime。
- * @param question 用户问题。
- * @param documentIds 本轮附件文档。
- * @param userId 当前用户。
- * @param trace 当前 Run trace recorder。
- * @returns 模型上下文与引用。
+ * @param messages 被裁前缀消息。
+ * @param previousSummary 上一次压缩的摘要（迭代更新场景）。
+ * @returns 摘要文本。
  */
-async function retrieveAttachmentGrounding(
-  runtime: DataSourceRuntime | undefined,
-  question: string,
-  documentIds: string[],
-  userId: string,
-  trace: ReturnType<typeof createObservableTraceRecorder>
-): Promise<{ context: string; citations: CitationDto[] }> {
-  if (!runtime) throw new Error("Attachment retrieval runtime is not configured.");
-  const result = await runtime.search(question, {
-    topK: 5,
-    filter: { documentIds }
-  }, { ownerUserId: userId });
-  if (!result.ok) throw new Error(result.error.message);
-  trace.record({
-    ...result.data.trace,
-    id: `${trace.traceId}_attachment_retrieval`,
-    traceId: trace.traceId,
-    requestId: trace.requestId
-  });
+async function defaultSummarizer(messages: AgentMessage[], previousSummary: string | undefined): Promise<string> {
+  const text = messages
+    .map((message) => {
+      if (message.role === "compaction") return message.summary;
+      const content = message.content;
+      if (typeof content === "string") return content;
+      return content
+        .map((block) => (block && typeof block === "object" && "text" in block ? String(block.text) : ""))
+        .join(" ");
+    })
+    .join("\n")
+    .slice(0, 800);
+  return `${previousSummary ? `${previousSummary}\n` : ""}（自动摘要）${text}`;
+}
+
+/**
+ * 把执行层异常收敛为结构化 run 错误，不泄漏原始异常细节。
+ *
+ * @param caught 原始异常。
+ * @param requestId 请求标识。
+ * @param cancelled 是否为用户取消。
+ * @returns 脱敏后的 ApiError。
+ */
+function toRunError(caught: unknown, requestId: string, cancelled: boolean): ApiError {
+  void caught;
   return {
-    context: result.data.results.map((item, index) =>
-      `[${index + 1}] ${item.citation.heading ?? item.citation.source}\n${item.text}`
-    ).join("\n\n"),
-    citations: result.data.results.map((item) => item.citation)
+    code: cancelled ? "request_cancelled" : "internal_error",
+    message: cancelled ? "Agent run 已取消。" : "Agent 服务暂时不可用，请稍后重试。",
+    requestId
   };
 }
 
@@ -439,152 +392,5 @@ export class RunModelNotFoundError extends Error {
   }
 }
 
-/**
- * report plan ready 时编排 report workflow（plan 由 agent-execution 生成）。
- *
- * @returns workflow DTO；plan 未就绪或已取消时返回 undefined。
- */
-async function maybeRunReport(
-  runId: string,
-  userId: string,
-  conversationId: string,
-  plan: ReportPlanDto | undefined,
-  trace: ReturnType<typeof createObservableTraceRecorder>,
-  signal: AbortSignal,
-  sink: RunServiceSink
-): Promise<ReportWorkflowResponseDto | undefined> {
-  if (plan?.status !== "ready" || signal.aborted) return undefined;
-  const result = await runReportWorkflow(plan, {
-    documents: createReportDemoDocuments(),
-    trace,
-    signal
-  });
-  const workflow = redactSensitiveValue(toWorkflowDto(result));
-  const context = { userId, conversationId, agentRunId: runId, planId: plan.planId };
-  if (workflow.run.approvalRequest && !workflow.run.approvalRequest.inputDigest) {
-    // workflow 审批（如 PDF exporter）由 workflow 包生成，不经过 tools executor，原生没有 inputDigest。
-    // 必须在 saveWorkflow 之前补齐确定性 digest：客户端从 workflow DTO 读取该 digest 调 decision
-    // endpoint，而 endpoint schema 要求非空 digest——缺了它审批永远无法决定，PDF 导出会回归。
-    workflow.run.approvalRequest.inputDigest = createWorkflowApprovalDigest(
-      workflow.run.approvalRequest.toolName,
-      workflow.run.runId,
-      `artifact_${workflow.run.runId}`
-    );
-  }
-  await sink.saveWorkflow(workflow, context);
-  if (workflow.run.approvalRequest) await sink.saveApproval(workflow.run.approvalRequest, { runId, userId });
-  if (workflow.artifact) await sink.saveArtifact(workflow.artifact, context);
-  return workflow;
-}
-
-/**
- * 把 loop 执行结果组装为对外 Run result DTO。
- *
- * @returns 脱敏前的 AgentRunResponseDto。
- */
-function toResponseDto(
-  runId: string,
-  execution: AgentExecutionResult,
-  trace: TraceDto,
-  request: AgentRunCreateRequestDto,
-  modelId: string,
-  requestId: string,
-  reportWorkflow: ReportWorkflowResponseDto | undefined,
-  tracePersistenceDegraded: boolean
-): AgentRunResponseDto {
-  return {
-    runId,
-    conversationId: request.conversationId,
-    modelId,
-    requestId,
-    traceId: trace.traceId,
-    ok: execution.ok,
-    intent: execution.intent,
-    answer: execution.answer,
-    citations: execution.citations,
-    steps: execution.steps,
-    trace,
-    tracePersistence: tracePersistenceDegraded
-      ? {
-          status: "degraded",
-          diagnostic: {
-            code: "trace_persistence_degraded",
-            message: "Trace 持久化暂时不可用；Agent 主结果已保留。"
-          }
-        }
-      : { status: "complete" },
-    reportPlan: execution.reportPlan,
-    reportWorkflow,
-    error: execution.error ? {
-      code: "agent_failed",
-      message: execution.error.message,
-      requestId,
-      details: { agentCode: execution.error.code, mode: request.mode, ...execution.error.details }
-    } : undefined
-  };
-}
-
-function toWorkflowDto(result: Awaited<ReturnType<typeof runReportWorkflow>>): ReportWorkflowResponseDto {
-  const draft = result.state.draft;
-  const citations = result.state.citations;
-  const artifact: ReportArtifactDto | undefined = draft && citations ? {
-    artifactId: `artifact_${result.run.runId}`,
-    reportId: result.state.plan.planId,
-    workflowRunId: result.run.runId,
-    status: "html_preview_only",
-    title: draft.title,
-    markdown: draft.markdown,
-    html: draft.html,
-    citations: citations.citations,
-    citationVerification: {
-      decision: citations.decision,
-      verified: citations.verified,
-      missingClaims: citations.missingClaims,
-      missingMetrics: citations.missingMetrics
-    },
-    pdfExport: {
-      status: "queued",
-      fileName: result.state.export?.fileName,
-      message: result.state.export?.message ?? "PDF Exporter 等待人工批准。"
-    },
-    createdAt: new Date().toISOString()
-  } : undefined;
-  return { run: result.run, artifact };
-}
-
-function toRunError(caught: unknown, requestId: string, cancelled: boolean): ApiError {
-  void caught;
-  return {
-    code: cancelled ? "request_cancelled" : "internal_error",
-    message: cancelled ? "Agent run 已取消。" : "Agent 服务暂时不可用，请稍后重试。",
-    requestId
-  };
-}
-
-/**
- * 为 workflow 审批生成确定性输入摘要；风格与 tools executor 的 createInputDigest 一致，
- * 对规范化序列化做 SHA-256 并截取前缀，不保存原文。
- *
- * @param toolName 工具名称。
- * @param workflowRunId workflow run 标识。
- * @param artifactId 导出目标 artifact 标识。
- * @returns `input_` 前缀的稳定摘要。
- */
-function createWorkflowApprovalDigest(toolName: string, workflowRunId: string, artifactId: string): string {
-  const serialized = JSON.stringify({ artifactId, toolName, workflowRunId });
-  return `input_${createHash("sha256").update(serialized).digest("hex").slice(0, 16)}`;
-}
-
-function createReportDemoDocuments() {
-  return [{
-    source: "demo://000001-sz-annual-report",
-    fileName: "000001-SZ-annual-report.md",
-    contentType: "text/markdown",
-    content: "# 盈利能力\n000001.SZ 最近两年营业收入保持增长，净利润同比改善，ROE 为 12.4%。\n\n# 资产质量与风险\n不良贷款率保持稳定，拨备覆盖率处于安全水平。"
-  }];
-}
-
-function defaultCreateId(prefix: string): string {
-  void prefix;
-  return randomUUID();
-}
+/** 保持对 AgentEvent 类型的显式引用，文档化事件协议来源。 */
+export type { AgentEvent };

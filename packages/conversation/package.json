@@ -15,5 +15,8 @@
     "build": "tsc -b",
     "test": "pnpm build && node --test test/*.test.mjs",
     "typecheck": "tsc -p tsconfig.json --pretty false --noEmit"
+  },
+  "dependencies": {
+    "@aiagent/ai": "workspace:*"
   }
 }

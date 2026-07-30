@@ -2,9 +2,9 @@ import type { IdentitySnapshot } from "@aiagent/identity";
 import type {
   ApiResult,
   ConversationDto,
-  ConversationMessageDto,
   CreateConversationRequestDto,
   CursorPageDto,
+  LinearMessageDto,
   UpdateConversationRequestDto
 } from "@aiagent/types";
 import type { FastifyInstance } from "fastify";
@@ -78,11 +78,11 @@ export function registerConversationRoutes(app: FastifyInstance, deps: Conversat
     }
   );
 
-  /** 读取当前用户拥有会话中的终态消息，越权与不存在统一为 not_found。 */
+  /** 读取当前用户拥有会话的线性消息（content 块原样透传，含 compaction 行），越权与不存在统一为 not_found。 */
   app.get<{
     Params: { conversationId: string };
     Querystring: { cursor?: string; limit?: string };
-  }>("/api/conversations/:conversationId/messages", async (request, reply): Promise<ApiResult<CursorPageDto<ConversationMessageDto>>> => {
+  }>("/api/conversations/:conversationId/messages", async (request, reply): Promise<ApiResult<CursorPageDto<LinearMessageDto>>> => {
     const requestId = createRequestId();
     const identity = identityByRequest.get(request);
     const parsed = conversationPageQuerySchema.safeParse(request.query);

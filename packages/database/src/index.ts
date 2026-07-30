@@ -20,18 +20,17 @@ export {
 } from "./rag-vector-store.js";
 export { RepositoryError, type RepositoryErrorCode } from "./repository-error.js";
 export { isPostgresUniqueViolation, postgresTimestampToIso } from "./postgres.js";
-export {
-  createPostgresConversationRepositories,
-  type PostgresConversationRepositories
-} from "./conversation-repository.js";
+export { createPostgresConversationRepository } from "./conversation-repository.js";
+export { createPostgresMessageStore } from "./message-repository.js";
 import { isPostgresUniqueViolation, postgresTimestampToIso } from "./postgres.js";
 import { createPostgresRagDocumentRepository } from "./rag-documents.js";
-import { createPostgresConversationRepositories } from "./conversation-repository.js";
+import { createPostgresConversationRepository } from "./conversation-repository.js";
+import { createPostgresMessageStore } from "./message-repository.js";
 import type { ArtifactRepository, WorkflowRepository } from "@aiagent/report";
 import { createPostgresArtifactRepository, createPostgresWorkflowRepository } from "./report.js";
 export { createPostgresArtifactRepository, createPostgresWorkflowRepository } from "./report.js";
 import { createPostgresRunRepository, type RunRepository } from "./run-repository.js";
-export { createPostgresRunRepository, type CreateRunInput, type RunRepository } from "./run-repository.js";
+export { createPostgresRunRepository, type CreateRunInputV2, type RunRepository } from "./run-repository.js";
 import { createPostgresApprovalRepository } from "./approval-repository.js";
 export { createPostgresApprovalRepository } from "./approval-repository.js";
 export {
@@ -65,7 +64,7 @@ const { Pool } = pg;
 export interface DatabaseRuntime {
   pool: pg.Pool;
   conversationRepository: import("@aiagent/conversation").ConversationRepository;
-  messageRepository: import("@aiagent/conversation").MessageRepository;
+  messageStore: import("@aiagent/conversation").MessageStore;
   identityRepository: IdentityRepository;
   ragDocumentRepository: RagDocumentRepository;
   citationRepository: CitationRepository;
@@ -96,10 +95,10 @@ export function createDatabaseRuntime(databaseUrl: string): DatabaseRuntime {
   pool.on("error", (error) => {
     console.error("PostgreSQL idle client error:", error instanceof Error ? error.message : "unknown error");
   });
-  const conversations = createPostgresConversationRepositories(pool);
   return {
     pool,
-    ...conversations,
+    conversationRepository: createPostgresConversationRepository(pool),
+    messageStore: createPostgresMessageStore(pool),
     identityRepository: createPostgresIdentityRepository(pool),
     ragDocumentRepository: createPostgresRagDocumentRepository(pool),
     citationRepository: createPostgresCitationRepository(pool),

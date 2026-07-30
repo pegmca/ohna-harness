@@ -1,6 +1,14 @@
+/**
+ * 会话领域类型与存储端口（阶段 3 线性模型重写）。
+ *
+ * 结构：
+ * - Conversation / ConversationRepository：会话主体 CRUD（表 conversations_v2）；
+ * - StoredMessage / MessageStore：线性消息存储端口（表 messages_v2），
+ *   每方法映射一类 pi Message 的读写，不采用 pi 的 entry 树；
+ * - message-mapping.ts：pi Message ↔ StoredMessage 的双向映射层。
+ *   packages/database 不得依赖 @aiagent/ai（架构规则 5），映射因此放在本包。
+ */
 export type ConversationStatus = "active" | "archived";
-export type MessageRole = "user" | "assistant" | "system" | "tool";
-export type MessageStatus = "pending" | "streaming" | "completed" | "failed" | "cancelled";
 
 export interface Conversation {
   id: string;
@@ -13,22 +21,7 @@ export interface Conversation {
   archivedAt?: string;
 }
 
-export interface Message {
-  id: string;
-  conversationId: string;
-  userId: string;
-  runId?: string;
-  role: MessageRole;
-  content: string;
-  status: MessageStatus;
-  clientMessageId?: string;
-  sequence: number;
-  createdAt: string;
-  completedAt?: string;
-  attachments: MessageAttachment[];
-}
-
-/** 消息与私有 RAG 文档的稳定绑定快照。 */
+/** 消息与私有 RAG 文档的稳定绑定快照（附件沿用旧表，阶段 5 回迁到新消息）。 */
 export interface MessageAttachment {
   id: string;
   documentId: string;
@@ -55,27 +48,93 @@ export interface CreateConversationInput {
   now?: string;
 }
 
-export interface AppendMessageInput {
+/** 线性消息角色，对齐 pi Message 三元组。 */
+export type StoredMessageRole = "user" | "assistant" | "toolResult";
+
+/** 消息类型：compaction 摘要消息在上下文投影中顶替其前历史。 */
+export type StoredMessageType = "normal" | "compaction";
+
+/**
+ * 存储消息记录：数据库行到 pi Message 的一对一投影。
+ * content 为 pi content 原样 JSON（user 为 string 或块数组，assistant 为块数组，
+ * toolResult 为 toolCallId/toolName/content/isError envelope），读回即可直接喂 convertToLlm。
+ */
+export interface StoredMessage {
+  id: string;
+  conversationId: string;
+  userId: string;
+  runId?: string;
+  role: StoredMessageRole;
+  content: unknown;
+  messageType: StoredMessageType;
+  clientMessageId?: string;
+  sequence: number;
+  /** 仅 assistant：pi Usage 形状。 */
+  usage?: import("@aiagent/ai").Usage;
+  /** 仅 assistant：模型目录标识。 */
+  modelId?: string;
+  /** 仅 assistant：停止原因。 */
+  stopReason?: string;
+  /** 仅 assistant：error/aborted 时的脱敏错误说明。 */
+  errorMessage?: string;
+  createdAt: string;
+}
+
+/** 追加一条终态消息的输入；sequence 由存储在会话行锁内分配。 */
+export interface AppendStoredMessageInput {
   id?: string;
   conversationId: string;
   runId?: string;
-  role: MessageRole;
-  content: string;
-  status: MessageStatus;
+  role: StoredMessageRole;
+  content: unknown;
+  messageType?: StoredMessageType;
   clientMessageId?: string;
+  usage?: import("@aiagent/ai").Usage;
+  modelId?: string;
+  stopReason?: string;
+  errorMessage?: string;
   createdAt?: string;
-  completedAt?: string;
 }
 
-export interface ListMessagesInput {
+export interface ListStoredMessagesInput {
   conversationId: string;
   limit?: number;
   cursor?: string;
 }
 
-export type IdempotentMessageResult =
-  | { outcome: "created"; message: Message }
-  | { outcome: "existing"; message: Message };
+export type IdempotentStoredMessageResult =
+  | { outcome: "created"; message: StoredMessage }
+  | { outcome: "existing"; message: StoredMessage };
+
+/**
+ * 消息存储端口：线性 append + 投影读取（对齐 docs/worktree/05 的 MessageStore 草案）。
+ */
+export interface MessageStore {
+  /** @param userId 当前用户。 @param input 终态消息。 @returns 已分配 sequence 的存储消息。 */
+  append(userId: string, input: AppendStoredMessageInput): Promise<StoredMessage>;
+  /**
+   * 以 client_message_id 幂等写入用户消息；冲突时返回既有行（outcome="existing"）。
+   *
+   * @param userId 当前用户。
+   * @param input 带客户端幂等键的用户消息。
+   * @returns 创建或已存在结果。
+   */
+  appendUserMessageIdempotently(
+    userId: string,
+    input: AppendStoredMessageInput & { role: "user"; clientMessageId: string }
+  ): Promise<IdempotentStoredMessageResult>;
+  /** @param userId 当前用户。 @param input 会话与游标分页参数。 @returns 时间线页（含 compaction 行原样返回）。 */
+  list(userId: string, input: ListStoredMessagesInput): Promise<CursorPage<StoredMessage>>;
+  /**
+   * LLM 上下文投影（agent loop 用）：取会话内最后一个 compaction 消息 +
+   * 其 sequence 之后的全部消息；无 compaction 时返回全量。按 sequence 升序。
+   *
+   * @param userId 当前用户。
+   * @param conversationId 会话 ID。
+   * @returns 可直接转 pi Message[] 的存储消息序列。
+   */
+  listForContext(userId: string, conversationId: string): Promise<StoredMessage[]>;
+}
 
 export type ConversationRepositoryErrorCode =
   | "not_found"
@@ -114,16 +173,10 @@ export interface ConversationRepository {
   archive(userId: string, conversationId: string, now?: string): Promise<Conversation>;
 }
 
-export interface MessageRepository {
-  /** @param userId 当前用户。 @param input 消息参数。 @returns 新消息。 */
-  append(userId: string, input: AppendMessageInput): Promise<Message>;
-  /** @param userId 当前用户。 @param input 幂等用户消息。 @returns 创建或已存在结果。 */
-  appendUserMessageIdempotently(
-    userId: string,
-    input: AppendMessageInput & { role: "user"; clientMessageId: string }
-  ): Promise<IdempotentMessageResult>;
-  /** @param userId 当前用户。 @param input 分页参数。 @returns 消息页。 */
-  list(userId: string, input: ListMessagesInput): Promise<CursorPage<Message>>;
-  /** @param userId 当前用户。 @param messageId 消息 ID。 @returns 所属消息或 undefined。 */
-  find(userId: string, messageId: string): Promise<Message | undefined>;
-}
+export {
+  COMPACTION_SUMMARY_PREFIX,
+  compactionStoredContent,
+  piMessageToAppendInput,
+  storedMessageToPiMessage,
+  storedMessagesToPiMessages
+} from "./message-mapping.js";

@@ -461,3 +461,88 @@ export const artifactCitations = pgTable("artifact_citations", {
   check("artifact_citations_ordinal_check", sql`${table.ordinal} > 0`),
   check("artifact_citations_verifier_status_check", sql`${table.verifierStatus} in ('unverified','verified','rejected','manual_verified','manual_rejected')`)
 ]);
+
+// ============================================================================
+// 阶段 3：线性消息 + run 新 schema（0110_linear_messages.sql，_v2 后缀避免与旧表冲突）。
+// 旧表镜像保留至阶段 6 统一删除。
+// ============================================================================
+
+export const conversationsV2 = pgTable("conversations_v2", {
+  id: uuid("id").primaryKey(),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  title: text("title").notNull(),
+  status: text("status").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true, mode: "string" }).notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" }).notNull(),
+  lastMessageAt: timestamp("last_message_at", { withTimezone: true, mode: "string" }).notNull(),
+  archivedAt: timestamp("archived_at", { withTimezone: true, mode: "string" })
+}, (table) => [
+  index("conversations_v2_user_status_last_message_idx").on(table.userId, table.status, table.lastMessageAt, table.id),
+  check("conversations_v2_status_check", sql`${table.status} in ('active','archived')`)
+]);
+
+export const messagesV2 = pgTable("messages_v2", {
+  id: uuid("id").primaryKey(),
+  conversationId: uuid("conversation_id").notNull().references(() => conversationsV2.id, { onDelete: "cascade" }),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  runId: uuid("run_id"),
+  role: text("role").notNull(),
+  content: jsonb("content").notNull(),
+  messageType: text("message_type").notNull().default("normal"),
+  clientMessageId: text("client_message_id"),
+  sequence: bigint("sequence", { mode: "number" }).notNull(),
+  usage: jsonb("usage"),
+  modelId: text("model_id"),
+  stopReason: text("stop_reason"),
+  errorMessage: text("error_message"),
+  createdAt: timestamp("created_at", { withTimezone: true, mode: "string" }).notNull()
+}, (table) => [
+  unique("messages_v2_conversation_sequence_uq").on(table.conversationId, table.sequence),
+  uniqueIndex("messages_v2_conversation_client_message_uq").on(table.conversationId, table.clientMessageId),
+  index("messages_v2_conversation_sequence_idx").on(table.conversationId, table.sequence),
+  check("messages_v2_role_check", sql`${table.role} in ('user','assistant','toolResult')`),
+  check("messages_v2_message_type_check", sql`${table.messageType} in ('normal','compaction')`)
+]);
+
+export const runsV2 = pgTable("runs_v2", {
+  id: uuid("id").primaryKey(),
+  requestId: text("request_id").notNull(),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  conversationId: uuid("conversation_id").notNull().references(() => conversationsV2.id, { onDelete: "cascade" }),
+  userMessageId: uuid("user_message_id").notNull(),
+  modelId: text("model_id").notNull(),
+  mode: text("mode").notNull(),
+  source: text("source").notNull(),
+  status: text("status").notNull(),
+  intent: text("intent"),
+  workflowRunId: text("workflow_run_id"),
+  error: jsonb("error"),
+  lastEventSequence: bigint("last_event_sequence", { mode: "number" }).notNull().default(0),
+  createdAt: timestamp("created_at", { withTimezone: true, mode: "string" }).notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" }).notNull(),
+  startedAt: timestamp("started_at", { withTimezone: true, mode: "string" }),
+  completedAt: timestamp("completed_at", { withTimezone: true, mode: "string" })
+}, (table) => [
+  uniqueIndex("runs_v2_request_id_key").on(table.requestId),
+  index("runs_v2_user_updated_idx").on(table.userId, table.updatedAt, table.id),
+  index("runs_v2_conversation_idx").on(table.userId, table.conversationId, table.updatedAt, table.id),
+  check("runs_v2_mode_check", sql`${table.mode} in ('auto','report')`),
+  check("runs_v2_source_check", sql`${table.source} in ('composer','report_button')`),
+  check("runs_v2_status_check", sql`${table.status} in ('queued','running','completed','failed','cancelled','interrupted')`)
+]);
+
+export const runEventsV2 = pgTable("run_events_v2", {
+  id: uuid("id").primaryKey(),
+  runId: uuid("run_id").notNull().references(() => runsV2.id, { onDelete: "cascade" }),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  conversationId: uuid("conversation_id").notNull().references(() => conversationsV2.id, { onDelete: "cascade" }),
+  sequence: bigint("sequence", { mode: "number" }).notNull(),
+  eventType: text("event_type").notNull(),
+  payload: jsonb("payload").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true, mode: "string" }).notNull()
+}, (table) => [
+  unique("run_events_v2_run_sequence_uq").on(table.runId, table.sequence),
+  index("run_events_v2_user_run_sequence_idx").on(table.userId, table.runId, table.sequence),
+  check("run_events_v2_sequence_check", sql`${table.sequence} > 0`),
+  check("run_events_v2_event_type_check", sql`${table.eventType} in ('agent_start','agent_end','turn_start','turn_end','message_start','message_update','message_end','tool_execution_start','tool_execution_update','tool_execution_end','run_status','run_error')`)
+]);

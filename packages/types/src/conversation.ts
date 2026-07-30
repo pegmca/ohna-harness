@@ -54,3 +54,23 @@ export interface ChatMessageDto {
   content: string;
   createdAt: ISODateTimeString;
 }
+
+/**
+ * 阶段 3 线性消息 DTO：content 块原样透传（pi content JSON），
+ * 不再有 status 流式状态机——消息落库即终态，流式中间态只存在于 run 事件流。
+ */
+export interface LinearMessageDto {
+  messageId: string;
+  conversationId: string;
+  runId?: string;
+  role: "user" | "assistant" | "toolResult";
+  /** pi content 原样 JSON：user 为文本或块数组，assistant 为块数组，toolResult 为 envelope。 */
+  content: unknown;
+  /** compaction 行在 UI 渲染为「历史已压缩」分隔条。 */
+  messageType: "normal" | "compaction";
+  sequence: number;
+  usage?: unknown;
+  modelId?: string;
+  stopReason?: string;
+  createdAt: ISODateTimeString;
+}

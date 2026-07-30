@@ -24,10 +24,14 @@ Reserved prefixes for persistence work are:
 | `0060` | pgvector / retrieval |
 | `0070` | Report / Artifact |
 | `0080` | Citation |
+| `0090` | Run model |
+| `0100` | Message attachments |
+| `0110` | 线性消息 + Run v2（阶段 3 新 schema） |
 
-PR-00 intentionally creates no business migration. `0010` (Conversation / Message), `0020`
-(Run / RunEvent), `0040` (Approval), `0050` (RAG documents), `0060` (pgvector retrieval), `0070`
-(Report / Artifact) and `0080` (Citation) are implemented; no reserved prefixes remain unclaimed.
+PR-00 intentionally creates no business migration. `0010`–`0100` 为旧 schema（阶段 6 统一删除）。
+`0110_linear_messages.sql` 是 pi 化改造阶段 3 的新 schema：`conversations_v2` /
+`messages_v2`（线性，content jsonb）/ `runs_v2` / `run_events_v2`（append-only）。
+新表统一 `_v2` 后缀避免与旧表命名冲突；旧数据不迁移。
 
 PR-05 implements the `0040` prefix (`0040_approval.sql`): see "Approval adapters" below.
 

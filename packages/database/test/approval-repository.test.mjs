@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createPostgresApprovalRepository, createPostgresConversationRepositories, createPostgresRunRepository } from "../dist/index.js";
+import { createPostgresApprovalRepository } from "../dist/index.js";
 import { runMigrations } from "../dist/migrate.js";
 import { createDatabaseTestContext } from "./helpers/database-test-helper.mjs";
 
@@ -19,25 +19,25 @@ test("Approval repository 保证幂等创建、CAS 决定、绑定校验、过�
        values ($1,$3,$3,$3),($2,$3,$3,$3)`,
       [userOne, userTwo, now]
     );
-    const conversation = await createPostgresConversationRepositories(context.pool).conversationRepository.create(userOne, {
-      id: "10000000-0000-4000-8000-000000000010", title: "Approval tests", now
-    });
-    const runs = createPostgresRunRepository(context.pool);
-    const run = await runs.create({
-      runId: "10000000-0000-4000-8000-000000000100",
-      requestId: `${userOne}:client-approval`,
-      userId: userOne,
-      conversationId: conversation.id,
-      message: "执行 SQL",
-      clientMessageId: "client-approval",
-      mode: "auto",
-      source: "composer",
-      modelId: "mock",
-      attachmentDocumentIds: [],
-      traceId: "trace-approval-1",
-      createdAt: now
-    });
-    const runId = run.snapshot.runId;
+    // 旧 conversation/run repository 已被 v2 取代；approval 表属阶段 6 删除对象，
+    // 这里用 SQL 播种旧表行，仅验证 approval repository 自身语义。
+    const conversation = { id: "10000000-0000-4000-8000-000000000010" };
+    const runId = "10000000-0000-4000-8000-000000000100";
+    await context.pool.query(
+      `insert into conversations(id,user_id,title,status,created_at,updated_at,last_message_at)
+       values ($1,$2,'Approval tests','active',$3,$3,$3)`,
+      [conversation.id, userOne, now]
+    );
+    await context.pool.query(
+      `insert into messages(id,conversation_id,user_id,role,content,status,sequence,created_at)
+       values ('10000000-0000-4000-8000-000000000200',$1,$2,'user','执行 SQL','completed',1,$3)`,
+      [conversation.id, userOne, now]
+    );
+    await context.pool.query(
+      `insert into agent_runs(id,request_id,user_id,conversation_id,user_message_id,mode,source,status,trace_id,model_id,created_at,updated_at)
+       values ($1,$3,$2,$4,'10000000-0000-4000-8000-000000000200','auto','composer','running','trace-approval-1','mock',$5,$5)`,
+      [runId, userOne, `${userOne}:client-approval`, conversation.id, now]
+    );
     const repository = createPostgresApprovalRepository(context.pool);
     const base = {
       approvalId: "approval_trace-approval-1_sql_query_mock_1",

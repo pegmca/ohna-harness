@@ -4,6 +4,7 @@ export * from "./api.js";
 export * from "./conversation.js";
 export * from "./trace.js";
 export * from "./agent-run.js";
+export * from "./run-v2.js";
 export * from "./market.js";
 export * from "./report.js";
 export * from "./workflow.js";

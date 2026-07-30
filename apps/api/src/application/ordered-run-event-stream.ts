@@ -1,16 +1,16 @@
-import type { AgentRunStreamEventDto } from "@aiagent/types";
+import type { RunSnapshotDtoV2, RunStreamEventDtoV2 } from "@aiagent/types";
 
 export interface OrderedRunEventStream {
-  replay(events: AgentRunStreamEventDto[]): Promise<void>;
-  acceptLive(event: AgentRunStreamEventDto): Promise<void>;
-  completeCatchUp(events: AgentRunStreamEventDto[]): Promise<void>;
+  replay(events: RunStreamEventDtoV2[]): Promise<void>;
+  acceptLive(event: RunStreamEventDtoV2): Promise<void>;
+  completeCatchUp(events: RunStreamEventDtoV2[]): Promise<void>;
   isClosed(): boolean;
 }
 
 export interface OrderedRunEventStreamDependencies {
   afterSequence: number;
-  loadAfter(sequence: number): Promise<AgentRunStreamEventDto[]>;
-  write(event: AgentRunStreamEventDto): void;
+  loadAfter(sequence: number): Promise<RunStreamEventDtoV2[]>;
+  write(event: RunStreamEventDtoV2): void;
   close(): void;
 }
 
@@ -27,7 +27,7 @@ export interface OrderedRunEventStreamDependencies {
 export function createOrderedRunEventStream(
   dependencies: OrderedRunEventStreamDependencies
 ): OrderedRunEventStream {
-  const pending = new Map<number, AgentRunStreamEventDto>();
+  const pending = new Map<number, RunStreamEventDtoV2>();
   let lastSequence = dependencies.afterSequence;
   let catchingUp = true;
   let closed = false;
@@ -41,7 +41,7 @@ export function createOrderedRunEventStream(
   }
 
   /** @param events 待合并事件。 @returns 无返回值。 */
-  function buffer(events: AgentRunStreamEventDto[]): void {
+  function buffer(events: RunStreamEventDtoV2[]): void {
     for (const event of events) {
       if (event.sequence > lastSequence) pending.set(event.sequence, event);
     }
@@ -105,14 +105,18 @@ export function createOrderedRunEventStream(
 }
 
 /**
- * 判断 canonical event 是否使 Run 进入终态。
+ * 判断 canonical event 是否使 Run 进入终态（SSE 在该事件后关闭）。
+ * 新协议下终态事件为 agent_end（正常/失败/取消收尾）、run_error（执行层异常）
+ * 与 run_status 的 interrupted（崩溃恢复）。
  *
  * @param event Run event。
  * @returns 是否应在发送该事件后关闭 SSE。
  */
-export function isTerminalRunEvent(event: AgentRunStreamEventDto): boolean {
-  if (event.type === "run_result" || event.type === "run_error") return true;
-  return event.type === "run_status" && isTerminalRunStatus(event.status);
+export function isTerminalRunEvent(event: RunStreamEventDtoV2): boolean {
+  if (event.type === "agent_end" || event.type === "run_error") return true;
+  if (event.type !== "run_status") return false;
+  const payload = event.payload as { status?: string };
+  return isTerminalRunStatus(payload.status ?? "");
 }
 
 /**
@@ -121,6 +125,6 @@ export function isTerminalRunEvent(event: AgentRunStreamEventDto): boolean {
  * @param status Run 状态。
  * @returns 是否应关闭 SSE。
  */
-export function isTerminalRunStatus(status: string): boolean {
-  return status === "succeeded" || status === "failed" || status === "cancelled";
+export function isTerminalRunStatus(status: RunSnapshotDtoV2["status"] | string): boolean {
+  return status === "completed" || status === "failed" || status === "cancelled" || status === "interrupted";
 }

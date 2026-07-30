@@ -1,10 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {
-  createPostgresConversationRepositories,
-  createPostgresRunRepository,
-  createPostgresTraceStore
-} from "../dist/index.js";
+import { createPostgresTraceStore } from "../dist/index.js";
 import { runMigrations } from "../dist/migrate.js";
 import { createDatabaseTestContext } from "./helpers/database-test-helper.mjs";
 
@@ -21,18 +17,26 @@ test("Trace 持久化保证原子 Run 投影、用户隔离、并发 sequence �
       "insert into users(id,created_at,updated_at,last_seen_at) values ($1,$3,$3,$3),($2,$3,$3,$3)",
       [userOne, userTwo, now]
     );
-    const conversations = createPostgresConversationRepositories(context.pool).conversationRepository;
-    const conversation = await conversations.create(userOne, {
-      id: "10000000-0000-4000-8000-000000000010", title: "Trace tests", now
-    });
+    // 旧 run repository 已被 v2 取代；trace 存储仍基于旧表（阶段 6 删除），这里用 SQL 播种旧表行。
+    const conversation = { id: "10000000-0000-4000-8000-000000000010" };
     const runId = "10000000-0000-4000-8000-000000000100";
     const requestId = "request-trace-1";
     const traceId = "trace-1";
-    await createPostgresRunRepository(context.pool).create({
-      runId, requestId, userId: userOne, conversationId: conversation.id, message: "研究问题",
-      clientMessageId: "trace-client-1", mode: "auto", source: "composer", traceId, createdAt: now,
-      modelId: "mock", attachmentDocumentIds: []
-    });
+    await context.pool.query(
+      `insert into conversations(id,user_id,title,status,created_at,updated_at,last_message_at)
+       values ($1,$2,'Trace tests','active',$3,$3,$3)`,
+      [conversation.id, userOne, now]
+    );
+    await context.pool.query(
+      `insert into messages(id,conversation_id,user_id,role,content,status,sequence,created_at)
+       values ('10000000-0000-4000-8000-000000000200',$1,$2,'user','研究问题','completed',1,$3)`,
+      [conversation.id, userOne, now]
+    );
+    await context.pool.query(
+      `insert into agent_runs(id,request_id,user_id,conversation_id,user_message_id,mode,source,status,trace_id,model_id,created_at,updated_at)
+       values ($1,$3,$2,$4,'10000000-0000-4000-8000-000000000200','auto','composer','running',$5,'mock',$6,$6)`,
+      [runId, userOne, requestId, conversation.id, traceId, now]
+    );
     const store = createPostgresTraceStore(context.pool);
     const traceContext = { userId: userOne, runId, conversationId: conversation.id, traceId, requestId, startedAt: now };
     await store.initialize(traceContext);

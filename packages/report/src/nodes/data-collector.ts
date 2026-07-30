@@ -16,10 +16,10 @@ import type { ReportWorkflowDemoDocument, ReportWorkflowState } from "../workflo
  * Data Collector 节点：基于 plan 生成 RAG queries，调用现有 RAG search/answer 能力收集证据。
  * 支持 follow-up queries（补充检索），并把 retrieval trace 和 citation 一起写入证据。
  *
- * @param maxRetries 仅用于摘要展示，与节点执行无关。
+ * @param _maxRetries 仅用于摘要展示，与节点执行无关。
  * @returns workflow node definition。
  */
-export function createDataCollectorNode(maxRetries: number): WorkflowNodeDefinition<ReportDataCollectorInput, ReportDataCollectorOutput, ReportWorkflowState> {
+export function createDataCollectorNode(_maxRetries: number): WorkflowNodeDefinition<ReportDataCollectorInput, ReportDataCollectorOutput, ReportWorkflowState> {
   return {
     nodeId: "data_collector",
     type: "report.data_collector",

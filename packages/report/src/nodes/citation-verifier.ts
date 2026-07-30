@@ -182,7 +182,7 @@ function buildFollowUpQueries(
  * @param missingMetrics 缺失的财务指标。
  * @param followUpQueries 生成的补充检索 queries。
  * @param retryCount 当前 retry 次数。
- * @param maxRetries 最大 retry 次数。
+ * @param _maxRetries 最大 retry 次数（保留参数位，暂不进 trace 负载）。
  */
 function recordVerifierDecisionTrace(
   trace: TraceRecorder | undefined,
@@ -192,7 +192,7 @@ function recordVerifierDecisionTrace(
   missingMetrics: readonly string[],
   followUpQueries: readonly string[],
   retryCount: number,
-  maxRetries: number
+  _maxRetries: number
 ): void {
   if (!trace) {
     return;

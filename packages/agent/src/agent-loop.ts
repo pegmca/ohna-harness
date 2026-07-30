@@ -12,7 +12,6 @@ import type {
   AgentRequest,
   AgentResponse,
   AgentRoute,
-  AgentRouter,
   AgentStep,
   AgentStepType
 } from "./types.js";

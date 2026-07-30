@@ -5,7 +5,6 @@ import type {
   DataSourceIngestResponseDto,
   EmbeddedChunkDto,
   EmbeddingUsageDto,
-  IngestedFilingDocumentDto,
   IngestedTextBlockDto,
   RagAnswerDto,
   RagChunkDto,

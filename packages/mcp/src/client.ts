@@ -101,7 +101,6 @@ export async function createMcpStdioClient(options: CreateMcpStdioClientOptions 
       }));
     },
     async callTool(name, args) {
-      const startedAt = performance.now();
       try {
         const response = await client.callTool({ name, arguments: args });
         const structuredContent = (response as Record<string, unknown>).structuredContent;

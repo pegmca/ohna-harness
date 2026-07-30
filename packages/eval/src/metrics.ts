@@ -1,4 +1,4 @@
-import type { EvalMetricDto, RagAnswerDto } from "@aiagent/types";
+import type { EvalMetricDto } from "@aiagent/types";
 import type { RagEvalAnswerContext, RagEvalCase, RagEvalRunnerOptions } from "./types.js";
 
 const DEFAULT_RETRIEVAL_PASS_THRESHOLD = 1;

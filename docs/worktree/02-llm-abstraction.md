@@ -54,23 +54,30 @@ pi-ai 是纯 LLM 层，不感知 agent，结构分两层（协议 adapter + prov
 
 ## 目标设计
 
-新建 `packages/ai`，目录：
+新建 `packages/ai`，目录（已与阶段 1 实际交付对齐；model catalog 手写目录延后到引入真实模型的阶段，本阶段无 `providers/registry.ts`/`catalog.ts`）：
 
 ```
 packages/ai/src/
 ├── types.ts                    # Message/Content/Usage/Context/Model/Event 等全部公共类型
 ├── api/
-│   ├── anthropic-messages.ts   # Anthropic Messages 协议
-│   ├── openai-completions.ts   # OpenAI chat completions 协议（覆盖 OpenAI/Kimi/DeepSeek 等兼容服务）
-│   ├── google-generative-ai.ts # Google Gemini 协议
-│   └── simple-options.ts       # buildBaseOptions/clampMaxTokensToContext/adjustMaxTokensForThinking
+│   ├── openai-completions/     # OpenAI chat completions 协议（覆盖 OpenAI/Kimi/DeepSeek 等兼容服务）
+│   │   ├── index.ts            #   stream/streamSimple 入口 + 裸 fetch HTTP 层（超时/重试/错误形状）
+│   │   ├── request.ts          #   compat 解析、Context→请求映射、usage/finish_reason 归一化
+│   │   ├── sse.ts              #   手写 SSE 逐行解析（data: 前缀、[DONE] 终止、跨 chunk 行拼接）
+│   │   └── streaming-state.ts  #   chunk → AssistantMessageEvent 的增量组装（块跟踪/参数拼接）
+│   └── simple-options.ts       # buildBaseOptions/clampMaxTokensToContext/clampReasoning/adjustMaxTokensForThinking
 ├── providers/
-│   ├── registry.ts             # Provider 接口、Models 注册表、按 api 分发
-│   └── catalog.ts              # 内置模型目录（首批少量手写，不生成）
+│   ├── openai.ts               # OpenAI 兼容链路分发入口（含 api 匹配校验）
+│   ├── anthropic.ts            # 类型桩：调用即产生结构化 error 事件（协议留待后续阶段）
+│   ├── google.ts               # 类型桩：同上
+│   └── disabled.ts             # 桩工厂（ProviderStreams 形状）
 ├── utils/
 │   ├── event-stream.ts         # EventStream / AssistantMessageEventStream
-│   ├── json-parse.ts           # parseStreamingJson
-│   └── provider-retry.ts       # retryProviderRequest
+│   ├── json-parse.ts           # parseStreamingJson（partialParse 内联，零依赖）
+│   ├── retry.ts                # retryProviderRequest
+│   ├── abort-signals.ts        # combineAbortSignals
+│   └── estimate.ts             # estimateContextTokens（simple-options 的 maxTokens 钳制用）
+├── compat.ts                   # 全局 stream()/streamSimple()，按 model.api 静态分发
 └── index.ts                    # barrel re-export
 ```
 

@@ -46,10 +46,10 @@ export const sqlQueryMockTool: Tool<SqlQueryMockInput, SqlQueryMockOutput> = {
   /**
    * 返回稳定 mock 查询结果；真实数据库接入前不执行外部 SQL。
    *
-   * @param input SQL 查询输入。
+   * @param _input SQL 查询输入（mock 实现不消费）。
    * @returns mock 行集。
    */
-  execute(input) {
+  execute(_input) {
     return {
       columns: ["ticker", "metric", "value", "period"],
       rows: [

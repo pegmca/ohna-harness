@@ -64,7 +64,7 @@ export function Workbench() {
   const [approvalStatusById, setApprovalStatusById] = useState<Record<string, string>>({});
   const [selectedRunDetail, setSelectedRunDetail] = useState<SelectedRunDetail>();
   const [reportMode, setReportMode] = useState(false);
-  const [activeRunId, setActiveRunId] = useState<string>();
+  const [_activeRunId, setActiveRunId] = useState<string>();
   const composer = useComposerState(setComposerError);
   const retrySubmission = useRef<{ message: string; clientMessageId: string } | undefined>(undefined);
   const activeRunController = useRef<AbortController | undefined>(undefined);

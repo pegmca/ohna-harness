@@ -1,4 +1,4 @@
-import type { EvalCaseDto, EvalMetricDto, EvalResultDto, RagEvalReportDto } from "@aiagent/types";
+import type { EvalCaseDto, EvalResultDto, RagEvalReportDto } from "@aiagent/types";
 import type { DataSourceRuntime, RagAnswer } from "@aiagent/rag";
 
 /**
@@ -12,7 +12,7 @@ export type RagEvalCase = EvalCaseDto;
 /**
  * 单条 case 的运行结果，包含原始答案和计算后的指标。
  */
-export interface RagEvalRunResult extends EvalResultDto {}
+export type RagEvalRunResult = EvalResultDto;
 
 /**
  * RAG 评测总体指标。

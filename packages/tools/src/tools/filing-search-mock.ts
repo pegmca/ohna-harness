@@ -1,5 +1,6 @@
 import { z } from "zod";
-import type { Tool } from "../types.js";
+import { defineAgentTool } from "../agent-tool.js";
+import type { AgentTool } from "../types.js";
 
 export const filingSearchMockInputSchema = z.object({
   ticker: z.string().min(1, "ticker is required"),
@@ -22,10 +23,11 @@ export const filingSearchMockOutputSchema = z.object({
 export type FilingSearchMockInput = z.infer<typeof filingSearchMockInputSchema>;
 export type FilingSearchMockOutput = z.infer<typeof filingSearchMockOutputSchema>;
 
-export const filingSearchMockTool: Tool<FilingSearchMockInput, FilingSearchMockOutput> = {
+export const filingSearchMockTool: AgentTool<typeof filingSearchMockInputSchema, FilingSearchMockOutput> = defineAgentTool({
   name: "filing_search_mock",
   description: "Search stable mock filing snippets for a ticker and natural-language query.",
-  inputSchema: filingSearchMockInputSchema,
+  label: "Filing Search (Mock)",
+  parameters: filingSearchMockInputSchema,
   outputSchema: filingSearchMockOutputSchema,
   /**
    * 返回稳定公告片段，便于验收 RAG/工具链路之前先验证工具基础设施。
@@ -48,4 +50,4 @@ export const filingSearchMockTool: Tool<FilingSearchMockInput, FilingSearchMockO
       ]
     };
   }
-};
+});

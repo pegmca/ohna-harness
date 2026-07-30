@@ -118,31 +118,28 @@ export function createMcpFinancialToolRuntime(): McpFinancialToolRuntime {
       if (!company) {
         return failure("company_not_found", "No mock financial metrics for the requested company.", input);
       }
-      const result = await toolRegistry.execute("financial_metric_mock", {
-        ticker: company.companyId,
-        metrics: input.metrics
-      });
-      if (!result.ok) {
-        return failure(result.error.code, result.error.message, result.error.details);
+      try {
+        const output = await executeRegisteredTool(toolRegistry, "financial_metric_mock", {
+          ticker: company.companyId,
+          metrics: input.metrics
+        });
+        const metrics = output.metrics as Record<"net_profit" | "roe", { value: number; unit: string }>;
+        return {
+          ok: true,
+          data: {
+            ...company,
+            metrics: input.metrics.map((metric) => ({
+              metric,
+              value: metrics[metric].value,
+              period: output.period as string,
+              unit: metrics[metric].unit,
+              source: output.source as "mock"
+            }))
+          }
+        };
+      } catch (error) {
+        return failure(toErrorCode(error), toErrorMessage(error));
       }
-      const output = result.result as {
-        period: string;
-        metrics: Record<"net_profit" | "roe", { value: number; unit: string }>;
-        source: "mock";
-      };
-      return {
-        ok: true,
-        data: {
-          ...company,
-          metrics: input.metrics.map((metric) => ({
-            metric,
-            value: output.metrics[metric].value,
-            period: output.period,
-            unit: output.metrics[metric].unit,
-            source: output.source
-          }))
-        }
-      };
     },
 
     /**
@@ -152,32 +149,57 @@ export function createMcpFinancialToolRuntime(): McpFinancialToolRuntime {
      * @returns 结构化行情摘要；prices/volume 是明确标记的 mock 衍生值。
      */
     async getMarketData(input) {
-      const result = await toolRegistry.execute("market_data_mock", { ticker: input.ticker });
-      if (!result.ok) {
-        return failure(result.error.code, result.error.message, result.error.details);
+      try {
+        const output = await executeRegisteredTool(toolRegistry, "market_data_mock", { ticker: input.ticker });
+        const series = output.series as import("@aiagent/types").MarketSeriesDto;
+        const requested = new Set(input.fields);
+        return {
+          ok: true,
+          data: {
+            ticker: input.ticker,
+            range: input.range,
+            asOf: output.asOf as string,
+            currency: output.currency as string,
+            ...(requested.has("prices") ? { prices: [{ timestamp: output.asOf as string, value: output.lastPrice as number }] } : {}),
+            ...(requested.has("returns") ? { returns: output.changePercent as number } : {}),
+            ...(requested.has("volume") ? { volume: 102400000 } : {}),
+            ...(requested.has("summary") ? { summary: { lastPrice: output.lastPrice as number, changePercent: output.changePercent as number } } : {}),
+            ...(requested.has("ohlcv") ? { series } : {}),
+            source: output.source as "mock"
+          }
+        };
+      } catch (error) {
+        return failure(toErrorCode(error), toErrorMessage(error));
       }
-      const output = result.result as {
-        asOf: string; currency: string; lastPrice: number; changePercent: number; source: "mock";
-        series: import("@aiagent/types").MarketSeriesDto;
-      };
-      const requested = new Set(input.fields);
-      return {
-        ok: true,
-        data: {
-          ticker: input.ticker,
-          range: input.range,
-          asOf: output.asOf,
-          currency: output.currency,
-          ...(requested.has("prices") ? { prices: [{ timestamp: output.asOf, value: output.lastPrice }] } : {}),
-          ...(requested.has("returns") ? { returns: output.changePercent } : {}),
-          ...(requested.has("volume") ? { volume: 102400000 } : {}),
-          ...(requested.has("summary") ? { summary: { lastPrice: output.lastPrice, changePercent: output.changePercent } } : {}),
-          ...(requested.has("ohlcv") ? { series: output.series } : {}),
-          source: output.source
-        }
-      };
     }
   };
+}
+
+/**
+ * 直接调用 registry 中的 AgentTool 并返回其 details（结构化输出）。
+ * AgentTool.execute 抛带 code 的结构化错误，调用方负责 catch。
+ *
+ * @param registry 工具注册表。
+ * @param name 工具名。
+ * @param args 工具参数。
+ * @returns 工具结构化输出（details）。
+ */
+async function executeRegisteredTool(
+  registry: ReturnType<typeof createDefaultToolRegistry>,
+  name: string,
+  args: Record<string, unknown>
+): Promise<Record<string, unknown>> {
+  const tool = registry.get(name);
+  if (!tool) {
+    throw Object.assign(new Error(`Tool not found: ${name}`), { code: "tool_not_found" });
+  }
+  const result = await tool.execute(`mcp_${name}_${Date.now().toString(36)}`, args);
+  return result.details as Record<string, unknown>;
+}
+
+/** @param error 未知异常。 @returns 结构化错误码（缺省 execution_error）。 */
+function toErrorCode(error: unknown): string {
+  return error && typeof error === "object" && "code" in error ? String(error.code) : "execution_error";
 }
 
 /**

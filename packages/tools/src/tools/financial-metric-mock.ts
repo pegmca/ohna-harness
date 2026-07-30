@@ -1,5 +1,6 @@
 import { z } from "zod";
-import type { Tool } from "../types.js";
+import { defineAgentTool } from "../agent-tool.js";
+import type { AgentTool } from "../types.js";
 
 export const financialMetricMockInputSchema = z.object({
   ticker: z.string().min(1, "ticker is required"),
@@ -42,13 +43,14 @@ const MOCK_FINANCIAL_METRICS: Record<string, Omit<FinancialMetricMockOutput, "ti
   }
 };
 
-export const financialMetricMockTool: Tool<FinancialMetricMockInput, FinancialMetricMockOutput> = {
+export const financialMetricMockTool: AgentTool<typeof financialMetricMockInputSchema, FinancialMetricMockOutput> = defineAgentTool({
   name: "financial_metric_mock",
   description: "Return stable mock financial metrics for a ticker.",
-  inputSchema: financialMetricMockInputSchema,
+  label: "Financial Metrics (Mock)",
+  parameters: financialMetricMockInputSchema,
   outputSchema: financialMetricMockOutputSchema,
   /**
-   * 返回稳定财务指标，缺失 ticker 数据时交给 executor 转成结构化错误。
+   * 返回稳定财务指标，缺失 ticker 数据时抛错，由包装层转成结构化错误回喂模型。
    *
    * @param input 财务指标查询参数。
    * @returns 最近一期净利润和 ROE mock 数据。
@@ -65,4 +67,4 @@ export const financialMetricMockTool: Tool<FinancialMetricMockInput, FinancialMe
       ...data
     };
   }
-};
+});

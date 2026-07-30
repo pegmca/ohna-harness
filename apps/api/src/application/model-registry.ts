@@ -1,16 +1,28 @@
-import type { LlmClient, ModelCatalogDto, ModelOptionDto } from "@aiagent/types";
+import type { Api, Model } from "@aiagent/ai";
+import type { StreamFn } from "@aiagent/agent";
+import type { ModelCatalogDto, ModelOptionDto } from "@aiagent/types";
+
+/**
+ * 一个可执行模型的运行时：pi 形态的 Model 目录条目 + 可选注入的 streamFn 与 apiKey。
+ * streamFn 缺省时 loop 使用 @aiagent/ai 的 streamSimple（真实 OpenAI 兼容链路）；
+ * MockModel 通过注入 streamFn 走同一条 agentLoop 代码路径（见 docs/worktree/03）。
+ */
+export interface ModelRuntime {
+  model: Model<Api>;
+  streamFn?: StreamFn;
+  apiKey?: string;
+}
 
 export interface ModelRuntimeEntry {
   option: ModelOptionDto;
-  client?: LlmClient;
-  /** 仅确定性 mock runtime 可在没有 LLM client 时执行。 */
-  clientlessRuntime?: boolean;
+  /** 缺失表示该目录项不可用（如 real profile 缺配置），has() 必须为 false。 */
+  runtime?: ModelRuntime;
 }
 
-/** 服务端模型目录同时承担公开元数据与私有 client 解析，浏览器永远拿不到凭据。 */
+/** 服务端模型目录同时承担公开元数据与私有 runtime 解析，浏览器永远拿不到凭据。 */
 export interface ModelRuntimeRegistry {
   catalog(): ModelCatalogDto;
-  resolve(modelId: string): LlmClient | undefined;
+  resolve(modelId: string): ModelRuntime | undefined;
   has(modelId: string): boolean;
   defaultModelId: string;
 }
@@ -20,7 +32,7 @@ export interface ModelRuntimeRegistry {
  *
  * @param entries 已完成配置校验的模型条目。
  * @param defaultModelId 默认模型稳定 ID。
- * @returns 模型目录与 client resolver。
+ * @returns 模型目录与 runtime resolver。
  */
 export function createModelRuntimeRegistry(
   entries: ModelRuntimeEntry[],
@@ -36,11 +48,8 @@ export function createModelRuntimeRegistry(
       defaultModelId,
       models: entries.map((entry) => structuredClone(entry.option))
     }),
-    resolve: (modelId) => byId.get(modelId)?.client,
-    // real profile 缺配置时必须在创建 Run 前失败，不能静默走 Agent 的 mock 分支。
-    has: (modelId) => {
-      const entry = byId.get(modelId);
-      return Boolean(entry && (entry.client || entry.clientlessRuntime));
-    }
+    resolve: (modelId) => byId.get(modelId)?.runtime,
+    // 缺 runtime 的目录项必须在创建 Run 前失败，不能静默降级。
+    has: (modelId) => Boolean(byId.get(modelId)?.runtime)
   };
 }

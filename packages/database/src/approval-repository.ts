@@ -4,8 +4,8 @@ import type {
   ApprovalRecord,
   ApprovalRepository,
   ApprovalRequestInput
-} from "@aiagent/tools";
-import { ApprovalRepositoryError } from "@aiagent/tools";
+} from "./approval-types.js";
+import { ApprovalRepositoryError } from "./approval-types.js";
 import type pg from "pg";
 import { postgresTimestampToIso, withTransaction } from "./postgres.js";
 

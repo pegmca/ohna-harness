@@ -1,39 +1,85 @@
-import type { TraceRecorder } from "@aiagent/trace";
-import type { ToolApprovalDecisionDto, ToolApprovalRequestDto, ToolPermissionLevelDto } from "@aiagent/types";
+/**
+ * 工具契约类型：AgentTool / AgentToolResult 定义在工具包（工具契约属于工具方）。
+ * packages/agent 仅 `import type` 后原样 re-export，避免 agent→tools 运行时反向依赖成环。
+ * 形状对齐 pi（badlogic/packages/agent/src/types.ts），唯一差异：parameters 持 zod schema（zod v4），
+ * zod → JSON Schema 的转换收敛在 packages/agent/src/convert.ts 一处。
+ */
+import type { ImageContent, TextContent, Usage } from "@aiagent/ai";
 import type { z } from "zod";
 
+/** 工具批执行模式：默认 parallel；批内任一工具声明 sequential 则整批降级串行（对齐 pi）。 */
+export type ToolExecutionMode = "sequential" | "parallel";
+
+/**
+ * 工具结果：content 回喂模型，details 仅供 trace/UI，不进 LLM 上下文。
+ */
+export interface AgentToolResult<TDetails = unknown> {
+  content: (TextContent | ImageContent)[];
+  details: TDetails;
+  /** 工具自身执行的用量（如有）；不参与主 LLM 上下文计费。 */
+  usage?: Usage;
+  /** 提前结束提示：批次内全部结果为 true 才终止 run（对齐 pi shouldTerminateToolBatch）。 */
+  terminate?: boolean;
+}
+
+/**
+ * 工具流式部分结果回调；作用域为单次 execute() 调用，settle 后的调用被忽略。
+ */
+export type AgentToolUpdateCallback<TDetails = unknown> = (partialResult: AgentToolResult<TDetails>) => void;
+
+/**
+ * Agent 运行时工具定义。与 pi 的唯一差异：parameters 持 zod schema 而非 typebox。
+ * 序列化为 JSON Schema 发生在 LLM 调用边界（packages/agent/src/convert.ts 的 toLlmTools），
+ * loop 内与落库始终持 zod。
+ */
+export interface AgentTool<TSchema extends z.ZodType = z.ZodType, TDetails = unknown> {
+  name: string;
+  description: string;
+  /** 面向 UI 展示的可读名称。 */
+  label: string;
+  /** zod 参数 schema；loop 在执行前用它校验模型给出的参数。 */
+  parameters: TSchema;
+  /** 原始参数兼容 shim，zod 校验前调用（对齐 pi prepareArguments）。 */
+  prepareArguments?: (args: unknown) => z.infer<TSchema>;
+  /**
+   * 执行工具真实逻辑；失败时抛异常，由 loop 转成 isError 的 ToolResultMessage 回喂模型。
+   *
+   * @param toolCallId 本次工具调用 id（来自 assistant 消息的 toolCall 块）。
+   * @param params 已通过 zod 校验的参数。
+   * @param signal run 级 AbortSignal，工具应响应取消。
+   * @param onUpdate 可选的部分结果回调，用于长耗时工具的进度观测。
+   * @returns 结构化工具结果。
+   */
+  execute: (
+    toolCallId: string,
+    params: z.infer<TSchema>,
+    signal?: AbortSignal,
+    onUpdate?: AgentToolUpdateCallback<TDetails>,
+  ) => Promise<AgentToolResult<TDetails>>;
+  /** 默认 parallel；任一为 sequential 则整批降级为串行。 */
+  executionMode?: ToolExecutionMode;
+}
+
+/** 工具执行错误码：withTimeoutAndRetry 抛出的 Error.code 取自这里。 */
 export type ToolErrorCode =
   | "tool_not_found"
   | "validation_error"
-  | "execution_error"
   | "output_validation_error"
-  | "permission_required"
+  | "execution_error"
   | "permission_denied"
   | "timeout"
   | "cancelled"
   | "deadline_exceeded"
   | "retry_exhausted";
 
+/** 结构化工具错误（withTimeoutAndRetry 以带 code 的 Error 抛出，不落 DTO）。 */
 export interface ToolError {
   code: ToolErrorCode;
   message: string;
   details?: Record<string, unknown>;
 }
 
-export interface ToolExecutionContext {
-  trace?: TraceRecorder;
-  approvalDecisions?: ToolApprovalDecisionDto[];
-  /** 调用方本次显式授予的最小工具集合；未列入即默认拒绝。 */
-  allowedTools?: readonly string[];
-  signal?: AbortSignal;
-  timeoutMs?: number;
-  deadlineAtMs?: number;
-  retry?: Partial<ToolRetryPolicy>;
-  idempotencyKey?: string;
-  now?: () => number;
-  sleep?: (delayMs: number, signal?: AbortSignal) => Promise<void>;
-}
-
+/** 重试策略：指数退避 + 抖动。 */
 export interface ToolRetryPolicy {
   maxAttempts: number;
   baseDelayMs: number;
@@ -41,63 +87,24 @@ export interface ToolRetryPolicy {
   jitterRatio: number;
 }
 
-export interface ToolExecutionSuccess<TOutput> {
-  ok: true;
-  toolName: string;
-  args: Record<string, unknown>;
-  result: TOutput;
-  durationMs: number;
-  attempts: number;
-  traceId?: string;
-}
-
-export interface ToolExecutionFailure {
-  ok: false;
-  toolName: string;
-  args: Record<string, unknown>;
-  error: ToolError;
-  approvalRequest?: ToolApprovalRequestDto;
-  durationMs: number;
-  attempts: number;
-  traceId?: string;
-}
-
-export type ToolExecutionResult<TOutput = unknown> = ToolExecutionSuccess<TOutput> | ToolExecutionFailure;
-
-export interface Tool<TInput, TOutput> {
-  name: string;
-  description: string;
-  permissionLevel?: ToolPermissionLevelDto;
-  inputSchema: z.ZodType<TInput>;
-  outputSchema: z.ZodType<TOutput>;
-  /**
-   * trace 中使用的工具调用事件类型；MCP tool wrapper 可设置为 `mcp_tool_call`，
-   * 使 REST/registry tool call 与 MCP tool call 在 timeline 中可区分。
-   */
-  traceEventType?: "tool_call" | "mcp_tool_call";
-  /** 工具是否有副作用；有副作用工具只有同时声明幂等且提供 idempotency key 才可重试。 */
+/** withTimeoutAndRetry 的执行选项（由 defineAgentTool 或调用方给出）。 */
+export interface ToolExecutionOptions {
+  /** 单次执行超时毫秒数，默认 10000。 */
+  timeoutMs?: number;
+  /** 总 deadline（绝对毫秒时刻）；单次预算取 min(timeoutMs, 剩余 deadline)。 */
+  deadlineAtMs?: number;
+  /** 重试策略覆盖。 */
+  retry?: Partial<ToolRetryPolicy>;
+  /** 工具是否有副作用；有副作用工具只有声明幂等且提供幂等键才可重试。 */
   hasSideEffects?: boolean;
   /** 声明 execute 在相同幂等键下可安全重放。 */
   idempotent?: boolean;
-  /**
-   * 对单次工具输入做权限判断；用于 SQL 只读校验、导出动作确认等敏感边界。
-   *
-   * @param input 已通过 inputSchema 校验的工具参数。
-   * @returns 权限等级和面向 reviewer 的原因。
-   */
-  evaluatePermission?(input: TInput): {
-    permissionLevel: ToolPermissionLevelDto;
-    reason: string;
-    inputPreview?: unknown;
-    reasonCode?: string;
-  };
-  /**
-   * 执行工具真实逻辑，入参已经由 executor 使用 zod 校验。
-   *
-   * @param input 通过 inputSchema 校验后的工具参数。
-   * @returns 工具输出，随后会继续经过 outputSchema 校验。
-   */
-  execute(input: TInput): TOutput | Promise<TOutput>;
+  idempotencyKey?: string;
+  signal?: AbortSignal;
+  /** 测试注入：时钟。 */
+  now?: () => number;
+  /** 测试注入：可中断的 sleep。 */
+  sleep?: (delayMs: number, signal?: AbortSignal) => Promise<void>;
 }
 
 export interface ToolRegistrySummary {

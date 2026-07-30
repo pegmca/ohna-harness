@@ -1,5 +1,6 @@
 import { z } from "zod";
-import type { Tool } from "../types.js";
+import { defineAgentTool } from "../agent-tool.js";
+import type { AgentTool } from "../types.js";
 
 export const calculatorInputSchema = z.object({
   expression: z.string().min(1, "expression is required")
@@ -13,11 +14,13 @@ export const calculatorOutputSchema = z.object({
 export type CalculatorInput = z.infer<typeof calculatorInputSchema>;
 export type CalculatorOutput = z.infer<typeof calculatorOutputSchema>;
 
-export const calculatorTool: Tool<CalculatorInput, CalculatorOutput> = {
+export const calculatorTool: AgentTool<typeof calculatorInputSchema, CalculatorOutput> = defineAgentTool({
   name: "calculator",
   description: "Evaluate a basic arithmetic expression with +, -, *, / and parentheses.",
-  inputSchema: calculatorInputSchema,
+  label: "Calculator",
+  parameters: calculatorInputSchema,
   outputSchema: calculatorOutputSchema,
+  formatResult: (output) => `${output.expression} = ${output.value}`,
   /**
    * 执行安全的四则运算解析，避免使用 eval 执行任意代码。
    *
@@ -30,7 +33,7 @@ export const calculatorTool: Tool<CalculatorInput, CalculatorOutput> = {
       value: evaluateArithmeticExpression(input.expression)
     };
   }
-};
+});
 
 /**
  * 计算基础四则运算表达式；这里手写小型 parser 是为了避免 eval 执行任意代码。

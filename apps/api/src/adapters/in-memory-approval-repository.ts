@@ -4,8 +4,8 @@ import type {
   ApprovalRecord,
   ApprovalRepository,
   ApprovalRequestInput
-} from "@aiagent/tools";
-import { ApprovalRepositoryError } from "@aiagent/tools";
+} from "@aiagent/database";
+import { ApprovalRepositoryError } from "@aiagent/database";
 
 /**
  * 创建进程内 Approval repository；仅供本地 dev 与 API 单测使用，重启即丢失。

@@ -1,10 +1,16 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createInMemoryTraceRecorder } from "@aiagent/trace";
 import { z } from "zod";
-import { createDefaultToolRegistry, getToolRegistrySummary, isReadonlySql, ToolRegistry } from "../dist/index.js";
+import {
+  createDefaultToolRegistry,
+  defineAgentTool,
+  getToolRegistrySummary,
+  isReadonlySql,
+  ToolRegistry,
+  withTimeoutAndRetry
+} from "../dist/index.js";
 
-test("default registry exposes and executes the week 1 mock tools", async () => {
+test("default registry exposes the mock tools as AgentTool", async () => {
   const registry = createDefaultToolRegistry();
   const summary = getToolRegistrySummary(registry);
 
@@ -17,80 +23,67 @@ test("default registry exposes and executes the week 1 mock tools", async () => 
     "sql_query_mock"
   ]);
 
-  const calculator = await registry.execute("calculator", { expression: "12.5 * 8" });
-  assert.equal(calculator.ok, true);
-  assert.equal(calculator.result.value, 100);
-
-  const market = await registry.execute("market_data_mock", { ticker: "000001.SZ" });
-  assert.equal(market.ok, true);
-  assert.equal(market.result.lastPrice, 10.85);
-
-  const filing = await registry.execute("filing_search_mock", {
-    ticker: "000001.SZ",
-    query: "资产质量"
-  });
-  assert.equal(filing.ok, true);
-  assert.match(filing.result.filings[0].snippet, /资产质量/);
-
-  const metrics = await registry.execute("financial_metric_mock", { ticker: "000001.SZ" });
-  assert.equal(metrics.ok, true);
-  assert.equal(metrics.result.metrics.net_profit.value, 14932000000);
-  assert.equal(metrics.result.metrics.roe.value, 3.42);
+  for (const tool of registry.list()) {
+    // AgentTool 形状：name/description/label/parameters(zod)/execute。
+    assert.equal(typeof tool.name, "string");
+    assert.equal(typeof tool.description, "string");
+    assert.equal(typeof tool.label, "string");
+    assert.equal(typeof tool.parameters.safeParse, "function");
+    assert.equal(typeof tool.execute, "function");
+  }
 });
 
-test("safe tools execute without approval", async () => {
-  const registry = createDefaultToolRegistry();
-  const trace = createInMemoryTraceRecorder("trace_safe_tool");
-  const result = await registry.execute("calculator", { expression: "2 + 3" }, { trace });
+test("calculator executes through the AgentTool contract", async () => {
+  const tool = createDefaultToolRegistry().get("calculator");
+  const result = await tool.execute("call_1", { expression: "12.5 * 8" });
 
-  assert.equal(result.ok, true);
-  assert.equal(result.result.value, 5);
-  assert.equal(trace.getEvents().some((event) => event.type === "approval"), false);
+  assert.deepEqual(result.content, [{ type: "text", text: "12.5 * 8 = 100" }]);
+  assert.deepEqual(result.details, { expression: "12.5 * 8", value: 100 });
 });
 
-test("readonly sql requires approval and executes after approval decision", async () => {
+test("mock tools return structured details", async () => {
   const registry = createDefaultToolRegistry();
-  const trace = createInMemoryTraceRecorder("trace_sql_approval");
-  const pending = await registry.execute("sql_query_mock", { query: "SELECT ticker, roe FROM metrics" }, { trace });
 
-  assert.equal(pending.ok, false);
-  assert.equal(pending.error.code, "permission_required");
-  assert.equal(pending.approvalRequest.permissionLevel, "needs_approval");
-  assert.equal(trace.getEvents().some((event) => event.type === "approval" && event.status === "requested"), true);
+  const market = await registry.get("market_data_mock").execute("call_2", { ticker: "000001.SZ" });
+  assert.equal(market.details.lastPrice, 10.85);
 
-  const approved = await registry.execute(
-    "sql_query_mock",
-    { query: "SELECT ticker, roe FROM metrics" },
-    {
-      trace,
-      approvalDecisions: [
-        {
-          approvalId: pending.approvalRequest.approvalId,
-          decision: "approved",
-          requestId: pending.approvalRequest.requestId,
-          inputDigest: pending.approvalRequest.inputDigest,
-          reviewerNote: "test approval"
-        }
-      ]
-    }
+  const filing = await registry.get("filing_search_mock").execute("call_3", { ticker: "000001.SZ", query: "资产质量" });
+  assert.match(filing.details.filings[0].snippet, /资产质量/);
+
+  const metrics = await registry.get("financial_metric_mock").execute("call_4", { ticker: "000001.SZ" });
+  assert.equal(metrics.details.metrics.net_profit.value, 14932000000);
+  assert.equal(metrics.details.metrics.roe.value, 3.42);
+});
+
+test("zod validation failure throws a structured validation_error", async () => {
+  const tool = createDefaultToolRegistry().get("financial_metric_mock");
+  await assert.rejects(
+    () => tool.execute("call_5", {}),
+    (error) => error.code === "validation_error" && Array.isArray(error.details.issues)
+  );
+});
+
+test("execution failure throws a structured execution_error", async () => {
+  const tool = createDefaultToolRegistry().get("calculator");
+  await assert.rejects(
+    () => tool.execute("call_6", { expression: "12.5 *" }),
+    (error) => error.code === "execution_error"
+  );
+});
+
+test("sql write operations are blocked by the readonly policy", async () => {
+  const tool = createDefaultToolRegistry().get("sql_query_mock");
+
+  assert.equal(isReadonlySql("SELECT * FROM filings"), true);
+  assert.equal(isReadonlySql("DROP TABLE filings"), false);
+
+  await assert.rejects(
+    () => tool.execute("call_7", { query: "DROP TABLE filings" }),
+    (error) => error.code === "permission_denied" && error.details.reasonCode === "SEC_SQL_READONLY_VIOLATION"
   );
 
-  assert.equal(approved.ok, true);
-  assert.equal(approved.result.rowCount, 1);
-  assert.equal(trace.getEvents().some((event) => event.type === "approval" && event.status === "approved"), true);
-});
-
-test("request allowlist and approval binding reject privilege escalation", async () => {
-  const registry = createDefaultToolRegistry();
-  const denied = await registry.execute("market_data_mock", { ticker: "000001.SZ" }, { allowedTools: ["calculator"] });
-  assert.equal(denied.ok, false);
-  assert.equal(denied.error.details.reasonCode, "SEC_TOOL_NOT_ALLOWLISTED");
-
-  const trace = createInMemoryTraceRecorder("trace_forged", "req_forged");
-  const pending = await registry.execute("sql_query_mock", { query: "SELECT * FROM metrics" }, { trace });
-  const forged = await registry.execute("sql_query_mock", { query: "SELECT * FROM metrics" }, { trace, approvalDecisions: [{ approvalId: pending.approvalRequest.approvalId, decision: "approved", requestId: "req_other", inputDigest: pending.approvalRequest.inputDigest }] });
-  assert.equal(forged.ok, false);
-  assert.equal(forged.error.code, "permission_required");
+  const ok = await tool.execute("call_8", { query: "SELECT ticker, roe FROM metrics" });
+  assert.equal(ok.details.rowCount, 1);
 });
 
 test("readonly SQL rejects multiple statements, comments and dangerous read primitives", () => {
@@ -101,90 +94,91 @@ test("readonly SQL rejects multiple statements, comments and dangerous read prim
   assert.equal(isReadonlySql("SELECT pg_read_file('/etc/passwd')"), false);
 });
 
-test("sql write operations are blocked by readonly validator", async () => {
-  const registry = createDefaultToolRegistry();
-  const trace = createInMemoryTraceRecorder("trace_sql_blocked");
-  const result = await registry.execute("sql_query_mock", { query: "DROP TABLE filings" }, { trace });
-
-  assert.equal(isReadonlySql("SELECT * FROM filings"), true);
-  assert.equal(isReadonlySql("DROP TABLE filings"), false);
-  assert.equal(result.ok, false);
-  assert.equal(result.error.code, "permission_denied");
-  assert.equal(result.approvalRequest.permissionLevel, "blocked");
-  assert.equal(trace.getEvents().some((event) => event.type === "approval" && event.status === "rejected"), true);
-});
-
-test("zod validation errors are returned and recorded instead of thrown", async () => {
-  const registry = createDefaultToolRegistry();
-  const trace = createInMemoryTraceRecorder("trace_validation_test");
-  const result = await registry.execute("financial_metric_mock", {}, { trace });
-
-  assert.equal(result.ok, false);
-  assert.equal(result.error.code, "validation_error");
-  assert.equal(trace.getEvents().length, 1);
-  assert.equal(trace.getEvents()[0].ok, false);
-  assert.equal(trace.getEvents()[0].error.code, "validation_error");
-});
-
-test("tool execution errors are structured and traced", async () => {
-  const registry = createDefaultToolRegistry();
-  const trace = createInMemoryTraceRecorder("trace_execution_test");
-  const result = await registry.execute("calculator", { expression: "12.5 *" }, { trace });
-
-  assert.equal(result.ok, false);
-  assert.equal(result.error.code, "execution_error");
-  assert.equal(trace.getEvents().length, 1);
-  assert.equal(trace.getEvents()[0].toolName, "calculator");
-  assert.equal(trace.getEvents()[0].ok, false);
-  assert.equal(trace.getEvents()[0].error.code, "execution_error");
-});
-
-test("successful tool calls are written to trace with args, result and latency", async () => {
-  const registry = createDefaultToolRegistry();
-  const trace = createInMemoryTraceRecorder("trace_success_test");
-  const result = await registry.execute("market_data_mock", { ticker: "000001.SZ" }, { trace });
-  const [event] = trace.getEvents();
-
-  assert.equal(result.ok, true);
-  assert.equal(event.type, "tool_call");
-  assert.equal(event.traceId, "trace_success_test");
-  assert.deepEqual(event.args, { ticker: "000001.SZ" });
-  assert.equal(event.result.lastPrice, 10.85);
-  assert.equal(typeof event.durationMs, "number");
-});
-
-test("trace recorder redacts sensitive fields from tool args", async () => {
-  const registry = createDefaultToolRegistry();
-  const trace = createInMemoryTraceRecorder("trace_redaction_test", "req_redaction_test");
-  await registry.execute(
-    "financial_metric_mock",
-    { ticker: "000001.SZ", apiKey: "should-not-be-stored", nested: { token: "secret-token" } },
-    { trace }
-  );
-  const [event] = trace.getEvents();
-
-  assert.equal(event.requestId, "req_redaction_test");
-  assert.equal(event.args.apiKey, "[redacted]");
-  assert.equal(event.args.nested.token, "[redacted]");
-});
-
 test("temporary tool failure retries without real waiting", async () => {
   let calls = 0;
   const delays = [];
-  const registry = new ToolRegistry().register({ name: "flaky", description: "test", inputSchema: z.object({}), outputSchema: z.object({ value: z.number() }), execute: () => { calls += 1; if (calls === 1) throw Object.assign(new Error("temporary"), { retryable: true }); return { value: 7 }; } });
-  const result = await registry.execute("flaky", {}, { sleep: async (delay) => { delays.push(delay); }, retry: { jitterRatio: 0 } });
-  assert.equal(result.ok, true); assert.equal(result.attempts, 2); assert.deepEqual(delays, [100]);
+  const tool = defineAgentTool({
+    name: "flaky",
+    description: "test",
+    parameters: z.object({}),
+    execution: { retry: { jitterRatio: 0 }, sleep: async (delay) => { delays.push(delay); } },
+    execute: () => {
+      calls += 1;
+      if (calls === 1) throw Object.assign(new Error("temporary"), { retryable: true });
+      return { value: 7 };
+    }
+  });
+
+  const result = await tool.execute("call_9", {});
+  assert.equal(calls, 2);
+  assert.deepEqual(delays, [100]);
+  assert.deepEqual(result.details, { value: 7 });
 });
 
 test("side effect tool is not retried without idempotency guarantee", async () => {
   let calls = 0;
-  const registry = new ToolRegistry().register({ name: "write", description: "test", hasSideEffects: true, inputSchema: z.object({}), outputSchema: z.object({}), execute: () => { calls += 1; throw Object.assign(new Error("temporary"), { retryable: true }); } });
-  const result = await registry.execute("write", {}, { sleep: async () => undefined });
-  assert.equal(result.ok, false); assert.equal(calls, 1); assert.equal(result.attempts, 1);
+  const tool = defineAgentTool({
+    name: "write",
+    description: "test",
+    parameters: z.object({}),
+    execution: { hasSideEffects: true, sleep: async () => undefined },
+    execute: () => {
+      calls += 1;
+      throw Object.assign(new Error("temporary"), { retryable: true });
+    }
+  });
+
+  await assert.rejects(() => tool.execute("call_10", {}), (error) => error.code === "execution_error");
+  assert.equal(calls, 1);
 });
 
 test("slow tool is bounded by timeout", async () => {
-  const registry = new ToolRegistry().register({ name: "slow", description: "test", inputSchema: z.object({}), outputSchema: z.object({}), execute: () => new Promise(() => undefined) });
-  const result = await registry.execute("slow", {}, { timeoutMs: 1, retry: { maxAttempts: 1 } });
-  assert.equal(result.ok, false); assert.equal(result.error.code, "timeout");
+  const tool = defineAgentTool({
+    name: "slow",
+    description: "test",
+    parameters: z.object({}),
+    execution: { timeoutMs: 1, retry: { maxAttempts: 1 } },
+    execute: () => new Promise(() => undefined)
+  });
+
+  await assert.rejects(() => tool.execute("call_11", {}), (error) => error.code === "timeout");
+});
+
+test("deadline budget intersects with the single-attempt timeout", async () => {
+  const now = () => 1_000;
+  await assert.rejects(
+    () => withTimeoutAndRetry(() => 1, { now, deadlineAtMs: 999 }),
+    (error) => error.code === "deadline_exceeded"
+  );
+});
+
+test("abort signal cancels execution", async () => {
+  const controller = new AbortController();
+  controller.abort();
+  await assert.rejects(
+    () => withTimeoutAndRetry(() => 1, { signal: controller.signal }),
+    (error) => error.code === "cancelled"
+  );
+});
+
+test("output schema mismatch throws output_validation_error", async () => {
+  const tool = defineAgentTool({
+    name: "bad_output",
+    description: "test",
+    parameters: z.object({}),
+    outputSchema: z.object({ value: z.number() }),
+    execute: () => ({ wrong: true })
+  });
+
+  await assert.rejects(
+    () => tool.execute("call_12", {}),
+    (error) => error.code === "output_validation_error" && Array.isArray(error.details.issues)
+  );
+});
+
+test("registry rejects duplicate tool names", () => {
+  const registry = new ToolRegistry();
+  const tool = defineAgentTool({ name: "dup", description: "test", parameters: z.object({}), execute: () => ({}) });
+  registry.register(tool);
+  assert.throws(() => registry.register(tool), /already registered/);
 });

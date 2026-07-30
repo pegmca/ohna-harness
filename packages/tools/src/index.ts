@@ -1,31 +1,19 @@
 export type {
-  Tool,
+  AgentTool,
+  AgentToolResult,
+  AgentToolUpdateCallback,
   ToolError,
   ToolErrorCode,
-  ToolExecutionContext,
-  ToolExecutionFailure,
-  ToolExecutionResult,
-  ToolExecutionSuccess,
+  ToolExecutionMode,
+  ToolExecutionOptions,
   ToolRegistrySummary,
   ToolRetryPolicy,
 } from "./types.js";
 
+export { defineAgentTool, type DefineAgentToolConfig } from "./agent-tool.js";
 export { ToolRegistry } from "./registry.js";
-export { executeTool } from "./executor.js";
+export { withTimeoutAndRetry } from "./executor.js";
 export { createDefaultToolRegistry, getToolRegistrySummary } from "./default-registry.js";
-export {
-  APPROVAL_REQUEST_TTL_MS,
-  ApprovalRepositoryError,
-  type ApprovalDecideConflictReason,
-  type ApprovalDecideFailureCode,
-  type ApprovalDecideResult,
-  type ApprovalDecisionInput,
-  type ApprovalRecord,
-  type ApprovalRepository,
-  type ApprovalRepositoryErrorCode,
-  type ApprovalRequestInput,
-  type ApprovalStatus
-} from "./approval-repository.js";
 
 export {
   calculatorInputSchema,

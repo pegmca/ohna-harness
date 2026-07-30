@@ -1,6 +1,6 @@
 import { redactSensitiveValue, type TraceApprovalEvent, type TraceRunEventProjection } from "@aiagent/trace";
-import type { ApprovalDecideResult, ApprovalDecisionInput } from "@aiagent/tools";
-import { ApprovalRepositoryError } from "@aiagent/tools";
+import type { ApprovalDecideResult, ApprovalDecisionInput } from "./approval-types.js";
+import { ApprovalRepositoryError } from "./approval-types.js";
 import { randomUUID } from "node:crypto";
 import type pg from "pg";
 import { decideApprovalWithClient } from "./approval-repository.js";

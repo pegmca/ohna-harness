@@ -1,7 +1,7 @@
 import { createIdentityService, createInMemoryIdentityRepository, type IdentityService } from "@aiagent/identity";
 import { createDataSourceRuntime, type DataSourceRuntime } from "@aiagent/rag";
 import type { ArtifactRepository, WorkflowRepository } from "@aiagent/report";
-import type { ApprovalRepository } from "@aiagent/tools";
+import type { ApprovalRepository } from "@aiagent/database";
 import { createInMemoryTraceStore, type TraceStore } from "@aiagent/trace";
 import type { RunStore } from "../application/run-ports.js";
 import { createInMemoryApprovalRepository } from "./in-memory-approval-repository.js";

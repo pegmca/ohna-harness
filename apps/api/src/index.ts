@@ -1,12 +1,13 @@
 import type { IdentityService, IdentitySnapshot } from "@aiagent/identity";
-import type { LlmClient } from "@aiagent/types";
 import type { ConversationRepository, MessageRepository } from "@aiagent/conversation";
 import type { DataSourceRuntime } from "@aiagent/rag";
 import { createLocalArtifactStorage } from "@aiagent/report";
 import type { ArtifactRepository, ArtifactStorage, WorkflowRepository } from "@aiagent/report";
 import type { TraceStore } from "@aiagent/trace";
-import type { ApprovalDecideResult, ApprovalDecisionInput, ApprovalRepository } from "@aiagent/tools";
-import { APPROVAL_REQUEST_TTL_MS } from "@aiagent/tools";
+import type { AgentTool } from "@aiagent/agent";
+import { createDefaultToolRegistry } from "@aiagent/tools";
+import type { ApprovalDecideResult, ApprovalDecisionInput, ApprovalRepository } from "@aiagent/database";
+import { APPROVAL_REQUEST_TTL_MS } from "@aiagent/database";
 import type { TraceRunEventProjection } from "@aiagent/trace";
 import type { IdentityMeDto } from "@aiagent/types";
 import type { AttachmentRepository } from "@aiagent/database";
@@ -16,6 +17,7 @@ import {
   createInMemoryRunEventBus,
   createMicrotaskRunScheduler
 } from "./adapters/in-memory-run-runtime.js";
+import { createMockModelRuntime } from "./adapters/mock-model.js";
 import { createRunApplicationService } from "./application/run-service.js";
 import type { RunStore } from "./application/run-ports.js";
 import { createConversationApplicationService } from "./application/conversation-service.js";
@@ -39,8 +41,9 @@ import {
 } from "./application/model-registry.js";
 
 export interface ApiServerOptions {
-  llmClient?: LlmClient;
   modelRegistry?: ModelRuntimeRegistry;
+  /** 注入 agent loop 的工具集；缺省用 @aiagent/tools 默认 registry。 */
+  tools?: AgentTool[];
   mockStepDelayMs?: number;
   readiness?: () => Promise<{ ok: boolean; dependency: string; message?: string }>;
   identityService: IdentityService;
@@ -107,16 +110,15 @@ export function createApiServer(options: ApiServerOptions): FastifyInstance {
       isDefault: true,
       capabilities: { structuredOutput: true, toolCalling: true }
     },
-    client: options.llmClient,
-    clientlessRuntime: !options.llmClient
+    runtime: createMockModelRuntime()
   }], "mock");
   const runService = createRunApplicationService({
     store: runStore,
     eventBus: runEventBus,
     executionRegistry: createInMemoryExecutionRegistry(),
     scheduler: createMicrotaskRunScheduler(),
-    llmClient: options.llmClient,
-    resolveLlmClient: (modelId) => modelRegistry.resolve(modelId),
+    tools: options.tools ?? createDefaultToolRegistry().list(),
+    resolveModel: (modelId) => modelRegistry.resolve(modelId),
     hasModel: (modelId) => modelRegistry.has(modelId),
     defaultModelId: modelRegistry.defaultModelId,
     dataSourceRuntime,

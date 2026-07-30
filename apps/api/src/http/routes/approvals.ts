@@ -5,7 +5,7 @@ import type {
   ApprovalDecisionInput,
   ApprovalRecord,
   ApprovalRepository
-} from "@aiagent/tools";
+} from "@aiagent/database";
 import type {
   AgentRunEventInputDto,
   AgentRunStreamEventDto,

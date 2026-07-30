@@ -1,7 +1,7 @@
 import type { IdentitySnapshot } from "@aiagent/identity";
 import { renderResearchReportPdf } from "@aiagent/report";
 import type { ArtifactRepository, ArtifactStorage, WorkflowRepository } from "@aiagent/report";
-import type { ApprovalRepository } from "@aiagent/tools";
+import type { ApprovalRepository } from "@aiagent/database";
 import type { ApiResult, ReportArtifactDto, ReportWorkflowResponseDto } from "@aiagent/types";
 import type { FastifyInstance } from "fastify";
 import { publishArtifactPdf } from "../../application/artifact-service.js";

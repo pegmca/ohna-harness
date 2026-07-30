@@ -34,6 +34,17 @@ import { createPostgresRunRepository, type RunRepository } from "./run-repositor
 export { createPostgresRunRepository, type CreateRunInput, type RunRepository } from "./run-repository.js";
 import { createPostgresApprovalRepository } from "./approval-repository.js";
 export { createPostgresApprovalRepository } from "./approval-repository.js";
+export {
+  APPROVAL_REQUEST_TTL_MS,
+  ApprovalRepositoryError,
+  type ApprovalDecideResult,
+  type ApprovalDecisionInput,
+  type ApprovalRecord,
+  type ApprovalRepository,
+  type ApprovalRequestInput,
+  type ApprovalStatus
+} from "./approval-types.js";
+import type { ApprovalRepository } from "./approval-types.js";
 import { createPostgresTraceStore } from "./trace-repository.js";
 export { createPostgresTraceStore } from "./trace-repository.js";
 import { createPostgresCitationRepository } from "./citation-repository.js";
@@ -61,7 +72,7 @@ export interface DatabaseRuntime {
   workflowRepository: WorkflowRepository;
   artifactRepository: ArtifactRepository;
   runRepository: RunRepository;
-  approvalRepository: import("@aiagent/tools").ApprovalRepository;
+  approvalRepository: ApprovalRepository;
   approvalDecisionService: ApprovalDecisionService;
   traceStore: import("@aiagent/trace").TraceStore;
   attachmentRepository: AttachmentRepository;

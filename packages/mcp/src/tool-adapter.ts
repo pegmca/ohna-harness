@@ -1,6 +1,6 @@
 import type { TraceRecorder } from "@aiagent/trace";
-import { ToolRegistry } from "@aiagent/tools";
-import type { Tool } from "@aiagent/tools";
+import { defineAgentTool, ToolRegistry } from "@aiagent/tools";
+import type { AgentTool } from "@aiagent/tools";
 import { z } from "zod";
 import type { McpClient, McpToolSummary } from "./client.js";
 import {
@@ -29,12 +29,12 @@ export function toMcpToolNames(summaries: McpToolSummary[]): string[] {
 }
 
 /**
- * 用已知 zod schema 包装 `search_filings`，使其能被现有 ToolRegistry 执行并复用权限/trace 边界。
+ * 用已知 zod schema 包装 `search_filings` 为 AgentTool（MCP 完整适配属阶段 5，本阶段保持可构建）。
  *
  * @param client 已连接的 MCP client。
- * @returns 符合 Tool 接口的 search_filings 包装器。
+ * @returns 符合 AgentTool 接口的 search_filings 包装器。
  */
-export function createMcpSearchFilingsTool(client: McpClient): Tool<SearchFilingsInput, SearchFilingsOutput> {
+export function createMcpSearchFilingsTool(client: McpClient): AgentTool<z.ZodType<SearchFilingsInput>, SearchFilingsOutput> {
   return createMcpTool(
     client,
     "search_filings",
@@ -50,7 +50,7 @@ export function createMcpSearchFilingsTool(client: McpClient): Tool<SearchFiling
  * @param client 已连接的 MCP client。
  * @returns 符合 Tool 接口的 get_financial_metrics 包装器。
  */
-export function createMcpFinancialMetricsTool(client: McpClient): Tool<FinancialMetricsInput, FinancialMetricsOutput> {
+export function createMcpFinancialMetricsTool(client: McpClient): AgentTool<z.ZodType<FinancialMetricsInput>, FinancialMetricsOutput> {
   return createMcpTool(
     client,
     "get_financial_metrics",
@@ -66,7 +66,7 @@ export function createMcpFinancialMetricsTool(client: McpClient): Tool<Financial
  * @param client 已连接的 MCP client。
  * @returns 符合 Tool 接口的 get_market_data 包装器。
  */
-export function createMcpMarketDataTool(client: McpClient): Tool<MarketDataInput, MarketDataOutput> {
+export function createMcpMarketDataTool(client: McpClient): AgentTool<z.ZodType<MarketDataInput>, MarketDataOutput> {
   return createMcpTool(
     client,
     "get_market_data",
@@ -77,16 +77,17 @@ export function createMcpMarketDataTool(client: McpClient): Tool<MarketDataInput
 }
 
 /**
- * 通用 MCP tool 包装工厂：把 MCP client 调用映射为 Tool 接口，并标记 traceEventType 为 mcp_tool_call。
+ * 通用 MCP tool 包装工厂：把 MCP client 调用映射为 AgentTool 接口。
  *
- * MCP server 负责输入校验，wrapper 再用 zod outputSchema 校验返回值，捕获 schema 不匹配。
+ * MCP server 负责输入校验，wrapper 再用 zod outputSchema 校验返回值，捕获 schema 不匹配；
+ * 超时/重试包装由 defineAgentTool 内嵌的 withTimeoutAndRetry 提供。
  *
  * @param client 已连接的 MCP client。
  * @param name MCP tool 名称。
  * @param description 工具描述。
  * @param inputSchema zod 输入 schema。
  * @param outputSchema zod 输出 schema。
- * @returns 符合 Tool 接口的包装器。
+ * @returns 符合 AgentTool 接口的包装器。
  */
 export function createMcpTool<TInput, TOutput>(
   client: McpClient,
@@ -94,14 +95,12 @@ export function createMcpTool<TInput, TOutput>(
   description: string,
   inputSchema: z.ZodType<TInput>,
   outputSchema: z.ZodType<TOutput>
-): Tool<TInput, TOutput> {
-  return {
+): AgentTool<z.ZodType<TInput>, TOutput> {
+  return defineAgentTool({
     name,
     description,
-    inputSchema,
+    parameters: inputSchema,
     outputSchema,
-    permissionLevel: "safe",
-    traceEventType: "mcp_tool_call",
     async execute(input) {
       const result = await client.callTool(name, input as Record<string, unknown>);
 
@@ -111,7 +110,7 @@ export function createMcpTool<TInput, TOutput>(
 
       return result.result as TOutput;
     }
-  };
+  });
 }
 
 export interface CreateMcpToolRegistryOptions {
@@ -192,14 +191,14 @@ export async function createMcpToolRegistry(
  * @param summary MCP tool 摘要。
  * @returns Tool 包装器；未知工具返回 undefined。
  */
-function wrapDiscoveredMcpTool(client: McpClient, summary: McpToolSummary): Tool<unknown, unknown> | undefined {
+function wrapDiscoveredMcpTool(client: McpClient, summary: McpToolSummary): AgentTool | undefined {
   switch (summary.name) {
     case "search_filings":
-      return createMcpSearchFilingsTool(client) as Tool<unknown, unknown>;
+      return createMcpSearchFilingsTool(client);
     case "get_financial_metrics":
-      return createMcpFinancialMetricsTool(client) as Tool<unknown, unknown>;
+      return createMcpFinancialMetricsTool(client);
     case "get_market_data":
-      return createMcpMarketDataTool(client) as Tool<unknown, unknown>;
+      return createMcpMarketDataTool(client);
     default:
       return undefined;
   }
@@ -244,8 +243,8 @@ function recordDiscoveryTrace(
 }
 
 /**
- * 用于把 MCP 调用失败转换为 Tool.execute 可抛出的异常，
- * 后续 tools executor 会捕获并转成 ToolExecutionFailure。
+ * 用于把 MCP 调用失败转换为 AgentTool.execute 可抛出的异常，
+ * agent loop 会捕获并转成 isError 的 ToolResultMessage 回喂模型。
  */
 class McpToolCallError extends Error {
   readonly code: string;

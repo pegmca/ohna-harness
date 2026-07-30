@@ -1,13 +1,16 @@
-import { createLlmClientForProfile } from "@aiagent/agent";
-import { runAgent } from "@aiagent/agent";
+import { agentLoop, defaultConvertToLlm, type AgentMessage } from "@aiagent/agent";
+import type { Model } from "@aiagent/ai";
 import { createQqBotChannel } from "@aiagent/channels";
 import { createDatabaseRuntime, createPostgresVectorStore } from "@aiagent/database";
 import { createLocalArtifactStorage } from "@aiagent/report";
 import { createIdentityService } from "@aiagent/identity";
 import { createDataSourceRuntime, createDeterministicMockEmbeddingClient } from "@aiagent/rag";
+import { createDefaultToolRegistry } from "@aiagent/tools";
 import { stat } from "node:fs/promises";
 import { createApiServer } from "./index.js";
-import { createModelRuntimeRegistry } from "./application/model-registry.js";
+import { createModelRuntimeRegistry, type ModelRuntime } from "./application/model-registry.js";
+import { BASE_SYSTEM_PROMPT } from "./application/agent-execution.js";
+import { createMockModelRuntime } from "./adapters/mock-model.js";
 
 /**
  * 唯一生产 composition root：所有事实源 adapter 在此注入，领域 package 不读取 DATABASE_URL。
@@ -16,8 +19,10 @@ import { createModelRuntimeRegistry } from "./application/model-registry.js";
 const port = Number(process.env.PORT ?? 3001);
 const host = process.env.HOST ?? "0.0.0.0";
 const providerMode = process.env.AIAGENT_PROVIDER_MODE ?? "mock";
-const deepseekResult = providerMode === "real" ? createLlmClientForProfile("deepseek") : undefined;
-const openrouterResult = providerMode === "real" ? createLlmClientForProfile("openrouter") : undefined;
+// run 执行统一走 agentLoop；工具集在此装配一次，API server 与 QQ channel 共享。
+const agentTools = createDefaultToolRegistry().list();
+const deepseekRuntime = providerMode === "real" ? createOpenAiCompatibleRuntime("deepseek", "https://api.deepseek.com/v1") : undefined;
+const openrouterRuntime = providerMode === "real" ? createOpenAiCompatibleRuntime("openrouter", "https://openrouter.ai/api/v1") : undefined;
 const modelRegistry = providerMode === "real"
   ? createModelRuntimeRegistry([
       {
@@ -29,7 +34,7 @@ const modelRegistry = providerMode === "real"
           isDefault: true,
           capabilities: { structuredOutput: true, toolCalling: true }
         },
-        client: deepseekResult?.ok ? deepseekResult.data : undefined
+        runtime: deepseekRuntime?.runtime
       },
       {
         option: {
@@ -40,7 +45,7 @@ const modelRegistry = providerMode === "real"
           isDefault: false,
           capabilities: { structuredOutput: true, toolCalling: true }
         },
-        client: openrouterResult?.ok ? openrouterResult.data : undefined
+        runtime: openrouterRuntime?.runtime
       }
     ], "deepseek")
   : createModelRuntimeRegistry([{
@@ -52,7 +57,7 @@ const modelRegistry = providerMode === "real"
         isDefault: true,
         capabilities: { structuredOutput: true, toolCalling: true }
       },
-      clientlessRuntime: true
+      runtime: createMockModelRuntime()
     }], "mock");
 const database = createDatabaseRuntime(process.env.DATABASE_URL ?? "");
 const artifactStorageRoot = process.env.ARTIFACT_STORAGE_ROOT ?? "./var/artifacts";
@@ -72,8 +77,24 @@ const qqChannel = createQqBotChannel({
   appSecret: process.env.QQBOT_APP_SECRET,
   identityService,
   async answerAgent(_userId, message) {
-    const response = await runAgent({ message }, { llmClient: modelRegistry.resolve(modelRegistry.defaultModelId) });
-    return response.answer;
+    // QQ channel 复用同一条 agentLoop 路径，默认模型目录项解析 runtime。
+    const runtime = modelRegistry.resolve(modelRegistry.defaultModelId);
+    if (!runtime) return "模型未配置，暂时无法回答。";
+    const prompt: AgentMessage = { role: "user", content: message, timestamp: Date.now() };
+    const stream = agentLoop(
+      [prompt],
+      { systemPrompt: BASE_SYSTEM_PROMPT, messages: [], tools: agentTools },
+      { model: runtime.model, apiKey: runtime.apiKey, convertToLlm: defaultConvertToLlm },
+      undefined,
+      runtime.streamFn
+    );
+    const messages = await stream.result();
+    const lastAssistant = [...messages].reverse().find((item) => item.role === "assistant");
+    if (!lastAssistant || lastAssistant.role !== "assistant") return "Agent 未能生成回答。";
+    return lastAssistant.content
+      .filter((block) => block.type === "text")
+      .map((block) => (block.type === "text" ? block.text : ""))
+      .join("\n") || "Agent 未能生成回答。";
   },
   logger: {
     info(message, meta) { console.info(message, meta ?? {}); },
@@ -83,6 +104,7 @@ const qqChannel = createQqBotChannel({
 });
 const app = createApiServer({
   modelRegistry,
+  tools: agentTools,
   mockStepDelayMs: providerMode === "mock"
     ? Math.max(0, Math.min(3_000, Number(process.env.AIAGENT_MOCK_STEP_DELAY_MS ?? 500)))
     : 0,
@@ -111,11 +133,11 @@ const app = createApiServer({
     if (providerMode !== "mock" && providerMode !== "real") {
       return { ok: false, dependency: "provider-config", message: "AIAGENT_PROVIDER_MODE must be mock or real." };
     }
-    if (providerMode === "real" && (!deepseekResult?.ok || !openrouterResult?.ok)) {
+    if (providerMode === "real" && (!deepseekRuntime?.runtime || !openrouterRuntime?.runtime)) {
       return {
         ok: false,
         dependency: "llm-provider-config",
-        message: llmConfigurationError(deepseekResult, openrouterResult)
+        message: llmConfigurationError(deepseekRuntime, openrouterRuntime)
       };
     }
     if (!await database.ping()) {
@@ -129,18 +151,51 @@ const app = createApiServer({
 });
 
 /**
- * 从两个模型配置结果中提取稳定的就绪错误，避免可选链破坏联合类型收窄。
+ * 从环境变量装配 OpenAI 兼容模型 runtime（pi 形态 Model + apiKey）。
+ * 缺 apiKey 或 model 时不产出 runtime，由 readiness 与 has() 在接流量前失败。
  *
- * @param deepseek DeepSeek 客户端结果。
- * @param openrouter OpenRouter 客户端结果。
+ * @param profile 模型 profile 稳定标识（deepseek/openrouter）。
+ * @param defaultBaseUrl 缺省 baseUrl。
+ * @returns runtime 与配置错误消息（二者必居其一）。
+ */
+function createOpenAiCompatibleRuntime(
+  profile: string,
+  defaultBaseUrl: string
+): { runtime?: ModelRuntime; error?: string } {
+  const suffix = profile.toUpperCase();
+  const apiKey = process.env[`AIAGENT_LLM_API_KEY_${suffix}`];
+  const baseUrl = process.env[`AIAGENT_LLM_BASE_URL_${suffix}`] || defaultBaseUrl;
+  const modelName = process.env[`AIAGENT_LLM_MODEL_${suffix}`];
+  if (!apiKey) return { error: `Missing LLM API key for ${profile} (AIAGENT_LLM_API_KEY_${suffix}).` };
+  if (!modelName) return { error: `Missing LLM model for ${profile} (AIAGENT_LLM_MODEL_${suffix}).` };
+  const model: Model<"openai-completions"> = {
+    id: modelName,
+    name: modelName,
+    api: "openai-completions",
+    provider: profile,
+    baseUrl,
+    reasoning: false,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 128_000,
+    maxTokens: 8_192
+  };
+  return { runtime: { model, apiKey } };
+}
+
+/**
+ * 从两个模型装配结果中提取稳定的就绪错误，避免可选链破坏联合类型收窄。
+ *
+ * @param deepseek DeepSeek 装配结果。
+ * @param openrouter OpenRouter 装配结果。
  * @returns 首个配置错误消息。
  */
 function llmConfigurationError(
-  deepseek: typeof deepseekResult,
-  openrouter: typeof openrouterResult
+  deepseek: typeof deepseekRuntime,
+  openrouter: typeof openrouterRuntime
 ): string {
-  if (deepseek && !deepseek.ok) return deepseek.error.message;
-  if (openrouter && !openrouter.ok) return openrouter.error.message;
+  if (deepseek?.error) return deepseek.error;
+  if (openrouter?.error) return openrouter.error;
   return "LLM provider is not configured.";
 }
 

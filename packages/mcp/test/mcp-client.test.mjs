@@ -70,32 +70,19 @@ test("MCP tool registry discovers tools and records mcp_tool_discovered trace", 
   assert.ok(discoveryEvent.toolNames.includes("search_filings"));
 });
 
-test("MCP tool registry executes search_filings through ToolRegistry", async () => {
+test("MCP tool registry executes search_filings through the AgentTool contract", async () => {
   const { registry } = await createMcpToolRegistry(client);
-  const result = await registry.execute("search_filings", {
+  const tool = registry.get("search_filings");
+  assert.ok(tool);
+  const result = await tool.execute("call_1", {
     companyId: "000001.SZ",
     query: "资产质量",
     topK: 1
   });
 
-  assert.equal(result.ok, true);
-  assert.equal(result.toolName, "search_filings");
-  assert.equal(result.result.ok, true);
-});
-
-test("MCP tool registry writes mcp_tool_call trace event on execution", async () => {
-  const trace = createInMemoryTraceRecorder("trace_mcp_call");
-  const { registry } = await createMcpToolRegistry(client);
-  await registry.execute(
-    "get_financial_metrics",
-    { companyId: "000001.SZ", metrics: ["net_profit"] },
-    { trace }
-  );
-
-  const callEvent = trace.getEvents().find((event) => event.type === "mcp_tool_call");
-  assert.ok(callEvent);
-  assert.equal(callEvent.toolName, "get_financial_metrics");
-  assert.equal(callEvent.ok, true);
+  assert.equal(result.details.ok, true);
+  assert.ok(Array.isArray(result.details.data.snippets));
+  assert.ok(result.content.length > 0);
 });
 
 test("combined registry includes REST tools when MCP server is unavailable", async () => {
@@ -133,25 +120,22 @@ test("combined registry includes both REST and MCP tools when server is availabl
   await close();
 });
 
-test("MCP tool execution failure returns structured error without crashing", async () => {
+test("MCP tool execution failure throws structured error without crashing", async () => {
   const { registry } = await createMcpToolRegistry(client);
-  const result = await registry.execute("get_market_data", { ticker: "UNKNOWN", range: "1d", fields: ["summary"] });
-
-  assert.equal(result.ok, false);
-  assert.equal(result.error.code, "execution_error");
+  const tool = registry.get("get_market_data");
+  await assert.rejects(
+    () => tool.execute("call_2", { ticker: "UNKNOWN", range: "1d", fields: ["summary"] }),
+    (error) => error.code === "execution_error"
+  );
 });
 
-test("MCP tool registry returns structured validation errors for schema mismatch", async () => {
+test("MCP tool registry throws structured validation errors for schema mismatch", async () => {
   const { registry } = await createMcpToolRegistry(client);
-  const result = await registry.execute("search_filings", {
-    companyId: "000001.SZ",
-    query: "资产质量",
-    topK: 0
-  });
-
-  assert.equal(result.ok, false);
-  assert.equal(result.error.code, "validation_error");
-  assert.ok(Array.isArray(result.error.details.issues));
+  const tool = registry.get("search_filings");
+  await assert.rejects(
+    () => tool.execute("call_3", { companyId: "000001.SZ", query: "资产质量", topK: 0 }),
+    (error) => error.code === "validation_error" && Array.isArray(error.details.issues)
+  );
 });
 
 test("MCP tool registry returns structured output errors for incompatible server output", async () => {
@@ -166,13 +150,9 @@ test("MCP tool registry returns structured output errors for incompatible server
     async close() {}
   };
   const { registry } = await createMcpToolRegistry(incompatibleClient);
-  const result = await registry.execute("search_filings", {
-    companyId: "000001.SZ",
-    query: "资产质量",
-    topK: 1
-  });
-
-  assert.equal(result.ok, false);
-  assert.equal(result.error.code, "output_validation_error");
-  assert.ok(Array.isArray(result.error.details.issues));
+  const tool = registry.get("search_filings");
+  await assert.rejects(
+    () => tool.execute("call_4", { companyId: "000001.SZ", query: "资产质量", topK: 1 }),
+    (error) => error.code === "output_validation_error" && Array.isArray(error.details.issues)
+  );
 });

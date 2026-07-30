@@ -3,6 +3,7 @@ import { test } from "node:test";
 import { createApiServer } from "../dist/index.js";
 import { createInMemoryRunStore } from "../dist/adapters/in-memory-run-runtime.js";
 import { createInMemoryApiTestRuntime } from "../dist/adapters/in-memory-test-runtime.js";
+import { createModelRuntimeRegistry } from "../dist/application/model-registry.js";
 
 const runRequest = {
   message: "帮我查询 000001.SZ 最近一期净利润和 ROE。",
@@ -57,6 +58,76 @@ test("POST /api/runs validates the new run creation contract", async () => {
   });
   assert.equal(invalid.statusCode, 400);
   assert.equal(invalid.json().error.code, "validation_failed");
+  await app.close();
+});
+
+test("同一 conversationId 连续两个 run，第二个 run 的上下文包含第一轮消息", async () => {
+  // 用捕获型 streamFn 记录每次 LLM 调用的上下文，验证会话历史内存累积（review B1 回归）。
+  const capturedContexts = [];
+  const capturingStreamFn = (_model, context) => {
+    capturedContexts.push(structuredClone({ systemPrompt: context.systemPrompt, messages: context.messages }));
+    const lastUser = [...context.messages].reverse().find((message) => message.role === "user");
+    const text = `回答：${typeof lastUser?.content === "string" ? lastUser.content : ""}`;
+    const message = {
+      role: "assistant",
+      content: [{ type: "text", text }],
+      api: "openai-completions",
+      provider: "mock",
+      model: "capturing-mock",
+      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+      stopReason: "stop",
+      timestamp: Date.now()
+    };
+    const events = [{ type: "start", partial: { ...message, content: [] } }, { type: "done", reason: "stop", message }];
+    return {
+      async *[Symbol.asyncIterator]() { yield* events; },
+      async result() { return message; }
+    };
+  };
+  const modelRegistry = createModelRuntimeRegistry([{
+    option: {
+      id: "mock",
+      label: "Capturing Mock",
+      provider: "mock",
+      description: "captures llm contexts",
+      isDefault: true,
+      capabilities: { structuredOutput: true, toolCalling: true }
+    },
+    runtime: {
+      model: {
+        id: "capturing-mock", name: "Capturing Mock", api: "openai-completions", provider: "mock",
+        baseUrl: "http://localhost/mock", reasoning: false, input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 128000, maxTokens: 4096
+      },
+      streamFn: capturingStreamFn
+    }
+  }], "mock");
+  const app = createApiServer({ ...createInMemoryApiTestRuntime(), modelRegistry });
+  const payload = (message) => ({ message, conversationId: "conversation_history", mode: "auto", source: "composer" });
+
+  const first = (await app.inject({ method: "POST", url: "/api/runs", payload: payload("第一轮问题") })).json().data;
+  const firstSnapshot = await waitForTerminal(app, first.snapshotUrl);
+  assert.equal(firstSnapshot.status, "succeeded");
+
+  const second = (await app.inject({ method: "POST", url: "/api/runs", payload: payload("第二轮问题") })).json().data;
+  const secondSnapshot = await waitForTerminal(app, second.snapshotUrl);
+  assert.equal(secondSnapshot.status, "succeeded");
+
+  assert.equal(capturedContexts.length, 2);
+  const secondTurnMessages = capturedContexts[1].messages;
+  // 第二轮上下文必须包含第一轮 user 与 assistant 消息（历史真正累积）。
+  assert.equal(
+    secondTurnMessages.some((message) => message.role === "user" && message.content === "第一轮问题"),
+    true
+  );
+  assert.equal(
+    secondTurnMessages.some(
+      (message) => message.role === "assistant"
+        && message.content.some((block) => block.type === "text" && block.text === "回答：第一轮问题")
+    ),
+    true
+  );
   await app.close();
 });
 
@@ -204,16 +275,15 @@ test("approval decision is bound to its run and input digest", async () => {
     method: "POST",
     url: "/api/runs",
     payload: {
-      message: "执行 SQL: SELECT * FROM metrics",
+      message: "基于最近两年公告和财务数据，为 000001.SZ 生成研究简报 PDF。",
       conversationId: "conversation_approval",
-      mode: "auto",
-      source: "composer"
+      mode: "report",
+      source: "report_button"
     }
   })).json().data;
   const snapshot = await waitForTerminal(app, accepted.snapshotUrl);
-  const approval = snapshot.result.trace.events.find(
-    (event) => event.type === "approval" && event.status === "requested"
-  );
+  // approval 门已从 agent loop 删除；仅存的审批来自 report workflow 的 PDF exporter。
+  const approval = snapshot.result.reportWorkflow.run.approvalRequest;
   const rejected = await app.inject({
     method: "POST",
     url: `/api/runs/${accepted.runId}/approvals/${approval.approvalId}/decision`,
@@ -240,16 +310,14 @@ test("approval decision 在 API 重启后仍可执行，且支持幂等重试与
     method: "POST",
     url: "/api/runs",
     payload: {
-      message: "执行 SQL: SELECT * FROM metrics",
+      message: "基于最近两年公告和财务数据，为 000001.SZ 生成研究简报 PDF。",
       conversationId: "conversation_approval_restart",
-      mode: "auto",
-      source: "composer"
+      mode: "report",
+      source: "report_button"
     }
   })).json().data;
   const snapshot = await waitForTerminal(appOne, accepted.snapshotUrl);
-  const approval = snapshot.result.trace.events.find(
-    (event) => event.type === "approval" && event.status === "requested"
-  );
+  const approval = snapshot.result.reportWorkflow.run.approvalRequest;
   await appOne.close();
 
   const appTwo = createApiServer(runtime);
@@ -291,16 +359,14 @@ test("approval decision 拒绝其他已认证用户，reviewer 身份只来自�
     url: "/api/runs",
     headers: { cookie: cookieOne },
     payload: {
-      message: "执行 SQL: SELECT * FROM metrics",
+      message: "基于最近两年公告和财务数据，为 000001.SZ 生成研究简报 PDF。",
       conversationId: "conversation_approval_isolation",
-      mode: "auto",
-      source: "composer"
+      mode: "report",
+      source: "report_button"
     }
   })).json().data;
   const snapshot = await waitForTerminal(app, accepted.snapshotUrl, { cookie: cookieOne });
-  const approval = snapshot.result.trace.events.find(
-    (event) => event.type === "approval" && event.status === "requested"
-  );
+  const approval = snapshot.result.reportWorkflow.run.approvalRequest;
   const url = `/api/runs/${accepted.runId}/approvals/${approval.approvalId}/decision`;
 
   const foreign = await app.inject({

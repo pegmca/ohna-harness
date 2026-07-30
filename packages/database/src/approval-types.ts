@@ -1,3 +1,11 @@
+/**
+ * Approval 持久化端口类型：原定义在 @aiagent/tools，pi 化改造阶段 2 删除了
+ * tools 包的 approval 门与这些纯类型；tool_approvals 表与 repository 在阶段 6 才删除，
+ * 本阶段把类型内联到 database 包，切断对 @aiagent/tools 的类型依赖。
+ *
+ * 与旧 tools 端口的唯一差异：`findApprovedDecision` 增加 runId 谓词
+ * （PDF 导出 gate 需要按 run 归属校验，签名早已按三参实现）。
+ */
 import type { ToolApprovalDecisionValueDto, ToolPermissionLevelDto } from "@aiagent/types";
 
 /** Approval 请求默认过期时间：30 分钟；调用方可按部署需要注入更短 TTL。 */
@@ -85,10 +93,10 @@ export class ApprovalRepositoryError extends Error {
 }
 
 /**
- * 工具权限领域的 Approval repository port。
+ * Approval repository port。
  *
  * 所有方法把 user 归属作为强制谓词，不能只凭 approval ID 定位资源；
- * adapter 由 `@aiagent/database`（PostgreSQL）或测试内存实现提供。
+ * adapter 由本包（PostgreSQL）或 apps/api 测试内存实现提供。
  */
 export interface ApprovalRepository {
   /**
@@ -116,7 +124,7 @@ export interface ApprovalRepository {
    * 查询当前用户已批准的审批决定，供 PDF 导出等 gate 使用；过期记录一律排除。
    *
    * @param userId 当前用户标识。
-   * @param runId 审批所属 Agent Run 标识；过期转移与查询都必须限定归属 Run。
+   * @param runId 审批所属 Run 标识。
    * @param approvalId 审批标识。
    * @returns 已批准且未过期的记录，否则 undefined。
    */

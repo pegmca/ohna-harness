@@ -47,6 +47,9 @@ importers:
       '@aiagent/agent':
         specifier: workspace:*
         version: link:../../packages/agent
+      '@aiagent/ai':
+        specifier: workspace:*
+        version: link:../../packages/ai
       '@aiagent/channels':
         specifier: workspace:^
         version: link:../../packages/channels
@@ -160,9 +163,9 @@ importers:
 
   packages/agent:
     dependencies:
-      '@aiagent/mcp':
+      '@aiagent/ai':
         specifier: workspace:*
-        version: link:../mcp
+        version: link:../ai
       '@aiagent/tools':
         specifier: workspace:*
         version: link:../tools
@@ -172,6 +175,11 @@ importers:
       '@aiagent/types':
         specifier: workspace:*
         version: link:../types
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
+
+  packages/ai: {}
 
   packages/channels:
     dependencies:
@@ -291,6 +299,9 @@ importers:
 
   packages/tools:
     dependencies:
+      '@aiagent/ai':
+        specifier: workspace:*
+        version: link:../ai
       '@aiagent/trace':
         specifier: workspace:^
         version: link:../trace

@@ -1,5 +1,6 @@
 import { z } from "zod";
-import type { Tool } from "../types.js";
+import { defineAgentTool } from "../agent-tool.js";
+import type { AgentTool } from "../types.js";
 import type { MarketSeriesDto } from "@aiagent/types";
 
 export const marketDataMockInputSchema = z.object({
@@ -83,13 +84,14 @@ function createMockSeries(ticker: string, asOf: string): MarketSeriesDto {
   };
 }
 
-export const marketDataMockTool: Tool<MarketDataMockInput, MarketDataMockOutput> = {
+export const marketDataMockTool: AgentTool<typeof marketDataMockInputSchema, MarketDataMockOutput> = defineAgentTool({
   name: "market_data_mock",
   description: "Return stable mock latest market data for a ticker.",
-  inputSchema: marketDataMockInputSchema,
+  label: "Market Data (Mock)",
+  parameters: marketDataMockInputSchema,
   outputSchema: marketDataMockOutputSchema,
   /**
-   * 返回稳定 mock 行情，缺失 ticker 数据时交给 executor 转成结构化错误。
+   * 返回稳定 mock 行情，缺失 ticker 数据时抛错，由包装层转成结构化错误回喂模型。
    *
    * @param input 行情查询参数。
    * @returns 最近价格 mock 数据。
@@ -107,4 +109,4 @@ export const marketDataMockTool: Tool<MarketDataMockInput, MarketDataMockOutput>
       series: createMockSeries(input.ticker, data.asOf)
     };
   }
-};
+});

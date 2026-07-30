@@ -1,3 +1,48 @@
+/**
+ * @aiagent/agent 公共出口：pi-agent 形态的多轮 ReAct loop（阶段 2）。
+ * 旧的单轮意图路由三分支编排（runAgent/createAgent/intent-router/reliability/llm-client）
+ * 已删除；report-planner 与 security 保留导出（apps/api 仍在使用，后续阶段迁移）。
+ */
+export { agentLoop, agentLoopContinue, runAgentLoop, runAgentLoopContinue } from "./agent-loop.js";
+export { executeToolCalls, failToolCallsFromTruncatedMessage } from "./agent-loop.js";
+export { defaultConvertToLlm, toLlmTools } from "./convert.js";
+export {
+  compact,
+  createCompactionTransform,
+  DEFAULT_COMPACTION_SETTINGS,
+  estimateContextTokens,
+  estimateTokens,
+  prepareCompaction,
+  shouldCompact,
+  type CompactionMessage,
+  type CompactionPreparation,
+  type CompactionSettings,
+  type CompactionTransformOptions,
+} from "./compaction.js";
+export type {
+  AfterToolCallContext,
+  AfterToolCallResult,
+  AgentContext,
+  AgentEvent,
+  AgentLoopConfig,
+  AgentLoopTurnUpdate,
+  AgentLoopError,
+  AgentMessage,
+  AgentToolCall,
+  BeforeToolCallContext,
+  BeforeToolCallResult,
+  PrepareNextTurnContext,
+  ShouldStopAfterTurnContext,
+  StreamFn,
+} from "./types.js";
+// AgentTool 契约定义在 @aiagent/tools（工具契约属于工具包），此处原样 re-export，
+// 对外仍从 @aiagent/agent 拿到 AgentTool，命名与 pi 对齐。
+export type { AgentTool, AgentToolResult, AgentToolUpdateCallback, ToolExecutionMode } from "./types.js";
+
+export { createReportActivation, createReportPlan, isNaturalLanguageReportRequest } from "./report-planner.js";
+export { assembleUntrustedContext, assessPromptInjection } from "./security.js";
+export type { InjectionAssessment, InjectionDecision, UntrustedContent, UntrustedContentSource } from "./security.js";
+
 export interface AgentStatus {
   name: string;
   description: string;
@@ -12,54 +57,7 @@ export interface AgentStatus {
 export function createAgentStatus(): AgentStatus {
   return {
     name: "@aiagent/agent",
-    description: "Agent package provides LLM client, intent router and minimal agent loop.",
+    description: "Agent package provides a pi-shaped multi-turn ReAct loop (agentLoop/agentLoopContinue) with AgentTool contracts.",
     ready: true
   };
 }
-
-export { createAgent, runAgent } from "./agent-loop.js";
-export { createIntentRouter, routeIntent } from "./intent-router.js";
-export { createLlmClient } from "./llm-client.js";
-export { createLlmClientForProfile, createLlmClientFromEnv } from "./llm/env.js";
-export { createReportActivation, createReportPlan, isNaturalLanguageReportRequest } from "./report-planner.js";
-export { chatWithReliability, isRetryableModelError } from "./reliability.js";
-export { assembleUntrustedContext, assessPromptInjection } from "./security.js";
-export type { InjectionAssessment, InjectionDecision, UntrustedContent, UntrustedContentSource } from "./security.js";
-export type { ModelCandidate, ModelCapabilities, ModelRetryPolicy, ReliableModelOptions, ReliableModelResult } from "./reliability.js";
-
-export type {
-  Agent,
-  AgentConfig,
-  AgentError,
-  AgentErrorCode,
-  AgentIntent,
-  AgentRequest,
-  AgentResponse,
-  AgentRoute,
-  AgentRouter,
-  AgentStep,
-  AgentStepStatus,
-  AgentStepType,
-  AgentToolSelection
-} from "./types.js";
-
-export type {
-  LlmChatOptions,
-  LlmChatRequest,
-  LlmChatResponse,
-  LlmClient,
-  LlmClientConfig,
-  LlmError,
-  LlmErrorCode,
-  LlmJsonChatRequest,
-  LlmJsonChatResponse,
-  LlmMessage,
-  LlmResult,
-  LlmRole,
-  LlmStreamEvent,
-  LlmToolCall,
-  LlmToolChatRequest,
-  LlmToolChatResponse,
-  LlmToolDefinition,
-  LlmUsage
-} from "@aiagent/types";

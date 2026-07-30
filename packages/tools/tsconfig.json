@@ -10,8 +10,13 @@
     "rootDir": "src",
     "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.tsbuildinfo"
   },
-  "include": ["src"],
+  "include": [
+    "src"
+  ],
   "references": [
+    {
+      "path": "../ai"
+    },
     {
       "path": "../types"
     },

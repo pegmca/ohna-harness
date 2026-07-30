@@ -34,7 +34,7 @@ pi 的分层是三个包：
 - **pi-agent-core（`badlogic/packages/agent`）**：agent 循环层，依赖 pi-ai。
   - `src/agent-loop.ts`：`agentLoop()`（第 31 行）/ `agentLoopContinue()`（第 64 行）返回 `EventStream<AgentEvent, AgentMessage[]>`；`runAgentLoop()` / `runAgentLoopContinue()` 为回调式变体。
   - `src/types.ts`：`AgentTool`（第 380 行，扩展 pi-ai `Tool`，加 `label` 与 `execute(toolCallId, params, signal?, onUpdate?)`）、`AgentContext`（第 406 行）、`AgentLoopConfig`（第 144 行，含 `transformContext` / `convertToLlm` / `beforeToolCall` / `afterToolCall` / `prepareNextTurn` / `shouldStopAfterTurn` 钩子）、`AgentEvent`（第 422 行）。
-  - `src/harness/`：会话存储（`session/jsonl-storage.ts`、`jsonl-repo.ts`）、工具集、skills——**本项目不采用**，会话存储走 Postgres 线性模型（见 02 文档）。
+  - `src/harness/`：会话存储（`session/jsonl-storage.ts`、`jsonl-repo.ts`）、工具集、skills——**本项目不采用**，会话存储走 Postgres 线性模型（见 05 文档）。
 - **pi-coding-agent（`badlogic/packages/coding-agent`）**：产品层，对应本项目 `apps/*` 的角色。
 
 依赖方向严格单向：`coding-agent → agent → ai`。ai 不知道 tools 如何执行，agent 不知道会话如何持久化（通过 `AgentContext` 注入）。
@@ -69,14 +69,15 @@ pi 的分层是三个包：
 | 现状 | 去向 | 说明 |
 | --- | --- | --- |
 | `packages/agent`（llm-client.ts、llm/） | **拆出到 `packages/ai`** | LLM 客户端整体按 pi-ai 重写，原手写 transport/parsing 删除 |
-| `packages/agent`（agent-loop.ts、intent-router.ts、report-planner.ts、reliability.ts、security.ts） | **留在 `packages/agent`** | `runAgent` 替换为 `agentLoop`/`agentLoopContinue` 事件流模型；reliability 改为 pi-ai `utils/retry` + 钩子 |
+| `packages/agent`（agent-loop.ts、intent-router.ts、report-planner.ts、reliability.ts） | **留在 `packages/agent`** | `runAgent` 替换为 `agentLoop`/`agentLoopContinue` 事件流模型；reliability 改为 pi-ai `utils/retry` + 钩子 |
+| `packages/agent`（security.ts） | **独立为 `packages/security`** | 注入防护不属 loop 内核，grounding hook 与 MCP 工具输出封装复用它，仅依赖 trace 接口（见 06 文档） |
 | `packages/tools` | **并入 `packages/agent` 的 tool 层** | `registry.ts`、`executor.ts`（去掉权限门）、`tools/` 迁移为 `packages/agent/src/tools/`；`approval-repository.ts` 删除 |
 | `packages/trace` | **改造为 loop 事件流持久化** | `TraceEvent` 联合类型替换为 pi 的 `AgentEvent` + 领域扩展事件；`TraceStore` 变为「run 事件追加存储」，落 `packages/database` 的新事件表；包名建议保留 `packages/trace` 但职责收窄为事件类型 + 记录器，或并入 database（见「取舍论证」） |
-| `packages/conversation` | **推倒重建（线性模型）** | `Message` 改为 pi 风格（`UserMessage/AssistantMessage/ToolResultMessage` + 本会话特有的 compaction message），详见 02 文档 |
+| `packages/conversation` | **推倒重建（线性模型）** | `Message` 改为 pi 风格（`UserMessage/AssistantMessage/ToolResultMessage` + 本会话特有的 compaction message），详见 05 文档 |
 | `packages/database` | **schema 推倒重来** | 会话消息线性表 + run 表 + 事件表 + compaction 以特殊 message 落线性表；删除 `approval-repository.ts`、`approval-decision.ts`；保留 `rag-vector-store.ts`、`rag-documents.ts`、`citation-repository.ts`、`report.ts` |
 | `packages/rag` | **保留，改挂载方式** | 不再由 intent-router 直接编排，改为向 `transformContext`/`prepareNextTurn` 钩子或 grounding 工具提供能力 |
 | `packages/report` + `packages/workflow` | **保留，改挂载方式** | 报告触发从 intent 路由改为 agent 工具/技能调用；PDF 导出（`report/pdf.ts`）不动 |
-| `packages/mcp` | **保留，改挂载方式** | `tool-adapter.ts` 输出从内部 Tool 类型改为 pi 风格 `AgentTool`（zod schema 桥接，见 03 文档） |
+| `packages/mcp` | **保留，改挂载方式** | `tool-adapter.ts` 输出从内部 Tool 类型改为 pi 风格 `AgentTool`（zod schema 桥接，见 06 文档） |
 | `packages/eval` | **保留** | runner 改消费 `agentLoop` 事件流而不是 `runAgent` 返回值 |
 | `packages/filings` | **保留** | 仅作为工具数据源，接口不变 |
 | `packages/types` | **收缩后逐步消亡** | LLM 类型移入 `packages/ai`，agent 类型移入 `packages/agent`，trace 类型移入 `packages/trace`；仅保留纯跨域 DTO（identity、filings）。过渡期允许存在，改造完成后评估删除 |
@@ -107,7 +108,7 @@ packages/ai/
 └── test/
 ```
 
-与 pi-ai 的裁剪差异（需在 03 文档展开论证）：不搬 `src/auth/`（OAuth）、`src/images*`、`src/models-store.ts`、`src/api/*.lazy.ts` 懒加载机制；`compat.ts` 保留同名同签名，但内部分发表只有 `openai` 一类。
+与 pi-ai 的裁剪差异（需在 02 文档展开论证）：不搬 `src/auth/`（OAuth）、`src/images*`、`src/models-store.ts`、`src/api/*.lazy.ts` 懒加载机制；`compat.ts` 保留同名同签名，但内部分发表只有 `openai` 一类。
 
 ### 公共 API 命名对齐清单
 
@@ -126,9 +127,9 @@ packages/ai/
 | `AgentRequest/AgentResponse`（`packages/agent/src/types.ts:54,67`） | `AgentMessage` / `AgentEvent` + 最终 `AgentMessage[]` | |
 | `ToolRegistry` / `executeTool`（`packages/tools/src/registry.ts`、`executor.ts`） | `AgentTool[]` 数组由 config 注入；执行内嵌于 loop，钩子 `beforeToolCall`/`afterToolCall`（pi `agent/src/types.ts:61,79`） | 注册表降级为组装 helper；zod 校验保留在 `AgentTool.execute` 内 |
 | `ToolDefinition`（`packages/tools/src/types.ts`） | `AgentTool<TParameters, TDetails>` 接口形状（pi `agent/src/types.ts:380`），schema 字段仍持 zod | 泛型参数用 zod 而非 typebox（与 pi 唯一刻意差异） |
-| `TraceEvent` 联合（`packages/trace/src/index.ts:311`） | `AgentEvent`（pi `agent/src/types.ts:422`）+ `DomainEvent` 扩展（rag/report/workflow/mcp） | 持久化模型见 02 文档 |
+| `TraceEvent` 联合（`packages/trace/src/index.ts:311`） | `AgentEvent`（pi `agent/src/types.ts:422`）+ `DomainEvent` 扩展（rag/report/workflow/mcp） | 持久化模型见 05 文档 |
 | `TraceRecorder` / `TraceStore` | `AgentEventSink`（pi `agent/src/agent-loop.ts:25`）订阅者 + run 事件表 writer | |
-| `intent-router` / `routeIntent`（`packages/agent/src/intent-router.ts`） | 删除路由概念；报告触发用 `shouldStopAfterTurn`/`prepareNextTurn` 钩子 + 工具 | 见 05 文档 |
+| `intent-router` / `routeIntent`（`packages/agent/src/intent-router.ts`） | 删除路由概念；报告触发用 `shouldStopAfterTurn`/`prepareNextTurn` 钩子 + 工具 | 见 06 文档 |
 | `chatWithReliability`（`packages/agent/src/reliability.ts`） | pi-ai `utils/retry` + `SimpleStreamOptions` 配置 | |
 
 ### 包间禁止依赖规则
@@ -177,14 +178,14 @@ export function agentLoop(prompts: AgentMessage[], context: AgentContext, config
 
 - **为什么新建 `packages/ai` 而不是在 `packages/agent/llm/` 原地改造**：pi 的核心架构收益来自「LLM 层零 agent 感知」，`stream()` 可被 eval、report 工作流节点直接复用而不拖入 agent 循环。原地改造无法切断 types 包对 `LlmClient` 的泄漏（当前 `apps/api` 经 types 包直接构造 LLM 请求）。
 - **为什么 `packages/tools` 并入 agent 而不是保留独立包**：pi 中 `AgentTool` 类型定义在 agent 包内，工具与 loop 的 `beforeToolCall`/`afterToolCall` 钩子强耦合；独立 tools 包要么反向依赖 agent（违反规则 4），要么复制类型。保留 zod schema 意味着 `AgentTool` 泛型参数与 pi 不同（typebox→zod），这是与 pi 唯一的刻意偏离，换取不重写现有 5 个工具 + mcp 适配器的 schema 及 zod 校验错误消息体系。
-- **为什么 trace 收窄为事件流持久化而非沿用 TraceRecorder**：现有 `TraceEvent` 20+ 种事件与「一次请求一条 trace」模型无法表达多 turn loop 与 compaction。pi 的 `AgentEvent`（`agent/src/types.ts:422`）天然覆盖 turn/message/toolExecution 生命周期；rag/report/workflow 领域事件作为扩展联合成员追加，持久化走 run 事件表（02 文档）。`packages/trace` 包去留建议：**并入 `packages/database`（事件表 + writer）+ `packages/agent`（事件类型 re-export）后删除独立包**，减少一个边界；若团队希望前端直接 import 事件类型而不经 api，则保留包仅放类型。
+- **为什么 trace 收窄为事件流持久化而非沿用 TraceRecorder**：现有 `TraceEvent` 20+ 种事件与「一次请求一条 trace」模型无法表达多 turn loop 与 compaction。pi 的 `AgentEvent`（`agent/src/types.ts:422`）天然覆盖 turn/message/toolExecution 生命周期；rag/report/workflow 领域事件作为扩展联合成员追加，持久化走 run 事件表（05 文档）。`packages/trace` 包去留建议：**并入 `packages/database`（事件表 + writer）+ `packages/agent`（事件类型 re-export）后删除独立包**，减少一个边界；若团队希望前端直接 import 事件类型而不经 api，则保留包仅放类型。
 - **为什么 types 包收缩而非直接删除**：identity/filings 等纯 DTO 仍有跨包共享价值；但 LLM/agent/trace 类型必须随层归位，否则 types 包会成为绕过依赖规则的公共垃圾桶。改造完成后再评估是否整体删除。
 - **为什么依赖规则要落到 dependency-cruiser**：本仓库已有 `.dependency-cruiser.cjs` 基础设施，口头约束在 14 包重构中必然失效。
 - **identity/channels 不动的理由**：与本次改造正交，纳入会扩大爆炸半径；identity 的 session/challenge 逻辑与 approval 无关，不属于删除范围。
 
 ## 删除清单
 
-随本次架构调整直接删除（审批体系细节见 04 文档）：
+随本次架构调整直接删除（审批体系细节见 05 文档）：
 
 - `packages/tools/src/approval-repository.ts`
 - `packages/database/src/approval-repository.ts`、`packages/database/src/approval-decision.ts` 及对应 migrations 中的审批表
@@ -192,5 +193,5 @@ export function agentLoop(prompts: AgentMessage[], context: AgentContext, config
 - `apps/api/src/adapters/in-memory-approval-repository.ts`、审批相关 HTTP 路由（`apps/api/src/http/routes` 下）与前端审批 UI
 - `packages/tools/src/executor.ts` 中的权限门逻辑（`executeTool` 本身并入 agent 后重写）
 - `packages/agent/src/llm/` 整个目录（transport/parsing/mapping/tracing/env/config）与 `llm-client.ts`，由 `packages/ai` 取代
-- `packages/agent/src/intent-router.ts` 的意图路由概念（报告触发改造见 05 文档；`report-planner.ts` 中纯计划生成部分保留）
+- `packages/agent/src/intent-router.ts` 的意图路由概念（报告触发改造见 06 文档；`report-planner.ts` 中纯计划生成部分保留）
 - `packages/types/src/llm.ts`、`agent-run.ts`、`trace.ts`（类型归位到 ai/agent/trace）

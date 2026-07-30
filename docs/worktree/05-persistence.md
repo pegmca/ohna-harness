@@ -40,7 +40,7 @@ pi 的会话持久化在 coding-agent 层，是**本地 JSONL 文件 + entry 树
   - `sessionEntryToContextMessages`（约 L383–L408）：compaction entry 投影为 `createCompactionSummaryMessage(...)` 产生的特殊 user 消息；branch_summary 同理。
   - `SessionManager.branch(branchFromId)`（约 L1360）：树结构存在的核心理由——从任意历史 entry 分叉。
 - `badlogic/packages/coding-agent/src/core/messages.ts`：`createCompactionSummaryMessage` / `createCustomMessage` 把特殊 entry 转成可进 LLM 上下文的消息。
-- `badlogic/packages/coding-agent/src/core/compaction/compaction.ts`：compaction 生成逻辑（本文只涉及其落库形态，算法见 04 文档）。
+- `badlogic/packages/coding-agent/src/core/compaction/compaction.ts`：compaction 生成逻辑（本文只涉及其落库形态，loop 内的触发入口见 04 文档）。
 - `badlogic/packages/agent/src/types.ts`（L422–L444）：`AgentEvent` 事件全集——`agent_start|agent_end|turn_start|turn_end|message_start|message_update|message_end|tool_execution_start|tool_execution_update|tool_execution_end`。这是 `run_events.event_type` 的对齐基准。
 
 **我们不照搬的部分**：entry 树 + `parentId` + JSONL 文件。理由见取舍论证。我们借用的是：(a) 消息中间表示直接存 `Message`（content 块数组）；(b) compaction 作为特殊消息参与投影的规则「最后一个 compaction + 其后消息」；(c) loop 事件命名。

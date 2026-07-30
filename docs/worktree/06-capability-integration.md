@@ -90,7 +90,7 @@ export function createGroundingTransformContext(
 // packages/report/src/report-tool.ts（新增）
 import type { AgentTool } from "@aiagent/agent"; // pi 形状，zod schema 经适配层暴露
 import type { DataSourceRuntime } from "@aiagent/rag";
-import type { RunEventSink } from "@aiagent/agent"; // run_events 写入抽象（03 文档）
+import type { RunEventSink } from "@aiagent/agent"; // run_events 写入抽象（写入端口见 05 文档）
 
 export interface ReportToolOptions {
   dataSourceRuntime?: DataSourceRuntime;
@@ -124,7 +124,7 @@ export function createReportTool(options: ReportToolOptions): AgentTool;
 **方案 B（放弃）：保留 API 层 `maybeRunReport`。**
 
 - 优点仅是对现有 HTTP 响应 DTO（`reportWorkflow` 字段）零改动；代价是 loop 外多一个隐式执行阶段，run 状态机要继续区分"agent 完成 / workflow 完成"两个终态，且 plan 生成仍要 loop 内的 report planner 特例分支（`runReportSkillPath`）——等于把 report 拆在两层维护。
-- 结论：选 A；HTTP 层 `reportWorkflow` 字段改为从 run_events/消息投影派生（02/03 文档的读模型职责）。
+- 结论：选 A；HTTP 层 `reportWorkflow` 字段改为从 run_events/消息投影派生（05 文档的读模型职责）。
 
 ### 删除清单
 
@@ -175,7 +175,7 @@ export function discoverMcpAgentTools(
 ): Promise<{ tools: AgentTool[]; toolNames: string[]; ok: boolean; error?: { code: string; message: string } }>;
 ```
 
-- 已知工具的 zod schema（`packages/mcp/src/schemas.ts`）原样复用；schema → JSON Schema 的暴露方式遵循 04 文档的工具适配层（zod 保留为校验层，接口形状对齐 `AgentTool`）。
+- 已知工具的 zod schema（`packages/mcp/src/schemas.ts`）原样复用；schema → JSON Schema 的暴露方式遵循 03 文档的 `convert.ts` 转换点（zod 保留为校验层，接口形状对齐 `AgentTool`）。
 - 工具来源合并：MCP 工具、内置工具、filings 扩展工具全部进入同一个 `tools` 数组交给 `agentLoop`，模型按 description 自主选择；不再存在 MCP registry 与 REST registry 的合并问题。
 
 ### 取舍论证
@@ -231,7 +231,7 @@ export function discoverMcpAgentTools(
 | report | 10 | 80k | 检索轮 + `generate_report` 长工具 + 总结轮 |
 | failure | 3 | 16k | 必须触达结构化错误并终止 |
 
-预算落在 `agentLoop` config（`shouldStopAfterTurn` + `maxTurns` 参数，04 文档）与 eval runner 的硬上限双层；超预算记 `ok=false` 并归入 `failure` 根因。
+预算落在 `agentLoop` config（`shouldStopAfterTurn` + `maxTurns` 参数，03 文档）与 eval runner 的硬上限双层；超预算记 `ok=false` 并归入 `failure` 根因。
 
 ### 取舍论证
 
@@ -248,7 +248,7 @@ export function discoverMcpAgentTools(
 ### 现状
 
 - `packages/filings/src/index.ts` 是纯解析/摄取库：`ingestFiling`（index.ts:135）、`parseMarkdownBlocks` / `parseTxtBlocks`、`detectFilingFileType`，产出 `FilingIngestionResult` 结构化结果；没有任何工具包装，目前只被数据摄取链路使用。
-- 05/04 文档定义了新架构的 extension 机制（对齐 pi 的 `ToolDefinition` / `ExtensionRunner`，`packages/coding-agent/src/core/extensions/types.ts:449`、`runner.ts:267`）：extension 是"产出 AgentTool 集合 + 可选 hook 的装配单元"。
+- 04 文档定义了新架构的 extension 机制（对齐 pi 的 `ToolDefinition` / `ExtensionRunner`，`packages/coding-agent/src/core/extensions/types.ts:449`、`runner.ts:267`）：extension 是"产出 AgentTool 集合 + 可选 hook 的装配单元"。
 
 ### pi 参照
 

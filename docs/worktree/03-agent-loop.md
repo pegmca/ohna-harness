@@ -23,7 +23,7 @@
 - 工具调用走 `ToolRegistry.execute()`（`packages/tools/src/registry.ts:52` →
   `executor.ts`），executor 内保留 zod 参数校验、单次 timeout、总 `deadlineAtMs`、
   指数退避重试、AbortSignal 取消（`executor.ts:145–240`），并有 `allowedTools` 权限门
-  （属于待删除的 approval 体系，见 04 文档）。
+  （属于待删除的 approval 体系，见 05 文档）。
 - LLM 调用只在 chat 分支出现一次（`chatWithReliability`，`reliability.ts:25`），
   RAG grounding 以 system/user 文本拼接的方式内联进 prompt（`agent-loop.ts:415–431`）。
 - 无模型时 `mockChatAnswer()`（第 716 行）返回固定文案；工具结果由
@@ -348,11 +348,11 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 - `packages/agent/src/reliability.ts` 的 `chatWithReliability()`：多模型 fallback 与重试
   职责移交 `packages/ai` 的 `retryProviderRequest` 与 run 层模型选择（见 02 文档）。
 - `packages/tools/src/executor.ts` 中 `allowedTools` 权限门与
-  `approval-repository.ts`（approval 体系删除详见 04 文档）；executor 的
+  `approval-repository.ts`（approval 体系删除详见 05 文档）；executor 的
   超时/重试/deadline/zod 校验语义迁移为 `AgentTool.execute` 的内部包装后，原文件删除。
 - trace 事件类型 `intent_routed`、`request_received`（路由专属）随路由删除；
   `agent_step` 系列事件由 `AgentEvent`（`turn_*` / `tool_execution_*`）取代，
-  trace 持久化映射见 06 文档。
+  trace 持久化落库见 05 文档，旧事件→新事件映射表见 06 文档。
 
 ## 验证
 

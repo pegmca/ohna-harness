@@ -5,7 +5,7 @@
 > - pi-agent-core skills：`badlogic/packages/agent/src/harness/skills.ts`
 > - slash commands：`badlogic/packages/coding-agent/src/core/slash-commands.ts`
 >
-> 已确认决策（全套文档口径一致）：LLM 层完全按 pi-ai 改造且命名与 pi 一致；会话存储为「线性消息 + run」；彻底删除 approval/permission 体系；保留 RAG/report/workflow/MCP/eval；接受完全不兼容改造。本文与 01（架构）、02（会话存储）、03（agent loop）配套。
+> 已确认决策（全套文档口径一致）：LLM 层完全按 pi-ai 改造且命名与 pi 一致；会话存储为「线性消息 + run」；彻底删除 approval/permission 体系；保留 RAG/report/workflow/MCP/eval；接受完全不兼容改造。本文与 01（架构）、03（agent loop）、05（会话存储）配套。
 
 ## 现状
 
@@ -251,7 +251,7 @@ export interface SlashCommandInfo {
 - `registerShortcut` / `registerFlag` / `getFlag` / `registerMessageRenderer` / `registerEntryRenderer`。
 - 事件：`project_trust`、`resources_discover`、`session_info_changed`、`session_before_switch`、`session_before_fork`、`session_shutdown`、`session_before_tree`、`session_tree`、`agent_settled`、`message_start`、`message_update`、`message_end`、`tool_execution_start/update/end`（这些观测点位已由 03 的 run 事件流 + trace 覆盖，不重复开两道）、`before_provider_request`、`after_provider_response`（首期无需求，事件面保持最小，后续可按同一模式增补）、`model_select`、`thinking_level_select`、`user_bash`、`input`。
 - `ExtensionCommandContext` 的会话树操作（`fork` / `navigateTree` / `switchSession` / `reload` / `newSession` 的 pi 形态）；`sendMessage` / `sendUserMessage` / `appendEntry`（pi 的 entry 树产物，线性模型下由 run 事件流替代）；`setLabel` / `setSessionName`（首期由会话服务 API 承担）。
-- `registerProvider` / `unregisterProvider`：provider 注册是服务端部署配置（01 文档），不开放给 extension。
+- `registerProvider` / `unregisterProvider`：provider 注册是服务端部署配置（02 文档的模型目录/providers），不开放给 extension。
 - 内置命令：`/fork` `/tree` `/clone` `/resume` `/import` `/share` `/login` `/logout` `/reload` `/trust` `/settings` `/hotkeys` `/changelog` `/copy` `/scoped-models` 不引入（TUI/会话树/CLI 场景产物）。
 
 相对本项目现状删除的部分：

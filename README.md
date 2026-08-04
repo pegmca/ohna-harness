@@ -268,25 +268,25 @@ pnpm --filter @aiagent/mcp test
 
 ### MCP Client 接入 Agent
 
-`packages/mcp` 同时提供 client adapter 和 combined registry，让 Agent 在不改动 UI 的情况下调用 MCP tools：
+`packages/mcp` 提供 client adapter 与 discovery 装配：MCP tools 被包装为 pi 形状的 `AgentTool`（zod schema 保留），discovery 产出直接并入 `agentLoop` 的 `config.tools`，模型按 description 自主选择：
 
 ```bash
 # 直接体验 MCP client 发现、调用和 fallback
 pnpm --filter @aiagent/mcp test
 ```
 
-或运行 Agent MCP path 验证：
+API server 侧通过环境变量开启启动期 discovery（`apps/api/src/server.ts`）：
 
 ```bash
-pnpm --filter @aiagent/agent test
+AIAGENT_MCP_ENABLED=true pnpm dev  # 可选 AIAGENT_MCP_COMMAND / AIAGENT_MCP_ARGS 指定外部 server
 ```
 
 关键接口：
 
 - `createMcpStdioClient()`：stdio MCP client，暴露 `listTools()` / `callTool()` / `close()`。
-- `createMcpToolRegistry(client)`：把 MCP tools 包装成 `ToolRegistry` 可执行的工具。
-- `createCombinedToolRegistry()`：同时注册 REST/mock tools 和 MCP tools；MCP server 不可用时 fallback 到 REST tools。
-- `AgentConfig.preferMcpTools`：true 时 Agent 优先选择 `search_filings` / `get_financial_metrics`。
+- `discoverMcpAgentTools(client, { sink })`：发现 MCP tools 并包装为 `AgentTool[]`，`mcp_tool_discovered` 事件经 sink 写入 run_events。
+- `createCombinedAgentTools()`：内置 tools 与 MCP tools 在装配期合并为一个数组；MCP server 不可用时 fallback 到内置 tools。
+- MCP 工具输出回喂模型前经 `packages/security` 的 `<untrusted_context>` 二次封装。
 
 当前公告、指标和行情数据均为本地 mock；RAG 检索与 citation 生成会真实执行，但不持久化，也不包含远程部署、鉴权、多租户或长连接生产化治理。工具失败同时使用 MCP `isError` 和结构化 error envelope，不向 client 泄漏 raw exception。实现取舍与 MCP/REST 对比见 ``。
 

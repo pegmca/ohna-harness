@@ -4,6 +4,7 @@ import { createQqBotChannel } from "@aiagent/channels";
 import { createDatabaseRuntime, createPostgresVectorStore } from "@aiagent/database";
 import { createLocalArtifactStorage } from "@aiagent/report";
 import { createIdentityService } from "@aiagent/identity";
+import { discoverMcpAgentTools, createMcpStdioClient, type McpClient } from "@aiagent/mcp";
 import { createDataSourceRuntime, createDeterministicMockEmbeddingClient } from "@aiagent/rag";
 import { createDefaultToolRegistry } from "@aiagent/tools";
 import { stat } from "node:fs/promises";
@@ -21,6 +22,10 @@ const host = process.env.HOST ?? "0.0.0.0";
 const providerMode = process.env.AIAGENT_PROVIDER_MODE ?? "mock";
 // run 执行统一走 agentLoop；工具集在此装配一次，API server 与 QQ channel 共享。
 const agentTools = createDefaultToolRegistry().list();
+// 阶段 5 MCP 回迁：AIAGENT_MCP_ENABLED=true 时启动期做 stdio discovery，
+// 产出直接并入 agentLoop config.tools（白名单语义前移到装配期）。
+const mcpEnabled = process.env.AIAGENT_MCP_ENABLED === "true";
+let mcpClient: McpClient | undefined;
 const deepseekRuntime = providerMode === "real" ? createOpenAiCompatibleRuntime("deepseek", "https://api.deepseek.com/v1") : undefined;
 const openrouterRuntime = providerMode === "real" ? createOpenAiCompatibleRuntime("openrouter", "https://openrouter.ai/api/v1") : undefined;
 const modelRegistry = providerMode === "real"
@@ -231,6 +236,7 @@ async function assertSchemaCurrent(): Promise<void> {
 async function start(): Promise<void> {
   try {
     await assertSchemaCurrent();
+    await assembleMcpTools();
     await app.listen({ port, host });
     void cleanupAttachmentOrphans();
     attachmentCleanupTimer = setInterval(() => void cleanupAttachmentOrphans(), 60 * 60_000);
@@ -239,6 +245,34 @@ async function start(): Promise<void> {
   } catch (error) {
     app.log.error(error);
     process.exitCode = 1;
+  }
+}
+
+/**
+ * 启动期 MCP discovery：连接真实 stdio MCP server，把产出 AgentTool 并入共享工具集。
+ * 启动期没有 run 上下文，mcp_tool_discovered 事件落日志；run 内事件由 loop 的
+ * tool_execution_* 承担（run_events）。server 不可用时仅记录日志并保留内置工具集。
+ *
+ * @returns 装配完成 Promise。
+ */
+async function assembleMcpTools(): Promise<void> {
+  if (!mcpEnabled) return;
+  try {
+    mcpClient = await createMcpStdioClient({
+      command: process.env.AIAGENT_MCP_COMMAND || undefined,
+      args: process.env.AIAGENT_MCP_ARGS ? process.env.AIAGENT_MCP_ARGS.split(" ").filter(Boolean) : undefined
+    });
+    const discovered = await discoverMcpAgentTools(mcpClient, {
+      sink: (event) => app.log.info({ mcpDiscovery: event.payload }, "mcp_tool_discovered")
+    });
+    if (discovered.ok) {
+      agentTools.push(...discovered.tools);
+      app.log.info({ mcpToolNames: discovered.toolNames }, "MCP tools assembled into agent loop");
+    } else {
+      app.log.warn({ error: discovered.error }, "MCP tool discovery failed; built-in tools only");
+    }
+  } catch (error) {
+    app.log.warn({ err: error }, "MCP server unavailable; built-in tools only");
   }
 }
 
@@ -302,6 +336,7 @@ process.on("SIGINT", () => void gracefulShutdown("SIGINT"));
 app.addHook("onClose", async () => {
   if (attachmentCleanupTimer) clearInterval(attachmentCleanupTimer);
   qqChannel.stop();
+  if (mcpClient) await mcpClient.close().catch(() => { /* 关闭失败不阻断停机。 */ });
   await database.close();
 });
 

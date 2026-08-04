@@ -15,7 +15,7 @@
     "dev": "node --env-file-if-exists=../../.env --import tsx --watch src/server.ts",
     "build": "tsc -b",
     "test": "pnpm build && node --test test/*.test.mjs",
-    "typecheck": "pnpm --filter @aiagent/agent build && pnpm --filter @aiagent/report build && pnpm --filter @aiagent/identity build && pnpm --filter @aiagent/database build && pnpm --filter @aiagent/channels build && tsc -p tsconfig.json --pretty false --noEmit"
+    "typecheck": "pnpm --filter @aiagent/agent build && pnpm --filter @aiagent/report build && pnpm --filter @aiagent/identity build && pnpm --filter @aiagent/database build && pnpm --filter @aiagent/channels build && pnpm --filter @aiagent/mcp build && tsc -p tsconfig.json --pretty false --noEmit"
   },
   "dependencies": {
     "@aiagent/agent": "workspace:*",
@@ -24,10 +24,11 @@
     "@aiagent/conversation": "workspace:^",
     "@aiagent/database": "workspace:^",
     "@aiagent/identity": "workspace:^",
+    "@aiagent/mcp": "workspace:^",
     "@aiagent/rag": "workspace:*",
     "@aiagent/report": "workspace:*",
-    "@aiagent/trace": "workspace:*",
     "@aiagent/tools": "workspace:*",
+    "@aiagent/trace": "workspace:*",
     "@aiagent/types": "workspace:*",
     "fastify": "^5.6.2",
     "zod": "^4.4.3"

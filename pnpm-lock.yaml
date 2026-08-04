@@ -62,6 +62,9 @@ importers:
       '@aiagent/identity':
         specifier: workspace:^
         version: link:../../packages/identity
+      '@aiagent/mcp':
+        specifier: workspace:^
+        version: link:../../packages/mcp
       '@aiagent/rag':
         specifier: workspace:*
         version: link:../../packages/rag
@@ -261,12 +264,12 @@ importers:
       '@aiagent/rag':
         specifier: workspace:^
         version: link:../rag
+      '@aiagent/security':
+        specifier: workspace:^
+        version: link:../security
       '@aiagent/tools':
         specifier: workspace:^
         version: link:../tools
-      '@aiagent/trace':
-        specifier: workspace:^
-        version: link:../trace
       '@modelcontextprotocol/sdk':
         specifier: ^1.29.0
         version: 1.29.0(zod@4.4.3)

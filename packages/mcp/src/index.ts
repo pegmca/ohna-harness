@@ -10,19 +10,21 @@ export {
   type McpToolSummary
 } from "./client.js";
 export {
-  createCombinedToolRegistry,
-  type CreateCombinedToolRegistryOptions,
-  type CreateCombinedToolRegistryResult
-} from "./registry.js";
+  createCombinedAgentTools,
+  type CreateCombinedAgentToolsOptions,
+  type CreateCombinedAgentToolsResult
+} from "./combined-tools.js";
 export {
   createMcpFinancialMetricsTool,
   createMcpMarketDataTool,
   createMcpSearchFilingsTool,
   createMcpTool,
-  createMcpToolRegistry,
+  discoverMcpAgentTools,
   toMcpToolNames,
-  type CreateMcpToolRegistryOptions,
-  type McpToolRegistryResult
+  type DiscoverMcpAgentToolsOptions,
+  type DiscoverMcpAgentToolsResult,
+  type McpToolDiscoveredPayload,
+  type McpToolEventSink
 } from "./tool-adapter.js";
 export {
   financialMetricsInputSchema,

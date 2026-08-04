@@ -1,13 +1,18 @@
 import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
-import { createInMemoryTraceRecorder } from "@aiagent/trace";
 import {
-  createCombinedToolRegistry,
+  createCombinedAgentTools,
   createMcpStdioClient,
-  createMcpToolRegistry
+  discoverMcpAgentTools
 } from "../dist/index.js";
 
 let client;
+
+/** 收集 sink 事件的内存数组，模拟装配层把 mcp_tool_discovered 转写 run_events。 */
+function createEventCollector() {
+  const events = [];
+  return { events, sink: (event) => { events.push(event); } };
+}
 
 before(async () => {
   client = await createMcpStdioClient({ clientName: "aiagent-mcp-client-test" });
@@ -56,23 +61,30 @@ test("MCP client calls get_financial_metrics and returns selected metrics", asyn
   );
 });
 
-test("MCP tool registry discovers tools and records mcp_tool_discovered trace", async () => {
-  const trace = createInMemoryTraceRecorder("trace_mcp_discovery");
-  const { registry, toolNames, ok } = await createMcpToolRegistry(client, { trace });
+test("discoverMcpAgentTools returns AgentTool array and emits mcp_tool_discovered via sink", async () => {
+  const { events, sink } = createEventCollector();
+  const { tools, toolNames, ok } = await discoverMcpAgentTools(client, { sink });
 
   assert.equal(ok, true);
   assert.deepEqual(toolNames.sort(), ["get_financial_metrics", "get_market_data", "search_filings"]);
-  assert.equal(registry.list().length, 3);
+  assert.equal(tools.length, 3);
+  for (const tool of tools) {
+    assert.equal(typeof tool.execute, "function");
+    assert.equal(typeof tool.description, "string");
+    // pi AgentTool 形状：parameters 持 zod schema（JSON Schema 序列化在 agent convert.ts 转换点）。
+    assert.equal(typeof tool.parameters.parse, "function");
+  }
 
-  const discoveryEvent = trace.getEvents().find((event) => event.type === "mcp_tool_discovered");
+  const discoveryEvent = events.find((event) => event.type === "mcp_tool_discovered");
   assert.ok(discoveryEvent);
-  assert.equal(discoveryEvent.ok, true);
-  assert.ok(discoveryEvent.toolNames.includes("search_filings"));
+  assert.equal(discoveryEvent.payload.ok, true);
+  assert.ok(discoveryEvent.payload.toolNames.includes("search_filings"));
+  assert.equal(discoveryEvent.payload.serverName, client.serverName);
 });
 
-test("MCP tool registry executes search_filings through the AgentTool contract", async () => {
-  const { registry } = await createMcpToolRegistry(client);
-  const tool = registry.get("search_filings");
+test("discovered AgentTool executes search_filings through the pi AgentTool contract", async () => {
+  const { tools } = await discoverMcpAgentTools(client);
+  const tool = tools.find((item) => item.name === "search_filings");
   assert.ok(tool);
   const result = await tool.execute("call_1", {
     companyId: "000001.SZ",
@@ -80,65 +92,70 @@ test("MCP tool registry executes search_filings through the AgentTool contract",
     topK: 1
   });
 
+  // details 保留原始结构化输出；回喂模型的 content 经 <untrusted_context> 安全封装。
   assert.equal(result.details.ok, true);
   assert.ok(Array.isArray(result.details.data.snippets));
-  assert.ok(result.content.length > 0);
+  const text = result.content.filter((block) => block.type === "text").map((block) => block.text).join("\n");
+  assert.ok(text.includes("<untrusted_context"), "MCP 工具输出应经 security 二次封装");
+  assert.ok(text.includes('source="tool_output"'));
 });
 
-test("combined registry includes REST tools when MCP server is unavailable", async () => {
-  const trace = createInMemoryTraceRecorder("trace_mcp_unavailable");
-  const { registry, mcpAvailable, mcpToolNames, close } = await createCombinedToolRegistry({
+test("combined tools include built-in tools when MCP server is unavailable", async () => {
+  const { events, sink } = createEventCollector();
+  const { tools, mcpAvailable, mcpToolNames, close } = await createCombinedAgentTools({
     mcpClientOptions: { command: "node", args: ["--eval", "process.exit(1)"] },
     fallbackToRest: true,
-    trace
+    sink
   });
 
   assert.equal(mcpAvailable, false);
   assert.deepEqual(mcpToolNames, []);
-  assert.ok(registry.get("financial_metric_mock"));
-  assert.ok(registry.get("filing_search_mock"));
-  const discoveryEvent = trace.getEvents().find((event) => event.type === "mcp_tool_discovered");
+  const names = tools.map((tool) => tool.name);
+  assert.ok(names.includes("financial_metric_mock"));
+  assert.ok(names.includes("filing_search_mock"));
+  const discoveryEvent = events.find((event) => event.type === "mcp_tool_discovered");
   assert.ok(discoveryEvent);
-  assert.equal(discoveryEvent.ok, false);
-  assert.equal(discoveryEvent.error.code, "mcp_server_unavailable");
+  assert.equal(discoveryEvent.payload.ok, false);
+  assert.equal(discoveryEvent.payload.error.code, "mcp_server_unavailable");
   await close();
 });
 
-test("combined registry includes both REST and MCP tools when server is available", async () => {
-  const trace = createInMemoryTraceRecorder("trace_combined_registry");
-  const { registry, mcpAvailable, mcpToolNames, close } = await createCombinedToolRegistry({ trace });
+test("combined tools include both built-in and MCP tools when server is available", async () => {
+  const { events, sink } = createEventCollector();
+  const { tools, mcpAvailable, mcpToolNames, close } = await createCombinedAgentTools({ sink });
 
   assert.equal(mcpAvailable, true);
   assert.ok(mcpToolNames.includes("search_filings"));
-  assert.ok(registry.get("search_filings"));
-  assert.ok(registry.get("financial_metric_mock"));
+  const names = tools.map((tool) => tool.name);
+  assert.ok(names.includes("search_filings"));
+  assert.ok(names.includes("financial_metric_mock"));
 
-  const discoveryEvent = trace.getEvents().find((event) => event.type === "mcp_tool_discovered");
+  const discoveryEvent = events.find((event) => event.type === "mcp_tool_discovered");
   assert.ok(discoveryEvent);
-  assert.equal(discoveryEvent.ok, true);
+  assert.equal(discoveryEvent.payload.ok, true);
 
   await close();
 });
 
 test("MCP tool execution failure throws structured error without crashing", async () => {
-  const { registry } = await createMcpToolRegistry(client);
-  const tool = registry.get("get_market_data");
+  const { tools } = await discoverMcpAgentTools(client);
+  const tool = tools.find((item) => item.name === "get_market_data");
   await assert.rejects(
     () => tool.execute("call_2", { ticker: "UNKNOWN", range: "1d", fields: ["summary"] }),
     (error) => error.code === "execution_error"
   );
 });
 
-test("MCP tool registry throws structured validation errors for schema mismatch", async () => {
-  const { registry } = await createMcpToolRegistry(client);
-  const tool = registry.get("search_filings");
+test("discovered AgentTool throws structured validation errors for schema mismatch", async () => {
+  const { tools } = await discoverMcpAgentTools(client);
+  const tool = tools.find((item) => item.name === "search_filings");
   await assert.rejects(
     () => tool.execute("call_3", { companyId: "000001.SZ", query: "资产质量", topK: 0 }),
     (error) => error.code === "validation_error" && Array.isArray(error.details.issues)
   );
 });
 
-test("MCP tool registry returns structured output errors for incompatible server output", async () => {
+test("discoverMcpAgentTools returns structured output errors for incompatible server output", async () => {
   const incompatibleClient = {
     serverName: "incompatible-test-server",
     async listTools() {
@@ -149,10 +166,33 @@ test("MCP tool registry returns structured output errors for incompatible server
     },
     async close() {}
   };
-  const { registry } = await createMcpToolRegistry(incompatibleClient);
-  const tool = registry.get("search_filings");
+  const { tools } = await discoverMcpAgentTools(incompatibleClient);
+  const tool = tools.find((item) => item.name === "search_filings");
   await assert.rejects(
     () => tool.execute("call_4", { companyId: "000001.SZ", query: "资产质量", topK: 1 }),
     (error) => error.code === "output_validation_error" && Array.isArray(error.details.issues)
   );
+});
+
+test("discoverMcpAgentTools returns structured error when listTools fails", async () => {
+  const failingClient = {
+    serverName: "failing-test-server",
+    async listTools() {
+      throw new Error("connection reset");
+    },
+    async callTool() {
+      return { ok: false, error: { code: "unreachable", message: "unreachable" } };
+    },
+    async close() {}
+  };
+  const { events, sink } = createEventCollector();
+  const { tools, ok, error } = await discoverMcpAgentTools(failingClient, { sink });
+
+  assert.equal(ok, false);
+  assert.deepEqual(tools, []);
+  assert.equal(error.code, "mcp_discovery_failed");
+  const discoveryEvent = events.find((event) => event.type === "mcp_tool_discovered");
+  assert.ok(discoveryEvent);
+  assert.equal(discoveryEvent.payload.ok, false);
+  assert.equal(discoveryEvent.payload.error.code, "mcp_discovery_failed");
 });

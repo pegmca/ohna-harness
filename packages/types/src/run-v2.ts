@@ -31,6 +31,7 @@ export type RunEventTypeDto =
   | "retrieval"
   | "workflow_node"
   | "pdf_export"
+  | "mcp_tool_discovered"
   | "run_status"
   | "run_error";
 

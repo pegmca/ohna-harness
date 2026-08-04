@@ -7,7 +7,7 @@
  * - 用户消息含算式 → calculator toolCall；
  * - 含研报/研究报告/深度报告关键词 → generate_report toolCall（阶段 5 report 工具链路）；
  * - 含 A 股 ticker 或财务指标关键词 → financial_metric_mock toolCall；
- * - 含公告/年报检索关键词 → filing_search_mock toolCall；
+ * - 含公告/年报检索关键词 → filing_search_mock toolCall；工具集含 MCP `search_filings` 时优先走 MCP；
  * - 其他 → 固定说明文本（stop）。
  */
 import {
@@ -63,7 +63,7 @@ export function createMockModelRuntime(): ModelRuntime {
 export function createMockStreamFn(): StreamFn {
   return (_model: Model<Api>, context: Context): AssistantMessageEventStream => {
     const stream = createAssistantMessageEventStream();
-    const message = decideMockMessage(context.messages);
+    const message = decideMockMessage(context.messages, new Set((context.tools ?? []).map((tool) => tool.name)));
     // 事件序列对齐真实 provider：start → 内容增量 → done。
     const partial: AssistantMessage = { ...message, content: [] };
     stream.push({ type: "start", partial });
@@ -91,9 +91,10 @@ export function createMockStreamFn(): StreamFn {
  * 按上下文最后一条消息决定本轮 Mock 输出：toolResult 之后收尾，否则按用户文本选工具。
  *
  * @param messages 当前 LLM 上下文消息。
+ * @param availableTools 本轮可用工具名集合（MCP 工具在装配期并入后优先于同名 mock 工具）。
  * @returns 完整的 Mock AssistantMessage。
  */
-function decideMockMessage(messages: Message[]): AssistantMessage {
+function decideMockMessage(messages: Message[], availableTools: Set<string>): AssistantMessage {
   const last = messages.at(-1);
   if (last?.role === "toolResult") {
     const toolResults = messages.filter((message) => message.role === "toolResult");
@@ -120,7 +121,7 @@ function decideMockMessage(messages: Message[]): AssistantMessage {
   }
 
   const userText = extractLastUserText(messages);
-  const toolCall = decideToolCall(userText);
+  const toolCall = decideToolCall(userText, availableTools);
   if (toolCall) {
     return createMessage([toolCall], "toolUse");
   }
@@ -138,9 +139,10 @@ function decideMockMessage(messages: Message[]): AssistantMessage {
  * 按用户文本决定一次确定性 toolCall；返回 undefined 表示直接文本回答。
  *
  * @param text 最后一条用户消息文本。
+ * @param availableTools 本轮可用工具名集合。
  * @returns toolCall 内容块或 undefined。
  */
-function decideToolCall(text: string): Extract<AssistantMessage["content"][number], { type: "toolCall" }> | undefined {
+function decideToolCall(text: string, availableTools: Set<string>): Extract<AssistantMessage["content"][number], { type: "toolCall" }> | undefined {
   const expression = text.match(/\d+(?:\.\d+)?(?:\s*[-+*/×÷]\s*\d+(?:\.\d+)?)+/)?.[0]?.replace(/[×÷]/g, (char) => (char === "×" ? "*" : "/"));
   if (expression) {
     return { type: "toolCall", id: `mock_call_${Date.now().toString(36)}`, name: "calculator", arguments: { expression } };
@@ -167,6 +169,15 @@ function decideToolCall(text: string): Extract<AssistantMessage["content"][numbe
     };
   }
   if (/公告|年报|检索/.test(text)) {
+    // MCP 装配优先（阶段 5）：discovery 产出并入工具集后，同一检索意图走真实 MCP server。
+    if (availableTools.has("search_filings")) {
+      return {
+        type: "toolCall",
+        id: `mock_call_${Date.now().toString(36)}`,
+        name: "search_filings",
+        arguments: { companyId: ticker ?? "000001.SZ", query: text.slice(0, 50), topK: 2 },
+      };
+    }
     return {
       type: "toolCall",
       id: `mock_call_${Date.now().toString(36)}`,

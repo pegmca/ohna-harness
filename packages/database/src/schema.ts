@@ -303,7 +303,7 @@ export const agentRuns = pgTable("agent_runs", {
 export const messageAttachments = pgTable("message_attachments", {
   id: uuid("id").primaryKey(),
   userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
-  messageId: uuid("message_id").notNull().references(() => messages.id, { onDelete: "cascade" }),
+  messageId: uuid("message_id").notNull().references(() => messagesV2.id, { onDelete: "cascade" }),
   documentId: uuid("document_id").notNull().references(() => documents.id, { onDelete: "restrict" }),
   ordinal: integer("ordinal").notNull(),
   fileName: text("file_name").notNull(),
@@ -322,7 +322,7 @@ export const chatAttachmentUploads = pgTable("chat_attachment_uploads", {
   clientAttachmentId: text("client_attachment_id").notNull(),
   contentChecksum: text("content_checksum").notNull(),
   documentId: uuid("document_id").references(() => documents.id, { onDelete: "restrict" }),
-  boundMessageId: uuid("bound_message_id").references(() => messages.id, { onDelete: "restrict" }),
+  boundMessageId: uuid("bound_message_id").references(() => messagesV2.id, { onDelete: "restrict" }),
   fileName: text("file_name").notNull(),
   contentType: text("content_type").notNull(),
   sizeBytes: bigint("size_bytes", { mode: "number" }).notNull(),
@@ -423,7 +423,7 @@ export const traceEvents = pgTable("trace_events", {
 export const messageCitations = pgTable("message_citations", {
   id: uuid("id").primaryKey(),
   userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
-  messageId: uuid("message_id").notNull().references(() => messages.id, { onDelete: "cascade" }),
+  messageId: uuid("message_id").notNull().references(() => messagesV2.id, { onDelete: "cascade" }),
   chunkId: uuid("chunk_id").references(() => chunks.id, { onDelete: "restrict" }),
   documentVersionId: uuid("document_version_id").references(() => documentVersions.id, { onDelete: "restrict" }),
   ordinal: integer("ordinal").notNull(),
@@ -544,5 +544,5 @@ export const runEventsV2 = pgTable("run_events_v2", {
   unique("run_events_v2_run_sequence_uq").on(table.runId, table.sequence),
   index("run_events_v2_user_run_sequence_idx").on(table.userId, table.runId, table.sequence),
   check("run_events_v2_sequence_check", sql`${table.sequence} > 0`),
-  check("run_events_v2_event_type_check", sql`${table.eventType} in ('agent_start','agent_end','turn_start','turn_end','message_start','message_update','message_end','tool_execution_start','tool_execution_update','tool_execution_end','run_status','run_error')`)
+  check("run_events_v2_event_type_check", sql`${table.eventType} in ('agent_start','agent_end','turn_start','turn_end','message_start','message_update','message_end','tool_execution_start','tool_execution_update','tool_execution_end','retrieval','run_status','run_error')`)
 ]);

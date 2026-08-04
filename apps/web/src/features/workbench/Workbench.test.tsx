@@ -657,6 +657,7 @@ function snapshot(runId: string, status: RunSnapshotDtoV2["status"]): RunSnapsho
     runId,
     requestId: `request_${runId}`,
     conversationId: "c1",
+    userMessageId: `msg_${runId}`,
     modelId: "mock",
     mode: "auto",
     source: "composer",

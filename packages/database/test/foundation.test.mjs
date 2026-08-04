@@ -70,7 +70,9 @@ test("空库 migration 可执行、可幂等，并回滚失败 migration", { ski
       "0080_citations.sql",
       "0090_run_model.sql",
       "0100_message_attachments.sql",
-      "0110_linear_messages.sql"
+      "0110_linear_messages.sql",
+      "0120_run_events_retrieval.sql",
+      "0130_message_v2_citation_attachment_fks.sql"
     ]);
 
     await writeFile(join(fixtureDir, "9999_failure.sql"), "create table rolled_back(id integer); select missing_function();");

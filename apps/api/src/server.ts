@@ -112,6 +112,7 @@ const app = createApiServer({
     vectorStoreFactory: (ownerUserId) => createPostgresVectorStore(database.pool, { ownerUserId })
   }),
   attachmentRepository: database.attachmentRepository,
+  citationRepository: database.citationRepository,
   requireIdentity: true,
   qqBotEnabled,
   qqBotQrUrl: process.env.QQBOT_PUBLIC_QR_URL,

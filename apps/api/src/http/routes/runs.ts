@@ -8,6 +8,7 @@ import type {
 import type { FastifyInstance } from "fastify";
 import { createOrderedRunEventStream, isTerminalRunStatus } from "../../application/ordered-run-event-stream.js";
 import {
+  RunAttachmentNotFoundError,
   RunModelNotFoundError,
   RunServiceShuttingDownError,
   type createRunApplicationService
@@ -62,6 +63,12 @@ export function registerRunRoutes(app: FastifyInstance, deps: RunRoutesDeps): vo
         reply.code(400);
         return fail(toApiError("validation_failed", "所选模型不可用，请刷新模型列表后重试。", requestId, {
           modelId: error.modelId
+        }), requestId);
+      }
+      if (error instanceof RunAttachmentNotFoundError) {
+        reply.code(400);
+        return fail(toApiError("validation_failed", "附件不存在或尚未完成索引，请重新上传后重试。", requestId, {
+          documentId: error.documentId
         }), requestId);
       }
       // 会话不存在/越权与旧行为一致：统一映射为 not_found。

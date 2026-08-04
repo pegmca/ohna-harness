@@ -9,7 +9,7 @@ import {
 } from "@aiagent/rag";
 import { randomUUID } from "node:crypto";
 import type pg from "pg";
-import { postgresTimestampToIso } from "./postgres.js";
+import { postgresTimestampToIso, withTransaction } from "./postgres.js";
 import { RepositoryError } from "./repository-error.js";
 
 /**
@@ -25,7 +25,7 @@ export function createPostgresCitationRepository(pool: pg.Pool): CitationReposit
   return {
     async listMessageCitations(userId, messageId) {
       try {
-        const owned = await pool.query("select 1 from messages where id=$1 and user_id=$2", [messageId, userId]);
+        const owned = await pool.query("select 1 from messages_v2 where id=$1 and user_id=$2", [messageId, userId]);
         if (!owned.rowCount) return undefined;
         const result = await pool.query<CitationJoinRow>(
           `${CITATION_SELECT} from message_citations r ${CITATION_JOINS}
@@ -33,6 +33,21 @@ export function createPostgresCitationRepository(pool: pg.Pool): CitationReposit
           [messageId, userId]
         );
         return result.rows.map((row) => mapCitationRecord(row, userId));
+      } catch (cause) {
+        throw mapCitationError(cause);
+      }
+    },
+    async saveMessageCitations(userId, messageId, citations) {
+      if (citations.length === 0) return;
+      try {
+        await withTransaction(pool, async (client) => {
+          await insertMessageCitations(client, {
+            userId,
+            messageId,
+            citations,
+            createdAt: new Date().toISOString()
+          });
+        });
       } catch (cause) {
         throw mapCitationError(cause);
       }

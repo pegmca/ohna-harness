@@ -23,20 +23,22 @@ export function createInMemoryRunStore(options: { messageStore?: MessageStore } 
       const existing = [...runs.values()].find((run) => run.snapshot.requestId === input.requestId && run.userId === input.userId);
       if (existing) return { snapshot: structuredClone(existing.snapshot), created: false };
       // 对齐 Postgres create：触发 Run 的用户消息在同一创建语义内幂等落库。
-      if (options.messageStore) {
-        await options.messageStore.appendUserMessageIdempotently(input.userId, {
-          conversationId: input.conversationId,
-          runId: input.runId,
-          role: "user",
-          content: input.message,
-          clientMessageId: input.clientMessageId,
-          createdAt: input.createdAt
-        });
-      }
+      const messageResult = options.messageStore
+        ? await options.messageStore.appendUserMessageIdempotently(input.userId, {
+            conversationId: input.conversationId,
+            runId: input.runId,
+            role: "user",
+            content: input.message,
+            clientMessageId: input.clientMessageId,
+            createdAt: input.createdAt
+          })
+        : undefined;
+      const userMessageId = messageResult?.message.id ?? crypto.randomUUID();
       const snapshot: RunSnapshotDtoV2 = {
         runId: input.runId,
         requestId: input.requestId,
         conversationId: input.conversationId,
+        userMessageId,
         modelId: input.modelId,
         mode: input.mode,
         source: input.source,

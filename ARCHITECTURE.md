@@ -26,6 +26,7 @@ flowchart LR
 - `packages/agent` owns an end-to-end research run and coordinates report-mode execution.
 - `packages/tools`, `packages/rag`, `packages/workflow`, and `packages/report` own their bounded contexts.
 - `packages/trace` owns event recording, sanitization, subscription, and trace projections.
+- `packages/security` owns prompt-injection assessment and untrusted-context encapsulation; it has no business dependencies and can be used by agent, rag, tools, and report boundaries.
 - `packages/types` owns transport contracts only and has no runtime dependencies.
 - Packages import other packages through declared public entrypoints. Deep cross-package imports and dependency cycles are forbidden.
 

@@ -269,6 +269,7 @@ function mapSnapshot(row: RunRow): RunSnapshotDtoV2 {
     runId: row.id,
     requestId: row.request_id,
     conversationId: row.conversation_id,
+    userMessageId: row.user_message_id,
     modelId: row.model_id,
     mode: row.mode,
     source: row.source,

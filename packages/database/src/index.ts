@@ -56,7 +56,11 @@ export {
 } from "./approval-decision.js";
 import { listPendingMigrations } from "./migrate.js";
 import { createPostgresAttachmentRepository, type AttachmentRepository } from "./attachment-repository.js";
-export { createPostgresAttachmentRepository, type AttachmentRepository } from "./attachment-repository.js";
+export {
+  createPostgresAttachmentRepository,
+  type AttachmentRepository,
+  type AttachmentUploadRecord
+} from "./attachment-repository.js";
 export { listPendingMigrations, runMigrations, MigrationError } from "./migrate.js";
 
 const { Pool } = pg;

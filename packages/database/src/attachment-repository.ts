@@ -25,6 +25,22 @@ export interface AttachmentRepository {
   renew(userId: string, clientAttachmentId: string, claimToken: string, now: string): Promise<boolean>;
   complete(userId: string, clientAttachmentId: string, claimToken: string, documentId: string, now: string): Promise<void>;
   fail(userId: string, clientAttachmentId: string, claimToken: string, now: string): Promise<void>;
+  /**
+   * 按 documentId 查找当前用户已 indexed 的上传记录，用于 run 创建前校验附件归属。
+   *
+   * @param userId 当前用户。
+   * @param documentId RAG 文档 ID。
+   * @returns 上传记录；不存在或不属于该用户时返回 undefined。
+   */
+  findByDocumentId(userId: string, documentId: string): Promise<AttachmentUploadRecord | undefined>;
+  /**
+   * 把已 indexed 的附件绑定到触发它的用户消息，避免孤儿清理误删。
+   *
+   * @param userId 当前用户。
+   * @param documentId RAG 文档 ID。
+   * @param messageId 用户消息 ID。
+   */
+  bindMessageByDocumentId(userId: string, documentId: string, messageId: string): Promise<void>;
   cleanupOrphans(before: string, limit: number, now: string): Promise<number>;
 }
 
@@ -91,6 +107,24 @@ export function createPostgresAttachmentRepository(pool: pg.Pool): AttachmentRep
           where user_id=$1 and client_attachment_id=$2 and claim_token=$4 and status='uploading'`,
         [userId, clientAttachmentId, now, claimToken]
       );
+    },
+    async findByDocumentId(userId, documentId) {
+      const result = await pool.query<UploadRow>(
+        "select * from chat_attachment_uploads where user_id=$1 and document_id=$2",
+        [userId, documentId]
+      );
+      return result.rows[0] ? mapUpload(result.rows[0]) : undefined;
+    },
+    async bindMessageByDocumentId(userId, documentId, messageId) {
+      const result = await pool.query(
+        `update chat_attachment_uploads
+            set bound_message_id=$3, updated_at=now()
+          where user_id=$1 and document_id=$2 and status='indexed'`,
+        [userId, documentId, messageId]
+      );
+      if ((result.rowCount ?? 0) === 0) {
+        throw new RepositoryError("not_found", "Attachment upload not found or not indexed.");
+      }
     },
     async cleanupOrphans(before, limit, now) {
       return withTransaction(pool, async (client) => {

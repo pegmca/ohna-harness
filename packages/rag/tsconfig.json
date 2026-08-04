@@ -13,7 +13,13 @@
   "include": ["src"],
   "references": [
     {
+      "path": "../agent"
+    },
+    {
       "path": "../filings"
+    },
+    {
+      "path": "../security"
     },
     {
       "path": "../types"

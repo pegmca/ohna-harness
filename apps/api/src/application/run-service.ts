@@ -11,12 +11,14 @@
 import { agentLoop, createCompactionTransform, defaultConvertToLlm } from "@aiagent/agent";
 import type { AgentEvent, AgentMessage, AgentTool, StreamFn } from "@aiagent/agent";
 import type { CompactionSettings } from "@aiagent/agent";
+import type { AttachmentRepository } from "@aiagent/database";
 import type { Message } from "@aiagent/ai";
 import {
   compactionStoredContent,
   piMessageToAppendInput,
   storedMessagesToPiMessages,
-  type MessageStore
+  type MessageStore,
+  type StoredMessage
 } from "@aiagent/conversation";
 import type {
   AgentRunAcceptedDto,
@@ -25,6 +27,13 @@ import type {
   RunSnapshotDtoV2,
   RunStreamEventDtoV2
 } from "@aiagent/types";
+import {
+  createGroundingTransformContext,
+  type Citation,
+  type CitationRepository,
+  type DataSourceRuntime,
+  type NewCitationInput
+} from "@aiagent/rag";
 import { redactSensitiveValue } from "@aiagent/trace";
 import { createHash, randomUUID } from "node:crypto";
 import type { RunEventBus, RunExecutionRegistry, RunScheduler, RunStore } from "./run-ports.js";
@@ -57,6 +66,12 @@ export interface RunServiceDependencies {
   defaultModelId?: string;
   /** 注入 loop 的工具集（来自 ToolRegistry.list()）；工具选择由模型 function calling 完成。 */
   tools: AgentTool[];
+  /** RAG runtime，供 grounding hook 检索附件片段。 */
+  dataSourceRuntime: DataSourceRuntime;
+  /** 附件上传 repository，用于把附件绑定到触发 Run 的用户消息。 */
+  attachmentRepository: AttachmentRepository;
+  /** Citation repository，用于把 grounding 检索结果持久化到 assistant message。 */
+  citationRepository: CitationRepository;
   /** 单 run 最大 turn 数预算。 */
   maxTurns?: number;
   compaction?: RunCompactionOptions;
@@ -161,6 +176,13 @@ export function createRunApplicationService(dependencies: RunServiceDependencies
       const runtime = dependencies.resolveModel(snapshot.modelId);
       if (!runtime) throw new RunModelNotFoundError(snapshot.modelId);
 
+      // 把本次 Run 引用的附件绑定到触发它的用户消息，避免孤儿清理误删用户显式材料。
+      if (request.attachmentDocumentIds && request.attachmentDocumentIds.length > 0) {
+        for (const documentId of request.attachmentDocumentIds) {
+          await dependencies.attachmentRepository.bindMessageByDocumentId(userId, documentId, snapshot.userMessageId);
+        }
+      }
+
       // 上下文重建：listForContext 投影（最后一个 compaction + 其后消息）→ pi Message[]。
       const storedHistory = await dependencies.messageStore.listForContext(userId, request.conversationId);
       const history: AgentMessage[] = storedMessagesToPiMessages(storedHistory);
@@ -170,11 +192,11 @@ export function createRunApplicationService(dependencies: RunServiceDependencies
       // loop 对 assistant / toolResult / steering 消息都会发 message_end（落库点），
       // agent_end 兜底补齐任何未落消息（如流中断）。
       const persistedMessages = new Set<AgentMessage>();
-      const persistMessage = async (message: AgentMessage): Promise<void> => {
-        if (message.role === "compaction" || persistedMessages.has(message)) return;
+      const persistMessage = async (message: AgentMessage): Promise<StoredMessage | undefined> => {
+        if (message.role === "compaction" || persistedMessages.has(message)) return undefined;
         persistedMessages.add(message);
         const mapped = piMessageToAppendInput(message as Message);
-        await dependencies.messageStore.append(userId, {
+        return await dependencies.messageStore.append(userId, {
           ...mapped,
           conversationId: request.conversationId,
           runId,
@@ -183,6 +205,17 @@ export function createRunApplicationService(dependencies: RunServiceDependencies
       };
       // 首个 user message_end 即 create 时已落库的 prompt，仅标记不重复写。
       let promptMarked = false;
+
+      // grounding：附件相关片段经 RAG 检索后封装为 <untrusted_context> user 消息注入上下文。
+      // citation 按“本轮最后一条用户消息时间戳”分槽保存，避免 event stream 异步消费导致 race。
+      const grounding = createGroundingTransformContext({
+        runtime: dependencies.dataSourceRuntime,
+        attachmentDocumentIds: request.attachmentDocumentIds ?? [],
+        ownerUserId: userId,
+        recordRetrieval: async (event) => {
+          await publish(userId, snapshot, "retrieval", event);
+        }
+      });
 
       // compaction 检测：transformContext 就地写回后，队首出现新 CompactionMessage 即落表
       // （role='user'、message_type='compaction'，content 为已包裹摘要文本）。
@@ -194,7 +227,8 @@ export function createRunApplicationService(dependencies: RunServiceDependencies
         summarizer: dependencies.compaction?.summarizer ?? defaultSummarizer
       });
       const transformContext = async (messages: AgentMessage[], signal?: AbortSignal): Promise<AgentMessage[]> => {
-        const transformed = await compactionTransform(messages, signal);
+        const grounded = await grounding(messages, signal);
+        const transformed = await compactionTransform(grounded, signal);
         const head = transformed[0];
         if (head?.role === "compaction" && !seenCompactionTimestamps.has(head.timestamp)) {
           seenCompactionTimestamps.add(head.timestamp);
@@ -228,14 +262,24 @@ export function createRunApplicationService(dependencies: RunServiceDependencies
 
       // 顺序消费事件流：逐事件落库（先落库后广播由 publish 保证），message_end 落终态消息。
       let terminalMessages: AgentMessage[] = [];
+      let lastUserMessageTimestamp: number | undefined;
       for await (const event of stream) {
         await publish(userId, snapshot, event.type, event);
         if (event.type === "message_end") {
           if (!promptMarked && event.message.role === "user") {
             promptMarked = true;
             persistedMessages.add(event.message);
+            lastUserMessageTimestamp = event.message.timestamp;
           } else {
-            await persistMessage(event.message);
+            const stored = await persistMessage(event.message);
+            if (event.message.role === "user") {
+              lastUserMessageTimestamp = event.message.timestamp;
+            } else if (stored && event.message.role === "assistant" && lastUserMessageTimestamp !== undefined && isFinalAssistantMessage(event.message)) {
+              const turnCitations = grounding.getCitationsForTurn(lastUserMessageTimestamp);
+              if (turnCitations.length > 0) {
+                await dependencies.citationRepository.saveMessageCitations(userId, stored.id, toNewCitationInputs(turnCitations));
+              }
+            }
           }
         }
         if (event.type === "agent_end") {
@@ -244,7 +288,13 @@ export function createRunApplicationService(dependencies: RunServiceDependencies
       }
       // 终态兜底：遗漏的消息一次性补落（保持 run 内顺序）。
       for (const message of terminalMessages) {
-        await persistMessage(message);
+        const stored = await persistMessage(message);
+        if (stored && message.role === "assistant" && lastUserMessageTimestamp !== undefined && isFinalAssistantMessage(message)) {
+          const turnCitations = grounding.getCitationsForTurn(lastUserMessageTimestamp);
+          if (turnCitations.length > 0) {
+            await dependencies.citationRepository.saveMessageCitations(userId, stored.id, toNewCitationInputs(turnCitations));
+          }
+        }
       }
     } catch (caught) {
       await publish(userId, snapshot, "run_error", { error: toRunError(caught, snapshot.requestId, controller.signal.aborted) });
@@ -259,6 +309,14 @@ export function createRunApplicationService(dependencies: RunServiceDependencies
       const modelId = request.modelId ?? dependencies.defaultModelId ?? "mock";
       if (dependencies.hasModel && !dependencies.hasModel(modelId)) {
         throw new RunModelNotFoundError(modelId);
+      }
+      if (request.attachmentDocumentIds && request.attachmentDocumentIds.length > 0) {
+        for (const documentId of request.attachmentDocumentIds) {
+          const upload = await dependencies.attachmentRepository.findByDocumentId(userId, documentId);
+          if (!upload || upload.status !== "indexed") {
+            throw new RunAttachmentNotFoundError(documentId);
+          }
+        }
       }
       const runId = createId("run");
       // 浏览器幂等键按用户命名空间化，既满足全局唯一约束，也不会产生跨用户冲突侧信道。
@@ -359,6 +417,38 @@ async function defaultSummarizer(messages: AgentMessage[], previousSummary: stri
 }
 
 /**
+ * 判断 assistant 消息是否为该 turn 的最终回答（不含 toolCall 块）。
+ * 工具调用轮的中间 assistant 消息只携带 toolCalls，不应挂载 citation。
+ *
+ * @param message agent loop 输出的消息。
+ * @returns 是最终回答时返回 true。
+ */
+function isFinalAssistantMessage(message: AgentMessage): boolean {
+  if (message.role !== "assistant") return false;
+  const content = message.content;
+  if (typeof content === "string") return true;
+  return !content.some((block) => block && typeof block === "object" && (block as { type?: string }).type === "toolCall");
+}
+
+/**
+ * 把 grounding 检索到的 citation 映射为落库输入。
+ * claim 暂用 quote 快照；后续可扩展为模型回答中的具体主张。
+ *
+ * @param citations grounding 注入的 citation 列表。
+ * @returns citation 落库输入。
+ */
+function toNewCitationInputs(citations: Citation[]): NewCitationInput[] {
+  return citations.map((citation, index) => ({
+    ordinal: index + 1,
+    chunkId: citation.chunkId,
+    claim: citation.quote,
+    quote: citation.quote,
+    score: citation.confidence,
+    verifierStatus: "unverified" as const
+  }));
+}
+
+/**
  * 把执行层异常收敛为结构化 run 错误，不泄漏原始异常细节。
  *
  * @param caught 原始异常。
@@ -389,6 +479,15 @@ export class RunModelNotFoundError extends Error {
   constructor(readonly modelId: string) {
     super(`Model is not available: ${modelId}`);
     this.name = "RunModelNotFoundError";
+  }
+}
+
+/** 请求引用了不存在、未 indexing 或不属于当前用户的附件；route 映射为 validation_failed。 */
+export class RunAttachmentNotFoundError extends Error {
+  /** @param documentId 非法或不可用的附件 documentId。 */
+  constructor(readonly documentId: string) {
+    super(`Attachment is not available: ${documentId}`);
+    this.name = "RunAttachmentNotFoundError";
   }
 }
 

@@ -103,6 +103,15 @@ export interface CitationRepository {
    * @returns 引用数组；消息不存在或不属于该用户时返回 undefined。
    */
   listMessageCitations(userId: string, messageId: string): Promise<CitationRecord[] | undefined>;
+  /**
+   * 在独立事务中写入 assistant message 的引用。
+   * 调用方已在外层完成消息落库；本方法只负责 citation 持久化，供 run 层在 message_end 后调用。
+   *
+   * @param userId 服务端确认的用户 ID。
+   * @param messageId assistant message ID。
+   * @param citations 待写入引用。
+   */
+  saveMessageCitations(userId: string, messageId: string, citations: NewCitationInput[]): Promise<void>;
 
   /**
    * 按序号稳定列出 report artifact 的引用，按当前文档 scope 投影来源可访问性。

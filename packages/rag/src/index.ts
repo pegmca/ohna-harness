@@ -46,3 +46,10 @@ export * from "./chunking.js";
 export * from "./answer.js";
 export * from "./source-uri.js";
 export * from "./data-source-runtime.js";
+export {
+  createGroundingTransformContext
+} from "./grounding-hook.js";
+export type {
+  GroundingHookOptions,
+  GroundingTransformContext
+} from "./grounding-hook.js";

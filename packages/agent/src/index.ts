@@ -1,7 +1,7 @@
 /**
  * @aiagent/agent 公共出口：pi-agent 形态的多轮 ReAct loop（阶段 2）。
  * 旧的单轮意图路由三分支编排（runAgent/createAgent/intent-router/reliability/llm-client）
- * 已删除；report-planner 与 security 保留导出（apps/api 仍在使用，后续阶段迁移）。
+ * 已删除；security 已独立为 @aiagent/security（阶段 5）。
  */
 export { agentLoop, agentLoopContinue, runAgentLoop, runAgentLoopContinue } from "./agent-loop.js";
 export { executeToolCalls, failToolCallsFromTruncatedMessage } from "./agent-loop.js";
@@ -40,8 +40,6 @@ export type {
 export type { AgentTool, AgentToolResult, AgentToolUpdateCallback, ToolExecutionMode } from "./types.js";
 
 export { createReportActivation, createReportPlan, isNaturalLanguageReportRequest } from "./report-planner.js";
-export { assembleUntrustedContext, assessPromptInjection } from "./security.js";
-export type { InjectionAssessment, InjectionDecision, UntrustedContent, UntrustedContentSource } from "./security.js";
 
 export interface AgentStatus {
   name: string;

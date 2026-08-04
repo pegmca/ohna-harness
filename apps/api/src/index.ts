@@ -9,6 +9,7 @@ import { createDefaultToolRegistry } from "@aiagent/tools";
 import type { ApprovalRepository } from "@aiagent/database";
 import type { IdentityMeDto } from "@aiagent/types";
 import type { AttachmentRepository } from "@aiagent/database";
+import type { CitationRepository } from "@aiagent/rag";
 import Fastify, { type FastifyInstance } from "fastify";
 import {
   createInMemoryExecutionRegistry,
@@ -47,7 +48,8 @@ export interface ApiServerOptions {
   readiness?: () => Promise<{ ok: boolean; dependency: string; message?: string }>;
   identityService: IdentityService;
   dataSourceRuntime: DataSourceRuntime;
-  attachmentRepository?: AttachmentRepository;
+  attachmentRepository: AttachmentRepository;
+  citationRepository: CitationRepository;
   requireIdentity?: boolean;
   qqBotQrUrl?: string;
   qqBotEnabled?: boolean;
@@ -117,6 +119,9 @@ export function createApiServer(options: ApiServerOptions): FastifyInstance {
     resolveModel: (modelId) => modelRegistry.resolve(modelId),
     hasModel: (modelId) => modelRegistry.has(modelId),
     defaultModelId: modelRegistry.defaultModelId,
+    dataSourceRuntime,
+    attachmentRepository: options.attachmentRepository,
+    citationRepository: options.citationRepository,
     compaction: options.compaction
   });
   const identityService = options.identityService;

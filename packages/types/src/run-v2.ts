@@ -28,6 +28,7 @@ export type RunEventTypeDto =
   | "tool_execution_start"
   | "tool_execution_update"
   | "tool_execution_end"
+  | "retrieval"
   | "run_status"
   | "run_error";
 
@@ -56,6 +57,7 @@ export interface RunSnapshotDtoV2 {
   runId: string;
   requestId: string;
   conversationId: string;
+  userMessageId: string;
   modelId: string;
   mode: "auto" | "report";
   source: "composer" | "report_button";

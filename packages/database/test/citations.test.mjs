@@ -6,7 +6,8 @@ import test from "node:test";
 import {
   createPostgresArtifactRepository,
   createPostgresCitationRepository,
-  createPostgresRagDocumentRepository
+  createPostgresRagDocumentRepository,
+  createPostgresRunRepository
 } from "../dist/index.js";
 import { runMigrations } from "../dist/migrate.js";
 import { createDatabaseTestContext } from "./helpers/database-test-helper.mjs";
@@ -52,20 +53,37 @@ test("Citation 持久化：固定 chunk/version 回链、原子写入、用户�
     assert.equal(ingestion.kind, "created");
     const chunk = ingestion.chunks[0];
 
-    // --- message citations：旧 run 终态集成已随新 schema 移除（阶段 5 回迁），
-    // 这里直接用 SQL 播种旧 messages/message_citations 行，验证 citation 读取与状态机语义不变。
+    // --- message citations：阶段 5 后 message_citations.message_id 外键指向 messages_v2，
+    // 读取侧也改查 messages_v2；这里用 SQL 播种 messages_v2/message_citations 行验证读取与状态机。
     const conversationId = randomUUID();
     const agentRunId = randomUUID();
     await context.pool.query(
-      `insert into conversations(id,user_id,title,status,created_at,updated_at,last_message_at)
+      `insert into conversations_v2(id,user_id,title,status,created_at,updated_at,last_message_at)
        values ($1,$2,'citations','active',$3,$3,$3)`,
       [conversationId, userA, now]
     );
+    // 触发 Run 的用户消息与 Run 行：messages_v2.run_id 与 runs_v2.user_message_id 互为外键，
+    // 必须通过 RunRepository.create 的事务顺序创建。
+    await createPostgresRunRepository(context.pool).create({
+      runId: agentRunId,
+      requestId: randomUUID(),
+      userId: userA,
+      conversationId,
+      message: "citation test prompt",
+      clientMessageId: randomUUID(),
+      mode: "auto",
+      source: "composer",
+      modelId: "mock",
+      createdAt: now
+    });
+
     const assistantMessageId = randomUUID();
     await context.pool.query(
-      `insert into messages(id,conversation_id,user_id,role,content,status,sequence,created_at)
-       values ($1,$2,$3,'assistant','不良率稳定 [1]。','completed',1,$4)`,
-      [assistantMessageId, conversationId, userA, now]
+      `insert into messages_v2(
+         id,conversation_id,user_id,run_id,role,content,message_type,client_message_id,sequence,
+         usage,model_id,stop_reason,error_message,created_at
+       ) values ($1,$2,$3,$4,'assistant',to_jsonb($5::text),'normal',null,2,null,null,null,null,$6)`,
+      [assistantMessageId, conversationId, userA, agentRunId, "不良率稳定 [1]。", now]
     );
     const chunkRow = (await context.pool.query(
       `select c.id,c.document_version_id from chunks c
@@ -96,6 +114,24 @@ test("Citation 持久化：固定 chunk/version 回链、原子写入、用户�
       await citations.updateMessageCitationVerifierStatus(userB, listed[0].citationId, "verified"),
       { status: "not_found" }
     );
+
+    // --- saveMessageCitations 写路径：run-service 在 assistant message 落库后调用。
+    const secondMessageId = randomUUID();
+    await context.pool.query(
+      `insert into messages_v2(
+         id,conversation_id,user_id,run_id,role,content,message_type,client_message_id,sequence,
+         usage,model_id,stop_reason,error_message,created_at
+       ) values ($1,$2,$3,$4,'assistant',to_jsonb($5::text),'normal',null,3,null,null,null,null,$6)`,
+      [secondMessageId, conversationId, userA, agentRunId, "拨备覆盖率上升 [1]。", now]
+    );
+    await citations.saveMessageCitations(userA, secondMessageId, [
+      { ordinal: 1, chunkId: chunk.chunkId, claim: "拨备覆盖", quote: "拨备覆盖率上升。", score: 0.91 }
+    ]);
+    const savedListed = await citations.listMessageCitations(userA, secondMessageId);
+    assert.equal(savedListed.length, 1);
+    assert.equal(savedListed[0].claim, "拨备覆盖");
+    assert.equal(savedListed[0].source.status, "accessible");
+    assert.equal(savedListed[0].source.chunkId, chunk.chunkId);
 
     // --- verifier 状态机：自动终态不可互改，人工终态不可覆盖 ---
     assert.deepEqual(

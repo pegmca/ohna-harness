@@ -1,8 +1,11 @@
+import type { AttachmentRepository } from "@aiagent/database";
 import { createIdentityService, createInMemoryIdentityRepository, type IdentityService } from "@aiagent/identity";
-import { createDataSourceRuntime, type DataSourceRuntime } from "@aiagent/rag";
+import { createDataSourceRuntime, type CitationRepository, type DataSourceRuntime } from "@aiagent/rag";
 import type { ArtifactRepository, WorkflowRepository } from "@aiagent/report";
 import type { ConversationRepository, MessageStore } from "@aiagent/conversation";
 import type { RunStore } from "../application/run-ports.js";
+import { createInMemoryAttachmentRepository } from "./in-memory-attachment-repository.js";
+import { createInMemoryCitationRepository } from "./in-memory-citation-repository.js";
 import { createInMemoryConversationStores } from "./in-memory-conversation-store.js";
 import { createInMemoryReportRepositories } from "./in-memory-report-persistence.js";
 import { createInMemoryRunStore } from "./in-memory-run-runtime.js";
@@ -16,6 +19,8 @@ export interface InMemoryApiTestRuntime {
   conversationRepository: ConversationRepository;
   messageStore: MessageStore;
   runStore: RunStore;
+  attachmentRepository: AttachmentRepository;
+  citationRepository: CitationRepository;
 }
 
 /**
@@ -41,6 +46,8 @@ export function createInMemoryApiTestRuntime(options: {
     dataSourceRuntime: createDataSourceRuntime(),
     workflowRepository: report.workflowRepository,
     artifactRepository: report.artifactRepository,
+    attachmentRepository: createInMemoryAttachmentRepository(),
+    citationRepository: createInMemoryCitationRepository(),
     ...stores
   };
 }

@@ -94,25 +94,33 @@ async function consumeRunStream(
   const url = lastSequence > 0
     ? `${accepted.eventsUrl}${separator}afterSequence=${lastSequence}`
     : accepted.eventsUrl;
-  const response = await fetch(url, {
-    headers: { accept: "text/event-stream", ...(lastSequence ? { "last-event-id": String(lastSequence) } : {}) },
-    signal: options.signal
-  });
-  if (!response.ok || !response.body) return undefined;
+  // 真实断网时 fetch/read 会 reject（而非干净 done）；传输错误返回 undefined 走重连续传，
+  // AbortError 是用户停止，必须向上抛，避免把主动取消当成网络重连（PR #16 review 问题 2）。
+  try {
+    const response = await fetch(url, {
+      headers: { accept: "text/event-stream", ...(lastSequence ? { "last-event-id": String(lastSequence) } : {}) },
+      signal: options.signal
+    });
+    if (!response.ok || !response.body) return undefined;
 
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-  while (true) {
-    const chunk = await reader.read();
-    buffer += decoder.decode(chunk.value, { stream: !chunk.done });
-    const frames = buffer.split("\n\n");
-    buffer = frames.pop() ?? "";
-    for (const frame of frames) {
-      const result = consumeFrame(frame, options.onEvent, recordSequence);
-      if (result) return result;
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    while (true) {
+      const chunk = await reader.read();
+      buffer += decoder.decode(chunk.value, { stream: !chunk.done });
+      const frames = buffer.split("\n\n");
+      buffer = frames.pop() ?? "";
+      for (const frame of frames) {
+        const result = consumeFrame(frame, options.onEvent, recordSequence);
+        if (result) return result;
+      }
+      if (chunk.done) return undefined;
     }
-    if (chunk.done) return undefined;
+  } catch {
+    // 传输错误与用户停止都返回 undefined；createAndStreamRun 循环按 signal.aborted 区分：
+    // 用户停止立即返回 request_cancelled，网络异常进入 afterSequence 续传。
+    return undefined;
   }
 }
 
@@ -129,11 +137,19 @@ function consumeFrame(
   onEvent: RunStreamOptions["onEvent"],
   recordSequence: (sequence: number) => void
 ): ApiResult<RunTerminalDto> | undefined {
-  // 心跳行没有 data 字段，直接跳过；event 名不匹配也跳过。
-  if (!frame.split("\n").some((line) => line === "event: run_event")) return undefined;
-  const data = frame.split("\n").filter((line) => line.startsWith("data: ")).map((line) => line.slice(6)).join("\n");
+  // 心跳行没有 data 字段，直接跳过；event 名不匹配也跳过（SSE 规范里冒号后空格可选）。
+  if (!frame.split("\n").some((line) => line.startsWith("event:") && line.slice(6).trim() === "run_event")) {
+    return undefined;
+  }
+  const data = frame.split("\n").filter((line) => line.startsWith("data:")).map((line) => line.slice(5).replace(/^ /, "")).join("\n");
   if (!data) return undefined;
-  const event = JSON.parse(data) as RunStreamEventDtoV2;
+  // 畸形帧不炸整个 run：跳过该帧，等待后续帧或续传恢复。
+  let event: RunStreamEventDtoV2;
+  try {
+    event = JSON.parse(data) as RunStreamEventDtoV2;
+  } catch {
+    return undefined;
+  }
   recordSequence(event.sequence);
   onEvent?.(event);
   return terminalOf(event);

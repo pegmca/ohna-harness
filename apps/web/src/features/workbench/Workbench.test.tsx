@@ -503,6 +503,66 @@ describe("Workbench conversation history", () => {
     expect(runRequests[1].modelId).toBe(runRequests[0].modelId);
   });
 
+  it("keeps the toolCall message and the summary message of a multi-message run", async () => {
+    const { createAndStreamRun } = await import("../../shared/api/run-stream-client");
+    vi.mocked(createAndStreamRun).mockImplementation(async (_request, options) => {
+      await options?.onAccepted?.(accepted("run-multi"));
+      options?.onEvent?.(streamEvent(1, "message_start", { message: { role: "assistant", content: [] } }));
+      options?.onEvent?.(streamEvent(2, "message_update", {
+        message: { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "query_metrics", arguments: {} }] },
+        assistantMessageEvent: {
+          type: "toolcall_end",
+          contentIndex: 0,
+          partial: { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "query_metrics", arguments: {} }] }
+        }
+      }));
+      options?.onEvent?.(streamEvent(3, "tool_execution_end", {
+        toolCallId: "call-1",
+        toolName: "query_metrics",
+        result: [{ type: "text", text: "ROE 12%" }],
+        isError: false
+      }));
+      options?.onEvent?.(streamEvent(4, "message_end", {
+        message: { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "query_metrics", arguments: {} }] }
+      }));
+      options?.onEvent?.(streamEvent(5, "message_start", { message: { role: "assistant", content: [] } }));
+      options?.onEvent?.(streamEvent(6, "message_update", {
+        message: { role: "assistant", content: [{ type: "text", text: "最终总结回答" }] },
+        assistantMessageEvent: {
+          type: "text_delta",
+          contentIndex: 0,
+          partial: { role: "assistant", content: [{ type: "text", text: "最终总结回答" }] }
+        }
+      }));
+      options?.onEvent?.(streamEvent(7, "agent_end", {
+        messages: [
+          { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "query_metrics", arguments: {} }] },
+          { role: "toolResult", content: { toolCallId: "call-1", toolName: "query_metrics", content: [{ type: "text", text: "ROE 12%" }], isError: false } },
+          { role: "assistant", content: [{ type: "text", text: "最终总结回答" }] }
+        ]
+      }));
+      return { ok: true, requestId: "terminal", data: { status: "completed", requestId: "terminal" } };
+    });
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith("/api/conversations?")) return ok({ items: [conversation("c1", "已有会话")] });
+      if (url.includes("/messages")) return ok({ items: [] });
+      throw new Error(`Unexpected fetch: ${url}`);
+    }));
+
+    render(<MemoryRouter><Workbench /></MemoryRouter>);
+    await screen.findByRole("heading", { name: "已有会话" });
+    const textbox = screen.getByRole("textbox");
+    fireEvent.change(textbox, { target: { value: "多消息 run" } });
+    fireEvent.submit(textbox.closest("form")!);
+
+    // 终态渲染里两条 assistant 消息的块都在：工具调用块 + 总结正文。
+    await screen.findByText("最终总结回答");
+    expect(screen.getByText("query_metrics")).toBeTruthy();
+    fireEvent.click(screen.getByText("query_metrics"));
+    expect(screen.getByText("ROE 12%")).toBeTruthy();
+  });
+
   it("shows retry for a failed message restored from conversation history", async () => {
     const runRequests: Array<{ message: string; modelId?: string }> = [];
     const { createAndStreamRun } = await import("../../shared/api/run-stream-client");
@@ -633,6 +693,20 @@ function textEvent(sequence: number, text: string): RunStreamEventDtoV2 {
       message: { role: "assistant", content: [{ type: "text", text }] },
       assistantMessageEvent: { type: "text_delta", contentIndex: 0, partial: { role: "assistant", content: [{ type: "text", text }] } }
     },
+    createdAt: "2026-07-25T00:00:00.000Z"
+  };
+}
+
+/** @param sequence 序号。 @param type 事件类型。 @param payload 事件本体。 @returns canonical envelope。 */
+function streamEvent(sequence: number, type: RunStreamEventDtoV2["type"], payload: unknown): RunStreamEventDtoV2 {
+  return {
+    eventId: `event-${sequence}`,
+    runId: "run",
+    requestId: "request",
+    conversationId: "c1",
+    sequence,
+    type,
+    payload,
     createdAt: "2026-07-25T00:00:00.000Z"
   };
 }

@@ -5,8 +5,12 @@ import type { UiContentBlock, UiToolCallBlock } from "./types";
 export type LiveTerminalStatus = "running" | "completed" | "failed" | "cancelled";
 
 /**
- * live run 事件流的渲染投影：assistant partial 内容块 + 工具执行状态 + 终态。
- * message_update 的 assistantMessageEvent 携带累积完整 partial，直接替换块列表即可，无需拼 delta。
+ * live run 事件流的渲染投影：assistant 内容块 + 工具执行状态 + 终态。
+ *
+ * pi 协议里 message_update 的 partial 是「当前正在流式的那条消息」的累积，带工具调用的 run
+ * 会产生多条 assistant 消息（工具调用消息 + 总结消息），因此投影按消息分段累积：
+ * message_start/message_end 界定分段，message_update 只替换当前段，最终渲染时拼接所有段，
+ * 避免中间消息的 text/toolCall 块被后续消息的 partial 整体覆盖（PR #16 review 问题 1）。
  */
 export interface LiveRunProjection {
   blocks: UiContentBlock[];
@@ -24,6 +28,11 @@ interface MessageUpdatePayload {
   };
 }
 
+/** message_start / message_end payload 的窄形状。 */
+interface MessageBoundaryPayload {
+  message?: { role?: string; content?: unknown };
+}
+
 /** tool_execution_* payload 的窄形状。 */
 interface ToolExecutionPayload {
   toolCallId?: string;
@@ -38,6 +47,12 @@ interface AgentEndPayload {
   error?: { code?: string; message?: string };
 }
 
+type EventPayload = MessageUpdatePayload & MessageBoundaryPayload & ToolExecutionPayload & AgentEndPayload & {
+  status?: string;
+  message?: string;
+  error?: ApiError;
+};
+
 /**
  * 把 canonical run_event 流投影为可渲染的 live 状态；允许包含续传 replay 的重复事件。
  *
@@ -46,7 +61,10 @@ interface AgentEndPayload {
  */
 export function projectLiveRun(events: RunStreamEventDtoV2[]): LiveRunProjection {
   let lastSequence = 0;
-  let blocks: UiContentBlock[] = [];
+  // 每条 assistant 消息一个分段；渲染时按顺序拼接。
+  let segments: UiContentBlock[][] = [];
+  // message_end 后置位，下一条 message_update 即便缺 message_start 也开新段。
+  let segmentClosed = false;
   let progressLabel = "正在准备回答";
   let terminal: LiveTerminalStatus = "running";
   let error: ApiError | undefined;
@@ -54,33 +72,51 @@ export function projectLiveRun(events: RunStreamEventDtoV2[]): LiveRunProjection
   for (const event of events) {
     if (event.sequence <= lastSequence) continue;
     lastSequence = event.sequence;
-    const payload = (event.payload ?? {}) as MessageUpdatePayload & ToolExecutionPayload & AgentEndPayload & {
-      status?: string;
-      message?: string;
-      error?: ApiError;
-    };
+    const payload = (event.payload ?? {}) as EventPayload;
 
     switch (event.type) {
+      case "message_start": {
+        if (payload.message?.role === "assistant" || !payload.message?.role) {
+          if (segments.length > 0 && !segmentClosed && segments[segments.length - 1].length === 0) break;
+          segments.push([]);
+          segmentClosed = false;
+        }
+        break;
+      }
       case "message_update": {
         const partial = payload.assistantMessageEvent?.partial?.content;
-        if (partial) {
-          // partial 是全量累积内容，直接替换；保留已配对工具结果与执行状态。
-          const next = parseAssistantBlocks(partial);
-          blocks = mergeToolState(blocks, next);
-          const kind = payload.assistantMessageEvent?.type ?? "";
-          progressLabel = kind.startsWith("thinking") ? "正在思考" : kind.startsWith("toolcall") ? "正在准备工具调用" : "正在生成回答";
+        if (!partial) break;
+        if (segments.length === 0 || segmentClosed) {
+          segments.push([]);
+          segmentClosed = false;
         }
+        // partial 是该条消息的全量累积内容，只替换当前段；保留段内已配对工具状态。
+        const current = segments[segments.length - 1];
+        segments[segments.length - 1] = mergeToolState(current, parseAssistantBlocks(partial));
+        const kind = payload.assistantMessageEvent?.type ?? "";
+        progressLabel = kind.startsWith("thinking") ? "正在思考" : kind.startsWith("toolcall") ? "正在准备工具调用" : "正在生成回答";
+        break;
+      }
+      case "message_end": {
+        // message_end 携带该消息最终形态，用它收口当前段。
+        const content = payload.message?.role === "assistant" ? payload.message.content : undefined;
+        if (content) {
+          if (segments.length === 0 || segmentClosed) segments.push([]);
+          const current = segments[segments.length - 1];
+          segments[segments.length - 1] = mergeToolState(current, parseAssistantBlocks(content));
+        }
+        segmentClosed = true;
         break;
       }
       case "tool_execution_start":
       case "tool_execution_update": {
         progressLabel = `正在调用工具 ${payload.toolName ?? ""}`;
-        updateTool(blocks, payload.toolCallId, payload.toolName, { status: "running" });
+        updateTool(segments, payload.toolCallId, { status: "running" });
         break;
       }
       case "tool_execution_end": {
         progressLabel = `工具 ${payload.toolName ?? ""} 已返回`;
-        updateTool(blocks, payload.toolCallId, payload.toolName, {
+        updateTool(segments, payload.toolCallId, {
           status: payload.isError ? "failed" : "completed",
           result: payload.toolCallId && payload.toolName
             ? {
@@ -120,9 +156,9 @@ export function projectLiveRun(events: RunStreamEventDtoV2[]): LiveRunProjection
           terminal = "completed";
           progressLabel = "回答完成";
         }
-        // agent_end 携带最终消息：用最后一条 assistant 内容收口，并配对 toolResult。
-        const finalBlocks = blocksFromFinalMessages(payload.messages);
-        if (finalBlocks) blocks = mergeToolState(blocks, finalBlocks);
+        // agent_end 携带 run 的全部新消息：拼接所有 assistant 分段并全局配对 toolResult。
+        const finalSegments = segmentsFromFinalMessages(payload.messages);
+        if (finalSegments) segments = finalSegments;
         break;
       }
       default:
@@ -130,39 +166,36 @@ export function projectLiveRun(events: RunStreamEventDtoV2[]): LiveRunProjection
     }
   }
 
-  return { blocks, progressLabel, terminal, error };
+  return { blocks: segments.flat(), progressLabel, terminal, error };
 }
 
 /**
- * 从 agent_end 的最终消息里提取 assistant 内容块并配对 toolResult。
+ * 从 agent_end 的最终消息重建分段：每条 assistant 消息一段，toolResult 全局按 toolCallId 配对。
  *
  * @param messages run 新产生的消息列表。
- * @returns 最终内容块；没有 assistant 消息时返回 undefined 保留流式中间态。
+ * @returns 最终分段；没有 assistant 消息时返回 undefined 保留流式中间态。
  */
-function blocksFromFinalMessages(
+function segmentsFromFinalMessages(
   messages: AgentEndPayload["messages"]
-): UiContentBlock[] | undefined {
+): UiContentBlock[][] | undefined {
   if (!messages) return undefined;
-  const lastAssistant = [...messages].reverse().find((message) => message.role === "assistant");
-  if (!lastAssistant) return undefined;
-  const blocks = parseAssistantBlocks(lastAssistant.content);
+  const assistants = messages.filter((message) => message.role === "assistant");
+  if (assistants.length === 0) return undefined;
+  const segments = assistants.map((message) => parseAssistantBlocks(message.content));
   for (const message of messages) {
     if (message.role !== "toolResult") continue;
     const result = parseToolResult(message.content);
     if (!result) continue;
-    const block = blocks.find(
-      (item): item is UiToolCallBlock => item.type === "toolCall" && item.id === result.toolCallId
-    );
-    if (block) {
-      block.result = result;
-      block.status = result.isError ? "failed" : "completed";
-    }
+    updateTool(segments, result.toolCallId, {
+      status: result.isError ? "failed" : "completed",
+      result
+    });
   }
-  return blocks;
+  return segments;
 }
 
 /**
- * partial 替换块列表时保留旧块上已配对的工具状态（partial 内不含执行结果）。
+ * partial 替换分段时保留旧块上已配对的工具状态（partial 内不含执行结果）。
  *
  * @param previous 之前的块列表。
  * @param next 最新 partial 解析出的块列表。
@@ -181,25 +214,26 @@ function mergeToolState(previous: UiContentBlock[], next: UiContentBlock[]): UiC
 }
 
 /**
- * 按 toolCallId 更新工具块状态；partial 尚未包含该块时静默跳过，后续 partial 出现时再合并。
+ * 跨分段按 toolCallId 更新工具块状态；partial 尚未包含该块时静默跳过，后续 partial 出现时再合并。
  *
- * @param blocks 当前块列表。
+ * @param segments 全部分段。
  * @param toolCallId 工具调用 ID。
- * @param toolName 工具名。
  * @param patch 状态补丁。
  * @returns 无返回值。
  */
 function updateTool(
-  blocks: UiContentBlock[],
+  segments: UiContentBlock[][],
   toolCallId: string | undefined,
-  toolName: string | undefined,
   patch: { status?: UiToolCallBlock["status"]; result?: UiToolCallBlock["result"] }
 ): void {
   if (!toolCallId) return;
-  const block = blocks.find(
-    (item): item is UiToolCallBlock => item.type === "toolCall" && item.id === toolCallId
-  );
-  if (!block) return;
-  if (patch.status) block.status = patch.status;
-  if (patch.result) block.result = patch.result;
+  for (const segment of segments) {
+    const block = segment.find(
+      (item): item is UiToolCallBlock => item.type === "toolCall" && item.id === toolCallId
+    );
+    if (!block) continue;
+    if (patch.status) block.status = patch.status;
+    if (patch.result) block.result = patch.result;
+    return;
+  }
 }

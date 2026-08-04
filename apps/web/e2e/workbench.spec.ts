@@ -118,30 +118,32 @@ test("collapses tool calls by default and expands to show arguments and result",
     await fulfillJson(route, accepted("run-1"));
   });
   await page.route("**/api/runs/run-1/events*", async (route) => {
+    // 真实两消息结构：第一条 assistant 发起 toolCall（配对 toolResult），第二条流式输出总结。
+    const toolCallContent = [
+      { type: "toolCall", id: "call-1", name: "query_metrics", arguments: { ticker: "000001.SZ" } }
+    ];
     await fulfillSse(route, [
-      frame(1, "message_update", partial("toolcall_end", [
-        { type: "toolCall", id: "call-1", name: "query_metrics", arguments: { ticker: "000001.SZ" } }
-      ])),
-      frame(2, "tool_execution_start", { toolCallId: "call-1", toolName: "query_metrics", args: { ticker: "000001.SZ" } }),
-      frame(3, "tool_execution_end", {
+      frame(1, "message_start", { message: { role: "assistant", content: [] } }),
+      frame(2, "message_update", partial("toolcall_end", toolCallContent)),
+      frame(3, "tool_execution_start", { toolCallId: "call-1", toolName: "query_metrics", args: { ticker: "000001.SZ" } }),
+      frame(4, "tool_execution_end", {
         toolCallId: "call-1",
         toolName: "query_metrics",
         result: [{ type: "text", text: "ROE 12%" }],
         isError: false
       }),
-      frame(4, "agent_end", {
+      frame(5, "message_end", { message: { role: "assistant", content: toolCallContent } }),
+      frame(6, "message_start", { message: { role: "assistant", content: [] } }),
+      frame(7, "message_update", partial("text_delta", [{ type: "text", text: "ROE 为 12%。" }])),
+      frame(8, "message_end", { message: { role: "assistant", content: [{ type: "text", text: "ROE 为 12%。" }] } }),
+      frame(9, "agent_end", {
         messages: [
-          {
-            role: "assistant",
-            content: [
-              { type: "toolCall", id: "call-1", name: "query_metrics", arguments: { ticker: "000001.SZ" } },
-              { type: "text", text: "ROE 为 12%。" }
-            ]
-          },
+          { role: "assistant", content: toolCallContent },
           {
             role: "toolResult",
             content: { toolCallId: "call-1", toolName: "query_metrics", content: [{ type: "text", text: "ROE 12%" }], isError: false }
-          }
+          },
+          { role: "assistant", content: [{ type: "text", text: "ROE 为 12%。" }] }
         ]
       })
     ]);

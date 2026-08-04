@@ -86,6 +86,53 @@ describe("projectLiveRun", () => {
     expect(projection.blocks[1]).toEqual({ type: "text", text: "最终回答" });
   });
 
+  it("keeps blocks from earlier assistant messages in a multi-message run", () => {
+    // 真实带工具调用的 run：第一条 assistant 发起 toolCall，第二条流式输出总结。
+    const events = [
+      envelope(1, "message_start", { message: { role: "assistant", content: [] } }),
+      messageUpdate(2, "toolcall_end", [
+        { type: "toolCall", id: "call-1", name: "query_metrics", arguments: { ticker: "000001.SZ" } }
+      ]),
+      toolExecution(3, "tool_execution_start"),
+      toolExecution(4, "tool_execution_end", { result: [{ type: "text", text: "ROE 12%" }], isError: false }),
+      envelope(5, "message_end", {
+        message: {
+          role: "assistant",
+          content: [{ type: "toolCall", id: "call-1", name: "query_metrics", arguments: { ticker: "000001.SZ" } }]
+        }
+      }),
+      envelope(6, "message_start", { message: { role: "assistant", content: [] } }),
+      messageUpdate(7, "text_delta", [{ type: "text", text: "ROE 为 12%。" }])
+    ];
+    // live 中途：第一条消息的工具块不能因为第二条消息的 partial 而消失。
+    const live = projectLiveRun(events);
+    expect(live.terminal).toBe("running");
+    expect(live.blocks.map((block) => block.type)).toEqual(["toolCall", "text"]);
+    const liveTool = live.blocks[0];
+    expect(liveTool?.type === "toolCall" && liveTool.status).toBe("completed");
+
+    // agent_end 终态：拼接全部 assistant 消息并配对 toolResult，不是只留最后一条。
+    const final = projectLiveRun([
+      ...events,
+      agentEnd(8, [
+        {
+          role: "assistant",
+          content: [{ type: "toolCall", id: "call-1", name: "query_metrics", arguments: { ticker: "000001.SZ" } }]
+        },
+        {
+          role: "toolResult",
+          content: { toolCallId: "call-1", toolName: "query_metrics", content: [{ type: "text", text: "ROE 12%" }], isError: false }
+        },
+        { role: "assistant", content: [{ type: "text", text: "ROE 为 12%。" }] }
+      ])
+    ]);
+    expect(final.terminal).toBe("completed");
+    expect(final.blocks.map((block) => block.type)).toEqual(["toolCall", "text"]);
+    const finalTool = final.blocks[0];
+    expect(finalTool?.type === "toolCall" && finalTool.result?.content).toEqual([{ type: "text", text: "ROE 12%" }]);
+    expect(final.blocks[1]).toEqual({ type: "text", text: "ROE 为 12%。" });
+  });
+
   it("treats agent_end with loop error as failed", () => {
     const projection = projectLiveRun([agentEnd(1, [], { code: "agent_loop_aborted", message: "钩子抛错" })]);
     expect(projection.terminal).toBe("failed");

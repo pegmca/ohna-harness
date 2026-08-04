@@ -1,5 +1,4 @@
 import type {
-  AgentRunResponseDto,
   ApiResult,
   DataSourceChunksResponseDto,
   DataSourceDocumentDto,
@@ -10,11 +9,9 @@ import type {
   RagAnswerResponseDto,
   RagChunkDto,
   RagSearchResponseDto,
-  ReportArtifactDto,
   RetrievalResultDto
 } from "@aiagent/types";
 import {
-  AlertTriangle,
   Braces,
   Database,
   FileText,
@@ -23,12 +20,11 @@ import {
   Plus,
   Quote,
   Search,
-  Send,
-  ShieldCheck
+  Send
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { formatApiError, parseApiResult } from "./format";
-import { ErrorBlock, ReportWorkflowPanel, StatusBadge } from "./run-details";
+import { ErrorBlock, StatusBadge } from "./run-details";
 import type { WorkspaceView } from "./types";
 
 export const demoDataSourceContent = `# 资产质量
@@ -40,13 +36,11 @@ export const demoDataSourceContent = `# 资产质量
 # 现金流
 经营性现金流改善，但资本开支增加带来短期压力。`;
 
-/** 展示 Workflow、Citation、Eval 与 Architecture 产品视图；所有内容均来自 API DTO 或当前 Agent run。 */
-export function ProductWorkspace(props: { latestRun?: AgentRunResponseDto; onMenuClick: () => void; view: Exclude<WorkspaceView, "chat" | "scheduled-tasks" | "data-sources" | "settings"> }) {
+/** 展示 Workflow、Citation、Eval 与 Architecture 产品视图；report 工作流数据已随 pi 化改造移除，阶段 5 回迁。 */
+export function ProductWorkspace(props: { onMenuClick: () => void; view: Exclude<WorkspaceView, "chat" | "scheduled-tasks" | "data-sources" | "settings"> }) {
   const [evalReport, setEvalReport] = useState<ProductEvalReportDto>();
   const [architecture, setArchitecture] = useState<ProductArchitectureDto>();
   const [error, setError] = useState<string>();
-  const workflow = props.latestRun?.reportWorkflow;
-  const artifact = workflow?.artifact;
 
   useEffect(() => {
     let active = true;
@@ -64,8 +58,8 @@ export function ProductWorkspace(props: { latestRun?: AgentRunResponseDto; onMen
       </div>{props.view === "eval" && evalReport ? <StatusBadge tone="info">DEMO DATA · {evalReport.datasetVersion}</StatusBadge> : null}</header>
       <div className="product-content">
         {error ? <ErrorBlock error={{ code: "internal_error", message: error }} /> : null}
-        {props.view === "workflow" ? workflow ? <ReportWorkflowPanel workflow={workflow} /> : <ProductEmpty text="先在 Immersive 中开启 Report Mode 或用自然语言生成报告；这里将展示同一次真实 run 的节点输入、输出、耗时和错误。" /> : null}
-        {props.view === "citations" ? artifact ? <CitationChecker artifact={artifact} /> : <ProductEmpty text="当前没有报告引用。完成一次 Report Workflow 后，可从关键结论回溯 document、chunk 和 source。" /> : null}
+        {props.view === "workflow" ? <ProductEmpty text="报告工作流能力已随 pi 化改造暂时下线，将在后续阶段恢复；届时这里会展示真实 run 的节点输入、输出、耗时和错误。" /> : null}
+        {props.view === "citations" ? <ProductEmpty text="报告引用校验已随 pi 化改造暂时下线；恢复后可从关键结论回溯 document、chunk 和 source。" /> : null}
         {props.view === "eval" ? evalReport ? <EvalReportView report={evalReport} /> : <LoadingBlock /> : null}
         {props.view === "architecture" ? architecture ? <ArchitectureView value={architecture} /> : <LoadingBlock /> : null}
       </div>
@@ -77,14 +71,6 @@ export function ProductWorkspace(props: { latestRun?: AgentRunResponseDto; onMen
 export function ProductEmpty(props: { text: string }) { return <div className="product-empty"><FileText /><h3>暂无当前运行数据</h3><p>{props.text}</p></div>; }
 /** @returns 产品视图加载状态。 */
 export function LoadingBlock() { return <div className="product-empty"><Loader2 className="spin" /><p>正在读取 API DTO…</p></div>; }
-
-/** 关键结论—来源映射；missing claims 独立使用警示状态。 */
-export function CitationChecker(props: { artifact: ReportArtifactDto }) {
-  return <div className="product-stack"><section className="data-panel"><div className="panel-heading"><h3><ShieldCheck className="icon-size" />Coverage</h3><StatusBadge tone={props.artifact.citationVerification.verified ? "success" : "danger"}>{props.artifact.citationVerification.decision}</StatusBadge></div>
-    <p className="muted-row">{props.artifact.citations.length} 条已映射引用 · {props.artifact.citationVerification.missingClaims.length} 条未覆盖结论</p></section>
-    {props.artifact.citations.map((citation, index) => <article className="data-panel citation-map" key={citation.id}><strong>[{index + 1}] {citation.supportsFinding}</strong><span>{citation.quote}</span><small>source {citation.source}</small><small>document {citation.documentId ?? "unknown"} · chunk {citation.chunkId ?? citation.chunkIndex ?? "unknown"}</small></article>)}
-    {props.artifact.citationVerification.missingClaims.map((claim) => <article className="data-panel uncovered" key={claim}><AlertTriangle className="icon-size" /><strong>未覆盖结论</strong><span>{claim}</span></article>)}</div>;
-}
 
 /** 展示版本化 eval 当前值、baseline 和至少三个失败案例。 */
 export function EvalReportView(props: { report: ProductEvalReportDto }) {

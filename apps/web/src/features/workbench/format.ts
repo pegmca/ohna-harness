@@ -1,35 +1,45 @@
 import type {
-  AgentRunResponseDto,
-  AgentRunStreamEventDto,
   ApiError,
   ApiResult,
   ConversationDto,
-  ConversationMessageDto,
-  ToolApprovalRequestDto
+  LinearMessageDto,
+  RunStatusDtoV2,
+  RunStreamEventDtoV2
 } from "@aiagent/types";
-import type { TraceEventDto, UiMessage, WorkspaceView } from "./types";
+import type {
+  UiContentBlock,
+  UiMessage,
+  UiTextBlock,
+  UiThinkingBlock,
+  UiToolCallBlock,
+  UiToolResult,
+  WorkspaceView
+} from "./types";
 
 /**
- * 把实时事件转换为 assistant 消息中的简短进度文案。
+ * 把实时 run_event 转换为 assistant 消息中的简短进度文案。
  *
- * @param event 当前 run event。
+ * @param event canonical run event envelope。
  * @returns 用户可读进度。
  */
-export function formatRunProgress(event: AgentRunStreamEventDto): string {
-  if (event.type === "run_status") return event.message;
-  if (event.type === "run_error") return event.error.message;
-  if (event.type === "run_result") return event.result.answer;
-  const labels: Partial<Record<TraceEventDto["type"], string>> = {
-    request_received: "已接收研究问题，正在分析意图。",
-    intent_routed: "已完成意图识别，正在选择研究路径。",
-    retrieval: "正在检索公告与研究证据。",
-    tool_call: "已调用本地研究工具。",
-    mcp_tool_call: "已通过 MCP 获取结构化数据。",
-    workflow_node: "正在执行研报工作流节点。",
-    citation_verifier: "正在校验结论与引用覆盖。",
-    final_response: "研究过程已完成，正在整理回答。"
-  };
-  return labels[event.event.type] ?? `正在处理 ${event.event.type.replaceAll("_", " ")}。`;
+export function formatRunProgress(event: RunStreamEventDtoV2): string {
+  const payload = (event.payload ?? {}) as { status?: string; message?: string; toolName?: string; error?: { message: string } };
+  switch (event.type) {
+    case "agent_start":
+      return "已开始处理请求。";
+    case "run_status":
+      return payload.message ?? `运行状态：${payload.status ?? "unknown"}`;
+    case "run_error":
+      return payload.error?.message ?? "运行失败。";
+    case "tool_execution_start":
+      return `正在调用工具 ${payload.toolName ?? ""}。`;
+    case "tool_execution_end":
+      return `工具 ${payload.toolName ?? ""} 已返回。`;
+    case "agent_end":
+      return "回答完成。";
+    default:
+      return "正在生成回答。";
+  }
 }
 
 /**
@@ -99,143 +109,6 @@ export function formatApiError(error: ApiError): string {
 }
 
 /**
- * 从 trace 中提取 approval request，前端只消费 trace DTO，不推断权限策略。
- *
- * @param run Agent run DTO。
- * @returns 去重后的审批请求。
- */
-export function getApprovalRequests(run: AgentRunResponseDto): ToolApprovalRequestDto[] {
-  const requests = new Map<string, ToolApprovalRequestDto>();
-
-  for (const event of run.trace.events) {
-    if (event.type !== "approval" || event.status !== "requested") {
-      continue;
-    }
-
-    requests.set(event.approvalId, {
-      approvalId: event.approvalId,
-      traceId: event.traceId,
-      toolName: event.toolName,
-      reason: event.reason,
-      inputPreview: event.inputPreview,
-      permissionLevel: "needs_approval",
-      requestId: event.requestId,
-      inputDigest: event.inputDigest,
-      reasonCode: event.reasonCode
-    });
-  }
-
-  const workflowApproval = run.reportWorkflow?.run.approvalRequest;
-  if (workflowApproval) requests.set(workflowApproval.approvalId, workflowApproval);
-
-  return [...requests.values()];
-}
-
-/**
- * 将 trace event 类型转换成适合 timeline 展示的标题。
- *
- * @param event trace event。
- * @returns 用户可读标题。
- */
-export function formatEventTitle(event: TraceEventDto): string {
-  switch (event.type) {
-    case "request_received":
-      return "Request Received";
-    case "intent_routed":
-      return `Intent Routed: ${event.intent}`;
-    case "agent_step":
-      return `Agent Step: ${event.stepType}`;
-    case "approval":
-      return `Approval: ${event.status}`;
-    case "security":
-      return `Security: ${event.decision}`;
-    case "retrieval":
-      return `Retrieval: ${event.mode}`;
-    case "report_skill_activation":
-      return `Report Activation: ${event.triggerSource}`;
-    case "report_plan":
-      return "Report Plan";
-    case "workflow_node":
-      return `Workflow Node: ${event.nodeId}`;
-    case "citation_verifier":
-      return `Citation Verifier: ${event.decision}`;
-    case "pdf_export":
-      return `PDF Export: ${event.status}`;
-    case "model_call":
-      return `Model Call: ${event.purpose}`;
-    case "tool_call":
-      return `Tool Call: ${event.toolName}`;
-    case "mcp_tool_discovered":
-      return `MCP Discovery: ${event.serverName}`;
-    case "mcp_tool_call":
-      return `MCP Tool Call: ${event.toolName}`;
-    case "final_response":
-      return "Final Response";
-  }
-}
-
-/**
- * 提取事件耗时，没有耗时字段时展示稳定占位。
- *
- * @param event trace event。
- * @returns 耗时文案。
- */
-export function formatLatency(event: TraceEventDto): string {
-  if ("durationMs" in event) {
-    return `${event.durationMs} ms`;
-  }
-
-  return "recorded";
-}
-
-/**
- * 生成每类 trace event 的摘要，避免前端只展示原始 JSON。
- *
- * @param event trace event。
- * @returns 时间线摘要。
- */
-export function formatEventSummary(event: TraceEventDto): string {
-  switch (event.type) {
-    case "request_received":
-      return event.inputPreview;
-    case "intent_routed":
-      return event.reason;
-    case "agent_step":
-      return `${event.status} with ${event.error?.code ?? "no_error"}`;
-    case "approval":
-      return `${event.toolName}: ${event.reason}`;
-    case "security":
-      return `${event.category}: ${event.reasonCode}`;
-    case "retrieval":
-      return event.ok
-        ? `${event.chunkIds.length} chunks retrieved, topK=${event.topK}`
-        : event.error?.message ?? "检索失败。";
-    case "report_skill_activation":
-      return `${event.triggerSource} activation; ${event.routeReason}`;
-    case "report_plan":
-      return event.ok ? `${event.plan.status} plan created` : event.error?.message ?? "planner failed";
-    case "workflow_node":
-      return `${event.status} ${event.nodeType} in ${event.durationMs} ms`;
-    case "citation_verifier":
-      return `${event.missingClaimCount} missing claims, ${event.missingMetricCount} missing metrics`;
-    case "pdf_export":
-      return event.fileName ?? "PDF export state updated";
-    case "model_call":
-      return event.ok ? `${event.model} responded` : event.error?.message ?? "model failed";
-    case "tool_call":
-      return event.ok ? "工具成功返回结构化结果。" : event.error?.message ?? "工具调用失败。";
-    case "mcp_tool_discovered":
-      return event.ok
-        ? `发现 ${event.toolNames.length} 个 MCP 工具：${event.toolNames.join("、")}`
-        : event.error?.message ?? "MCP 工具发现失败。";
-    case "mcp_tool_call":
-      return event.ok ? "MCP 工具成功返回结构化结果。" : event.error?.message ?? "MCP 工具调用失败。";
-    case "final_response":
-      return event.answerPreview;
-  }
-}
-
-/**
  * 格式化 ISO 时间；非法时间保持原值，避免 UI 抛错。
  *
  * @param value ISO 时间字符串。
@@ -268,17 +141,13 @@ export function formatRelativeTime(value: string): string {
 }
 
 /**
- * 把最近一次 run 转成会话列表和 header 的状态文案。
+ * 把最近一次 run 状态转成 header 的状态文案。
  *
- * @param run 最近一次 run。
+ * @param status 最近一次 run 状态。
  * @returns 状态文案。
  */
-export function formatRunStatus(run: AgentRunResponseDto | undefined): string {
-  if (!run) {
-    return "idle";
-  }
-
-  return run.ok ? run.intent : "failed";
+export function formatRunStatus(status: RunStatusDtoV2 | undefined): string {
+  return status ?? "idle";
 }
 
 /**
@@ -291,17 +160,142 @@ export function createConversationTitle(message: string): string {
   return message.length > 24 ? `${message.slice(0, 24)}...` : message;
 }
 
-/** @param message 服务端消息 DTO。 @returns 时间线 UI 消息。 */
-export function toUiMessage(message: ConversationMessageDto): UiMessage {
+/**
+ * 把线性消息页转换为 UI 消息列表：toolResult 行按 toolCallId 并入前一条 assistant 消息的
+ * toolCall 块，compaction 行转换为分隔条消息。
+ *
+ * @param items 服务端线性消息（按时间线顺序）。
+ * @returns UI 时间线消息。
+ */
+export function toUiMessages(items: LinearMessageDto[]): UiMessage[] {
+  const messages: UiMessage[] = [];
+  for (const item of items) {
+    if (item.messageType === "compaction") {
+      messages.push({
+        id: item.messageId,
+        role: "user",
+        content: "",
+        blocks: [],
+        createdAt: item.createdAt,
+        status: "complete",
+        kind: "compaction"
+      });
+      continue;
+    }
+    if (item.role === "toolResult") {
+      const result = parseToolResult(item.content);
+      // 历史里 toolResult 紧跟产出它的 assistant 消息；找不到配对时丢弃该行，不单独成气泡。
+      if (result) attachToolResult(messages, result);
+      continue;
+    }
+    if (item.role === "assistant") {
+      const blocks = parseAssistantBlocks(item.content);
+      messages.push({
+        id: item.messageId,
+        role: "assistant",
+        content: textOfBlocks(blocks),
+        blocks,
+        createdAt: item.createdAt,
+        status: "complete",
+        ok: item.stopReason !== "error",
+        runId: item.runId,
+        modelId: item.modelId
+      });
+      continue;
+    }
+    messages.push({
+      id: item.messageId,
+      role: "user",
+      content: parseUserText(item.content),
+      blocks: [],
+      createdAt: item.createdAt,
+      status: "complete",
+      runId: item.runId
+    });
+  }
+  return messages;
+}
+
+/**
+ * 把 toolResult 配对到最近的 assistant 消息的同名 toolCall 块上。
+ *
+ * @param messages 已转换的 UI 消息（原地修改）。
+ * @param result toolResult 摘要。
+ * @returns 无返回值。
+ */
+function attachToolResult(messages: UiMessage[], result: UiToolResult): void {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const candidate = messages[index];
+    if (candidate.role !== "assistant") continue;
+    const block = candidate.blocks.find(
+      (item): item is UiToolCallBlock => item.type === "toolCall" && item.id === result.toolCallId
+    );
+    if (!block) return;
+    block.result = result;
+    block.status = result.isError ? "failed" : "completed";
+    return;
+  }
+}
+
+/** @param content toolResult envelope。 @returns 解析出的结果摘要；形状不符时返回 undefined。 */
+export function parseToolResult(content: unknown): UiToolResult | undefined {
+  if (!content || typeof content !== "object") return undefined;
+  const record = content as Record<string, unknown>;
+  if (typeof record.toolCallId !== "string" || typeof record.toolName !== "string") return undefined;
   return {
-    id: message.messageId,
-    role: message.role === "user" ? "user" : "assistant",
-    content: message.content,
-    createdAt: message.createdAt,
-    status: message.status === "failed" ? "failed" : "complete",
-    ok: message.status === "completed",
-    attachments: message.attachments ?? []
+    toolCallId: record.toolCallId,
+    toolName: record.toolName,
+    content: record.content,
+    isError: record.isError === true,
+    details: record.details
   };
+}
+
+/** @param content assistant content 块数组。 @returns 前端窄类型块（未知块类型被丢弃）。 */
+export function parseAssistantBlocks(content: unknown): UiContentBlock[] {
+  if (!Array.isArray(content)) return [];
+  const blocks: UiContentBlock[] = [];
+  for (const item of content) {
+    if (!item || typeof item !== "object") continue;
+    const record = item as Record<string, unknown>;
+    if (record.type === "text" && typeof record.text === "string") {
+      blocks.push({ type: "text", text: record.text } satisfies UiTextBlock);
+    } else if (record.type === "thinking" && typeof record.thinking === "string") {
+      blocks.push({
+        type: "thinking",
+        thinking: record.thinking,
+        redacted: record.redacted === true
+      } satisfies UiThinkingBlock);
+    } else if (record.type === "toolCall" && typeof record.id === "string" && typeof record.name === "string") {
+      blocks.push({
+        type: "toolCall",
+        id: record.id,
+        name: record.name,
+        arguments: (record.arguments ?? {}) as Record<string, unknown>,
+        status: "completed"
+      } satisfies UiToolCallBlock);
+    }
+  }
+  return blocks;
+}
+
+/** @param content user content（字符串或块数组）。 @returns 纯文本正文。 */
+function parseUserText(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .filter((item): item is { type: "text"; text: string } =>
+      Boolean(item) && typeof item === "object" && (item as { type?: unknown }).type === "text")
+    .map((item) => item.text)
+    .join("\n");
+}
+
+/** @param blocks assistant 内容块。 @returns text 块拼接出的纯文本，供复制等操作使用。 */
+export function textOfBlocks(blocks: UiContentBlock[]): string {
+  return blocks
+    .filter((block): block is UiTextBlock => block.type === "text")
+    .map((block) => block.text)
+    .join("\n");
 }
 
 /** @param current 已加载会话。 @param incoming 新页。 @returns 按 ID 去重的列表。 */

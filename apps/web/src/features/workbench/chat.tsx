@@ -1,29 +1,23 @@
-import type {
-  AgentRunResponseDto,
-  AgentRunStreamEventDto,
-  ModelOptionDto,
-  ToolApprovalDecisionDto,
-  ToolApprovalRequestDto
-} from "@aiagent/types";
+import type { ModelOptionDto, RunStatusDtoV2 } from "@aiagent/types";
 import {
   AlertTriangle,
+  Brain,
   Check,
+  ChevronDown,
   Copy,
   FileText,
   Loader2,
   Menu,
   RotateCcw,
-  User
+  User,
+  Wrench
 } from "lucide-react";
 import { type FormEvent, useState } from "react";
-import {
-  formatRunStatus,
-  formatTime
-} from "./format";
-import { RunDetails, StatusBadge } from "./run-details";
-import { ComposerControls } from "./composer-controls";
-import type { DraftAttachment, SelectedRunDetail, UiMessage } from "./types";
+import { formatRunStatus, formatTime } from "./format";
 import { projectLiveRun } from "./live-run-projection";
+import { JsonDetails, RunDetails, StatusBadge } from "./run-details";
+import { ComposerControls } from "./composer-controls";
+import type { DraftAttachment, SelectedRunDetail, UiContentBlock, UiMessage, UiToolCallBlock } from "./types";
 
 export const demoPrompts = [
   "这家公司最近两年的营收变化如何？",
@@ -36,12 +30,12 @@ export const demoPrompts = [
 interface ChatHeaderProps {
   conversationTitle: string;
   isSubmitting: boolean;
-  latestRun: AgentRunResponseDto | undefined;
+  latestRunStatus: RunStatusDtoV2 | undefined;
   onMenuClick: () => void;
 }
 
 /**
- * 渲染紧凑顶部栏，展示当前会话、Report Mode 和最近一次 run 状态。
+ * 渲染紧凑顶部栏，展示当前会话与最近一次 run 状态。
  *
  * @param props 组件属性。
  * @returns 聊天顶部栏。
@@ -60,8 +54,8 @@ export function ChatHeader(props: ChatHeaderProps) {
       </div>
 
       <div className="header-actions">
-        <StatusBadge tone={props.isSubmitting ? "info" : props.latestRun?.ok === false ? "danger" : "success"}>
-          {props.isSubmitting ? "running" : formatRunStatus(props.latestRun)}
+        <StatusBadge tone={props.isSubmitting ? "info" : props.latestRunStatus === "failed" ? "danger" : "success"}>
+          {props.isSubmitting ? "running" : formatRunStatus(props.latestRunStatus)}
         </StatusBadge>
       </div>
     </header>
@@ -69,14 +63,12 @@ export function ChatHeader(props: ChatHeaderProps) {
 }
 
 interface ChatTimelineProps {
-  approvalStatusById: Record<string, string>;
   error: string | undefined;
   hasMore: boolean;
   isLoading: boolean;
   isSubmitting: boolean;
   messages: UiMessage[];
   onLoadMore: () => void;
-  onApprovalDecision: (request: ToolApprovalRequestDto, decision: ToolApprovalDecisionDto["decision"]) => Promise<void>;
   onOpenRunDetail: (detail: SelectedRunDetail) => void;
   onRetryMessage: (message: UiMessage) => void;
   onUsePrompt: (prompt: string) => void;
@@ -101,7 +93,7 @@ export function ChatTimeline(props: ChatTimelineProps) {
         <div className="empty-state">
           <span className="empty-brand-logo" aria-hidden="true"><span className="brand-mark empty-brand-mark" /></span>
           <h2>从一个金融研究问题开始</h2>
-          <p>回答会保留真实 Agent run、工具调用和 trace，可在 assistant 消息内展开查看。</p>
+          <p>回答会保留真实工具调用与运行事件，可在 assistant 消息内展开查看。</p>
           <StarterPrompts disabled={props.isSubmitting} onUsePrompt={props.onUsePrompt} />
         </div>
       </section>
@@ -113,17 +105,19 @@ export function ChatTimeline(props: ChatTimelineProps) {
       <div className="timeline-inner">
         {props.hasMore ? <button className="secondary-button timeline-load-more" onClick={props.onLoadMore} type="button">加载更多消息</button> : null}
         {props.messages.map((message, index) => (
-          <ChatMessage
-            approvalStatusById={props.approvalStatusById}
-            canRetry={message.role === "assistant" && message.status !== "pending"
-              && props.messages.slice(0, index).some((candidate) => candidate.role === "user")}
-            isSubmitting={props.isSubmitting}
-            key={message.id}
-            message={message}
-            onApprovalDecision={props.onApprovalDecision}
-            onOpenRunDetail={props.onOpenRunDetail}
-            onRetryMessage={props.onRetryMessage}
-          />
+          message.kind === "compaction"
+            ? <CompactionDivider key={message.id} />
+            : (
+              <ChatMessage
+                canRetry={message.role === "assistant" && message.status !== "pending"
+                  && props.messages.slice(0, index).some((candidate) => candidate.role === "user")}
+                isSubmitting={props.isSubmitting}
+                key={message.id}
+                message={message}
+                onOpenRunDetail={props.onOpenRunDetail}
+                onRetryMessage={props.onRetryMessage}
+              />
+            )
         ))}
       </div>
     </section>
@@ -131,17 +125,15 @@ export function ChatTimeline(props: ChatTimelineProps) {
 }
 
 /**
- * 渲染单条 user 或 assistant 消息；assistant 消息承载 run details。
+ * 渲染单条 user 或 assistant 消息；assistant 消息按 content 块分类型渲染。
  *
  * @param props 组件属性。
  * @returns 消息块。
  */
 export function ChatMessage(props: {
-  approvalStatusById: Record<string, string>;
   canRetry: boolean;
   isSubmitting: boolean;
   message: UiMessage;
-  onApprovalDecision: (request: ToolApprovalRequestDto, decision: ToolApprovalDecisionDto["decision"]) => Promise<void>;
   onOpenRunDetail: (detail: SelectedRunDetail) => void;
   onRetryMessage: (message: UiMessage) => void;
 }) {
@@ -149,6 +141,9 @@ export function ChatMessage(props: {
   const isUser = message.role === "user";
   const [copied, setCopied] = useState(false);
   const [copyFailed, setCopyFailed] = useState(false);
+  const isPending = message.status === "pending";
+  const liveProjection = isPending ? projectLiveRun(message.liveEvents ?? []) : undefined;
+  const blocks = isPending ? liveProjection?.blocks ?? [] : message.blocks;
 
   /**
    * 复制当前回答正文，并用短暂状态反馈替代额外 toast。
@@ -169,37 +164,36 @@ export function ChatMessage(props: {
 
   return (
     <article className={`chat-message ${isUser ? "is-user" : "is-assistant"}`}>
-      <div className={`message-avatar ${message.status === "pending" ? "is-thinking" : ""}`} aria-hidden="true">
+      <div className={`message-avatar ${isPending ? "is-thinking" : ""}`} aria-hidden="true">
         {isUser ? <User className="icon-size" /> : <span className="brand-mark message-brand-mark" />}
       </div>
       <div className="message-content">
         <div className="message-meta">
           <span>{isUser ? "User" : "Assistant"}</span>
           <span>{formatTime(message.createdAt)}</span>
-          {message.status === "pending" ? <StatusBadge tone="info">running</StatusBadge> : null}
+          {isPending ? <StatusBadge tone="info">running</StatusBadge> : null}
           {message.status === "failed" ? <StatusBadge tone="danger">failed</StatusBadge> : null}
           {message.status === "cancelled" ? <StatusBadge tone="neutral">cancelled</StatusBadge> : null}
         </div>
         {message.attachments && message.attachments.length > 0 ? (
           <div className="message-attachments">
             {message.attachments.map((attachment) => (
-              <span key={"attachmentId" in attachment ? attachment.attachmentId : attachment.clientAttachmentId}>
+              <span key={attachment.attachmentId}>
                 <FileText className="icon-size" />{attachment.fileName}
               </span>
             ))}
           </div>
         ) : null}
-        {message.status === "pending" ? (
-          <LiveRunProcess events={message.streamEvents ?? []} />
+        {isPending && liveProjection ? <LiveRunProcess label={liveProjection.progressLabel} /> : null}
+        {!isUser && !isPending && (blocks.some((block) => block.type !== "text") || message.runId) ? (
+          <RunDetails message={message} onOpen={(section) => props.onOpenRunDetail({ message, section })} />
         ) : null}
-        {message.run ? (
-          <RunDetails
-            onOpen={(section) => props.onOpenRunDetail({ run: message.run, section })}
-            run={message.run}
-          />
+        <MessageBlocks blocks={blocks} live={isPending} />
+        {isUser || (blocks.length === 0 && message.content) ? <p className="message-text">{message.content}</p> : null}
+        {message.error ? (
+          <div className="error-block"><AlertTriangle className="icon-size" /><span>{message.error.code}: {message.error.message}</span></div>
         ) : null}
-        {message.status !== "pending" ? <p className="message-text">{message.content}</p> : null}
-        {!isUser && message.status !== "pending" ? (
+        {!isUser && !isPending ? (
           <div className="message-actions" aria-label="回答操作">
             <button
               aria-label={copied ? "已复制" : "复制回答"}
@@ -231,33 +225,127 @@ export function ChatMessage(props: {
 }
 
 /**
- * 用单行摘要和可折叠列表展示实时 Run，不把原始 trace 术语暴露给普通用户。
+ * 按块类型渲染 assistant 内容：text 正文、thinking 折叠块、toolCall 折叠块。
  *
- * @param props SSE 事件集合。
+ * @param props 内容块与是否 live。
+ * @returns 块列表。
+ */
+function MessageBlocks(props: { blocks: UiContentBlock[]; live: boolean }) {
+  return (
+    <>
+      {props.blocks.map((block, index) => {
+        if (block.type === "text") {
+          return <p className="message-text" key={index}>{block.text}</p>;
+        }
+        if (block.type === "thinking") {
+          return <ThinkingBlockView block={block} key={index} />;
+        }
+        return <ToolCallBlockView block={block} key={block.id || index} live={props.live} />;
+      })}
+    </>
+  );
+}
+
+/**
+ * thinking 块默认折叠，展开查看思考文本。
+ *
+ * @param props thinking 块。
+ * @returns 折叠思考块。
+ */
+function ThinkingBlockView(props: { block: Extract<UiContentBlock, { type: "thinking" }> }) {
+  return (
+    <details className="run-process thinking-block">
+      <summary className="run-process-trigger">
+        <Brain className="icon-size" />
+        <span>思考过程</span>
+        <ChevronDown className="details-chevron" />
+      </summary>
+      <div className="run-process-body">
+        <p className="thinking-text">{props.block.redacted ? "（该段思考内容已被安全过滤。）" : props.block.thinking}</p>
+      </div>
+    </details>
+  );
+}
+
+/**
+ * toolCall 块默认折叠为单行摘要（工具名 + 状态徽标），展开查看参数 JSON 与配对结果。
+ *
+ * @param props toolCall 块与是否 live。
+ * @returns 折叠工具调用块。
+ */
+function ToolCallBlockView(props: { block: UiToolCallBlock; live: boolean }) {
+  const { block } = props;
+  const status = block.status ?? (props.live ? "running" : "completed");
+  const isError = status === "failed" || block.result?.isError === true;
+  return (
+    <details className="run-process tool-call-block">
+      <summary className="run-process-trigger">
+        {status === "running" ? <Loader2 className="icon-size spin" /> : <Wrench className="icon-size" />}
+        <span>{block.name}</span>
+        <StatusBadge tone={isError ? "danger" : status === "running" ? "info" : "success"}>
+          {isError ? "error" : status}
+        </StatusBadge>
+        <ChevronDown className="details-chevron" />
+      </summary>
+      <div className="run-process-body">
+        <JsonDetails title="调用参数" value={block.arguments} />
+        {block.result ? (
+          <>
+            <ToolResultContent content={block.result.content} />
+            {block.result.details !== undefined ? <JsonDetails title="结果详情" value={block.result.details} /> : null}
+          </>
+        ) : null}
+      </div>
+    </details>
+  );
+}
+
+/**
+ * 渲染 toolResult 内容：text 块直接展示，其他形状退化为 JSON 折叠。
+ *
+ * @param props toolResult content。
+ * @returns 结果内容。
+ */
+function ToolResultContent(props: { content: unknown }) {
+  const texts = Array.isArray(props.content)
+    ? props.content
+        .filter((item): item is { type: "text"; text: string } =>
+          Boolean(item) && typeof item === "object" && (item as { type?: unknown }).type === "text")
+        .map((item) => item.text)
+    : [];
+  if (texts.length > 0) {
+    return (
+      <div className="tool-result-content">
+        {texts.map((text, index) => <p className="message-text" key={index}>{text}</p>)}
+      </div>
+    );
+  }
+  return <JsonDetails title="工具结果" value={props.content} />;
+}
+
+/** @returns 「历史已压缩」分隔条。 */
+function CompactionDivider() {
+  return (
+    <div className="compaction-divider" role="separator">
+      <span>历史已压缩</span>
+    </div>
+  );
+}
+
+/**
+ * 用单行摘要展示 live run 当前活动，不暴露原始事件结构。
+ *
+ * @param props 当前活动标签。
  * @returns 实时回答过程。
  */
-function LiveRunProcess(props: { events: AgentRunStreamEventDto[] }) {
-  const activities = projectLiveRun(props.events);
-  const active = [...activities].reverse().find((activity) => activity.status === "active");
+function LiveRunProcess(props: { label: string }) {
   return (
-    <details className="run-process live-run-process" open>
-      <summary className="run-process-trigger">
+    <div className="run-process live-run-process">
+      <span className="run-process-trigger">
         <Loader2 className="icon-size spin" />
-        <span>{active ? `正在${active.label}` : "正在准备回答"}</span>
-      </summary>
-      {activities.length > 0 ? (
-        <div className="run-process-body">
-          <ol className="run-activity-list">
-            {activities.map((activity) => (
-              <li className={`is-${activity.status}`} key={activity.category}>
-                <span aria-hidden="true" />
-                <strong>{activity.label}</strong>
-              </li>
-            ))}
-          </ol>
-        </div>
-      ) : null}
-    </details>
+        <span>{props.label}</span>
+      </span>
+    </div>
   );
 }
 

@@ -1795,7 +1795,6 @@ textarea:disabled {
 .trace-summary-grid small { color: var(--md-color-text-muted); }
 
 .detail-row,
-.approval-row,
 .trace-row,
 .muted-row {
   border: 1px solid var(--md-color-border-subtle);
@@ -1804,8 +1803,7 @@ textarea:disabled {
   padding: var(--md-space-3);
 }
 
-.detail-row,
-.approval-row {
+.detail-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: var(--md-space-3);
@@ -1813,7 +1811,6 @@ textarea:disabled {
 }
 
 .detail-row > div,
-.approval-row > div,
 .trace-row > div {
   display: grid;
   min-width: 0;
@@ -1821,15 +1818,12 @@ textarea:disabled {
 }
 
 .detail-row strong,
-.approval-row strong,
 .trace-row strong {
   color: var(--md-color-text-primary);
   font-size: var(--md-text-body-sm-size);
 }
 
 .detail-row span,
-.approval-row span,
-.approval-row small,
 .trace-row span,
 .trace-row small,
 .muted-row {
@@ -1838,11 +1832,38 @@ textarea:disabled {
   line-height: 1.5;
 }
 
-.approval-actions {
+/* pi 化改造：thinking 块为冷静 mono surface；toolCall / compaction 复用 run-process 模式。 */
+.thinking-block .thinking-text {
+  margin: 0;
+  color: var(--md-color-text-muted);
+  font-family: var(--md-font-mono);
+  font-size: var(--md-text-body-sm-size);
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
+.tool-call-block .run-process-trigger {
+  color: var(--md-color-text-secondary);
+}
+
+.tool-result-content .message-text {
+  font-size: var(--md-text-body-sm-size);
+}
+
+.compaction-divider {
   display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: var(--md-space-2);
+  align-items: center;
+  gap: var(--md-space-3);
+  margin: var(--md-space-3) 0;
+  color: var(--md-color-text-muted);
+  font-size: var(--md-text-body-sm-size);
+}
+
+.compaction-divider::before,
+.compaction-divider::after {
+  content: "";
+  flex: 1;
+  border-top: 1px solid var(--md-color-border-subtle);
 }
 
 .danger-action {
@@ -2136,13 +2157,8 @@ textarea:disabled {
   }
 
   .run-details > summary,
-  .detail-row,
-  .approval-row {
+  .detail-row {
     grid-template-columns: 1fr;
-  }
-
-  .approval-actions {
-    justify-content: flex-start;
   }
 
   .details-chevron {

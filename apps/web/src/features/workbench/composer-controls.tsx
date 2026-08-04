@@ -159,6 +159,7 @@ export function ComposerControls(props: ComposerControlsProps) {
             </Popover.Root>
             <input
               accept=".md,.markdown,.txt,text/markdown,text/plain"
+              aria-label="上传附件文件"
               className="visually-hidden"
               multiple
               onChange={handleFileChange}

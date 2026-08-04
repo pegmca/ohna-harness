@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createInMemoryTraceRecorder } from "@aiagent/trace";
 import { z } from "zod";
 import { createWorkflowPackageSummary, runSequentialWorkflow } from "../dist/index.js";
 
@@ -12,12 +11,12 @@ test("workflow package exposes its boundary summary", () => {
   });
 });
 
-test("sequential workflow executes nodes, updates state and writes trace", async () => {
-  const trace = createInMemoryTraceRecorder("trace_workflow_happy");
+test("sequential workflow executes nodes, updates state and emits node events via sink", async () => {
+  const events = [];
   const result = await runSequentialWorkflow({
     workflowName: "test_workflow",
     initialState: { value: 1 },
-    trace,
+    sink: (event) => { events.push(event); },
     nodes: [
       {
         nodeId: "increment",
@@ -50,12 +49,12 @@ test("sequential workflow executes nodes, updates state and writes trace", async
     result.run.nodes.map((node) => node.status),
     ["succeeded", "succeeded"]
   );
-  const workflowEvents = trace.getEvents().filter((event) => event.type === "workflow_node");
+  const workflowEvents = events.filter((event) => event.type === "workflow_node");
   assert.equal(workflowEvents.length, 4);
-  assert.equal(workflowEvents[0].status, "running");
-  assert.equal(workflowEvents[0].inputSummary.value, 1);
-  assert.equal(workflowEvents[1].status, "succeeded");
-  assert.equal(workflowEvents[1].outputSummary.value, 2);
+  assert.equal(workflowEvents[0].payload.status, "running");
+  assert.equal(workflowEvents[0].payload.inputSummary.value, 1);
+  assert.equal(workflowEvents[1].payload.status, "succeeded");
+  assert.equal(workflowEvents[1].payload.outputSummary.value, 2);
 });
 
 test("max steps returns structured failure before executing the next node", async () => {
@@ -120,12 +119,12 @@ test("non-critical node can be skipped and workflow returns partial success", as
 });
 
 test("decideNext can loop back to an earlier node with max steps protection", async () => {
-  const trace = createInMemoryTraceRecorder("trace_workflow_loop");
+  const events = [];
   const result = await runSequentialWorkflow({
     workflowName: "test_loop",
     initialState: { value: 0 },
     maxSteps: 6,
-    trace,
+    sink: (event) => { events.push(event); },
     nodes: [
       {
         nodeId: "increment",
@@ -160,7 +159,7 @@ test("decideNext can loop back to an earlier node with max steps protection", as
     result.run.nodes.map((node) => node.status),
     ["succeeded", "succeeded"]
   );
-  const workflowEvents = trace.getEvents().filter((event) => event.type === "workflow_node");
+  const workflowEvents = events.filter((event) => event.type === "workflow_node");
   assert.equal(workflowEvents.length, 8);
 
   const maxStepsResult = await runSequentialWorkflow({
@@ -187,116 +186,12 @@ test("decideNext can loop back to an earlier node with max steps protection", as
   assert.equal(maxStepsResult.run.executedSteps, 2);
 });
 
-test("workflow pauses before approval node and continues after approval", async () => {
-  const trace = createInMemoryTraceRecorder("trace_workflow_approval");
-  const approvalRequest = {
-    approvalId: "approval_workflow_export",
-    traceId: "trace_workflow_approval",
-    toolName: "test_exporter",
-    reason: "Export requires review.",
-    inputPreview: {
-      title: "demo"
-    },
-    permissionLevel: "needs_approval"
-  };
-  const nodes = [
-    {
-      nodeId: "export",
-      type: "test.export",
-      title: "Export",
-      inputSchema: z.object({ value: z.number() }),
-      outputSchema: z.object({ value: z.number() }),
-      buildInput: (state) => ({ value: state.value }),
-      createApprovalRequest: () => approvalRequest,
-      execute: (input) => ({ value: input.value + 10 }),
-      applyOutput: (state, output) => ({ ...state, value: output.value })
-    }
-  ];
-  const paused = await runSequentialWorkflow({
-    workflowName: "test_approval_pause",
-    runId: "wf_approval",
-    initialState: { value: 1 },
-    trace,
-    nodes
-  });
-
-  assert.equal(paused.ok, false);
-  assert.equal(paused.run.status, "paused");
-  assert.equal(paused.error.code, "approval_required");
-  assert.equal(paused.approvalRequest.approvalId, "approval_workflow_export");
-  assert.equal(paused.run.nodes[0].status, "paused");
-
-  const approved = await runSequentialWorkflow({
-    workflowName: "test_approval_continue",
-    runId: "wf_approval",
-    initialState: { value: 1 },
-    trace,
-    nodes,
-    approvalDecisions: [
-      {
-        approvalId: "approval_workflow_export",
-        decision: "approved",
-        reviewerNote: "ok"
-      }
-    ]
-  });
-
-  assert.equal(approved.ok, true);
-  assert.equal(approved.run.status, "succeeded");
-  assert.equal(approved.state.value, 11);
-  assert.equal(trace.getEvents().some((event) => event.type === "approval" && event.status === "approved"), true);
-});
-
-test("workflow rejects approval node without executing it", async () => {
-  let executed = false;
-  const result = await runSequentialWorkflow({
-    workflowName: "test_approval_reject",
-    runId: "wf_reject",
-    initialState: { value: 1 },
-    nodes: [
-      {
-        nodeId: "export",
-        type: "test.export",
-        title: "Export",
-        inputSchema: z.object({ value: z.number() }),
-        outputSchema: z.object({ value: z.number() }),
-        buildInput: (state) => ({ value: state.value }),
-        createApprovalRequest: () => ({
-          approvalId: "approval_reject_export",
-          traceId: "trace_reject",
-          toolName: "test_exporter",
-          reason: "Export requires review.",
-          inputPreview: { title: "demo" },
-          permissionLevel: "needs_approval"
-        }),
-        execute: (input) => {
-          executed = true;
-          return { value: input.value + 10 };
-        },
-        applyOutput: (state, output) => ({ ...state, value: output.value })
-      }
-    ],
-    approvalDecisions: [
-      {
-        approvalId: "approval_reject_export",
-        decision: "rejected",
-        reviewerNote: "not allowed"
-      }
-    ]
-  });
-
-  assert.equal(result.ok, false);
-  assert.equal(result.run.status, "rejected");
-  assert.equal(result.error.code, "approval_rejected");
-  assert.equal(executed, false);
-});
-
 test("node exceptions and schema failures are returned as workflow errors", async () => {
-  const trace = createInMemoryTraceRecorder("trace_workflow_failure");
+  const events = [];
   const thrown = await runSequentialWorkflow({
     workflowName: "test_throw",
     initialState: {},
-    trace,
+    sink: (event) => { events.push(event); },
     nodes: [
       {
         nodeId: "thrower",
@@ -316,9 +211,9 @@ test("node exceptions and schema failures are returned as workflow errors", asyn
   assert.equal(thrown.ok, false);
   assert.equal(thrown.error.code, "node_execution_failed");
   assert.match(thrown.error.message, /boom/);
-  const failedTraceEvent = trace.getEvents().find((event) => event.type === "workflow_node" && event.status === "failed");
-  assert.equal(failedTraceEvent.error.code, "node_execution_failed");
-  assert.equal(failedTraceEvent.nodeId, "thrower");
+  const failedTraceEvent = events.find((event) => event.type === "workflow_node" && event.payload.status === "failed");
+  assert.equal(failedTraceEvent.payload.error.code, "node_execution_failed");
+  assert.equal(failedTraceEvent.payload.nodeId, "thrower");
 
   const badOutput = await runSequentialWorkflow({
     workflowName: "test_bad_output",

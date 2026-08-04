@@ -1,5 +1,4 @@
-import type { TraceRecorder } from "@aiagent/trace";
-import type { WorkflowNodeDefinition } from "@aiagent/workflow";
+import type { WorkflowEventSink, WorkflowNodeDefinition } from "@aiagent/workflow";
 import {
   reportCitationVerifierInputSchema,
   reportCitationVerifierOutputSchema,
@@ -32,7 +31,7 @@ export function createCitationVerifierNode(maxRetries: number): WorkflowNodeDefi
       collectedData: state.collectedData,
       risks: state.risks
     }),
-    execute: (input, context) => {
+    execute: async (input, context) => {
       const evidenceById = new Map(input.collectedData.evidence.map((item) => [item.id, item]));
       const citationsById = new Map<string, ReportCitationVerifierOutput["citations"][number]>();
       const missingClaims: string[] = [];
@@ -92,7 +91,7 @@ export function createCitationVerifierNode(maxRetries: number): WorkflowNodeDefi
         decision = canRetry ? "needs_more_evidence" : "fail";
       }
 
-      recordVerifierDecisionTrace(context.trace, context.runId, decision, missingClaims, missingMetrics, followUpQueries, retryCount, maxRetries);
+      await emitVerifierDecisionEvent(context.sink, context.runId, decision, missingClaims, missingMetrics, followUpQueries, retryCount);
 
       return {
         decision,
@@ -174,46 +173,46 @@ function buildFollowUpQueries(
 }
 
 /**
- * 记录 Citation Verifier 的决策到 trace，满足 Agentic RAG 可解释性要求。
+ * 经 sink 发出 Citation Verifier 的决策事件，满足 Agentic RAG 可解释性要求。
  *
- * @param trace trace recorder。
+ * @param sink 节点事件出口。
+ * @param workflowRunId workflow run id。
  * @param decision verifier 决策。
  * @param missingClaims 缺失引用的 claims。
  * @param missingMetrics 缺失的财务指标。
  * @param followUpQueries 生成的补充检索 queries。
  * @param retryCount 当前 retry 次数。
- * @param _maxRetries 最大 retry 次数（保留参数位，暂不进 trace 负载）。
+ * @returns sink 完成 Promise。
  */
-function recordVerifierDecisionTrace(
-  trace: TraceRecorder | undefined,
+async function emitVerifierDecisionEvent(
+  sink: WorkflowEventSink | undefined,
   workflowRunId: string,
   decision: CitationVerifierDecision,
   missingClaims: readonly string[],
   missingMetrics: readonly string[],
   followUpQueries: readonly string[],
-  retryCount: number,
-  _maxRetries: number
-): void {
-  if (!trace) {
+  retryCount: number
+): Promise<void> {
+  if (!sink) {
     return;
   }
 
   try {
-    trace.record({
+    await sink({
       type: "citation_verifier",
-      id: `agent_step_verifier_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
-      traceId: trace.traceId,
-      requestId: trace.requestId,
-      workflowRunId,
-      decision,
-      retryCount,
-      missingClaimCount: missingClaims.length,
-      missingMetricCount: missingMetrics.length,
-      durationMs: 0,
-      ok: decision !== "fail",
-      createdAt: new Date().toISOString()
+      payload: {
+        workflowRunId,
+        decision,
+        retryCount,
+        missingClaimCount: missingClaims.length,
+        missingMetricCount: missingMetrics.length,
+        followUpQueryCount: followUpQueries.length,
+        durationMs: 0,
+        ok: decision !== "fail",
+        createdAt: new Date().toISOString()
+      }
     });
   } catch {
-    // trace 失败不应影响 workflow 主流程。
+    // sink 失败不应影响 workflow 主流程。
   }
 }

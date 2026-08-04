@@ -16,7 +16,7 @@ export type RunStatusDtoV2 =
   | "cancelled"
   | "interrupted";
 
-/** run_events_v2.event_type 枚举：loop 事件对齐 pi AgentEvent，run_status/run_error 为服务端生命周期补充。 */
+/** run_events_v2.event_type 枚举：loop 事件对齐 pi AgentEvent，retrieval/workflow_node/pdf_export 为能力事件，run_status/run_error 为服务端生命周期补充。 */
 export type RunEventTypeDto =
   | "agent_start"
   | "agent_end"
@@ -29,6 +29,8 @@ export type RunEventTypeDto =
   | "tool_execution_update"
   | "tool_execution_end"
   | "retrieval"
+  | "workflow_node"
+  | "pdf_export"
   | "run_status"
   | "run_error";
 

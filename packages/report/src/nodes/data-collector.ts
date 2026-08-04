@@ -1,8 +1,7 @@
 import { createDataSourceRuntime } from "@aiagent/rag";
 import type { DataSourceRuntime, RetrievalResult } from "@aiagent/rag";
-import type { TraceRecorder } from "@aiagent/trace";
 import type { DataSourceIngestRequestDto } from "@aiagent/types";
-import type { WorkflowNodeDefinition } from "@aiagent/workflow";
+import type { WorkflowEventSink, WorkflowNodeDefinition } from "@aiagent/workflow";
 import {
   reportDataCollectorInputSchema,
   reportDataCollectorOutputSchema,
@@ -44,7 +43,7 @@ export function createDataCollectorNode(_maxRetries: number): WorkflowNodeDefini
 
       const queries = buildDataCollectorQueries(subject, timeRange, input.plan.requiredData, input.followUpQueries);
 
-      recordDataCollectorTrace(context.trace, queries, input.followUpQueries);
+      await emitDataCollectorEvent(context.sink, queries, input.followUpQueries);
 
       const evidence: ReportEvidenceItem[] = [];
       const retrievalTraces: unknown[] = [];
@@ -316,38 +315,38 @@ function extractFinancialMetrics(
 }
 
 /**
- * 记录 Data Collector 的检索意图到 trace，便于观察初始检索和补充检索的 query 差异。
+ * 经 sink 发出 Data Collector 的检索意图事件，便于观察初始检索和补充检索的 query 差异。
  *
- * @param trace trace recorder。
+ * @param sink 节点事件出口。
  * @param queries 本次执行的 queries。
  * @param followUpQueries 可选的 follow-up queries 标记。
+ * @returns sink 完成 Promise。
  */
-function recordDataCollectorTrace(
-  trace: TraceRecorder | undefined,
+async function emitDataCollectorEvent(
+  sink: WorkflowEventSink | undefined,
   queries: readonly string[],
   followUpQueries: readonly string[] | undefined
-): void {
-  if (!trace) {
+): Promise<void> {
+  if (!sink) {
     return;
   }
 
   try {
-    trace.record({
+    await sink({
       type: "tool_call",
-      id: `tool_call_data_collector_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
-      traceId: trace.traceId,
-      requestId: trace.requestId,
-      toolName: "report.data_collector_search",
-      args: {
-        queryCount: queries.length,
-        queries: queries.map((query) => (query.length > 60 ? `${query.slice(0, 60)}...` : query)),
-        isFollowUp: (followUpQueries?.length ?? 0) > 0
-      },
-      durationMs: 0,
-      ok: true,
-      createdAt: new Date().toISOString()
+      payload: {
+        toolName: "report.data_collector_search",
+        args: {
+          queryCount: queries.length,
+          queries: queries.map((query) => (query.length > 60 ? `${query.slice(0, 60)}...` : query)),
+          isFollowUp: (followUpQueries?.length ?? 0) > 0
+        },
+        durationMs: 0,
+        ok: true,
+        createdAt: new Date().toISOString()
+      }
     });
   } catch {
-    // trace 失败不应影响 workflow 主流程。
+    // sink 失败不应影响 workflow 主流程。
   }
 }

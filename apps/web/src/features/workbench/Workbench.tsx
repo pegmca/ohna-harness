@@ -694,6 +694,8 @@ async function runAgent(
     modelId,
     attachmentDocumentIds,
     mode: reportMode ? "report" : "auto",
-    source: reportTriggerSource === "button" ? "report_button" : "composer"
+    source: reportTriggerSource === "button" ? "report_button" : "composer",
+    // 阶段 5：report 开关不再产生 API 层编排分支，而是以 hint 约束模型调用 generate_report 工具。
+    metadata: reportMode ? { hint: "report" } : undefined
   }, { onEvent, onAccepted: (accepted) => onAccepted?.(accepted.runId), signal });
 }

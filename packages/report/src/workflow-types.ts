@@ -1,12 +1,10 @@
 import type { DataSourceRuntime } from "@aiagent/rag";
-import type { TraceRecorder } from "@aiagent/trace";
 import type {
   ReportPlanDto,
-  ToolApprovalDecisionDto,
   WorkflowErrorDto,
   WorkflowRunDto
 } from "@aiagent/types";
-import type { WorkflowState } from "@aiagent/workflow";
+import type { WorkflowEventSink, WorkflowState } from "@aiagent/workflow";
 import type {
   ReportAnalyzerOutput,
   ReportCitationVerifierOutput,
@@ -41,9 +39,9 @@ export interface RunReportWorkflowOptions {
   runId?: string;
   maxSteps?: number;
   maxRetries?: number;
-  trace?: TraceRecorder;
+  /** 节点观测事件出口（workflow_node / pdf_export / citation_verifier 等），payload 与原 trace 事件本体同形状。 */
+  sink?: WorkflowEventSink;
   documents?: ReportWorkflowDemoDocument[];
-  approvalDecisions?: ToolApprovalDecisionDto[];
   deadlineMs?: number;
   signal?: AbortSignal;
   dataSourceRuntime?: DataSourceRuntime;
@@ -62,7 +60,6 @@ export interface ReportWorkflowResultError {
   run: WorkflowRunDto;
   state: ReportWorkflowState;
   error: WorkflowErrorDto;
-  approvalRequest?: WorkflowRunDto["approvalRequest"];
 }
 
 export type ReportWorkflowResult = ReportWorkflowResultOk | ReportWorkflowResultError;

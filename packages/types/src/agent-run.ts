@@ -14,6 +14,11 @@ export interface AgentRunCreateRequestDto {
   attachmentDocumentIds?: string[];
   /** 浏览器生成的用户消息幂等键；同一次网络重试必须复用。 */
   clientMessageId?: string;
+  /**
+   * 客户端提示元数据（阶段 5）：hint="report" 表示用户显式要求研报，
+   * 仅用于 system prompt 约束模型调用 generate_report 工具；当前不落库（messages_v2 无 metadata 列）。
+   */
+  metadata?: { hint?: string };
   mode: "auto" | "report";
   source: "composer" | "report_button";
 }

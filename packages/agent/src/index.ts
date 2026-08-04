@@ -39,8 +39,6 @@ export type {
 // 对外仍从 @aiagent/agent 拿到 AgentTool，命名与 pi 对齐。
 export type { AgentTool, AgentToolResult, AgentToolUpdateCallback, ToolExecutionMode } from "./types.js";
 
-export { createReportActivation, createReportPlan, isNaturalLanguageReportRequest } from "./report-planner.js";
-
 export interface AgentStatus {
   name: string;
   description: string;

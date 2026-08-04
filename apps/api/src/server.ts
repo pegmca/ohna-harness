@@ -124,7 +124,6 @@ const app = createApiServer({
   messageStore: database.messageStore,
   artifactStorage: createLocalArtifactStorage(artifactStorageRoot),
   runStore: database.runRepository,
-  approvalRepository: database.approvalRepository,
   traceStore: database.traceStore,
   readiness: async () => {
     if (providerMode !== "mock" && providerMode !== "real") {

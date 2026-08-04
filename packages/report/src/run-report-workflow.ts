@@ -32,7 +32,7 @@ export function createReportPackageSummary(): ReportPackageSummary {
  * 最后由 Report Writer 生成草稿、PDF Exporter 占位导出。
  *
  * @param plan Report Planner 输出。
- * @param options max steps、max retries、trace、可选 demo documents。
+ * @param options max steps、max retries、节点事件 sink、可选 demo documents。
  * @returns 结构化 workflow 结果。
  */
 export async function runReportWorkflow(
@@ -90,8 +90,7 @@ export async function runReportWorkflow(
     initialState,
     nodes: createReportWorkflowNodes(options.maxRetries ?? DEFAULT_MAX_RETRIES),
     maxSteps: options.maxSteps ?? DEFAULT_MAX_STEPS,
-    trace: options.trace,
-    approvalDecisions: options.approvalDecisions
+    sink: options.sink
     , deadlineMs: options.deadlineMs
     , signal: options.signal
   });
@@ -101,8 +100,7 @@ export async function runReportWorkflow(
       ok: false,
       run: result.run,
       state: result.state,
-      error: result.error,
-      approvalRequest: result.approvalRequest
+      error: result.error
     };
   }
 

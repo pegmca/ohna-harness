@@ -9,6 +9,17 @@ export {
   type WorkflowRepository
 } from "./persistence.js";
 export { assertStorageKey, createLocalArtifactStorage } from "./local-artifact-storage.js";
+export {
+  publishArtifactPdf,
+  type PdfPublishFailurePhase,
+  type PdfPublishResult
+} from "./publish-artifact-pdf.js";
+export {
+  createReportTool,
+  type ReportToolDetails,
+  type ReportToolEventSink,
+  type ReportToolOptions
+} from "./report-tool.js";
 export * from "./schemas.js";
 export * from "./workflow-types.js";
 export * from "./pdf.js";

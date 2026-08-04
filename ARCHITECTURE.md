@@ -23,7 +23,7 @@ flowchart LR
 
 - `apps/web` depends only on browser libraries and `@aiagent/types`.
 - `apps/api` is a transport/composition adapter. It may compose runtime packages but must not implement Agent, RAG, tool, workflow, or report rules.
-- `packages/agent` owns an end-to-end research run and coordinates report-mode execution.
+- `packages/agent` owns an end-to-end research run; report generation is exposed to the loop as the `generate_report` tool (`packages/report`), not orchestrated by the API layer.
 - `packages/tools`, `packages/rag`, `packages/workflow`, and `packages/report` own their bounded contexts.
 - `packages/trace` owns event recording, sanitization, subscription, and trace projections.
 - `packages/security` owns prompt-injection assessment and untrusted-context encapsulation; it has no business dependencies and can be used by agent, rag, tools, and report boundaries.

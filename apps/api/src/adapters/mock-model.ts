@@ -5,6 +5,7 @@
  * 行为可预测：
  * - 上一轮有 toolResult → 汇总工具结果生成最终文本（stop）；
  * - 用户消息含算式 → calculator toolCall；
+ * - 含研报/研究报告/深度报告关键词 → generate_report toolCall（阶段 5 report 工具链路）；
  * - 含 A 股 ticker 或财务指标关键词 → financial_metric_mock toolCall；
  * - 含公告/年报检索关键词 → filing_search_mock toolCall；
  * - 其他 → 固定说明文本（stop）。
@@ -145,6 +146,18 @@ function decideToolCall(text: string): Extract<AssistantMessage["content"][numbe
     return { type: "toolCall", id: `mock_call_${Date.now().toString(36)}`, name: "calculator", arguments: { expression } };
   }
   const ticker = text.match(/\b\d{6}\.(?:SZ|SH|BJ)\b/i)?.[0]?.toUpperCase();
+  // 研报关键词优先于单指标查询：report 触发只有「模型自主调用 generate_report」一条路（阶段 5）。
+  if (/研报|研究报告|深度报告/.test(text)) {
+    return {
+      type: "toolCall",
+      id: `mock_call_${Date.now().toString(36)}`,
+      name: "generate_report",
+      arguments: {
+        subject: ticker ?? extractReportSubject(text),
+        scope: text.match(/最近两年|近两年|最近一年|近一年|最近一期|20\d{2}/u)?.[0]
+      }
+    };
+  }
   if (ticker || /净利润|ROE|营收|财务指标/.test(text)) {
     return {
       type: "toolCall",
@@ -162,6 +175,19 @@ function decideToolCall(text: string): Extract<AssistantMessage["content"][numbe
     };
   }
   return undefined;
+}
+
+/**
+ * 无 ticker 时从文本截取研究对象短语（MockModel 确定性兜底，保证冒烟链路稳定）。
+ *
+ * @param text 用户消息文本。
+ * @returns 截取的研究对象短语。
+ */
+function extractReportSubject(text: string): string {
+  const cleaned = text
+    .replace(/帮我|请|生成|撰写|写一份|写|的|研报|研究报告|深度报告|一份/g, "")
+    .trim();
+  return cleaned.slice(0, 24) || "通用研究对象";
 }
 
 /**

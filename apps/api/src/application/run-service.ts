@@ -42,7 +42,25 @@ import type { ModelRuntime } from "./model-registry.js";
 /** 基础 system prompt；附件 grounding 由阶段 5 经 transformContext 回迁。 */
 export const BASE_SYSTEM_PROMPT =
   "你是一个金融研究 Agent。可以自主调用提供的工具（财务指标、公告检索、计算器等）完成多步研究，"
-  + "拿到工具结果后用中文给出简洁、有依据的回答。报告类诉求由系统在 run 层编排，无需自行生成完整研报。";
+  + "拿到工具结果后用中文给出简洁、有依据的回答。"
+  + "当用户显式要求研报/研究报告/深度报告（或消息 metadata 带 hint=report）时，必须调用 generate_report 工具完成完整研报流程，"
+  + "不得只给文字答复；工具返回后基于其结果总结，并在回答中给出 PDF 下载链接。";
+
+/** hint=report 时追加的硬性指令：report 触发只有「模型自主调用 generate_report」一条路，hint 只做提示约束。 */
+export const REPORT_HINT_SYSTEM_INSTRUCTION =
+  "本轮用户已显式要求生成研报：你必须调用 generate_report 工具（subject 从用户消息提取），不得跳过工具直接回答。";
+
+/**
+ * report 工具装配上下文：由 composition root 注入的 factory 在每个 run 内创建 generate_report 工具，
+ * recordEvent 经 publish 先落 run_events_v2 再 SSE 广播（与 grounding 的 recordRetrieval 同一模式）。
+ * 取消语义不经此上下文传递：loop 会把 run 级 AbortSignal 作为 execute 参数传给工具。
+ */
+export interface ReportToolFactoryContext {
+  recordEvent: (type: "workflow_node" | "pdf_export", payload: Record<string, unknown>) => Promise<void>;
+  userId: string;
+  conversationId: string;
+  runId: string;
+}
 
 /** 单 run 的最大 turn 数预算，防止真实模型陷入工具循环。 */
 export const DEFAULT_MAX_TURNS = 8;
@@ -66,6 +84,8 @@ export interface RunServiceDependencies {
   defaultModelId?: string;
   /** 注入 loop 的工具集（来自 ToolRegistry.list()）；工具选择由模型 function calling 完成。 */
   tools: AgentTool[];
+  /** 可选 report 工具工厂：注入后每个 run 额外装配 generate_report（阶段 5 report 回迁，模型自主触发）。 */
+  reportToolFactory?: (ctx: ReportToolFactoryContext) => AgentTool;
   /** RAG runtime，供 grounding hook 检索附件片段。 */
   dataSourceRuntime: DataSourceRuntime;
   /** 附件上传 repository，用于把附件绑定到触发 Run 的用户消息。 */
@@ -245,9 +265,23 @@ export function createRunApplicationService(dependencies: RunServiceDependencies
       };
 
       const maxTurns = dependencies.maxTurns ?? DEFAULT_MAX_TURNS;
+      // report 工具按 run 装配：sink 转接 publish 落 run_events（事件名 workflow_node / pdf_export 不变）。
+      const reportTool = dependencies.reportToolFactory?.({
+        recordEvent: async (type, payload) => {
+          await publish(userId, snapshot, type, payload);
+        },
+        userId,
+        conversationId: request.conversationId,
+        runId
+      });
+      const tools = reportTool ? [...dependencies.tools, reportTool] : dependencies.tools;
+      // metadata.hint 只做 system prompt 约束（不落库：messages_v2/runs_v2 无 metadata 列，避免动 schema）。
+      const systemPrompt = request.metadata?.hint === "report"
+        ? `${BASE_SYSTEM_PROMPT}\n${REPORT_HINT_SYSTEM_INSTRUCTION}`
+        : BASE_SYSTEM_PROMPT;
       const stream = agentLoop(
         [prompt],
-        { systemPrompt: BASE_SYSTEM_PROMPT, messages: history, tools: dependencies.tools },
+        { systemPrompt, messages: history, tools },
         {
           model: runtime.model,
           apiKey: runtime.apiKey,

@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import pg from "pg";
 import {
-  createPostgresApprovalRepository,
   createPostgresArtifactRepository,
   createPostgresConversationRepository,
   createPostgresIdentityRepository,
@@ -37,7 +36,6 @@ async function createPgContext() {
       conversationRepository: createPostgresConversationRepository(pool),
       messageStore: createPostgresMessageStore(pool),
       runStore: createPostgresRunRepository(pool),
-      approvalRepository: createPostgresApprovalRepository(pool),
       workflowRepository: createPostgresWorkflowRepository(pool),
       artifactRepository: createPostgresArtifactRepository(pool),
       identityService: createIdentityService(createPostgresIdentityRepository(pool), {

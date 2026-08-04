@@ -11,7 +11,9 @@ export const agentRunRequestSchema = z.object({
   ).optional(),
   mode: z.enum(["auto", "report"]),
   source: z.enum(["composer", "report_button"]),
-  clientMessageId: z.string().min(1).max(200).optional()
+  clientMessageId: z.string().min(1).max(200).optional(),
+  // 客户端提示元数据（阶段 5）：hint=report 只做 system prompt 约束，不落库。
+  metadata: z.object({ hint: z.string().max(40).optional() }).optional()
 });
 export const runEventsQuerySchema = z.object({
   afterSequence: z.coerce.number().int().min(0).optional()

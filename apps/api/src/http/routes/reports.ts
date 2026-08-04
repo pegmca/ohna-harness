@@ -1,18 +1,14 @@
 import type { IdentitySnapshot } from "@aiagent/identity";
-import { renderResearchReportPdf } from "@aiagent/report";
+import { publishArtifactPdf, renderResearchReportPdf } from "@aiagent/report";
 import type { ArtifactRepository, ArtifactStorage, WorkflowRepository } from "@aiagent/report";
-import type { ApprovalRepository } from "@aiagent/database";
 import type { ApiResult, ReportArtifactDto, ReportWorkflowResponseDto } from "@aiagent/types";
 import type { FastifyInstance } from "fastify";
-import { publishArtifactPdf } from "../../application/artifact-service.js";
 import { createRequestId, fail, toApiError } from "../errors.js";
-import { requestUserId } from "../hooks/auth.js";
 
 export interface ReportRoutesDeps {
   workflowRepository: WorkflowRepository;
   artifactRepository: ArtifactRepository;
   artifactStorage: ArtifactStorage;
-  approvalRepository: ApprovalRepository;
   identityByRequest: WeakMap<object, IdentitySnapshot>;
 }
 
@@ -20,10 +16,10 @@ export interface ReportRoutesDeps {
  * 注册 report workflow 快照与 artifact 预览、PDF 导出、下载和软删除路由。
  *
  * @param app Fastify 实例。
- * @param deps workflow/artifact repository、artifact 存储、审批 repository 与共享 identity 映射。
+ * @param deps workflow/artifact repository、artifact 存储与共享 identity 映射。
  */
 export function registerReportRoutes(app: FastifyInstance, deps: ReportRoutesDeps): void {
-  const { workflowRepository, artifactRepository, artifactStorage, approvalRepository, identityByRequest } = deps;
+  const { workflowRepository, artifactRepository, artifactStorage, identityByRequest } = deps;
 
   /** 按服务端身份读取持久化 workflow 快照。 */
   app.get<{ Params: { runId: string } }>("/api/report-workflows/:runId", async (request, reply): Promise<ApiResult<ReportWorkflowResponseDto>> => {
@@ -51,7 +47,7 @@ export function registerReportRoutes(app: FastifyInstance, deps: ReportRoutesDep
     return { ok: true, data: value.artifact, requestId };
   });
 
-  /** 审批后生成真实 PDF；只按 artifact ID 访问持久化对象，不接受客户端文件路径。 */
+  /** 重新发布真实 PDF；approval 门删除后直接执行发布 saga（幂等：已 pdf_ready 直接复用）。 */
   app.post<{ Params: { artifactId: string } }>("/api/report-artifacts/:artifactId/pdf", async (request, reply): Promise<ApiResult<ReportArtifactDto>> => {
     const requestId = createRequestId();
     const identity = identityByRequest.get(request);
@@ -61,13 +57,6 @@ export function registerReportRoutes(app: FastifyInstance, deps: ReportRoutesDep
       return fail(toApiError("not_found", "Report artifact 不存在。", requestId), requestId);
     }
     const artifact = record.artifact;
-    const approvalId = `approval_${artifact.workflowRunId}_pdf_exporter`;
-    // 导出 gate 只认当前用户、同一 Agent Run 下已批准且未过期的持久化决定；过期 pending 由 repository 原子转为 expired。
-    const approved = await approvalRepository.findApprovedDecision(requestUserId(identityByRequest, request), record.agentRunId, approvalId);
-    if (!approved) {
-      reply.code(403);
-      return fail(toApiError("forbidden", "PDF 导出需要先批准对应 workflow 的 exporter。", requestId, { approvalId }), requestId);
-    }
     const published = await publishArtifactPdf(
       record,
       artifactRepository,
@@ -104,7 +93,7 @@ export function registerReportRoutes(app: FastifyInstance, deps: ReportRoutesDep
     try {
       const bytes = await artifactStorage.readPdf(record.storageKey);
       reply.header("content-type", "application/pdf");
-      reply.header("content-disposition", `attachment; filename="${sanitizeDownloadFileName(artifact.pdfExport.fileName ?? `${artifact.artifactId}.pdf`)}"`);
+      reply.header("content-disposition", createDownloadContentDisposition(artifact.pdfExport.fileName ?? `${artifact.artifactId}.pdf`));
       return reply.send(Buffer.from(bytes));
     } catch {
       reply.code(500);
@@ -133,4 +122,16 @@ export function registerReportRoutes(app: FastifyInstance, deps: ReportRoutesDep
 /** @param fileName artifact 中的展示文件名。 @returns 不含控制字符和路径分隔符的下载名。 */
 function sanitizeDownloadFileName(fileName: string): string {
   return fileName.replace(/[\\/\r\n"\x00-\x1F]/g, "_").slice(0, 120) || "immersive-report.pdf";
+}
+
+/**
+ * 构造 content-disposition：HTTP header 只能放 Latin-1，中文标题需 ASCII 回退名 + RFC 5987 UTF-8 扩展名。
+ *
+ * @param fileName artifact 中的展示文件名（可含中文）。
+ * @returns 合法的 content-disposition 值。
+ */
+function createDownloadContentDisposition(fileName: string): string {
+  const safe = sanitizeDownloadFileName(fileName);
+  const asciiFallback = safe.replace(/[^\x20-\x7E]/g, "_") || "immersive-report.pdf";
+  return `attachment; filename="${asciiFallback}"; filename*=UTF-8''${encodeURIComponent(safe)}`;
 }

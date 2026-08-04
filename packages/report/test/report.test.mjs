@@ -3,7 +3,6 @@ import { test } from "node:test";
 import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createInMemoryTraceRecorder } from "@aiagent/trace";
 import {
   createReportPackageSummary,
   assertStorageKey,
@@ -77,13 +76,12 @@ test("report workflow nodes declare input and output schemas", () => {
 });
 
 test("report workflow executes a ready plan to completed PDF export boundary", async () => {
-  const trace = createInMemoryTraceRecorder("trace_report_workflow_happy");
+  const events = [];
   const runId = "report_wf_test_happy";
   const result = await runReportWorkflow(createReadyPlan(), {
     runId,
-    trace,
-    documents: [createDemoDocument()],
-    approvalDecisions: [approvePdfExport(runId)]
+    sink: (event) => { events.push(event); },
+    documents: [createDemoDocument()]
   });
 
   assert.equal(result.ok, true);
@@ -92,8 +90,9 @@ test("report workflow executes a ready plan to completed PDF export boundary", a
   assert.match(result.draft.markdown, /000001\.SZ/);
   assert.equal(result.export.status, "completed");
   assert.equal(result.run.nodes.every((node) => node.status === "succeeded"), true);
-  assert.equal(trace.getEvents().filter((event) => event.type === "workflow_node").length, 12);
-  assert.equal(trace.getEvents().some((event) => event.type === "approval" && event.status === "approved"), true);
+  assert.equal(events.filter((event) => event.type === "workflow_node").length, 12);
+  // approval 门删除后 pdf_exporter 直接执行，占位事件名保持 pdf_export。
+  assert.equal(events.some((event) => event.type === "pdf_export" && event.payload.status === "not_implemented"), true);
 });
 
 test("PDF renderer returns a legal multi-section artifact with citations", () => {
@@ -106,7 +105,7 @@ test("PDF renderer returns a legal multi-section artifact with citations", () =>
 });
 
 test("report workflow triggers supplementary retrieval when citations are missing", async () => {
-  const trace = createInMemoryTraceRecorder("trace_report_workflow_retry");
+  const events = [];
   const runId = "report_wf_test_retry";
   const result = await runReportWorkflow(
     {
@@ -116,10 +115,9 @@ test("report workflow triggers supplementary retrieval when citations are missin
     },
     {
       runId,
-      trace,
+      sink: (event) => { events.push(event); },
       documents: [],
-      maxRetries: 2,
-      approvalDecisions: [approvePdfExport(runId)]
+      maxRetries: 2
     }
   );
 
@@ -127,12 +125,10 @@ test("report workflow triggers supplementary retrieval when citations are missin
   assert.match(result.draft.markdown, /资料不足|不足以判断/);
   assert.ok(result.state.verifierRetryCount > 0);
 
-  const verifierEvents = trace
-    .getEvents()
-    .filter((event) => event.type === "citation_verifier");
+  const verifierEvents = events.filter((event) => event.type === "citation_verifier");
   assert.ok(verifierEvents.length > 0);
 
-  const lastVerifierEvent = verifierEvents[verifierEvents.length - 1];
+  const lastVerifierEvent = verifierEvents[verifierEvents.length - 1].payload;
   assert.ok(lastVerifierEvent.retryCount <= 2);
   assert.equal(lastVerifierEvent.decision, "fail");
 });
@@ -146,35 +142,18 @@ test("report workflow returns max step structured failure", async () => {
   assert.equal(result.run.nodes[3].status, "failed");
 });
 
-test("report workflow pauses and rejects PDF export without executing sensitive action", async () => {
-  const runId = "report_wf_test_approval";
-  const paused = await runReportWorkflow(createReadyPlan(), {
+test("report workflow exports PDF directly without approval gate", async () => {
+  // approval 体系删除后：不再出现 paused/rejected 分支，pdf_exporter 节点直接执行。
+  const runId = "report_wf_test_no_approval";
+  const result = await runReportWorkflow(createReadyPlan(), {
     runId,
     documents: [createDemoDocument()]
   });
 
-  assert.equal(paused.ok, false);
-  assert.equal(paused.run.status, "paused");
-  assert.equal(paused.error.code, "approval_required");
-  assert.equal(paused.approvalRequest.approvalId, `approval_${runId}_pdf_exporter`);
-  assert.equal(paused.run.nodes[5].status, "paused");
-
-  const rejected = await runReportWorkflow(createReadyPlan(), {
-    runId,
-    documents: [createDemoDocument()],
-    approvalDecisions: [
-      {
-        approvalId: `approval_${runId}_pdf_exporter`,
-        decision: "rejected",
-        reviewerNote: "demo reject"
-      }
-    ]
-  });
-
-  assert.equal(rejected.ok, false);
-  assert.equal(rejected.run.status, "rejected");
-  assert.equal(rejected.error.code, "approval_rejected");
-  assert.equal(rejected.state.export, undefined);
+  assert.equal(result.ok, true);
+  assert.equal(result.run.status, "succeeded");
+  assert.equal(result.run.nodes[5].status, "succeeded");
+  assert.equal(result.export.fileName.endsWith(".pdf"), true);
 });
 
 test("report workflow rejects plans without subject as structured invalid workflow", async () => {
@@ -208,8 +187,7 @@ test("report workflow risk review asks for more evidence when risk disclosure is
           content: "# 经营情况\n公司营业收入保持稳定增长。"
         }
       ],
-      maxRetries: 1,
-      approvalDecisions: [approvePdfExport(runId)]
+      maxRetries: 1
     }
   );
 
@@ -228,7 +206,7 @@ test("report workflow degrades to an explicitly partial report when non-critical
     search: async () => ({ ok: false, error: { code: "retrieval_failed", message: "market source temporarily unavailable" } }),
     answer: async () => ({ ok: false, error: { code: "answer_failed", message: "unavailable" } })
   };
-  const result = await runReportWorkflow(createReadyPlan(), { runId, dataSourceRuntime: unavailableRuntime, maxRetries: 0, approvalDecisions: [approvePdfExport(runId)] });
+  const result = await runReportWorkflow(createReadyPlan(), { runId, dataSourceRuntime: unavailableRuntime, maxRetries: 0 });
   assert.equal(result.ok, true); assert.equal(result.run.partial, true); assert.equal(result.state.collectedData.partial, true); assert.ok(result.state.collectedData.sourceErrors.length > 0); assert.match(result.draft.markdown, /资料不足|无法基于/);
 });
 
@@ -253,14 +231,6 @@ function createReadyPlan() {
         optional: false
       }
     ]
-  };
-}
-
-function approvePdfExport(runId) {
-  return {
-    approvalId: `approval_${runId}_pdf_exporter`,
-    decision: "approved",
-    reviewerNote: "test approval"
   };
 }
 

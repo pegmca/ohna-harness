@@ -1,12 +1,11 @@
 import type { IdentityService, IdentitySnapshot } from "@aiagent/identity";
 import type { ConversationRepository, MessageStore } from "@aiagent/conversation";
 import type { DataSourceRuntime } from "@aiagent/rag";
-import { createLocalArtifactStorage } from "@aiagent/report";
+import { createLocalArtifactStorage, createReportTool } from "@aiagent/report";
 import type { ArtifactRepository, ArtifactStorage, WorkflowRepository } from "@aiagent/report";
 import type { TraceStore } from "@aiagent/trace";
 import type { AgentTool } from "@aiagent/agent";
 import { createDefaultToolRegistry } from "@aiagent/tools";
-import type { ApprovalRepository } from "@aiagent/database";
 import type { IdentityMeDto } from "@aiagent/types";
 import type { AttachmentRepository } from "@aiagent/database";
 import type { CitationRepository } from "@aiagent/rag";
@@ -66,8 +65,6 @@ export interface ApiServerOptions {
   /** 旧 trace 查询路由的可选事实源；run 主路径不再写 trace 表（阶段 6 收敛）。 */
   traceStore?: TraceStore;
   staleRunThresholdMs?: number;
-  /** report 路由仍依赖旧 approval 表查询 PDF 导出决定（阶段 5/6 收敛）。 */
-  approvalRepository: ApprovalRepository;
 }
 
 declare module "fastify" {
@@ -122,7 +119,19 @@ export function createApiServer(options: ApiServerOptions): FastifyInstance {
     dataSourceRuntime,
     attachmentRepository: options.attachmentRepository,
     citationRepository: options.citationRepository,
-    compaction: options.compaction
+    compaction: options.compaction,
+    // report 工具按 run 装配（阶段 5 方案 A）：模型自主调用 generate_report，
+    // 事件经 recordEvent 落 run_events_v2 + SSE，PDF 在工具内直接发布（无 approval 门）。
+    reportToolFactory: ({ recordEvent, userId, conversationId, runId }) => createReportTool({
+      dataSourceRuntime,
+      workflowRepository,
+      artifactRepository,
+      artifactStorage,
+      ownerUserId: userId,
+      conversationId,
+      agentRunId: runId,
+      sink: async (event) => recordEvent(event.type, event.payload)
+    })
   });
   const identityService = options.identityService;
   app.decorate("aiagentRunService", runService);
@@ -176,7 +185,6 @@ export function createApiServer(options: ApiServerOptions): FastifyInstance {
     workflowRepository,
     artifactRepository,
     artifactStorage,
-    approvalRepository: options.approvalRepository,
     identityByRequest
   });
   registerProductRoutes(app);

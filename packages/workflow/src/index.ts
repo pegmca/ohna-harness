@@ -1,7 +1,4 @@
-import type { TraceRecorder } from "@aiagent/trace";
 import type {
-  ToolApprovalDecisionDto,
-  ToolApprovalRequestDto,
   WorkflowEdgeDto,
   WorkflowErrorDto,
   WorkflowEventDto,
@@ -12,12 +9,29 @@ import type { z } from "zod";
 
 export type WorkflowState = Record<string, unknown>;
 
+/**
+ * 节点事件出口（pi 化阶段 5）：approval/TraceRecorder 体系删除后，workflow 观测事件
+ * 统一经 sink 流向调用方（report 工具转接到 run_events），payload 形状保持原 trace 事件本体。
+ */
+export interface WorkflowNodeEvent {
+  /** 事件名：runtime 发 "workflow_node"；节点内可发自有事件（如 "pdf_export"、"citation_verifier"）。 */
+  type: string;
+  /** 事件载荷：与原 trace 事件本体同形状（不含 traceId/requestId，归属由调用方信封提供）。 */
+  payload: Record<string, unknown>;
+}
+
+/**
+ * workflow 事件 sink；实现可以是同步或异步，runtime 一律 await 并吞掉异常（旁路观测不影响主流程）。
+ */
+export type WorkflowEventSink = (event: WorkflowNodeEvent) => void | Promise<void>;
+
 export interface WorkflowNodeExecutionContext<TState extends WorkflowState> {
   runId: string;
   nodeId: string;
   nodeType: string;
   state: TState;
-  trace?: TraceRecorder;
+  /** 节点自有事件出口（如 pdf-exporter 的 pdf_export 占位事件）。 */
+  sink?: WorkflowEventSink;
   executedSteps: number;
   signal?: AbortSignal;
   deadlineAtMs?: number;
@@ -46,17 +60,6 @@ export interface WorkflowNodeDefinition<TInput, TOutput, TState extends Workflow
    * @returns 未信任的节点输入。
    */
   buildInput(state: TState): unknown;
-  /**
-   * 在节点执行前生成审批请求；runtime 会先检查 approval decision，未批准则暂停或拒绝。
-   *
-   * @param state 当前 workflow state。
-   * @param context 当前节点执行上下文。
-   * @returns 审批请求；没有敏感动作时返回 undefined。
-   */
-  createApprovalRequest?(
-    state: TState,
-    context: WorkflowNodeExecutionContext<TState>
-  ): ToolApprovalRequestDto | undefined;
   /**
    * 执行节点逻辑。节点可以抛错，runtime 会统一转成结构化 WorkflowError。
    *
@@ -94,8 +97,8 @@ export interface RunSequentialWorkflowInput<TState extends WorkflowState> {
   initialState: TState;
   nodes: readonly AnyWorkflowNodeDefinition<TState>[];
   maxSteps?: number;
-  trace?: TraceRecorder;
-  approvalDecisions?: ToolApprovalDecisionDto[];
+  /** 节点观测事件出口；runtime 的 workflow_node 事件与节点自有事件都经此发出。 */
+  sink?: WorkflowEventSink;
   deadlineMs?: number;
   deadlineAtMs?: number;
   signal?: AbortSignal;
@@ -114,7 +117,6 @@ export type WorkflowRunResult<TState extends WorkflowState = WorkflowState> =
       run: WorkflowRunDto;
       state: TState;
       error: WorkflowErrorDto;
-      approvalRequest?: ToolApprovalRequestDto;
     };
 
 export interface WorkflowPackageSummary {
@@ -139,7 +141,7 @@ export function createWorkflowPackageSummary(): WorkflowPackageSummary {
 }
 
 /**
- * 执行第一版顺序 workflow runtime，提供 schema 校验、max steps、状态流转和 trace 写入。
+ * 执行第一版顺序 workflow runtime，提供 schema 校验、max steps、状态流转和节点事件 sink 上报。
  *
  * @template TState workflow state 类型。
  * @param input workflow 定义、初始 state 和执行选项。
@@ -195,7 +197,7 @@ export async function runSequentialWorkflow<TState extends WorkflowState>(
     if (terminationError) {
       nodes[nodeIndex] = failPendingNode(nodes[nodeIndex], terminationError);
       events.push(createWorkflowEvent("workflow_failed", definition.nodeId, { terminationReason: terminationError.code }, terminationError));
-      recordWorkflowTrace(input.trace, runId, definition, nodes[nodeIndex], "failed", terminationError);
+      await emitWorkflowNodeEvent(input.sink, runId, definition, nodes[nodeIndex], "failed", terminationError);
       return { ok: false, state, error: terminationError, run: buildRunDto({ runId, workflowName: input.workflowName, status: "failed", startedAt, startedAtMs, maxSteps, executedSteps, nodes, edges, events, error: terminationError, recovery }) };
     }
     const budgetError = ensureStepBudget(executedSteps, maxSteps, definition.nodeId);
@@ -203,7 +205,7 @@ export async function runSequentialWorkflow<TState extends WorkflowState>(
     if (budgetError) {
       nodes[nodeIndex] = failPendingNode(nodes[nodeIndex], budgetError);
       events.push(createWorkflowEvent("workflow_failed", definition.nodeId, { maxSteps, executedSteps }, budgetError));
-      recordWorkflowTrace(input.trace, runId, definition, nodes[nodeIndex], "failed", budgetError);
+      await emitWorkflowNodeEvent(input.sink, runId, definition, nodes[nodeIndex], "failed", budgetError);
       return {
         ok: false,
         state,
@@ -226,97 +228,6 @@ export async function runSequentialWorkflow<TState extends WorkflowState>(
 
     const nodeStartedAtMs = performance.now();
     const nodeStartedAt = new Date().toISOString();
-    const approvalRequest = definition.createApprovalRequest?.(state, {
-      runId,
-      nodeId: definition.nodeId,
-      nodeType: definition.type,
-      state,
-      trace: input.trace,
-      executedSteps
-      , signal: input.signal, deadlineAtMs
-    });
-
-    if (approvalRequest) {
-      const approvalDecision = input.approvalDecisions?.find((decision) => decision.approvalId === approvalRequest.approvalId);
-
-      if (approvalDecision?.decision === "rejected") {
-        const error: WorkflowErrorDto = {
-          code: "approval_rejected",
-          message: `Workflow node rejected by reviewer: ${definition.nodeId}`,
-          nodeId: definition.nodeId,
-          details: {
-            approvalId: approvalRequest.approvalId,
-            reviewerNote: approvalDecision.reviewerNote
-          }
-        };
-        nodes[nodeIndex] = markNodeWithApproval(nodes[nodeIndex], "rejected", nodeStartedAt, nodeStartedAtMs, approvalRequest, error);
-        events.push(createWorkflowEvent("node_rejected", definition.nodeId, { approvalRequest }, error));
-        events.push(createWorkflowEvent("workflow_rejected", definition.nodeId, { approvalRequest }, error));
-        recordApprovalTrace(input.trace, approvalRequest, "rejected", approvalDecision.reviewerNote);
-        recordWorkflowTrace(input.trace, runId, definition, nodes[nodeIndex], "rejected", error);
-        return {
-          ok: false,
-          state,
-          error,
-          approvalRequest,
-          run: buildRunDto({
-            runId,
-            workflowName: input.workflowName,
-            status: "rejected",
-            startedAt,
-            startedAtMs,
-            maxSteps,
-            executedSteps,
-            nodes,
-            edges,
-            events,
-            approvalRequest,
-            error
-          })
-        };
-      }
-
-      if (approvalDecision?.decision !== "approved") {
-        const error: WorkflowErrorDto = {
-          code: "approval_required",
-          message: `Workflow paused before sensitive node: ${definition.nodeId}`,
-          nodeId: definition.nodeId,
-          details: {
-            approvalId: approvalRequest.approvalId,
-            permissionLevel: approvalRequest.permissionLevel
-          }
-        };
-        nodes[nodeIndex] = markNodeWithApproval(nodes[nodeIndex], "paused", nodeStartedAt, nodeStartedAtMs, approvalRequest, error);
-        events.push(createWorkflowEvent("node_paused", definition.nodeId, { approvalRequest }, error));
-        events.push(createWorkflowEvent("workflow_paused", definition.nodeId, { approvalRequest }, error));
-        recordApprovalTrace(input.trace, approvalRequest, "requested");
-        recordWorkflowTrace(input.trace, runId, definition, nodes[nodeIndex], "paused", error);
-        return {
-          ok: false,
-          state,
-          error,
-          approvalRequest,
-          run: buildRunDto({
-            runId,
-            workflowName: input.workflowName,
-            status: "paused",
-            startedAt,
-            startedAtMs,
-            maxSteps,
-            executedSteps,
-            nodes,
-            edges,
-            events,
-            approvalRequest,
-            error
-          })
-        };
-      }
-
-      events.push(createWorkflowEvent("node_approved", definition.nodeId, { approvalRequest }));
-      events.push(createWorkflowEvent("workflow_approved", definition.nodeId, { approvalRequest }));
-      recordApprovalTrace(input.trace, approvalRequest, "approved", approvalDecision.reviewerNote);
-    }
 
     const rawInput = definition.buildInput(state);
     const parsedInput = definition.inputSchema.safeParse(rawInput);
@@ -335,7 +246,7 @@ export async function runSequentialWorkflow<TState extends WorkflowState>(
       nodes[nodeIndex] = failRunningNode(nodes[nodeIndex], nodeStartedAt, nodeStartedAtMs, error);
       events.push(createWorkflowEvent("node_started", definition.nodeId, { nodeType: definition.type }));
       events.push(createWorkflowEvent("node_failed", definition.nodeId, undefined, error));
-      recordWorkflowTrace(input.trace, runId, definition, nodes[nodeIndex], "failed", error);
+      await emitWorkflowNodeEvent(input.sink, runId, definition, nodes[nodeIndex], "failed", error);
       return {
         ok: false,
         state,
@@ -375,14 +286,14 @@ export async function runSequentialWorkflow<TState extends WorkflowState>(
           inputSummary,
           attempt
         }));
-        recordWorkflowTrace(input.trace, runId, definition, nodes[nodeIndex], "running");
+        await emitWorkflowNodeEvent(input.sink, runId, definition, nodes[nodeIndex], "running");
         try {
           rawOutput = await executeWorkflowNode(definition, parsedInput.data, {
         runId,
         nodeId: definition.nodeId,
         nodeType: definition.type,
         state,
-        trace: input.trace,
+        sink: input.sink,
         executedSteps, signal: input.signal, deadlineAtMs
       }, policy.timeoutMs, deadlineAtMs, now);
           break;
@@ -415,7 +326,7 @@ export async function runSequentialWorkflow<TState extends WorkflowState>(
         };
         nodes[nodeIndex] = failRunningNode(nodes[nodeIndex], nodeStartedAt, nodeStartedAtMs, error);
         events.push(createWorkflowEvent("node_failed", definition.nodeId, undefined, error));
-        recordWorkflowTrace(input.trace, runId, definition, nodes[nodeIndex], "failed", error);
+        await emitWorkflowNodeEvent(input.sink, runId, definition, nodes[nodeIndex], "failed", error);
         return {
           ok: false,
           state,
@@ -446,14 +357,14 @@ export async function runSequentialWorkflow<TState extends WorkflowState>(
         outputSummary
       };
       events.push(createWorkflowEvent("node_succeeded", definition.nodeId, { outputSummary }));
-      recordWorkflowTrace(input.trace, runId, definition, nodes[nodeIndex], "succeeded");
+      await emitWorkflowNodeEvent(input.sink, runId, definition, nodes[nodeIndex], "succeeded");
 
       const nextNodeId = definition.decideNext?.(parsedOutput.data, {
         runId,
         nodeId: definition.nodeId,
         nodeType: definition.type,
         state,
-        trace: input.trace,
+        sink: input.sink,
         executedSteps
       });
 
@@ -480,13 +391,13 @@ export async function runSequentialWorkflow<TState extends WorkflowState>(
         nodes[nodeIndex] = { ...failRunningNode(nodes[nodeIndex], nodeStartedAt, nodeStartedAtMs, error), status: "skipped" };
         recovery.push({ nodeId: definition.nodeId, action: recoveryAction === "skip" ? "skipped" : "partial", attempts: getWorkflowAttempts(caught), reason: error.message });
         events.push(createWorkflowEvent("node_failed", definition.nodeId, { recoveryAction }, error));
-        recordWorkflowTrace(input.trace, runId, definition, nodes[nodeIndex], "failed", error);
+        await emitWorkflowNodeEvent(input.sink, runId, definition, nodes[nodeIndex], "failed", error);
         nodeIndex += 1;
         continue;
       }
       nodes[nodeIndex] = failRunningNode(nodes[nodeIndex], nodeStartedAt, nodeStartedAtMs, error);
       events.push(createWorkflowEvent("node_failed", definition.nodeId, undefined, error));
-      recordWorkflowTrace(input.trace, runId, definition, nodes[nodeIndex], "failed", error);
+      await emitWorkflowNodeEvent(input.sink, runId, definition, nodes[nodeIndex], "failed", error);
       return {
         ok: false,
         state,
@@ -646,117 +557,46 @@ function failRunningNode(
 }
 
 /**
- * 构造带审批状态的节点 DTO，暂停/拒绝时保留 approval request 摘要。
+ * 经 sink 发出 workflow_node 事件，payload 与原 trace 事件本体同形状；
+ * sink 是旁路观测能力，失败不影响 workflow 执行结果。
  *
- * @param node 原节点 DTO。
- * @param status 审批相关节点状态。
- * @param startedAt 节点开始时间。
- * @param startedAtMs performance 起始时间。
- * @param approvalRequest 审批请求。
- * @param error 结构化审批错误。
- * @returns paused/rejected node DTO。
- */
-function markNodeWithApproval(
-  node: WorkflowNodeDto,
-  status: "paused" | "rejected",
-  startedAt: string,
-  startedAtMs: number,
-  approvalRequest: ToolApprovalRequestDto,
-  error: WorkflowErrorDto
-): WorkflowNodeDto {
-  return {
-    ...node,
-    status,
-    startedAt,
-    completedAt: new Date().toISOString(),
-    durationMs: elapsedMs(startedAtMs),
-    inputSummary: {
-      approvalId: approvalRequest.approvalId,
-      toolName: approvalRequest.toolName,
-      permissionLevel: approvalRequest.permissionLevel,
-      inputPreview: approvalRequest.inputPreview
-    },
-    error
-  };
-}
-
-/**
- * 写入 workflow 级 approval trace event；审批事件只包含 preview，不记录完整敏感 payload。
- *
- * @param trace trace recorder。
- * @param request 审批请求。
- * @param status 审批状态。
- * @param reviewerNote reviewer 说明。
- */
-function recordApprovalTrace(
-  trace: TraceRecorder | undefined,
-  request: ToolApprovalRequestDto,
-  status: "requested" | "approved" | "rejected",
-  reviewerNote?: string
-): void {
-  if (!trace) {
-    return;
-  }
-
-  try {
-    trace.record({
-      type: "approval",
-      id: `${trace.traceId}_${request.approvalId}_${status}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
-      traceId: trace.traceId,
-      requestId: trace.requestId,
-      approvalId: request.approvalId,
-      toolName: request.toolName,
-      status,
-      reason: request.reason,
-      inputPreview: request.inputPreview,
-      reviewerNote,
-      createdAt: new Date().toISOString()
-    });
-  } catch {
-    // trace 是旁路观测能力，不能影响 workflow 权限边界。
-  }
-}
-
-/**
- * 写入 workflow node trace event，trace 失败不影响 workflow 主流程。
- *
- * @param trace trace recorder。
+ * @param sink 事件出口。
  * @param runId workflow run id。
  * @param definition 节点定义。
  * @param node 当前节点 DTO。
- * @param status trace 状态。
+ * @param status 节点状态。
  * @param error 可选错误。
+ * @returns sink 完成 Promise。
  */
-function recordWorkflowTrace(
-  trace: TraceRecorder | undefined,
+async function emitWorkflowNodeEvent(
+  sink: WorkflowEventSink | undefined,
   runId: string,
   definition: AnyWorkflowNodeDefinition<WorkflowState>,
   node: WorkflowNodeDto,
   status: WorkflowNodeDto["status"],
   error?: WorkflowErrorDto
-): void {
-  if (!trace) {
+): Promise<void> {
+  if (!sink) {
     return;
   }
 
   try {
-    trace.record({
+    await sink({
       type: "workflow_node",
-      id: `${trace.traceId}_${runId}_${definition.nodeId}_${status}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
-      traceId: trace.traceId,
-      requestId: trace.requestId,
-      workflowRunId: runId,
-      nodeId: definition.nodeId,
-      nodeType: definition.type,
-      status,
-      durationMs: node.durationMs,
-      inputSummary: node.inputSummary,
-      outputSummary: node.outputSummary,
-      error,
-      createdAt: new Date().toISOString()
+      payload: {
+        workflowRunId: runId,
+        nodeId: definition.nodeId,
+        nodeType: definition.type,
+        status,
+        durationMs: node.durationMs,
+        inputSummary: node.inputSummary,
+        outputSummary: node.outputSummary,
+        error,
+        createdAt: new Date().toISOString()
+      }
     });
   } catch {
-    // trace 是旁路观测能力，不能影响 workflow 执行结果。
+    // sink 是旁路观测能力，不能影响 workflow 执行结果。
   }
 }
 
@@ -870,7 +710,6 @@ function buildRunDto(input: {
   nodes: WorkflowNodeDto[];
   edges: WorkflowEdgeDto[];
   events: WorkflowEventDto[];
-  approvalRequest?: ToolApprovalRequestDto;
   error?: WorkflowErrorDto;
   partial?: boolean;
   recovery?: WorkflowRunDto["recovery"];
@@ -887,7 +726,6 @@ function buildRunDto(input: {
     nodes: input.nodes,
     edges: input.edges,
     events: input.events,
-    approvalRequest: input.approvalRequest,
     error: input.error,
     partial: input.partial,
     recovery: input.recovery

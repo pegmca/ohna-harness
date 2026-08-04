@@ -14,10 +14,9 @@
   "scripts": {
     "build": "tsc -b",
     "test": "pnpm build && node --test test/*.test.mjs",
-    "typecheck": "pnpm --filter @aiagent/types build && pnpm --filter @aiagent/trace build && tsc -p tsconfig.json --pretty false --noEmit"
+    "typecheck": "pnpm --filter @aiagent/types build && tsc -p tsconfig.json --pretty false --noEmit"
   },
   "dependencies": {
-    "@aiagent/trace": "workspace:^",
     "@aiagent/types": "workspace:^",
     "zod": "^4.4.3"
   }

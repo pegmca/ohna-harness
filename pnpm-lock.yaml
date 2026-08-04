@@ -295,9 +295,9 @@ importers:
       '@aiagent/rag':
         specifier: workspace:^
         version: link:../rag
-      '@aiagent/trace':
+      '@aiagent/tools':
         specifier: workspace:^
-        version: link:../trace
+        version: link:../tools
       '@aiagent/types':
         specifier: workspace:^
         version: link:../types
@@ -335,9 +335,6 @@ importers:
 
   packages/workflow:
     dependencies:
-      '@aiagent/trace':
-        specifier: workspace:^
-        version: link:../trace
       '@aiagent/types':
         specifier: workspace:^
         version: link:../types

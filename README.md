@@ -75,7 +75,7 @@ Immersive Playground 已演进为带实时执行过程的研究 Workbench：
 
 - 页面采用 Agent Chat 布局：左侧持久化会话列表，中间历史时间线与 live Run，底部 composer，顶部提供 Report Mode 开关和生成研报按钮。当前会话写入 `?conversation=<id>`，刷新后恢复选择。
 - 会话 API 提供创建、稳定游标分页、终态消息读取、改标题与归档。所有 route 从 HttpOnly session 取得 `userId`，不存在与越权统一返回 `not_found`。
-- 每次提交先调用 `POST /api/runs` 获得 `runId`，请求字段为 `message`、`conversationId`、稳定的 `clientMessageId`、`mode: auto | report` 和 `source: composer | report_button`；网络重试复用同一个 client ID，再订阅 `GET /api/runs/:runId/events`。
+- 每次提交先调用 `POST /api/runs` 获得 `runId`，请求字段为 `message`、`conversationId`、稳定的 `clientMessageId`、`mode: auto | report` 和 `source: composer | report_button`；Report Mode 开关/研报按钮额外带 `metadata: { hint: "report" }`（只做 system prompt 约束，不落库），研报由模型自主调用 `generate_report` 工具完成；网络重试复用同一个 client ID，再订阅 `GET /api/runs/:runId/events`。
 - `GET /api/runs/:runId` 提供 PostgreSQL 可恢复快照，`DELETE /api/runs/:runId` 取消尚未结束的运行。SSE 支持 `Last-Event-ID` 或 `afterSequence` 持久回放；最终回答作为终态事件一次提交。
 - run state、工具调用和 trace 以“分类过程入口 → 最终答案”的顺序归属于对应 assistant 消息；Summary、Steps、Tools、Trace、Report 与 Approvals 分别打开右侧对应类型，不混排全部详情。历史消息通过 `runId` 恢复 PostgreSQL Run 快照，刷新后仍可查看。桌面端压缩主区，移动端覆盖显示，不设置常驻调试侧栏。
 - 行情工具返回稳定的 60 根 mock OHLCV，详情面板使用 A 股红涨绿跌 K 线；图表按 lightweight-charts 要求保留 TradingView attribution。
@@ -410,7 +410,7 @@ Week 2-014 完成 RAG eval 闭环：30 条 QA case、eval runner、四个指标�
 
 ## Agent Loop
 
-`packages/agent` 现在导出最小 Agent API：`createAgent(config)`、`runAgent(request, config)`、`createIntentRouter()`、`routeIntent()`、`createReportActivation()`、`createReportPlan()` 和 `isNaturalLanguageReportRequest()`。核心公开类型包括 `AgentRequest`、`AgentResponse`、`AgentIntent`、`AgentStep`、`AgentError` 和 `AgentRoute`。
+`packages/agent` 现在导出 pi 形态的 `agentLoop` / `agentLoopContinue` 与 hook 体系（详见 ``）；早期版本的 `createAgent()`、Intent Router 与 report planner 特例路径已在 pi 化改造中删除，report 由 `generate_report` 工具承接（见 ``）。
 
 Intent Router 第一版采用可审查规则优先：
 
@@ -443,7 +443,7 @@ pnpm --filter @aiagent/tools test
 Week 3-016 新增两个 package：
 
 - `@aiagent/workflow`：通用节点执行器。每个节点必须声明 `inputSchema` 和 `outputSchema`，runtime 在节点执行前后用 zod 校验，节点异常、输入错误、输出错误和 max steps 超限都会转换成 `WorkflowErrorDto`。Week 3-017 为其增加 `decideNext` 能力，支持节点执行成功后跳转到指定节点，从而实现 verifier loop 等有限循环。Week 3-018 增加 `createApprovalRequest()`，敏感节点未批准前返回 `paused`，拒绝后返回 `rejected`。
-- `@aiagent/report`：研报领域 workflow 节点实现。`runReportWorkflow(plan, options)` 从 `ReportPlanDto` 创建 workflow run，依次执行 Data Collector、Analyzer、Risk Checker、Citation Verifier、Report Writer 和 PDF Exporter；`renderResearchReportPdf()` 生成合法 PDF 二进制。导出是敏感动作，API 在审批通过后才允许生成。
+- `@aiagent/report`：研报领域 workflow 节点实现。`runReportWorkflow(plan, options)` 从 `ReportPlanDto` 创建 workflow run，依次执行 Data Collector、Analyzer、Risk Checker、Citation Verifier、Report Writer 和 PDF Exporter；`renderResearchReportPdf()` 生成合法 PDF 二进制。pi 化阶段 5 起 report 降级为 loop 工具 `generate_report`（`createReportTool()`），模型自主触发，节点事件经 sink 写入 run_events（`workflow_node`/`pdf_export` 事件名不变）；approval 体系删除后 PDF 由工具内 `publishArtifactPdf` saga 直接发布，不再有人工审批门。
 
 Workflow DTO 放在 `packages/types`：`WorkflowRunDto`、`WorkflowNodeDto`、`WorkflowNodeStatusDto`、`WorkflowEdgeDto`、`WorkflowEventDto`、`WorkflowErrorDto`、`ToolApprovalRequestDto` 和 `ToolApprovalDecisionDto`。Workflow、节点 attempt 与 Artifact metadata/预览由 PostgreSQL 持久化；PDF bytes 经 `ArtifactStorage` 原子写入专用目录。Approval queue 仍属于后续独立持久化任务。
 

@@ -1,10 +1,10 @@
 import type {
   ApiResult,
-  AgentRunSnapshotDto,
   ConversationDto,
-  ConversationMessageDto,
   CreateConversationRequestDto,
   CursorPageDto,
+  LinearMessageDto,
+  RunSnapshotDtoV2,
   UpdateConversationRequestDto
 } from "@aiagent/types";
 import { parseApiResult } from "./http-client";
@@ -30,12 +30,12 @@ export async function createConversation(
   }));
 }
 
-/** @param conversationId 会话 ID。 @param cursor 可选游标。 @param signal 取消信号。 @returns 消息页。 */
+/** @param conversationId 会话 ID。 @param cursor 可选游标。 @param signal 取消信号。 @returns 线性消息页。 */
 export async function listConversationMessages(
   conversationId: string,
   cursor?: string,
   signal?: AbortSignal
-): Promise<ApiResult<CursorPageDto<ConversationMessageDto>>> {
+): Promise<ApiResult<CursorPageDto<LinearMessageDto>>> {
   const query = new URLSearchParams({ limit: "50" });
   if (cursor) query.set("cursor", cursor);
   return parseApiResult(await fetch(
@@ -44,11 +44,11 @@ export async function listConversationMessages(
   ));
 }
 
-/** @param runId Run ID。 @param signal 取消信号。 @returns 持久化 Run 快照。 */
+/** @param runId Run ID。 @param signal 取消信号。 @returns 新协议 Run 快照（无 result 正文）。 */
 export async function getRunSnapshot(
   runId: string,
   signal?: AbortSignal
-): Promise<ApiResult<AgentRunSnapshotDto>> {
+): Promise<ApiResult<RunSnapshotDtoV2>> {
   return parseApiResult(await fetch(`/api/runs/${encodeURIComponent(runId)}`, { signal }));
 }
 

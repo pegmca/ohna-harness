@@ -1,5 +1,5 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import type { AgentRunResponseDto } from "@aiagent/types";
+import type { RunSnapshotDtoV2, RunStreamEventDtoV2 } from "@aiagent/types";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Workbench } from "./Workbench";
@@ -79,7 +79,7 @@ describe("Workbench conversation history", () => {
       if (url.startsWith("/api/conversations?")) return ok({ items: conversations });
       if (url.includes("/c1/messages")) {
         historyRequests += 1;
-        return ok({ items: [message("m1", "c1", "已加载的会话消息")] });
+        return ok({ items: [userMessage("m1", "c1", "已加载的会话消息")] });
       }
       throw new Error(`Unexpected fetch: ${url}`);
     }));
@@ -93,7 +93,7 @@ describe("Workbench conversation history", () => {
     expect(historyRequests).toBe(1);
   });
 
-  it("restores a persisted run with a folded user-facing process before the final answer", async () => {
+  it("restores a persisted assistant answer with a folded process before the final answer", async () => {
     const writeText = vi.fn(async () => undefined);
     Object.defineProperty(navigator, "clipboard", {
       configurable: true,
@@ -105,24 +105,11 @@ describe("Workbench conversation history", () => {
       if (url.includes("/c1/messages")) {
         return ok({ items: [assistantMessage("m1", "c1", "最终研究结论", "r1")] });
       }
-      if (url === "/api/runs/r1") {
-        const result = runResult("r1", "c1", "最终研究结论");
-        return ok({
-          runId: "r1",
-          requestId: result.requestId,
-          conversationId: "c1",
-          status: "succeeded",
-          createdAt: "2026-07-25T00:00:00.000Z",
-          updatedAt: "2026-07-25T00:00:01.000Z",
-          events: [],
-          result
-        });
-      }
       throw new Error(`Unexpected fetch: ${url}`);
     }));
 
     render(<MemoryRouter initialEntries={["/?conversation=c1"]}><Workbench /></MemoryRouter>);
-    const processLabel = await screen.findByText("已完成 · 1.0 秒");
+    const processLabel = await screen.findByText("已完成");
     const process = processLabel.closest("summary")!;
     const answer = screen.getByText("最终研究结论");
 
@@ -130,14 +117,50 @@ describe("Workbench conversation history", () => {
     fireEvent.click(screen.getByRole("button", { name: "复制回答" }));
     expect(writeText).toHaveBeenCalledWith("最终研究结论");
     expect(screen.getByRole("button", { name: "重新生成回答" })).toBeTruthy();
-    expect(screen.queryByRole("button", { name: /Steps/ })).toBeNull();
-    expect(screen.queryByRole("button", { name: /Tools/ })).toBeNull();
-    expect(screen.queryByRole("button", { name: /Trace/ })).toBeNull();
     fireEvent.click(process);
     fireEvent.click(screen.getByRole("button", { name: "查看开发者详情" }));
     expect(await screen.findByRole("heading", { level: 2, name: "回答过程" })).toBeTruthy();
     const developerDetails = screen.getByText("开发者详情").closest("details");
     expect(developerDetails?.open).toBe(false);
+  });
+
+  it("renders thinking and toolCall blocks with paired toolResult, plus a compaction divider", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith("/api/conversations?")) return ok({ items: [conversations[0]] });
+      if (url.includes("/c1/messages")) {
+        return ok({
+          items: [
+            userMessage("u1", "c1", "查一下 ROE"),
+            {
+              ...assistantMessage("a1", "c1", "ROE 为 12%。", "r1"),
+              content: [
+                { type: "thinking", thinking: "需要先取净利润" },
+                { type: "toolCall", id: "call-1", name: "query_metrics", arguments: { ticker: "000001.SZ" } },
+                { type: "text", text: "ROE 为 12%。" }
+              ]
+            },
+            toolResultMessage("t1", "c1"),
+            compactionMessage("x1", "c1")
+          ]
+        });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    }));
+
+    render(<MemoryRouter initialEntries={["/?conversation=c1"]}><Workbench /></MemoryRouter>);
+    await screen.findByText("ROE 为 12%。");
+    // thinking 与 toolCall 默认折叠。
+    const thinkingSummary = screen.getByText("思考过程").closest("details")!;
+    expect(thinkingSummary.open).toBe(false);
+    const toolDetails = screen.getByText("query_metrics").closest("details")!;
+    expect(toolDetails.open).toBe(false);
+    // 展开 toolCall 可见参数与配对结果。
+    fireEvent.click(screen.getByText("query_metrics"));
+    expect(toolDetails.open).toBe(true);
+    expect(screen.getByText(/"ticker": "000001.SZ"/)).toBeTruthy();
+    expect(screen.getByText("净利润 100 亿")).toBeTruthy();
+    expect(screen.getByText("历史已压缩")).toBeTruthy();
   });
 
   it("restores URL selection and ignores an aborted previous conversation response", async () => {
@@ -149,7 +172,7 @@ describe("Workbench conversation history", () => {
         init?.signal?.addEventListener("abort", () => pendingFirst.reject(new DOMException("Aborted", "AbortError")));
         return pendingFirst.promise;
       }
-      if (url.includes("/c2/messages")) return ok({ items: [message("m2", "c2", "第二会话消息")] });
+      if (url.includes("/c2/messages")) return ok({ items: [userMessage("m2", "c2", "第二会话消息")] });
       throw new Error(`Unexpected fetch: ${url}`);
     }));
 
@@ -158,7 +181,7 @@ describe("Workbench conversation history", () => {
     fireEvent.click(screen.getByRole("button", { name: /^第二会话/ }));
     expect(await screen.findByText("第二会话消息")).toBeTruthy();
     await act(async () => {
-      pendingFirst.resolve(ok({ items: [message("m1", "c1", "不应串写")] }));
+      pendingFirst.resolve(ok({ items: [userMessage("m1", "c1", "不应串写")] }));
     });
     expect(screen.queryByText("不应串写")).toBeNull();
   });
@@ -214,11 +237,11 @@ describe("Workbench conversation history", () => {
       if (url.startsWith("/api/conversations?")) return ok({ items: conversations });
       if (url.includes("/c1/messages")) {
         c1Requests += 1;
-        if (c1Requests === 1) return ok({ items: [message("m1", "c1", "首条消息")], nextCursor: "more" });
+        if (c1Requests === 1) return ok({ items: [userMessage("m1", "c1", "首条消息")], nextCursor: "more" });
         init?.signal?.addEventListener("abort", () => delayedPage.reject(new DOMException("Aborted", "AbortError")));
         return delayedPage.promise;
       }
-      if (url.includes("/c2/messages")) return ok({ items: [message("m2", "c2", "第二会话消息")] });
+      if (url.includes("/c2/messages")) return ok({ items: [userMessage("m2", "c2", "第二会话消息")] });
       throw new Error(`Unexpected fetch: ${url}`);
     }));
 
@@ -227,7 +250,7 @@ describe("Workbench conversation history", () => {
     fireEvent.click(screen.getByRole("button", { name: "加载更多消息" }));
     fireEvent.click(screen.getByRole("button", { name: /^第二会话/ }));
     expect(await screen.findByText("第二会话消息")).toBeTruthy();
-    await act(async () => delayedPage.resolve(ok({ items: [message("late", "c1", "迟到分页消息")] })));
+    await act(async () => delayedPage.resolve(ok({ items: [userMessage("late", "c1", "迟到分页消息")] })));
     expect(screen.queryByText("迟到分页消息")).toBeNull();
   });
 
@@ -245,7 +268,7 @@ describe("Workbench conversation history", () => {
       if (url === "/api/conversations") return ok(conversation("created", "首次问题"));
       if (url.includes("/created/messages")) {
         historyRequests += 1;
-        return ok({ items: [message("persisted", "created", "首次问题")] });
+        return ok({ items: [userMessage("persisted", "created", "首次问题")] });
       }
       throw new Error(`Unexpected fetch: ${url}`);
     }));
@@ -268,15 +291,7 @@ describe("Workbench conversation history", () => {
   it("clears the submitted input only after the server accepts the Run", async () => {
     const { createAndStreamRun } = await import("../../shared/api/run-stream-client");
     vi.mocked(createAndStreamRun).mockImplementation(async (_request, options) => {
-      options?.onAccepted?.({
-        runId: "run-accepted",
-        requestId: "request-accepted",
-        conversationId: "c1",
-        modelId: "mock",
-        status: "queued",
-        eventsUrl: "/events",
-        snapshotUrl: "/snapshot"
-      });
+      options?.onAccepted?.(accepted("run-accepted"));
       return {
         ok: false,
         requestId: "stream_failed",
@@ -305,29 +320,12 @@ describe("Workbench conversation history", () => {
     vi.mocked(cancelRun).mockResolvedValue({
       ok: true,
       requestId: "cancel-request",
-      data: {
-        runId: "run-created",
-        requestId: "run-request",
-        conversationId: "c1",
-        modelId: "mock",
-        status: "cancelled",
-        createdAt: "2026-07-25T00:00:00.000Z",
-        updatedAt: "2026-07-25T00:00:01.000Z",
-        events: []
-      }
+      data: snapshot("run-created", "cancelled")
     });
     vi.mocked(createAndStreamRun).mockImplementation(async (_request, options) =>
       new Promise((_resolve, reject) => {
         createSignal = options?.signal;
-        acceptedHook = () => options?.onAccepted?.({
-          runId: "run-created",
-          requestId: "run-request",
-          conversationId: "c1",
-          modelId: "mock",
-          status: "queued",
-          eventsUrl: "/events",
-          snapshotUrl: "/snapshot"
-        });
+        acceptedHook = () => options?.onAccepted?.(accepted("run-created"));
         options?.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")));
       }));
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
@@ -363,19 +361,12 @@ describe("Workbench conversation history", () => {
     vi.mocked(createAndStreamRun).mockImplementation(async (_request, options) =>
       new Promise((resolve) => {
         finishAcceptedRun = async () => {
-          await options?.onAccepted?.({
-            runId: "run-continues",
-            requestId: "request-continues",
-            conversationId: "c1",
-            modelId: "mock",
-            status: "queued",
-            eventsUrl: "/events",
-            snapshotUrl: "/snapshot"
-          });
+          await options?.onAccepted?.(accepted("run-continues"));
+          options?.onEvent?.(textEvent(1, "继续执行完成"));
           resolve({
             ok: true,
             requestId: "terminal",
-            data: runResult("run-continues", "c1", "继续执行完成") as AgentRunResponseDto
+            data: { status: "completed", requestId: "terminal" }
           });
         };
       }));
@@ -405,16 +396,7 @@ describe("Workbench conversation history", () => {
     vi.mocked(cancelRun).mockResolvedValue({
       ok: true,
       requestId: "cancel-normal",
-      data: {
-        runId: "run-normal",
-        requestId: "request-normal",
-        conversationId: "c1",
-        modelId: "mock",
-        status: "cancelled",
-        createdAt: "2026-07-25T00:00:00.000Z",
-        updatedAt: "2026-07-25T00:00:01.000Z",
-        events: []
-      }
+      data: snapshot("run-normal", "cancelled")
     });
     vi.mocked(createAndStreamRun).mockImplementation(async (request, options) => {
       runRequests.push(request);
@@ -425,15 +407,7 @@ describe("Workbench conversation history", () => {
           error: { code: "internal_error", message: "test complete", requestId: "retry-failed" }
         };
       }
-      await options?.onAccepted?.({
-        runId: "run-normal",
-        requestId: "request-normal",
-        conversationId: "c1",
-        modelId: "mock",
-        status: "queued",
-        eventsUrl: "/events",
-        snapshotUrl: "/snapshot"
-      });
+      await options?.onAccepted?.(accepted("run-normal"));
       return new Promise((_resolve, reject) => {
         options?.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")));
       });
@@ -529,6 +503,66 @@ describe("Workbench conversation history", () => {
     expect(runRequests[1].modelId).toBe(runRequests[0].modelId);
   });
 
+  it("keeps the toolCall message and the summary message of a multi-message run", async () => {
+    const { createAndStreamRun } = await import("../../shared/api/run-stream-client");
+    vi.mocked(createAndStreamRun).mockImplementation(async (_request, options) => {
+      await options?.onAccepted?.(accepted("run-multi"));
+      options?.onEvent?.(streamEvent(1, "message_start", { message: { role: "assistant", content: [] } }));
+      options?.onEvent?.(streamEvent(2, "message_update", {
+        message: { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "query_metrics", arguments: {} }] },
+        assistantMessageEvent: {
+          type: "toolcall_end",
+          contentIndex: 0,
+          partial: { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "query_metrics", arguments: {} }] }
+        }
+      }));
+      options?.onEvent?.(streamEvent(3, "tool_execution_end", {
+        toolCallId: "call-1",
+        toolName: "query_metrics",
+        result: [{ type: "text", text: "ROE 12%" }],
+        isError: false
+      }));
+      options?.onEvent?.(streamEvent(4, "message_end", {
+        message: { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "query_metrics", arguments: {} }] }
+      }));
+      options?.onEvent?.(streamEvent(5, "message_start", { message: { role: "assistant", content: [] } }));
+      options?.onEvent?.(streamEvent(6, "message_update", {
+        message: { role: "assistant", content: [{ type: "text", text: "最终总结回答" }] },
+        assistantMessageEvent: {
+          type: "text_delta",
+          contentIndex: 0,
+          partial: { role: "assistant", content: [{ type: "text", text: "最终总结回答" }] }
+        }
+      }));
+      options?.onEvent?.(streamEvent(7, "agent_end", {
+        messages: [
+          { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "query_metrics", arguments: {} }] },
+          { role: "toolResult", content: { toolCallId: "call-1", toolName: "query_metrics", content: [{ type: "text", text: "ROE 12%" }], isError: false } },
+          { role: "assistant", content: [{ type: "text", text: "最终总结回答" }] }
+        ]
+      }));
+      return { ok: true, requestId: "terminal", data: { status: "completed", requestId: "terminal" } };
+    });
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith("/api/conversations?")) return ok({ items: [conversation("c1", "已有会话")] });
+      if (url.includes("/messages")) return ok({ items: [] });
+      throw new Error(`Unexpected fetch: ${url}`);
+    }));
+
+    render(<MemoryRouter><Workbench /></MemoryRouter>);
+    await screen.findByRole("heading", { name: "已有会话" });
+    const textbox = screen.getByRole("textbox");
+    fireEvent.change(textbox, { target: { value: "多消息 run" } });
+    fireEvent.submit(textbox.closest("form")!);
+
+    // 终态渲染里两条 assistant 消息的块都在：工具调用块 + 总结正文。
+    await screen.findByText("最终总结回答");
+    expect(screen.getByText("query_metrics")).toBeTruthy();
+    fireEvent.click(screen.getByText("query_metrics"));
+    expect(screen.getByText("ROE 12%")).toBeTruthy();
+  });
+
   it("shows retry for a failed message restored from conversation history", async () => {
     const runRequests: Array<{ message: string; modelId?: string }> = [];
     const { createAndStreamRun } = await import("../../shared/api/run-stream-client");
@@ -542,27 +576,9 @@ describe("Workbench conversation history", () => {
       if (url.includes("/c1/messages")) {
         return ok({
           items: [
-            message("user-1", "c1", "历史失败问题"),
-            { ...assistantMessage("assistant-1", "c1", "agent_failed", "run-1"), status: "failed", sequence: 2 }
+            userMessage("user-1", "c1", "历史失败问题"),
+            { ...assistantMessage("assistant-1", "c1", "agent_failed", "run-1"), stopReason: "error", sequence: 2 }
           ]
-        });
-      }
-      if (url === "/api/runs/run-1") {
-        const result = {
-          ...runResult("run-1", "c1", "agent_failed"),
-          modelId: "mock",
-          ok: false,
-          error: { code: "agent_failed", message: "LLM request timed out." }
-        };
-        return ok({
-          runId: "run-1",
-          requestId: result.requestId,
-          conversationId: "c1",
-          status: "failed",
-          createdAt: "2026-07-25T00:00:00.000Z",
-          updatedAt: "2026-07-25T00:00:01.000Z",
-          events: [],
-          result
         });
       }
       throw new Error(`Unexpected fetch: ${url}`);
@@ -586,57 +602,112 @@ function conversation(conversationId: string, title: string) {
   };
 }
 
-function message(messageId: string, conversationId: string, content: string) {
+/** 新协议 LinearMessageDto：user content 为纯文本，无 status 字段。 */
+function userMessage(messageId: string, conversationId: string, content: string) {
   return {
     messageId,
     conversationId,
     role: "user",
     content,
-    status: "completed",
+    messageType: "normal",
     sequence: 1,
     createdAt: "2026-07-25T00:00:00.000Z"
   };
 }
 
-function assistantMessage(messageId: string, conversationId: string, content: string, runId: string) {
+/** assistant content 为 pi 块数组。 */
+function assistantMessage(messageId: string, conversationId: string, text: string, runId: string) {
   return {
-    ...message(messageId, conversationId, content),
+    ...userMessage(messageId, conversationId, ""),
     runId,
-    role: "assistant"
+    role: "assistant",
+    content: [{ type: "text", text }],
+    modelId: "mock",
+    stopReason: "stop"
   };
 }
 
-function runResult(runId: string, conversationId: string, answer: string) {
+/** toolResult 行：渲染时并入前一条 assistant 消息的 toolCall 块。 */
+function toolResultMessage(messageId: string, conversationId: string) {
+  return {
+    ...userMessage(messageId, conversationId, ""),
+    role: "toolResult",
+    content: {
+      toolCallId: "call-1",
+      toolName: "query_metrics",
+      content: [{ type: "text", text: "净利润 100 亿" }],
+      isError: false
+    },
+    sequence: 3
+  };
+}
+
+/** compaction 行：渲染为「历史已压缩」分隔条。 */
+function compactionMessage(messageId: string, conversationId: string) {
+  return {
+    ...userMessage(messageId, conversationId, "[compaction] 更早历史已压缩"),
+    messageType: "compaction",
+    sequence: 4
+  };
+}
+
+/** @param runId Run ID。 @param status 终态。 @returns 新协议 Run 快照。 */
+function snapshot(runId: string, status: RunSnapshotDtoV2["status"]): RunSnapshotDtoV2 {
   return {
     runId,
-    conversationId,
-    modelId: "mock",
     requestId: `request_${runId}`,
-    traceId: `trace_${runId}`,
-    ok: true,
-    intent: "chat",
-    answer,
-    steps: [],
-    trace: {
-      traceId: `trace_${runId}`,
-      requestId: `request_${runId}`,
-      startedAt: "2026-07-25T00:00:00.000Z",
-      completedAt: "2026-07-25T00:00:01.000Z",
-      summary: {
-        status: "succeeded",
-        durationMs: 1000,
-        modelCallCount: 1,
-        toolCallCount: 0,
-        retrievalCount: 0,
-        inputTokens: 10,
-        outputTokens: 20,
-        knownTokenTotal: 30,
-        unknownTokenCallCount: 0,
-        errorCount: 0
-      },
-      events: []
+    conversationId: "c1",
+    modelId: "mock",
+    mode: "auto",
+    source: "composer",
+    status,
+    lastEventSequence: 0,
+    createdAt: "2026-07-25T00:00:00.000Z",
+    updatedAt: "2026-07-25T00:00:01.000Z"
+  };
+}
+
+/** @param runId Run ID。 @returns Run accepted DTO。 */
+function accepted(runId: string) {
+  return {
+    runId,
+    requestId: `request_${runId}`,
+    conversationId: "c1",
+    modelId: "mock",
+    status: "queued" as const,
+    eventsUrl: "/events",
+    snapshotUrl: "/snapshot"
+  };
+}
+
+/** @param sequence 序号。 @param text 累积文本。 @returns message_update 事件。 */
+function textEvent(sequence: number, text: string): RunStreamEventDtoV2 {
+  return {
+    eventId: `event-${sequence}`,
+    runId: "run",
+    requestId: "request",
+    conversationId: "c1",
+    sequence,
+    type: "message_update",
+    payload: {
+      message: { role: "assistant", content: [{ type: "text", text }] },
+      assistantMessageEvent: { type: "text_delta", contentIndex: 0, partial: { role: "assistant", content: [{ type: "text", text }] } }
     },
-    tracePersistence: { status: "complete" }
+    createdAt: "2026-07-25T00:00:00.000Z"
+  };
+}
+
+/** @param sequence 序号。 @param type 事件类型。 @param payload 事件本体。 @returns canonical envelope。 */
+function streamEvent(sequence: number, type: RunStreamEventDtoV2["type"], payload: unknown): RunStreamEventDtoV2 {
+  return {
+    eventId: `event-${sequence}`,
+    runId: "run",
+    requestId: "request",
+    conversationId: "c1",
+    sequence,
+    type,
+    payload,
+    createdAt: "2026-07-25T00:00:00.000Z"
   };
 }
 

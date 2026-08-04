@@ -1,101 +1,187 @@
-import type { AgentRunStreamEventDto, TraceEventDto } from "@aiagent/types";
+import type { RunStreamEventDtoV2 } from "@aiagent/types";
 import { describe, expect, it } from "vitest";
-import { projectLiveRun, projectRunActivity } from "./live-run-projection";
+import { projectLiveRun } from "./live-run-projection";
 
 describe("projectLiveRun", () => {
-  it("keeps first appearance order and reactivates an interleaved category", () => {
+  it("renders streaming text directly from cumulative partial without stitching deltas", () => {
     const events = [
-      trace(1, "request_received"),
-      trace(2, "model_call"),
-      trace(3, "tool_call"),
-      trace(4, "model_call")
+      messageUpdate(1, "text_start", [{ type: "text", text: "" }]),
+      messageUpdate(2, "text_delta", [{ type: "text", text: "营收" }]),
+      messageUpdate(3, "text_delta", [{ type: "text", text: "营收同比增长" }])
     ];
-    expect(projectLiveRun(events).map(({ category, status, count }) => ({ category, status, count }))).toEqual([
-      { category: "routing", status: "completed", count: 1 },
-      { category: "model", status: "active", count: 2 },
-      { category: "tools", status: "completed", count: 1 }
-    ]);
+    const projection = projectLiveRun(events);
+    expect(projection.terminal).toBe("running");
+    expect(projection.blocks).toEqual([{ type: "text", text: "营收同比增长" }]);
   });
 
-  it("deduplicates replay and applies cancelled terminal state", () => {
-    const routing = trace(1, "request_received");
-    const events = [routing, routing, trace(2, "model_call"), cancelled(3)];
-    expect(projectLiveRun(events).map(({ category, status, count }) => ({ category, status, count }))).toEqual([
-      { category: "routing", status: "completed", count: 1 },
-      { category: "model", status: "cancelled", count: 1 }
-    ]);
-  });
-
-  it("routes unknown future trace events to finalizing", () => {
-    expect(projectLiveRun([trace(1, "future_event")])[0]?.category).toBe("finalizing");
-  });
-
-  it("projects terminal trace into user-facing Chinese activity categories", () => {
+  it("projects thinking and toolCall blocks with tool execution status", () => {
     const events = [
-      terminalTrace("request_received"),
-      terminalTrace("retrieval", { ok: true }),
-      terminalTrace("tool_call", { ok: false }),
-      terminalTrace("final_response")
+      messageUpdate(1, "thinking_delta", [{ type: "thinking", thinking: "先查指标" }]),
+      messageUpdate(2, "toolcall_end", [
+        { type: "thinking", thinking: "先查指标" },
+        { type: "toolCall", id: "call-1", name: "query_metrics", arguments: { ticker: "000001.SZ" } }
+      ]),
+      toolExecution(3, "tool_execution_start"),
+      toolExecution(4, "tool_execution_end", { result: [{ type: "text", text: "ROE 12%" }], isError: false })
     ];
-    expect(projectRunActivity(events).map(({ label, status }) => ({ label, status }))).toEqual([
-      { label: "理解问题", status: "completed" },
-      { label: "检索资料", status: "completed" },
-      { label: "查询数据", status: "failed" },
-      { label: "整理结果", status: "completed" }
+    const projection = projectLiveRun(events);
+    expect(projection.blocks[0]).toEqual({ type: "thinking", thinking: "先查指标", redacted: false });
+    const tool = projection.blocks[1];
+    expect(tool).toMatchObject({ type: "toolCall", id: "call-1", status: "completed" });
+    expect(tool?.type === "toolCall" && tool.result?.content).toEqual([{ type: "text", text: "ROE 12%" }]);
+  });
+
+  it("deduplicates replayed sequences and keeps the latest partial", () => {
+    const first = messageUpdate(1, "text_delta", [{ type: "text", text: "甲" }]);
+    const events = [first, first, messageUpdate(2, "text_delta", [{ type: "text", text: "甲乙" }])];
+    expect(projectLiveRun(events).blocks).toEqual([{ type: "text", text: "甲乙" }]);
+  });
+
+  it("marks failed tool execution with an error result", () => {
+    const events = [
+      messageUpdate(1, "toolcall_end", [
+        { type: "toolCall", id: "call-1", name: "run_sql", arguments: {} }
+      ]),
+      toolExecution(2, "tool_execution_end", { result: "boom", isError: true })
+    ];
+    const projection = projectLiveRun(events);
+    const tool = projection.blocks[0];
+    expect(tool?.type === "toolCall" && tool.status).toBe("failed");
+    expect(tool?.type === "toolCall" && tool.result?.isError).toBe(true);
+  });
+
+  it("applies cancelled terminal state from run_error", () => {
+    const events = [runError(2, { code: "request_cancelled", message: "cancelled", requestId: "request" })];
+    expect(projectLiveRun(events).terminal).toBe("cancelled");
+  });
+
+  it("applies failed terminal state from run_error", () => {
+    const events = [runError(1, { code: "agent_failed", message: "LLM 超时", requestId: "request" })];
+    const projection = projectLiveRun(events);
+    expect(projection.terminal).toBe("failed");
+    expect(projection.error?.message).toBe("LLM 超时");
+  });
+
+  it("settles final blocks from agent_end messages and pairs toolResult", () => {
+    const events = [
+      messageUpdate(1, "text_delta", [{ type: "text", text: "中间态" }]),
+      agentEnd(2, [
+        {
+          role: "assistant",
+          content: [
+            { type: "toolCall", id: "call-1", name: "query_metrics", arguments: {} },
+            { type: "text", text: "最终回答" }
+          ]
+        },
+        {
+          role: "toolResult",
+          content: { toolCallId: "call-1", toolName: "query_metrics", content: [{ type: "text", text: "ok" }], isError: false }
+        }
+      ])
+    ];
+    const projection = projectLiveRun(events);
+    expect(projection.terminal).toBe("completed");
+    const tool = projection.blocks[0];
+    expect(tool?.type === "toolCall" && tool.status).toBe("completed");
+    expect(projection.blocks[1]).toEqual({ type: "text", text: "最终回答" });
+  });
+
+  it("keeps blocks from earlier assistant messages in a multi-message run", () => {
+    // 真实带工具调用的 run：第一条 assistant 发起 toolCall，第二条流式输出总结。
+    const events = [
+      envelope(1, "message_start", { message: { role: "assistant", content: [] } }),
+      messageUpdate(2, "toolcall_end", [
+        { type: "toolCall", id: "call-1", name: "query_metrics", arguments: { ticker: "000001.SZ" } }
+      ]),
+      toolExecution(3, "tool_execution_start"),
+      toolExecution(4, "tool_execution_end", { result: [{ type: "text", text: "ROE 12%" }], isError: false }),
+      envelope(5, "message_end", {
+        message: {
+          role: "assistant",
+          content: [{ type: "toolCall", id: "call-1", name: "query_metrics", arguments: { ticker: "000001.SZ" } }]
+        }
+      }),
+      envelope(6, "message_start", { message: { role: "assistant", content: [] } }),
+      messageUpdate(7, "text_delta", [{ type: "text", text: "ROE 为 12%。" }])
+    ];
+    // live 中途：第一条消息的工具块不能因为第二条消息的 partial 而消失。
+    const live = projectLiveRun(events);
+    expect(live.terminal).toBe("running");
+    expect(live.blocks.map((block) => block.type)).toEqual(["toolCall", "text"]);
+    const liveTool = live.blocks[0];
+    expect(liveTool?.type === "toolCall" && liveTool.status).toBe("completed");
+
+    // agent_end 终态：拼接全部 assistant 消息并配对 toolResult，不是只留最后一条。
+    const final = projectLiveRun([
+      ...events,
+      agentEnd(8, [
+        {
+          role: "assistant",
+          content: [{ type: "toolCall", id: "call-1", name: "query_metrics", arguments: { ticker: "000001.SZ" } }]
+        },
+        {
+          role: "toolResult",
+          content: { toolCallId: "call-1", toolName: "query_metrics", content: [{ type: "text", text: "ROE 12%" }], isError: false }
+        },
+        { role: "assistant", content: [{ type: "text", text: "ROE 为 12%。" }] }
+      ])
     ]);
+    expect(final.terminal).toBe("completed");
+    expect(final.blocks.map((block) => block.type)).toEqual(["toolCall", "text"]);
+    const finalTool = final.blocks[0];
+    expect(finalTool?.type === "toolCall" && finalTool.result?.content).toEqual([{ type: "text", text: "ROE 12%" }]);
+    expect(final.blocks[1]).toEqual({ type: "text", text: "ROE 为 12%。" });
+  });
+
+  it("treats agent_end with loop error as failed", () => {
+    const projection = projectLiveRun([agentEnd(1, [], { code: "agent_loop_aborted", message: "钩子抛错" })]);
+    expect(projection.terminal).toBe("failed");
+    expect(projection.error?.code).toBe("agent_loop_aborted");
   });
 });
 
-/** @param sequence canonical sequence。 @param type Trace type。 @returns 测试事件。 */
-function trace(sequence: number, type: string): AgentRunStreamEventDto {
+
+/** @param sequence 序号。 @param kind AssistantMessageEvent 类型。 @param content 累积 partial 内容。 @returns message_update 事件。 */
+function messageUpdate(sequence: number, kind: string, content: unknown): RunStreamEventDtoV2 {
+  return envelope(sequence, "message_update", {
+    message: { role: "assistant", content },
+    assistantMessageEvent: { type: kind, contentIndex: 0, partial: { role: "assistant", content } }
+  });
+}
+
+/** @param sequence 序号。 @param type 工具事件类型。 @param extra 附加 payload。 @returns tool_execution_* 事件。 */
+function toolExecution(
+  sequence: number,
+  type: "tool_execution_start" | "tool_execution_end",
+  extra: Record<string, unknown> = {}
+): RunStreamEventDtoV2 {
+  return envelope(sequence, type, { toolCallId: "call-1", toolName: "query_metrics", args: {}, ...extra });
+}
+
+/** @param sequence 序号。 @param error 结构化错误。 @returns run_error 事件。 */
+function runError(sequence: number, error: { code: string; message: string; requestId: string }): RunStreamEventDtoV2 {
+  return envelope(sequence, "run_error", { error });
+}
+
+/** @param sequence 序号。 @param messages 最终消息。 @param error 可选 loop 错误。 @returns agent_end 事件。 */
+function agentEnd(
+  sequence: number,
+  messages: unknown[],
+  error?: { code: string; message: string }
+): RunStreamEventDtoV2 {
+  return envelope(sequence, "agent_end", { messages, error });
+}
+
+/** @param sequence 序号。 @param type 事件类型。 @param payload 事件本体。 @returns canonical envelope。 */
+function envelope(sequence: number, type: RunStreamEventDtoV2["type"], payload: unknown): RunStreamEventDtoV2 {
   return {
-    type: "trace_event",
     eventId: `event-${sequence}`,
-    sequence,
     runId: "run",
     requestId: "request",
     conversationId: "conversation",
-    traceId: "trace",
-    createdAt: "2026-07-28T00:00:00.000Z",
-    event: {
-      type,
-      id: `trace-${sequence}`,
-      traceId: "trace",
-      requestId: "request",
-      createdAt: "2026-07-28T00:00:00.000Z"
-    }
-  } as AgentRunStreamEventDto;
-}
-
-/** @param sequence canonical sequence。 @returns 取消终态事件。 */
-function cancelled(sequence: number): AgentRunStreamEventDto {
-  return {
-    type: "run_error",
-    eventId: `event-${sequence}`,
     sequence,
-    runId: "run",
-    requestId: "request",
-    conversationId: "conversation",
-    traceId: "trace",
-    createdAt: "2026-07-28T00:00:00.000Z",
-    error: { code: "request_cancelled", message: "cancelled", requestId: "request" }
-  };
-}
-
-/**
- * 创建只包含投影所需字段的终态 Trace 测试事件。
- *
- * @param type Trace 类型。
- * @param extra 用于表达成功或失败的附加字段。
- * @returns Trace 测试事件。
- */
-function terminalTrace(type: string, extra: Record<string, unknown> = {}): TraceEventDto {
-  return {
     type,
-    id: `trace-${type}`,
-    traceId: "trace",
-    requestId: "request",
-    createdAt: "2026-07-28T00:00:00.000Z",
-    ...extra
-  } as TraceEventDto;
+    payload,
+    createdAt: "2026-07-28T00:00:00.000Z"
+  };
 }

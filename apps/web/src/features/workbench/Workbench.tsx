@@ -1,19 +1,15 @@
 import type {
-  AgentRunResponseDto,
-  AgentRunStreamEventDto,
   ApiResult,
   ConversationDto,
   ReportTriggerSourceDto,
-  ToolApprovalDecisionDto,
-  ToolApprovalRequestDto
+  RunStreamEventDtoV2
 } from "@aiagent/types";
 import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { SettingsPage } from "../settings";
-import { cancelRun, createAndStreamRun } from "../../shared/api/run-stream-client";
+import { cancelRun, createAndStreamRun, type RunTerminalDto } from "../../shared/api/run-stream-client";
 import {
   createConversation,
-  getRunSnapshot,
   listConversationMessages,
   listConversations,
   updateConversation as updateConversationApi
@@ -23,14 +19,14 @@ import {
   createConversationTitle,
   createUiId,
   formatApiError,
-  formatRunProgress,
   getWorkspacePath,
   getWorkspaceView,
   mergeConversations,
   mergeMessages,
-  parseApiResult,
-  toUiMessage
+  textOfBlocks,
+  toUiMessages
 } from "./format";
+import { projectLiveRun } from "./live-run-projection";
 import { RunDetailPanel } from "./run-details";
 import { ConversationSidebar } from "./sidebar";
 import type { DraftAttachment, RetryRunContext, SelectedRunDetail, UiMessage } from "./types";
@@ -38,7 +34,7 @@ import { useComposerState } from "./use-composer-state";
 import { DataSourcesWorkspace, ProductWorkspace, ScheduledTasksWorkspace } from "./workspace-views";
 
 /**
- * 渲染 Immersive Agent Chat；持久化历史只来自 Conversation API，live Run 仅作为瞬时派生状态。
+ * 渲染 Immersive Agent Chat；持久化历史只来自 Conversation 线性消息 API，live Run 仅作为瞬时派生状态。
  *
  * @returns Week 1 Agent Chat 产品页面。
  */
@@ -61,7 +57,6 @@ export function Workbench() {
   const [composerError, setComposerError] = useState<string | undefined>();
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const workspaceView = getWorkspaceView(location.pathname);
-  const [approvalStatusById, setApprovalStatusById] = useState<Record<string, string>>({});
   const [selectedRunDetail, setSelectedRunDetail] = useState<SelectedRunDetail>();
   const [reportMode, setReportMode] = useState(false);
   const [_activeRunId, setActiveRunId] = useState<string>();
@@ -79,7 +74,7 @@ export function Workbench() {
     () => conversations.find((conversation) => conversation.conversationId === activeConversationId),
     [activeConversationId, conversations]
   );
-  const latestRun = [...messages].reverse().find((message) => message.run)?.run;
+  const latestRunStatus = [...messages].reverse().find((message) => message.runStatus)?.runStatus;
 
   useEffect(() => {
     const controller = new AbortController();
@@ -155,6 +150,7 @@ export function Workbench() {
 
   /**
    * 统一加载初始历史与后续消息页；请求代次和当前选择共同阻止迟到响应串写。
+   * 新协议下历史渲染只依赖线性消息列表，不再按 runId 逐个恢复快照。
    *
    * @param conversationId 请求所属会话。
    * @param cursor 可选消息游标。
@@ -185,15 +181,7 @@ export function Workbench() {
         setMessageError(formatApiError(result.error));
         return;
       }
-      const incoming = await Promise.all(result.data.items.map(async (message) => {
-        const uiMessage = toUiMessage(message);
-        if (message.role !== "assistant" || !message.runId) return uiMessage;
-        // Run 是持久化事实源；历史消息只携带关联 ID，因此在进入时间线时恢复终态运行详情。
-        const snapshot = await getRunSnapshot(message.runId, controller.signal).catch(() => undefined);
-        return snapshot?.ok && snapshot.data.result
-          ? { ...uiMessage, run: snapshot.data.result }
-          : uiMessage;
-      }));
+      const incoming = toUiMessages(result.data.items);
       if (
         controller.signal.aborted
         || generation !== messageRequestGeneration.current
@@ -339,7 +327,7 @@ export function Workbench() {
   }
 
   /**
-   * 发送用户输入并把 run 结果挂到对应 assistant 消息，避免使用全局右侧调试状态。
+   * 发送用户输入并把 run 终态挂到对应 assistant 消息，避免使用全局右侧调试状态。
    *
    * @param message 用户输入。
    * @returns 请求完成 Promise。
@@ -360,18 +348,14 @@ export function Workbench() {
     const sourceMessage = messageIndex < 0
       ? undefined
       : messages.slice(0, messageIndex).reverse().find((candidate) => candidate.role === "user");
-    const restoredAttachments = sourceMessage?.attachments?.map((attachment, ordinal) => ({
-      attachmentId: "attachmentId" in attachment ? attachment.attachmentId : attachment.clientAttachmentId,
-      documentId: attachment.documentId,
-      fileName: attachment.fileName,
-      contentType: attachment.contentType,
-      sizeBytes: attachment.sizeBytes,
+    const restoredAttachments = (sourceMessage?.attachments ?? []).map((attachment, ordinal) => ({
+      ...attachment,
       ordinal
-    })) ?? [];
+    }));
     const retryContext = message.retryContext ?? (sourceMessage ? {
       message: sourceMessage.content,
-      modelId: message.run?.modelId ?? message.modelId ?? composer.selectedModelId,
-      reportMode: message.run?.intent === "report_skill",
+      modelId: message.modelId ?? composer.selectedModelId,
+      reportMode: false,
       attachments: restoredAttachments
     } : undefined);
     if (!retryContext?.modelId) return;
@@ -380,7 +364,7 @@ export function Workbench() {
   }
 
   /**
-   * 发送用户输入并把 run 结果挂到对应 assistant 消息，避免使用全局右侧调试状态。
+   * 发送用户输入并把 run 结果挂到对应 assistant 消息，live 事件实时投影为内容块。
    *
    * @param message 用户输入。
    * @param triggerSource 可选 Report Skill 显式触发来源。
@@ -433,18 +417,19 @@ export function Workbench() {
       id: clientMessageId,
       role: "user",
       content: trimmed,
+      blocks: [],
       createdAt: now,
-      status: "complete"
-      ,
+      status: "complete",
       attachments: submittedAttachments
     };
     const pendingMessage: UiMessage = {
       id: pendingMessageId,
       role: "assistant",
-      content: "Agent 正在分析问题、路由意图并准备回答。",
+      content: "",
+      blocks: [],
       createdAt: now,
       status: "pending",
-      streamEvents: [],
+      liveEvents: [],
       modelId: submittedModelId,
       retryContext: {
         message: trimmed,
@@ -471,6 +456,8 @@ export function Workbench() {
     const runController = new AbortController();
     cancelRequested.current = false;
     activeRunController.current = runController;
+    // live 事件累积在闭包内，终态时一次性投影为消息块，避免渲染期反复重算。
+    const liveEvents: RunStreamEventDtoV2[] = [];
 
     try {
       const result = await runAgent(
@@ -482,11 +469,9 @@ export function Workbench() {
         submittedAttachments.map((attachment) => attachment.documentId),
         triggerSource,
         (event) => {
-          replaceMessage(submittedConversationId, pendingMessageId, {
-            content: formatRunProgress(event)
-          });
+          liveEvents.push(event);
           setMessages((current) => current.map((item) => item.id === pendingMessageId
-            ? { ...item, streamEvents: [...(item.streamEvents ?? []), event] }
+            ? { ...item, liveEvents: [...liveEvents] }
             : item));
         },
         async (runId) => {
@@ -517,39 +502,46 @@ export function Workbench() {
         runController.signal
       );
 
+      const projection = projectLiveRun(liveEvents);
+      const finalBlocks = projection.blocks;
+      const finalText = textOfBlocks(finalBlocks);
+
       if (!result.ok) {
-        const messageText = formatApiError(result.error);
+        const cancelledRun = result.error.code === "request_cancelled";
         replaceMessage(submittedConversationId, pendingMessageId, {
-          content: messageText,
-          status: result.error.code === "request_cancelled" ? "cancelled" : "failed",
-          ok: false
+          content: finalText || formatApiError(result.error),
+          blocks: finalBlocks,
+          status: cancelledRun ? "cancelled" : "failed",
+          ok: false,
+          runStatus: cancelledRun ? "cancelled" : "failed",
+          error: result.error,
+          liveEvents: undefined
         });
-        if (result.error.code !== "request_cancelled") {
+        if (!cancelledRun) {
           setComposerError("请求失败，已把结构化错误写入当前 assistant 消息。");
         }
         return;
       }
 
-      const run = result.data;
       retrySubmission.current = undefined;
       replaceMessage(submittedConversationId, pendingMessageId, {
-        content: run.answer,
-        status: run.ok ? "complete" : run.error?.code === "request_cancelled" ? "cancelled" : "failed",
-        ok: run.ok,
-        run,
-        streamEvents: undefined
+        content: finalText,
+        blocks: finalBlocks,
+        status: "complete",
+        ok: true,
+        runStatus: result.data.status,
+        liveEvents: undefined
       });
-
-      if (!run.ok && run.error) {
-        setComposerError(formatApiError(run.error));
-      }
     } catch (caught) {
       if (runController.signal.aborted) {
+        const projection = projectLiveRun(liveEvents);
         replaceMessage(submittedConversationId, pendingMessageId, {
-          content: "已停止本次生成。",
+          content: textOfBlocks(projection.blocks) || "已停止本次生成。",
+          blocks: projection.blocks,
           status: "cancelled",
           ok: false,
-          streamEvents: undefined
+          runStatus: "cancelled",
+          liveEvents: undefined
         });
         return;
       }
@@ -557,7 +549,8 @@ export function Workbench() {
       replaceMessage(submittedConversationId, pendingMessageId, {
         content: messageText,
         status: "failed",
-        ok: false
+        ok: false,
+        runStatus: "failed"
       });
       setComposerError("请求失败，请确认 apps/api 和 apps/web 已通过 pnpm dev 启动。");
     } finally {
@@ -582,46 +575,6 @@ export function Workbench() {
     setMessages((current) => current.map((messageItem) =>
       messageItem.id === messageId ? { ...messageItem, ...patch } : messageItem
     ));
-  }
-
-  /**
-   * 提交人工审批决定；UI 只转交 decision，不在浏览器内重复实现权限判断。
-   *
-   * @param approvalId 审批请求 id。
-   * @param decision approve/reject 决策。
-   * @returns 请求完成 Promise。
-   */
-  async function handleApprovalDecision(
-    approvalRequest: ToolApprovalRequestDto,
-    decision: ToolApprovalDecisionDto["decision"]
-  ): Promise<void> {
-    const approvalId = approvalRequest.approvalId;
-    const runId = latestRun?.runId;
-    if (!runId) {
-      setComposerError("当前审批没有关联可操作的 Run。");
-      return;
-    }
-    setApprovalStatusById((current) => ({
-      ...current,
-      [approvalId]: "submitting"
-    }));
-
-    const result = await submitApprovalDecision(runId, {
-      approvalId,
-      decision,
-      requestId: approvalRequest.requestId,
-      inputDigest: approvalRequest.inputDigest,
-      reviewerNote: decision === "approved" ? "Approved from Immersive UI." : "Rejected from Immersive UI."
-    });
-
-    setApprovalStatusById((current) => ({
-      ...current,
-      [approvalId]: result.ok ? result.data.decision : "failed"
-    }));
-
-    if (!result.ok) {
-      setComposerError(formatApiError(result.error));
-    }
   }
 
   return (
@@ -651,12 +604,11 @@ export function Workbench() {
           <ChatHeader
             conversationTitle={activeConversation?.title ?? "新会话"}
             isSubmitting={isSubmitting}
-            latestRun={latestRun}
+            latestRunStatus={latestRunStatus}
             onMenuClick={() => setIsSidebarOpen(true)}
           />
 
           <ChatTimeline
-            approvalStatusById={approvalStatusById}
             isSubmitting={isSubmitting}
             error={messageError}
             hasMore={Boolean(messageCursor)}
@@ -666,7 +618,6 @@ export function Workbench() {
               if (!activeConversationId) return;
               void loadMessagePage(activeConversationId, messageCursor, true);
             }}
-            onApprovalDecision={handleApprovalDecision}
             onOpenRunDetail={setSelectedRunDetail}
             onRetryMessage={(message) => void retryFailedMessage(message)}
             onUsePrompt={setInput}
@@ -701,12 +652,10 @@ export function Workbench() {
       ) : workspaceView === "settings" ? (
         <SettingsPage onMenuClick={() => setIsSidebarOpen(true)} />
       ) : (
-        <ProductWorkspace latestRun={latestRun} onMenuClick={() => setIsSidebarOpen(true)} view={workspaceView} />
+        <ProductWorkspace onMenuClick={() => setIsSidebarOpen(true)} view={workspaceView} />
       )}
       <RunDetailPanel
-        approvalStatusById={approvalStatusById}
         detail={selectedRunDetail}
-        onApprovalDecision={handleApprovalDecision}
         onClose={() => setSelectedRunDetail(undefined)}
       />
     </main>
@@ -734,10 +683,10 @@ async function runAgent(
   modelId: string,
   attachmentDocumentIds: string[],
   reportTriggerSource?: ReportTriggerSourceDto,
-  onEvent?: (event: AgentRunStreamEventDto) => void,
+  onEvent?: (event: RunStreamEventDtoV2) => void,
   onAccepted?: (runId: string) => void | Promise<void>,
   signal?: AbortSignal
-): Promise<ApiResult<AgentRunResponseDto>> {
+): Promise<ApiResult<RunTerminalDto>> {
   return createAndStreamRun({
     message,
     conversationId: conversationId ?? createUiId("conversation"),
@@ -747,26 +696,4 @@ async function runAgent(
     mode: reportMode ? "report" : "auto",
     source: reportTriggerSource === "button" ? "report_button" : "composer"
   }, { onEvent, onAccepted: (accepted) => onAccepted?.(accepted.runId), signal });
-}
-
-/**
- * 调用 Approval decision API，供 Run details 中的人工确认控件使用。
- *
- * @param decision 审批决定。
- * @returns API result。
- */
-async function submitApprovalDecision(runId: string, decision: ToolApprovalDecisionDto): Promise<ApiResult<ToolApprovalDecisionDto>> {
-  const response = await fetch(`/api/runs/${encodeURIComponent(runId)}/approvals/${encodeURIComponent(decision.approvalId)}/decision`, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json"
-    },
-    body: JSON.stringify({
-      decision: decision.decision,
-      reviewerNote: decision.reviewerNote,
-      inputDigest: decision.inputDigest
-    })
-  });
-
-  return parseApiResult(response);
 }

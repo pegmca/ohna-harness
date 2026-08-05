@@ -513,7 +513,7 @@ pnpm --filter @aiagent/report test
 
 ## 自动化 Eval 基线
 
-`datasets/eval-financial-v1.json` 是版本 `financial-research-v1.0.0` 的固定评测集，共 31 条：18 条 RAG、5 条 Chat、5 条 Report Mode、3 条失败路径。默认 runner 使用 seed `20260719` 和确定性 fixture，不读取 API key，也未使用 LLM-as-judge。
+`datasets/eval-financial-v1.json` 是版本 `financial-research-v1.0.0` 的固定评测集，共 31 条：18 条 RAG、5 条 Chat、5 条 Report Mode、3 条失败路径。runner（`packages/eval/src/loop-runner.ts` 的 `runLoopEval`）用 fixture 作为确定性种子推导 mock streamFn 与 mock 工具，跑真 `agentLoop`，从 run_events（loop 事件 + retrieval / workflow_node / pdf_export）投影证据后用既有确定性指标打分；预算按 mode 走 `shouldStopAfterTurn`（maxTurns + token）与 runner 硬上限双层。不读取 API key，也未使用 LLM-as-judge。
 
 ```bash
 # 运行回归，生成 docs/eval/latest-report.json 和 latest-report.md

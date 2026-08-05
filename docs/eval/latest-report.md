@@ -16,51 +16,51 @@
 | workflowCompletion | 0.984 | 0.984 | 0 |
 | reportSectionCoverage | 0.968 | 0.968 | 0 |
 | exportStatusRate | 1 | 1 | 0 |
-| averageLatencyMs | 22.839 | 22.839 | 0 |
-| p95LatencyMs | 45 | 45 | 0 |
+| averageLatencyMs | 0.226 | 22.839 | -22.613 |
+| p95LatencyMs | 1 | 45 | -44 |
 
 ## 逐条结果
 
 | Case | Mode | Pass | Citation | Financial | Grounded | Latency |
 |---|---|---:|---:|---:|---:|---:|
-| rag-001 | rag | yes | 1 | 1 | 1 | 18ms |
-| rag-002 | rag | yes | 1 | 1 | 1 | 20ms |
-| rag-003 | rag | yes | 1 | 1 | 1 | 21ms |
-| rag-004 | rag | yes | 1 | 1 | 1 | 19ms |
-| rag-005 | rag | yes | 1 | 1 | 1 | 22ms |
-| rag-006 | rag | yes | 1 | 1 | 1 | 24ms |
-| rag-007 | rag | yes | 1 | 1 | 1 | 26ms |
-| rag-008 | rag | yes | 1 | 1 | 1 | 20ms |
-| rag-009 | rag | yes | 1 | 1 | 1 | 23ms |
-| rag-010 | rag | yes | 1 | 1 | 1 | 21ms |
-| rag-011 | rag | yes | 1 | 1 | 1 | 19ms |
-| rag-012 | rag | yes | 1 | 1 | 1 | 22ms |
-| rag-013 | rag | yes | 1 | 1 | 1 | 25ms |
-| rag-014 | rag | yes | 1 | 1 | 1 | 23ms |
-| rag-015 | rag | yes | 1 | 1 | 1 | 18ms |
-| chat-001 | chat | yes | 1 | 1 | 1 | 8ms |
-| chat-002 | chat | yes | 1 | 1 | 1 | 7ms |
-| chat-003 | chat | yes | 1 | 1 | 1 | 9ms |
-| chat-004 | chat | yes | 1 | 1 | 1 | 6ms |
-| chat-005 | chat | yes | 1 | 1 | 1 | 7ms |
-| report-001 | report | yes | 1 | 1 | 1 | 42ms |
-| report-002 | report | yes | 1 | 1 | 1 | 45ms |
-| report-003 | report | yes | 1 | 1 | 1 | 44ms |
-| report-004 | report | yes | 1 | 1 | 1 | 43ms |
-| report-005 | report | yes | 1 | 1 | 1 | 48ms |
-| rag-016 | rag | yes | 1 | 1 | 1 | 20ms |
-| rag-017 | rag | yes | 1 | 1 | 1 | 22ms |
-| rag-018 | rag | yes | 1 | 1 | 1 | 23ms |
-| fail-001 | failure | no | 0 | 0 | 1 | 16ms |
-| fail-002 | failure | no | 1 | 1 | 0 | 15ms |
-| fail-003 | failure | no | 0 | 1 | 1 | 32ms |
+| rag-001 | rag | yes | 1 | 1 | 1 | 3ms |
+| rag-002 | rag | yes | 1 | 1 | 1 | 0ms |
+| rag-003 | rag | yes | 1 | 1 | 1 | 1ms |
+| rag-004 | rag | yes | 1 | 1 | 1 | 0ms |
+| rag-005 | rag | yes | 1 | 1 | 1 | 0ms |
+| rag-006 | rag | yes | 1 | 1 | 1 | 0ms |
+| rag-007 | rag | yes | 1 | 1 | 1 | 1ms |
+| rag-008 | rag | yes | 1 | 1 | 1 | 0ms |
+| rag-009 | rag | yes | 1 | 1 | 1 | 0ms |
+| rag-010 | rag | yes | 1 | 1 | 1 | 0ms |
+| rag-011 | rag | yes | 1 | 1 | 1 | 0ms |
+| rag-012 | rag | yes | 1 | 1 | 1 | 0ms |
+| rag-013 | rag | yes | 1 | 1 | 1 | 0ms |
+| rag-014 | rag | yes | 1 | 1 | 1 | 0ms |
+| rag-015 | rag | yes | 1 | 1 | 1 | 0ms |
+| chat-001 | chat | yes | 1 | 1 | 1 | 1ms |
+| chat-002 | chat | yes | 1 | 1 | 1 | 0ms |
+| chat-003 | chat | yes | 1 | 1 | 1 | 0ms |
+| chat-004 | chat | yes | 1 | 1 | 1 | 0ms |
+| chat-005 | chat | yes | 1 | 1 | 1 | 0ms |
+| report-001 | report | yes | 1 | 1 | 1 | 0ms |
+| report-002 | report | yes | 1 | 1 | 1 | 0ms |
+| report-003 | report | yes | 1 | 1 | 1 | 0ms |
+| report-004 | report | yes | 1 | 1 | 1 | 0ms |
+| report-005 | report | yes | 1 | 1 | 1 | 1ms |
+| rag-016 | rag | yes | 1 | 1 | 1 | 0ms |
+| rag-017 | rag | yes | 1 | 1 | 1 | 0ms |
+| rag-018 | rag | yes | 1 | 1 | 1 | 0ms |
+| fail-001 | failure | no | 0 | 0 | 1 | 0ms |
+| fail-002 | failure | no | 1 | 1 | 0 | 0ms |
+| fail-003 | failure | no | 0 | 1 | 1 | 0ms |
 
 ## 失败案例
 
 ### fail-001
 
 - Query: 不存在公司的收入
-- Trace / request: trace-fail-001 / req-fail-001
+- Trace / request: run-fail-001 / req-fail-001
 - Evidence: retrieved=[], citations=[]
 - Answer/report: 2024年收入100亿元。
 - 失败项: citationCoverage=0；financialAccuracy=0
@@ -70,7 +70,7 @@
 ### fail-002
 
 - Query: 给出无来源结论
-- Trace / request: trace-fail-002 / req-fail-002
+- Trace / request: run-fail-002 / req-fail-002
 - Evidence: retrieved=[fc2], citations=[annual]
 - Answer/report: 资产质量优秀。
 - 失败项: sourceGroundedness=0
@@ -80,9 +80,9 @@
 ### fail-003
 
 - Query: 证据不足时生成研报
-- Trace / request: trace-fail-003 / req-fail-003
+- Trace / request: run-fail-003 / req-fail-003
 - Evidence: retrieved=[], citations=[]
-- Answer/report: 证据不足，workflow终止。
+- Answer/report: （空）
 - 失败项: citationCoverage=0；successRate=0；workflowCompletion=0.5；reportSectionCoverage=0
 - 根因: Report workflow 在预期节点前终止。
 - 改进: 补齐节点重试与结构化 workflow 终止原因。

@@ -70,9 +70,9 @@ export async function loadEvalDataset(path: string): Promise<EvalDataset> {
  */
 export function runAutomationEval(dataset: EvalDataset, baseline?: EvalBaseline, thresholds: RegressionThresholds = DEFAULT_REGRESSION_THRESHOLDS): AutomationReport {
   const results = dataset.cases.map(scoreCase);
-  const metrics = aggregate(results);
+  const metrics = aggregateAutomationMetrics(results);
   const diff = baseline ? (Object.keys(metrics) as Array<keyof AutomationMetrics>).map((metric) => ({ metric, current: metrics[metric], baseline: baseline.metrics[metric], delta: round(metrics[metric] - baseline.metrics[metric]) })) : [];
-  const regressionReasons = checkRegression(metrics, baseline, thresholds);
+  const regressionReasons = checkAutomationRegression(metrics, baseline, thresholds);
   return { schemaVersion: "1.0.0", datasetVersion: dataset.datasetVersion, run: { id: `eval-${dataset.datasetVersion}-seed-${dataset.seed}`, startedAt: new Date().toISOString(), seed: dataset.seed, strategy: "deterministic_fixture", llmJudge: false }, metrics, results, failures: results.filter((item) => !item.passed), baseline, diff, regressionReasons };
 }
 
@@ -100,7 +100,19 @@ export async function readBaseline(path: string): Promise<EvalBaseline | undefin
 export async function writeBaseline(baseline: EvalBaseline, path: string): Promise<void> { await mkdir(dirname(path), { recursive: true }); await writeFile(path, `${JSON.stringify(baseline, null, 2)}\n`); }
 
 function scoreCase(item: UnifiedEvalCase): AutomationCaseResult {
-  const f = item.fixture; const citationCoverage = ratio(item.expectedCitations, (source) => f.citations.some((c) => c.source === source));
+  return scoreCaseWithEvidence(item, item.fixture);
+}
+
+/**
+ * 用一份证据（旧口径为 fixture，新口径为 run_events 投影）给单条 case 打分。
+ * 指标定义与阈值口径完全不变，是 deterministic fixture 策略的唯一打分入口。
+ *
+ * @param item 数据集用例（期望值来源）。
+ * @param f 待打分证据，形状与 fixture 相同。
+ * @returns 单条 case 的完整打分结果。
+ */
+export function scoreCaseWithEvidence(item: UnifiedEvalCase, f: UnifiedEvalFixture): AutomationCaseResult {
+  const citationCoverage = ratio(item.expectedCitations, (source) => f.citations.some((c) => c.source === source));
   const factChecks = item.expectedFacts.map((fact) => checkFact(fact, f)); const financialAccuracy = factChecks.length ? factChecks.filter(Boolean).length / factChecks.length : 1;
   const sourceGroundedness = ratio(f.citations, (citation) => f.retrievedChunks.some((chunk) => chunk.source === citation.source && normalize(chunk.text).includes(normalize(citation.quote))));
   const workflowCompletion = ratio(item.expectedWorkflow, (step) => f.workflow.includes(step)); const reportSectionCoverage = ratio(item.expectedSections, (section) => f.sections.includes(section));
@@ -110,8 +122,10 @@ function scoreCase(item: UnifiedEvalCase): AutomationCaseResult {
   return { caseId: item.id, mode: item.mode, query: item.query, passed: failures.length === 0, metrics, latencyMs: f.latencyMs, traceId: f.traceId, requestId: f.requestId, evidence: f, failures, rootCause: failures.length ? rootCause(failures) : undefined, improvement: failures.length ? improvement(failures) : undefined };
 }
 function checkFact(fact: FinancialFactExpectation, fixture: UnifiedEvalFixture): boolean { const text = `${fixture.answer} ${fixture.citations.map((c) => c.quote).join(" ")}`; return normalize(text).includes(normalize(String(fact.value))) && normalize(text).includes(normalize(fact.unit)) && normalize(text).includes(normalize(fact.period)) && (!fact.currency || normalize(text).includes(normalize(fact.currency))) && fixture.citations.some((c) => c.source === fact.source); }
-function aggregate(results: AutomationCaseResult[]): AutomationMetrics { const avg = (key: keyof AutomationCaseResult["metrics"]) => round(results.reduce((sum, item) => sum + item.metrics[key], 0) / results.length); const latencies = results.map((x) => x.latencyMs).sort((a,b)=>a-b); return { citationCoverage: avg("citationCoverage"), financialAccuracy: avg("financialAccuracy"), sourceGroundedness: avg("sourceGroundedness"), successRate: round(results.filter((x)=>x.passed).length/results.length), workflowCompletion: avg("workflowCompletion"), reportSectionCoverage: avg("reportSectionCoverage"), exportStatusRate: avg("exportStatusRate"), averageLatencyMs: round(latencies.reduce((a,b)=>a+b,0)/latencies.length), p95LatencyMs: latencies[Math.max(0, Math.ceil(latencies.length*.95)-1)] ?? 0 }; }
-function checkRegression(m: AutomationMetrics, b: EvalBaseline | undefined, t: RegressionThresholds): string[] { const r:string[]=[]; for (const key of ["successRate","citationCoverage","financialAccuracy","sourceGroundedness","workflowCompletion"] as const) if (m[key] < t[key]) r.push(`${key} ${m[key]} 低于门槛 ${t[key]}`); if (b) { for (const key of ["successRate","citationCoverage","financialAccuracy","sourceGroundedness","workflowCompletion"] as const) if (m[key] < b.metrics[key]) r.push(`${key} 相对 baseline 回退 ${round(m[key]-b.metrics[key])}`); if (m.p95LatencyMs-b.metrics.p95LatencyMs>t.maxP95LatencyIncreaseMs) r.push(`p95 latency 增加 ${m.p95LatencyMs-b.metrics.p95LatencyMs}ms`); } return r; }
+/** @param results 全部 case 打分结果。 @returns 聚合后的总体指标（含 latency 分布）。 */
+export function aggregateAutomationMetrics(results: AutomationCaseResult[]): AutomationMetrics { const avg = (key: keyof AutomationCaseResult["metrics"]) => round(results.reduce((sum, item) => sum + item.metrics[key], 0) / results.length); const latencies = results.map((x) => x.latencyMs).sort((a,b)=>a-b); return { citationCoverage: avg("citationCoverage"), financialAccuracy: avg("financialAccuracy"), sourceGroundedness: avg("sourceGroundedness"), successRate: round(results.filter((x)=>x.passed).length/results.length), workflowCompletion: avg("workflowCompletion"), reportSectionCoverage: avg("reportSectionCoverage"), exportStatusRate: avg("exportStatusRate"), averageLatencyMs: round(latencies.reduce((a,b)=>a+b,0)/latencies.length), p95LatencyMs: latencies[Math.max(0, Math.ceil(latencies.length*.95)-1)] ?? 0 }; }
+/** @param m 当前指标。 @param b 可选基线。 @param t 回归阈值。 @returns 触发的回归原因列表，空数组表示通过。 */
+export function checkAutomationRegression(m: AutomationMetrics, b: EvalBaseline | undefined, t: RegressionThresholds): string[] { const r:string[]=[]; for (const key of ["successRate","citationCoverage","financialAccuracy","sourceGroundedness","workflowCompletion"] as const) if (m[key] < t[key]) r.push(`${key} ${m[key]} 低于门槛 ${t[key]}`); if (b) { for (const key of ["successRate","citationCoverage","financialAccuracy","sourceGroundedness","workflowCompletion"] as const) if (m[key] < b.metrics[key]) r.push(`${key} 相对 baseline 回退 ${round(m[key]-b.metrics[key])}`); if (m.p95LatencyMs-b.metrics.p95LatencyMs>t.maxP95LatencyIncreaseMs) r.push(`p95 latency 增加 ${m.p95LatencyMs-b.metrics.p95LatencyMs}ms`); } return r; }
 function ratio<T>(items: readonly T[], predicate:(item:T)=>boolean):number { return items.length ? items.filter(predicate).length/items.length : 1; }
 function normalize(v:string):string { return v.toLowerCase().replace(/[\s,，]/g,""); } function round(v:number):number{return Math.round(v*1000)/1000;}
 function rootCause(f:string[]):string { if(f.some(x=>x.startsWith("financialAccuracy"))) return "财务事实的数值、单位、币种、期间或来源未同时满足。"; if(f.some(x=>x.startsWith("sourceGroundedness"))) return "引用文本无法在 retrieved chunk 中逐项回溯。"; if(f.some(x=>x.startsWith("workflowCompletion"))) return "Report workflow 在预期节点前终止。"; return "输出缺少预期引用、章节或导出状态。"; }

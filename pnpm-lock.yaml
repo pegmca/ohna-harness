@@ -241,6 +241,12 @@ importers:
 
   packages/eval:
     dependencies:
+      '@aiagent/agent':
+        specifier: workspace:^
+        version: link:../agent
+      '@aiagent/ai':
+        specifier: workspace:^
+        version: link:../ai
       '@aiagent/rag':
         specifier: workspace:^
         version: link:../rag
@@ -250,6 +256,9 @@ importers:
       '@types/node':
         specifier: ^22.10.5
         version: 22.20.0
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
 
   packages/filings:
     dependencies:

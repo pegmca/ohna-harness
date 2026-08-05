@@ -16,11 +16,14 @@
     "test": "pnpm build && node --test test/*.test.mjs",
     "eval": "pnpm build && node dist/cli.js",
     "eval:update-baseline": "pnpm build && node dist/cli.js --update-baseline",
-    "typecheck": "pnpm --filter @aiagent/rag build && pnpm --filter @aiagent/types build && tsc -p tsconfig.json --pretty false --noEmit"
+    "typecheck": "pnpm --filter @aiagent/agent build && pnpm --filter @aiagent/rag build && pnpm --filter @aiagent/types build && tsc -p tsconfig.json --pretty false --noEmit"
   },
   "dependencies": {
+    "@aiagent/agent": "workspace:^",
+    "@aiagent/ai": "workspace:^",
     "@aiagent/rag": "workspace:^",
     "@aiagent/types": "workspace:^",
-    "@types/node": "^22.10.5"
+    "@types/node": "^22.10.5",
+    "zod": "^4.4.3"
   }
 }

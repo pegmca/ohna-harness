@@ -31,6 +31,16 @@ export type {
 
 export { createRagEvalReport, runRagEval, computeRagMetrics, RAG_EVAL_CASES, DEMO_DOCUMENTS, createDemoRagRuntime };
 export * from "./automation.js";
+export {
+  runLoopEval,
+  runEvalCaseWithLoop,
+  LOOP_EVAL_BUDGETS,
+  type LoopEvalBudget,
+  type LoopEvalCaseRun,
+  type LoopEvalOptions,
+  type LoopEvalRunEvent,
+} from "./loop-runner.js";
+export { projectRunEvents } from "./loop-projection.js";
 
 export interface EvalRunnerInput {
   case: EvalCase;

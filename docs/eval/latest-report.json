@@ -3,7 +3,7 @@
   "datasetVersion": "financial-research-v1.0.0",
   "run": {
     "id": "eval-financial-research-v1.0.0-seed-20260719",
-    "startedAt": "2026-07-25T07:00:49.553Z",
+    "startedAt": "2026-08-04T17:11:22.077Z",
     "seed": 20260719,
     "strategy": "deterministic_fixture",
     "llmJudge": false
@@ -16,8 +16,8 @@
     "workflowCompletion": 0.984,
     "reportSectionCoverage": 0.968,
     "exportStatusRate": 1,
-    "averageLatencyMs": 22.839,
-    "p95LatencyMs": 45
+    "averageLatencyMs": 0.226,
+    "p95LatencyMs": 1
   },
   "results": [
     {
@@ -34,8 +34,8 @@
         "reportSectionCoverage": 1,
         "exportStatusRate": 1
       },
-      "latencyMs": 18,
-      "traceId": "trace-rag-001",
+      "latencyMs": 3,
+      "traceId": "run-rag-001",
       "requestId": "req-rag-001",
       "evidence": {
         "answer": "2024年不良率1.05%。",
@@ -55,8 +55,8 @@
         "workflow": [],
         "sections": [],
         "ok": true,
-        "latencyMs": 18,
-        "traceId": "trace-rag-001",
+        "latencyMs": 3,
+        "traceId": "run-rag-001",
         "requestId": "req-rag-001"
       },
       "failures": []
@@ -75,8 +75,8 @@
         "reportSectionCoverage": 1,
         "exportStatusRate": 1
       },
-      "latencyMs": 20,
-      "traceId": "trace-rag-002",
+      "latencyMs": 0,
+      "traceId": "run-rag-002",
       "requestId": "req-rag-002",
       "evidence": {
         "answer": "2024年净利润397亿元人民币。",
@@ -96,8 +96,8 @@
         "workflow": [],
         "sections": [],
         "ok": true,
-        "latencyMs": 20,
-        "traceId": "trace-rag-002",
+        "latencyMs": 0,
+        "traceId": "run-rag-002",
         "requestId": "req-rag-002"
       },
       "failures": []
@@ -116,8 +116,8 @@
         "reportSectionCoverage": 1,
         "exportStatusRate": 1
       },
-      "latencyMs": 21,
-      "traceId": "trace-rag-003",
+      "latencyMs": 1,
+      "traceId": "run-rag-003",
       "requestId": "req-rag-003",
       "evidence": {
         "answer": "2024年前三季度营收2590亿元人民币。",
@@ -137,8 +137,8 @@
         "workflow": [],
         "sections": [],
         "ok": true,
-        "latencyMs": 21,
-        "traceId": "trace-rag-003",
+        "latencyMs": 1,
+        "traceId": "run-rag-003",
         "requestId": "req-rag-003"
       },
       "failures": []
@@ -157,8 +157,8 @@
         "reportSectionCoverage": 1,
         "exportStatusRate": 1
       },
-      "latencyMs": 19,
-      "traceId": "trace-rag-004",
+      "latencyMs": 0,
+      "traceId": "run-rag-004",
       "requestId": "req-rag-004",
       "evidence": {
         "answer": "2024年前三季度毛利率25.1%。",
@@ -178,8 +178,8 @@
         "workflow": [],
         "sections": [],
         "ok": true,
-        "latencyMs": 19,
-        "traceId": "trace-rag-004",
+        "latencyMs": 0,
+        "traceId": "run-rag-004",
         "requestId": "req-rag-004"
       },
       "failures": []
@@ -198,8 +198,8 @@
         "reportSectionCoverage": 1,
         "exportStatusRate": 1
       },
-      "latencyMs": 22,
-      "traceId": "trace-rag-005",
+      "latencyMs": 0,
+      "traceId": "run-rag-005",
       "requestId": "req-rag-005",
       "evidence": {
         "answer": "2024年一季度拨备覆盖率450%。",
@@ -219,8 +219,8 @@
         "workflow": [],
         "sections": [],
         "ok": true,
-        "latencyMs": 22,
-        "traceId": "trace-rag-005",
+        "latencyMs": 0,
+        "traceId": "run-rag-005",
         "requestId": "req-rag-005"
       },
       "failures": []
@@ -239,8 +239,8 @@
         "reportSectionCoverage": 1,
         "exportStatusRate": 1
       },
-      "latencyMs": 24,
-      "traceId": "trace-rag-006",
+      "latencyMs": 0,
+      "traceId": "run-rag-006",
       "requestId": "req-rag-006",
       "evidence": {
         "answer": "2024年销量预计1700万辆。",
@@ -260,8 +260,8 @@
         "workflow": [],
         "sections": [],
         "ok": true,
-        "latencyMs": 24,
-        "traceId": "trace-rag-006",
+        "latencyMs": 0,
+        "traceId": "run-rag-006",
         "requestId": "req-rag-006"
       },
       "failures": []
@@ -280,8 +280,8 @@
         "reportSectionCoverage": 1,
         "exportStatusRate": 1
       },
-      "latencyMs": 26,
-      "traceId": "trace-rag-007",
+      "latencyMs": 1,
+      "traceId": "run-rag-007",
       "requestId": "req-rag-007",
       "evidence": {
         "answer": "风险包括原材料波动与供应链扰动。",
@@ -301,8 +301,8 @@
         "workflow": [],
         "sections": [],
         "ok": true,
-        "latencyMs": 26,
-        "traceId": "trace-rag-007",
+        "latencyMs": 1,
+        "traceId": "run-rag-007",
         "requestId": "req-rag-007"
       },
       "failures": []
@@ -321,8 +321,8 @@
         "reportSectionCoverage": 1,
         "exportStatusRate": 1
       },
-      "latencyMs": 20,
-      "traceId": "trace-rag-008",
+      "latencyMs": 0,
+      "traceId": "run-rag-008",
       "requestId": "req-rag-008",
       "evidence": {
         "answer": "2024年资本充足率13.5%。",
@@ -342,8 +342,8 @@
         "workflow": [],
         "sections": [],
         "ok": true,
-        "latencyMs": 20,
-        "traceId": "trace-rag-008",
+        "latencyMs": 0,
+        "traceId": "run-rag-008",
         "requestId": "req-rag-008"
       },
       "failures": []
@@ -362,8 +362,8 @@
         "reportSectionCoverage": 1,
         "exportStatusRate": 1
       },
-      "latencyMs": 23,
-      "traceId": "trace-rag-009",
+      "latencyMs": 0,
+      "traceId": "run-rag-009",
       "requestId": "req-rag-009",
       "evidence": {
         "answer": "2024年ROE为10.5%。",
@@ -383,8 +383,8 @@
         "workflow": [],
         "sections": [],
         "ok": true,
-        "latencyMs": 23,
-        "traceId": "trace-rag-009",
+        "latencyMs": 0,
+        "traceId": "run-rag-009",
         "requestId": "req-rag-009"
       },
       "failures": []
@@ -403,8 +403,8 @@
         "reportSectionCoverage": 1,
         "exportStatusRate": 1
       },
-      "latencyMs": 21,
-      "traceId": "trace-rag-010",
+      "latencyMs": 0,
+      "traceId": "run-rag-010",
       "requestId": "req-rag-010",
       "evidence": {
         "answer": "2024年前三季度研发费用180亿元人民币。",
@@ -424,8 +424,8 @@
         "workflow": [],
         "sections": [],
         "ok": true,
-        "latencyMs": 21,
-        "traceId": "trace-rag-010",
+        "latencyMs": 0,
+        "traceId": "run-rag-010",
         "requestId": "req-rag-010"
       },
       "failures": []
@@ -444,8 +444,8 @@
         "reportSectionCoverage": 1,
         "exportStatusRate": 1
       },
-      "latencyMs": 19,
-      "traceId": "trace-rag-011",
+      "latencyMs": 0,
+      "traceId": "run-rag-011",
       "requestId": "req-rag-011",
       "evidence": {
         "answer": "2024年前三季度海外收入占比35%。",
@@ -465,8 +465,8 @@
         "workflow": [],
         "sections": [],
         "ok": true,
-        "latencyMs": 19,
-        "traceId": "trace-rag-011",
+        "latencyMs": 0,
+        "traceId": "run-rag-011",
         "requestId": "req-rag-011"
       },
       "failures": []
@@ -485,8 +485,8 @@
         "reportSectionCoverage": 1,
         "exportStatusRate": 1
       },
-      "latencyMs": 22,
-      "traceId": "trace-rag-012",
+      "latencyMs": 0,
+      "traceId": "run-rag-012",
       "requestId": "req-rag-012",
       "evidence": {
         "answer": "2024年一季度关注类贷款1.2%。",
@@ -506,8 +506,8 @@
         "workflow": [],
         "sections": [],
         "ok": true,
-        "latencyMs": 22,
-        "traceId": "trace-rag-012",
+        "latencyMs": 0,
+        "traceId": "run-rag-012",
         "requestId": "req-rag-012"
       },
       "failures": []
@@ -526,8 +526,8 @@
         "reportSectionCoverage": 1,
         "exportStatusRate": 1
       },
-      "latencyMs": 25,
-      "traceId": "trace-rag-013",
+      "latencyMs": 0,
+      "traceId": "run-rag-013",
       "requestId": "req-rag-013",
       "evidence": {
         "answer": "2024年中国新能源渗透率40%。",
@@ -547,8 +547,8 @@
         "workflow": [],
         "sections": [],
         "ok": true,
-        "latencyMs": 25,
-        "traceId": "trace-rag-013",
+        "latencyMs": 0,
+        "traceId": "run-rag-013",
         "requestId": "req-rag-013"
       },
       "failures": []
@@ -567,8 +567,8 @@
         "reportSectionCoverage": 1,
         "exportStatusRate": 1
       },
-      "latencyMs": 23,
-      "traceId": "trace-rag-014",
+      "latencyMs": 0,
+      "traceId": "run-rag-014",
       "requestId": "req-rag-014",
       "evidence": {
         "answer": "2024年上半年市占率37%。",
@@ -588,8 +588,8 @@
         "workflow": [],
         "sections": [],
         "ok": true,
-        "latencyMs": 23,
-        "traceId": "trace-rag-014",
+        "latencyMs": 0,
+        "traceId": "run-rag-014",
         "requestId": "req-rag-014"
       },
       "failures": []
@@ -608,8 +608,8 @@
         "reportSectionCoverage": 1,
         "exportStatusRate": 1
       },
-      "latencyMs": 18,
-      "traceId": "trace-rag-015",
+      "latencyMs": 0,
+      "traceId": "run-rag-015",
       "requestId": "req-rag-015",
       "evidence": {
         "answer": "2024年股利0.5元/股人民币。",
@@ -629,8 +629,8 @@
         "workflow": [],
         "sections": [],
         "ok": true,
-        "latencyMs": 18,
-        "traceId": "trace-rag-015",
+        "latencyMs": 0,
+        "traceId": "run-rag-015",
         "requestId": "req-rag-015"
       },
       "failures": []
@@ -649,8 +649,8 @@
         "reportSectionCoverage": 1,
         "exportStatusRate": 1
       },
-      "latencyMs": 8,
-      "traceId": "trace-chat-001",
+      "latencyMs": 1,
+      "traceId": "run-chat-001",
       "requestId": "req-chat-001",
       "evidence": {
         "answer": "ROE衡量净利润相对净资产的回报。",
@@ -659,8 +659,8 @@
         "workflow": [],
         "sections": [],
         "ok": true,
-        "latencyMs": 8,
-        "traceId": "trace-chat-001",
+        "latencyMs": 1,
+        "traceId": "run-chat-001",
         "requestId": "req-chat-001"
       },
       "failures": []
@@ -679,8 +679,8 @@
         "reportSectionCoverage": 1,
         "exportStatusRate": 1
       },
-      "latencyMs": 7,
-      "traceId": "trace-chat-002",
+      "latencyMs": 0,
+      "traceId": "run-chat-002",
       "requestId": "req-chat-002",
       "evidence": {
         "answer": "净息差衡量生息资产的利差收益。",
@@ -689,8 +689,8 @@
         "workflow": [],
         "sections": [],
         "ok": true,
-        "latencyMs": 7,
-        "traceId": "trace-chat-002",
+        "latencyMs": 0,
+        "traceId": "run-chat-002",
         "requestId": "req-chat-002"
       },
       "failures": []
@@ -709,8 +709,8 @@
         "reportSectionCoverage": 1,
         "exportStatusRate": 1
       },
-      "latencyMs": 9,
-      "traceId": "trace-chat-003",
+      "latencyMs": 0,
+      "traceId": "run-chat-003",
       "requestId": "req-chat-003",
       "evidence": {
         "answer": "拨备覆盖率衡量贷款损失准备对不良贷款的覆盖。",
@@ -719,8 +719,8 @@
         "workflow": [],
         "sections": [],
         "ok": true,
-        "latencyMs": 9,
-        "traceId": "trace-chat-003",
+        "latencyMs": 0,
+        "traceId": "run-chat-003",
         "requestId": "req-chat-003"
       },
       "failures": []
@@ -739,8 +739,8 @@
         "reportSectionCoverage": 1,
         "exportStatusRate": 1
       },
-      "latencyMs": 6,
-      "traceId": "trace-chat-004",
+      "latencyMs": 0,
+      "traceId": "run-chat-004",
       "requestId": "req-chat-004",
       "evidence": {
         "answer": "同比比较本期与上年同期。",
@@ -749,8 +749,8 @@
         "workflow": [],
         "sections": [],
         "ok": true,
-        "latencyMs": 6,
-        "traceId": "trace-chat-004",
+        "latencyMs": 0,
+        "traceId": "run-chat-004",
         "requestId": "req-chat-004"
       },
       "failures": []
@@ -769,8 +769,8 @@
         "reportSectionCoverage": 1,
         "exportStatusRate": 1
       },
-      "latencyMs": 7,
-      "traceId": "trace-chat-005",
+      "latencyMs": 0,
+      "traceId": "run-chat-005",
       "requestId": "req-chat-005",
       "evidence": {
         "answer": "环比比较本期与相邻上一期。",
@@ -779,8 +779,8 @@
         "workflow": [],
         "sections": [],
         "ok": true,
-        "latencyMs": 7,
-        "traceId": "trace-chat-005",
+        "latencyMs": 0,
+        "traceId": "run-chat-005",
         "requestId": "req-chat-005"
       },
       "failures": []
@@ -799,8 +799,8 @@
         "reportSectionCoverage": 1,
         "exportStatusRate": 1
       },
-      "latencyMs": 42,
-      "traceId": "trace-report-001",
+      "latencyMs": 0,
+      "traceId": "run-report-001",
       "requestId": "req-report-001",
       "evidence": {
         "answer": "银行研究报告已生成。",
@@ -833,8 +833,8 @@
         ],
         "exportStatus": "placeholder",
         "ok": true,
-        "latencyMs": 42,
-        "traceId": "trace-report-001",
+        "latencyMs": 0,
+        "traceId": "run-report-001",
         "requestId": "req-report-001"
       },
       "failures": []
@@ -853,8 +853,8 @@
         "reportSectionCoverage": 1,
         "exportStatusRate": 1
       },
-      "latencyMs": 45,
-      "traceId": "trace-report-002",
+      "latencyMs": 0,
+      "traceId": "run-report-002",
       "requestId": "req-report-002",
       "evidence": {
         "answer": "新能源研究报告已生成。",
@@ -887,8 +887,8 @@
         ],
         "exportStatus": "placeholder",
         "ok": true,
-        "latencyMs": 45,
-        "traceId": "trace-report-002",
+        "latencyMs": 0,
+        "traceId": "run-report-002",
         "requestId": "req-report-002"
       },
       "failures": []
@@ -907,8 +907,8 @@
         "reportSectionCoverage": 1,
         "exportStatusRate": 1
       },
-      "latencyMs": 44,
-      "traceId": "trace-report-003",
+      "latencyMs": 0,
+      "traceId": "run-report-003",
       "requestId": "req-report-003",
       "evidence": {
         "answer": "电池公司研究报告已生成。",
@@ -941,8 +941,8 @@
         ],
         "exportStatus": "placeholder",
         "ok": true,
-        "latencyMs": 44,
-        "traceId": "trace-report-003",
+        "latencyMs": 0,
+        "traceId": "run-report-003",
         "requestId": "req-report-003"
       },
       "failures": []
@@ -961,8 +961,8 @@
         "reportSectionCoverage": 1,
         "exportStatusRate": 1
       },
-      "latencyMs": 43,
-      "traceId": "trace-report-004",
+      "latencyMs": 0,
+      "traceId": "run-report-004",
       "requestId": "req-report-004",
       "evidence": {
         "answer": "资产质量研究报告已生成。",
@@ -995,8 +995,8 @@
         ],
         "exportStatus": "placeholder",
         "ok": true,
-        "latencyMs": 43,
-        "traceId": "trace-report-004",
+        "latencyMs": 0,
+        "traceId": "run-report-004",
         "requestId": "req-report-004"
       },
       "failures": []
@@ -1015,8 +1015,8 @@
         "reportSectionCoverage": 1,
         "exportStatusRate": 1
       },
-      "latencyMs": 48,
-      "traceId": "trace-report-005",
+      "latencyMs": 1,
+      "traceId": "run-report-005",
       "requestId": "req-report-005",
       "evidence": {
         "answer": "对比研究报告已生成。",
@@ -1058,8 +1058,8 @@
         ],
         "exportStatus": "placeholder",
         "ok": true,
-        "latencyMs": 48,
-        "traceId": "trace-report-005",
+        "latencyMs": 1,
+        "traceId": "run-report-005",
         "requestId": "req-report-005"
       },
       "failures": []
@@ -1078,8 +1078,8 @@
         "reportSectionCoverage": 1,
         "exportStatusRate": 1
       },
-      "latencyMs": 20,
-      "traceId": "trace-rag-016",
+      "latencyMs": 0,
+      "traceId": "run-rag-016",
       "requestId": "req-rag-016",
       "evidence": {
         "answer": "2024年净息差2.31%。",
@@ -1099,8 +1099,8 @@
         "workflow": [],
         "sections": [],
         "ok": true,
-        "latencyMs": 20,
-        "traceId": "trace-rag-016",
+        "latencyMs": 0,
+        "traceId": "run-rag-016",
         "requestId": "req-rag-016"
       },
       "failures": []
@@ -1119,8 +1119,8 @@
         "reportSectionCoverage": 1,
         "exportStatusRate": 1
       },
-      "latencyMs": 22,
-      "traceId": "trace-rag-017",
+      "latencyMs": 0,
+      "traceId": "run-rag-017",
       "requestId": "req-rag-017",
       "evidence": {
         "answer": "2024年总产能超过500GWh。",
@@ -1140,8 +1140,8 @@
         "workflow": [],
         "sections": [],
         "ok": true,
-        "latencyMs": 22,
-        "traceId": "trace-rag-017",
+        "latencyMs": 0,
+        "traceId": "run-rag-017",
         "requestId": "req-rag-017"
       },
       "failures": []
@@ -1160,8 +1160,8 @@
         "reportSectionCoverage": 1,
         "exportStatusRate": 1
       },
-      "latencyMs": 23,
-      "traceId": "trace-rag-018",
+      "latencyMs": 0,
+      "traceId": "run-rag-018",
       "requestId": "req-rag-018",
       "evidence": {
         "answer": "2024年一季度房地产不良率3.85%。",
@@ -1181,8 +1181,8 @@
         "workflow": [],
         "sections": [],
         "ok": true,
-        "latencyMs": 23,
-        "traceId": "trace-rag-018",
+        "latencyMs": 0,
+        "traceId": "run-rag-018",
         "requestId": "req-rag-018"
       },
       "failures": []
@@ -1201,8 +1201,8 @@
         "reportSectionCoverage": 1,
         "exportStatusRate": 1
       },
-      "latencyMs": 16,
-      "traceId": "trace-fail-001",
+      "latencyMs": 0,
+      "traceId": "run-fail-001",
       "requestId": "req-fail-001",
       "evidence": {
         "answer": "2024年收入100亿元。",
@@ -1211,8 +1211,8 @@
         "workflow": [],
         "sections": [],
         "ok": true,
-        "latencyMs": 16,
-        "traceId": "trace-fail-001",
+        "latencyMs": 0,
+        "traceId": "run-fail-001",
         "requestId": "req-fail-001"
       },
       "failures": [
@@ -1236,8 +1236,8 @@
         "reportSectionCoverage": 1,
         "exportStatusRate": 1
       },
-      "latencyMs": 15,
-      "traceId": "trace-fail-002",
+      "latencyMs": 0,
+      "traceId": "run-fail-002",
       "requestId": "req-fail-002",
       "evidence": {
         "answer": "资产质量优秀。",
@@ -1257,8 +1257,8 @@
         "workflow": [],
         "sections": [],
         "ok": true,
-        "latencyMs": 15,
-        "traceId": "trace-fail-002",
+        "latencyMs": 0,
+        "traceId": "run-fail-002",
         "requestId": "req-fail-002"
       },
       "failures": [
@@ -1281,11 +1281,11 @@
         "reportSectionCoverage": 0,
         "exportStatusRate": 1
       },
-      "latencyMs": 32,
-      "traceId": "trace-fail-003",
+      "latencyMs": 0,
+      "traceId": "run-fail-003",
       "requestId": "req-fail-003",
       "evidence": {
-        "answer": "证据不足，workflow终止。",
+        "answer": "",
         "citations": [],
         "retrievedChunks": [],
         "workflow": [
@@ -1296,8 +1296,8 @@
         "sections": [],
         "exportStatus": "blocked",
         "ok": false,
-        "latencyMs": 32,
-        "traceId": "trace-fail-003",
+        "latencyMs": 0,
+        "traceId": "run-fail-003",
         "requestId": "req-fail-003"
       },
       "failures": [
@@ -1325,8 +1325,8 @@
         "reportSectionCoverage": 1,
         "exportStatusRate": 1
       },
-      "latencyMs": 16,
-      "traceId": "trace-fail-001",
+      "latencyMs": 0,
+      "traceId": "run-fail-001",
       "requestId": "req-fail-001",
       "evidence": {
         "answer": "2024年收入100亿元。",
@@ -1335,8 +1335,8 @@
         "workflow": [],
         "sections": [],
         "ok": true,
-        "latencyMs": 16,
-        "traceId": "trace-fail-001",
+        "latencyMs": 0,
+        "traceId": "run-fail-001",
         "requestId": "req-fail-001"
       },
       "failures": [
@@ -1360,8 +1360,8 @@
         "reportSectionCoverage": 1,
         "exportStatusRate": 1
       },
-      "latencyMs": 15,
-      "traceId": "trace-fail-002",
+      "latencyMs": 0,
+      "traceId": "run-fail-002",
       "requestId": "req-fail-002",
       "evidence": {
         "answer": "资产质量优秀。",
@@ -1381,8 +1381,8 @@
         "workflow": [],
         "sections": [],
         "ok": true,
-        "latencyMs": 15,
-        "traceId": "trace-fail-002",
+        "latencyMs": 0,
+        "traceId": "run-fail-002",
         "requestId": "req-fail-002"
       },
       "failures": [
@@ -1405,11 +1405,11 @@
         "reportSectionCoverage": 0,
         "exportStatusRate": 1
       },
-      "latencyMs": 32,
-      "traceId": "trace-fail-003",
+      "latencyMs": 0,
+      "traceId": "run-fail-003",
       "requestId": "req-fail-003",
       "evidence": {
-        "answer": "证据不足，workflow终止。",
+        "answer": "",
         "citations": [],
         "retrievedChunks": [],
         "workflow": [
@@ -1420,8 +1420,8 @@
         "sections": [],
         "exportStatus": "blocked",
         "ok": false,
-        "latencyMs": 32,
-        "traceId": "trace-fail-003",
+        "latencyMs": 0,
+        "traceId": "run-fail-003",
         "requestId": "req-fail-003"
       },
       "failures": [
@@ -1507,15 +1507,15 @@
     },
     {
       "metric": "averageLatencyMs",
-      "current": 22.839,
+      "current": 0.226,
       "baseline": 22.839,
-      "delta": 0
+      "delta": -22.613
     },
     {
       "metric": "p95LatencyMs",
-      "current": 45,
+      "current": 1,
       "baseline": 45,
-      "delta": 0
+      "delta": -44
     }
   ],
   "regressionReasons": []

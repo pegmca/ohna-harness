@@ -148,8 +148,8 @@ function decideToolCall(text: string, availableTools: Set<string>): Extract<Assi
     return { type: "toolCall", id: `mock_call_${Date.now().toString(36)}`, name: "calculator", arguments: { expression } };
   }
   const ticker = text.match(/\b\d{6}\.(?:SZ|SH|BJ)\b/i)?.[0]?.toUpperCase();
-  // 研报关键词优先于单指标查询：report 触发只有「模型自主调用 generate_report」一条路（阶段 5）。
-  if (/研报|研究报告|深度报告/.test(text)) {
+  // 研报/研究简报/PDF 生成意图优先于检索与单指标查询：report 触发只有「模型自主调用 generate_report」一条路（阶段 5）。
+  if (/研报|研究报告|深度报告|研究简报|PDF/i.test(text)) {
     return {
       type: "toolCall",
       id: `mock_call_${Date.now().toString(36)}`,

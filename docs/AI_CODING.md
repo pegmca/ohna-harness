@@ -20,5 +20,5 @@
 
 - Run the narrowest relevant typecheck and test first, then root `pnpm typecheck`, `pnpm test`, and `pnpm build` for cross-package changes.
 - Run dependency checks for package or directory changes.
-- Verify light/dark, desktop/mobile, loading/error/approval, and reduced-motion states for UI work.
+- Verify light/dark, desktop/mobile, loading/error, and reduced-motion states for UI work.
 - Update affected public docs, task cards, and learning notes in the same change. If no update is required, explain why.

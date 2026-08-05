@@ -83,7 +83,7 @@ function parseSseEvents(body) {
     .map((line) => JSON.parse(line.slice(6)));
 }
 
-test("(a) run 落库线性消息序列，run_events_v2 与 SSE 输出逐条一致", { skip: !integrationEnabled }, async () => {
+test("(a) run 落库线性消息序列，run_events 与 SSE 输出逐条一致", { skip: !integrationEnabled }, async () => {
   const context = await createPgContext();
   const app = createServer(context.repos);
   try {
@@ -98,9 +98,9 @@ test("(a) run 落库线性消息序列，run_events_v2 与 SSE 输出逐条一�
     const snapshot = await waitForTerminal(app, accepted.snapshotUrl, { cookie });
     assert.equal(snapshot.status, "completed");
 
-    // messages_v2：user → assistant(toolCall) → toolResult → assistant 线性序列。
+    // messages：user → assistant(toolCall) → toolResult → assistant 线性序列。
     const messageRows = (await context.pool.query(
-      "select role,message_type,sequence,run_id from messages_v2 where conversation_id=$1 order by sequence",
+      "select role,message_type,sequence,run_id from messages where conversation_id=$1 order by sequence",
       [conversation.conversationId]
     )).rows;
     assert.deepEqual(messageRows.map((row) => row.role), ["user", "assistant", "toolResult", "assistant"]);
@@ -108,9 +108,9 @@ test("(a) run 落库线性消息序列，run_events_v2 与 SSE 输出逐条一�
     assert.equal(messageRows.every((row) => row.message_type === "normal"), true);
     assert.equal(messageRows.slice(1).every((row) => row.run_id === accepted.runId), true);
 
-    // run_events_v2 与 SSE 实际输出逐条一致（sequence / type / payload）。
+    // run_events 与 SSE 实际输出逐条一致（sequence / type / payload）。
     const storedEvents = (await context.pool.query(
-      "select sequence,event_type,payload from run_events_v2 where run_id=$1 order by sequence",
+      "select sequence,event_type,payload from run_events where run_id=$1 order by sequence",
       [accepted.runId]
     )).rows;
     const sse = await app.inject({ method: "GET", url: `${accepted.eventsUrl}?afterSequence=0`, headers: { cookie } });
@@ -225,7 +225,7 @@ test("(c) compaction 跨进程生效：重启后上下文从压缩消息重建",
   await appOne.close();
 
   const compactionRows = (await context.pool.query(
-    "select content from messages_v2 where conversation_id=$1 and message_type='compaction'",
+    "select content from messages where conversation_id=$1 and message_type='compaction'",
     [conversationId]
   )).rows;
   assert.equal(compactionRows.length, 1);

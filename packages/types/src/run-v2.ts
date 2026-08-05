@@ -16,7 +16,7 @@ export type RunStatusDtoV2 =
   | "cancelled"
   | "interrupted";
 
-/** run_events_v2.event_type 枚举：loop 事件对齐 pi AgentEvent，retrieval/workflow_node/pdf_export 为能力事件，run_status/run_error 为服务端生命周期补充。 */
+/** run_events.event_type 枚举：loop 事件对齐 pi AgentEvent，retrieval/workflow_node/pdf_export 为能力事件，run_status/run_error 为服务端生命周期补充。 */
 export type RunEventTypeDto =
   | "agent_start"
   | "agent_end"
@@ -36,7 +36,7 @@ export type RunEventTypeDto =
   | "run_error";
 
 /**
- * SSE 与 run_events_v2 共用的 canonical 事件 envelope。
+ * SSE 与 run_events 共用的 canonical 事件 envelope。
  * payload：loop 事件为 AgentEvent JSON 本体；run_status 为 {status, message}；
  * run_error 为 {error: ApiError}。
  */
@@ -77,4 +77,34 @@ export interface RunSnapshotDtoV2 {
   updatedAt: string;
   startedAt?: string;
   completedAt?: string;
+}
+
+/** 创建研究 Run 的请求；显式模式与触发入口分离，避免 UI 泄漏 Agent 路由细节。 */
+export interface AgentRunCreateRequestDto {
+  message: string;
+  conversationId: string;
+  /** 服务端模型目录中的稳定 ID；旧客户端缺省时使用目录默认模型。 */
+  modelId?: string;
+  /** 已上传且属于当前用户的文档 ID；带附件时检索严格限定在该集合。 */
+  attachmentDocumentIds?: string[];
+  /** 浏览器生成的用户消息幂等键；同一次网络重试必须复用。 */
+  clientMessageId?: string;
+  /**
+   * 客户端提示元数据（阶段 5）：hint="report" 表示用户显式要求研报，
+   * 仅用于 system prompt 约束模型调用 generate_report 工具；当前不落库（messages 无 metadata 列）。
+   */
+  metadata?: { hint?: string };
+  mode: "auto" | "report";
+  source: "composer" | "report_button";
+}
+
+/** 创建异步 Agent run 后立即返回的定位信息。 */
+export interface AgentRunAcceptedDto {
+  runId: string;
+  requestId: string;
+  conversationId: string;
+  modelId: string;
+  status: RunStatusDtoV2;
+  eventsUrl: string;
+  snapshotUrl: string;
 }

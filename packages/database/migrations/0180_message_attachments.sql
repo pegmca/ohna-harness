@@ -1,10 +1,19 @@
-ALTER TABLE documents DROP CONSTRAINT documents_source_type_check;
-ALTER TABLE documents ADD CONSTRAINT documents_source_type_check
-  CHECK (source_type IN ('local_file', 'remote_url', 'mock_text', 'chat_attachment'));
+ALTER TABLE documents DROP CONSTRAINT IF EXISTS documents_source_type_check;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'documents_source_type_check' AND conrelid = 'documents'::regclass
+  ) THEN
+    ALTER TABLE documents ADD CONSTRAINT documents_source_type_check
+      CHECK (source_type IN ('local_file', 'remote_url', 'mock_text', 'chat_attachment'));
+  END IF;
+END
+$$;
 COMMENT ON COLUMN documents.source_type IS
   '来源类型：local_file 本地文件、remote_url 远程地址、mock_text 演示文本、chat_attachment 聊天附件';
 
-CREATE TABLE chat_attachment_uploads (
+CREATE TABLE IF NOT EXISTS chat_attachment_uploads (
   id uuid PRIMARY KEY,
   user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   client_attachment_id text NOT NULL,
@@ -24,11 +33,11 @@ CREATE TABLE chat_attachment_uploads (
   UNIQUE (bound_message_id, document_id)
 );
 
-CREATE INDEX chat_attachment_uploads_orphan_idx
+CREATE INDEX IF NOT EXISTS chat_attachment_uploads_orphan_idx
   ON chat_attachment_uploads(uploaded_at, id)
   WHERE status = 'indexed' AND bound_message_id IS NULL;
 
-CREATE INDEX chat_attachment_uploads_lease_idx
+CREATE INDEX IF NOT EXISTS chat_attachment_uploads_lease_idx
   ON chat_attachment_uploads(lease_expires_at, id)
   WHERE status = 'uploading';
 
@@ -47,7 +56,7 @@ COMMENT ON COLUMN chat_attachment_uploads.status IS '上传生命周期状态：
 COMMENT ON COLUMN chat_attachment_uploads.uploaded_at IS '首次创建上传记录的时间';
 COMMENT ON COLUMN chat_attachment_uploads.updated_at IS '上传状态最近更新时间';
 
-CREATE TABLE message_attachments (
+CREATE TABLE IF NOT EXISTS message_attachments (
   id uuid PRIMARY KEY,
   user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   message_id uuid NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
@@ -61,7 +70,7 @@ CREATE TABLE message_attachments (
   UNIQUE (message_id, ordinal)
 );
 
-CREATE INDEX message_attachments_user_message_idx
+CREATE INDEX IF NOT EXISTS message_attachments_user_message_idx
   ON message_attachments(user_id, message_id, ordinal);
 
 COMMENT ON COLUMN message_attachments.id IS '消息附件绑定唯一标识';

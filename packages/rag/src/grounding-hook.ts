@@ -1,5 +1,5 @@
 import type { AgentMessage } from "@aiagent/agent";
-import type { TraceRetrievalEventDto } from "@aiagent/types";
+import type { RetrievalTraceDto } from "@aiagent/types";
 import { assembleUntrustedContext, type UntrustedContent } from "@aiagent/security";
 import { createQueryPreview } from "./retrieval.js";
 import { createTraceRetrievalEvent } from "./source-uri.js";
@@ -23,7 +23,7 @@ export interface GroundingHookOptions {
   /** topK，默认 5。 */
   topK?: number;
   /** 检索事件写入 run_events 的回调；事件名保持 "retrieval"。 */
-  recordRetrieval?: (event: TraceRetrievalEventDto) => void | Promise<void>;
+  recordRetrieval?: (event: RetrievalTraceDto) => void | Promise<void>;
 }
 
 /**

@@ -46,7 +46,7 @@ test("后续 migration 的新增列都有同文件中文注释", async () => {
 });
 
 test("后续 migration 编号保持保留且无业务 migration 被提前创建", async () => {
-  const reserved = ["0010", "0020", "0030", "0040", "0050", "0060", "0070", "0080"];
+  const reserved = ["0050", "0060", "0070", "0110", "0120", "0140", "0150", "0160", "0170", "0180"];
   const plan = await readFile(join(packageDir, "README.md"), "utf8");
   for (const prefix of reserved) assert.equal(plan.includes(`\`${prefix}\``), true);
 });
@@ -60,21 +60,20 @@ test("空库 migration 可执行、可幂等，并回滚失败 migration", { ski
     const applied = await context.pool.query("select name from __aiagent_migrations order by name");
     assert.deepEqual(applied.rows.map((row) => row.name), [
       "0000_identity.sql",
-      "0010_conversation.sql",
-      "0020_runs.sql",
-      "0030_trace.sql",
-      "0040_approval.sql",
       "0050_rag_documents.sql",
       "0060_rag_vectors.sql",
       "0070_report.sql",
-      "0080_citations.sql",
-      "0090_run_model.sql",
-      "0100_message_attachments.sql",
       "0110_linear_messages.sql",
       "0120_run_events_retrieval.sql",
-      "0130_message_v2_citation_attachment_fks.sql",
       "0140_run_events_workflow.sql",
-      "0150_run_events_mcp_discovery.sql"
+      "0150_run_events_mcp_discovery.sql",
+      "0160_drop_legacy_schema.sql",
+      "0170_citations.sql",
+      "0180_message_attachments.sql",
+      "0190_drop_run_events_conversation_fk.sql",
+      "0200_drop_runs_conversation_fk.sql",
+      "0210_drop_remaining_conversation_fks.sql",
+      "0220_trim_workflow_status.sql"
     ]);
 
     await writeFile(join(fixtureDir, "9999_failure.sql"), "create table rolled_back(id integer); select missing_function();");

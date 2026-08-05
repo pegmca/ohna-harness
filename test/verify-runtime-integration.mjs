@@ -3,7 +3,7 @@
  * PR-10 runtime 集成全链路验证脚本（真实 Fastify API 进程 + 真实 PostgreSQL）。
  *
  * 覆盖：identity bootstrap / conversation / run 终态、SSE 断线重连连续性、
- * 读取链路（messages/snapshot/trace）、审批决定与幂等重放、report workflow + PDF 导出与下载、
+ * 读取链路（messages/snapshot/run_events）、report workflow + PDF 导出与下载、
  * RAG ingest/search/citation、跨重启持久化与 stale run 恢复、跨用户越权隔离、
  * clientMessageId 并发幂等与取消竞争、pg_dump 备份恢复、PostgreSQL 故障注入（结构化错误不泄漏）、
  * SIGTERM graceful shutdown（在途 run 落库为 run_interrupted）。
@@ -39,7 +39,7 @@ const DATABASE_URL = `postgresql://aiagent:aiagent-local@127.0.0.1:${PG_PORT}/${
 const ARTIFACT_ROOT = path.join(repoRoot, "test", ".artifacts-runtime-verify");
 const API_ENTRY = path.join(repoRoot, "apps/api/dist/server.js");
 const MIGRATE_ENTRY = path.join(repoRoot, "packages/database/dist/migrate.js");
-const TERMINAL = new Set(["succeeded", "failed", "cancelled"]);
+const TERMINAL = new Set(["completed", "failed", "cancelled", "interrupted"]);
 
 const results = [];
 /** 当前 API 子进程句柄；finally 中必须确保被杀掉。 */
@@ -199,7 +199,7 @@ async function readSse(runId, cookie, options = {}) {
           controller.abort();
           return events;
         }
-        if (last.type === "run_result" || last.type === "run_error") {
+        if (last.type === "agent_end" || last.type === "run_error") {
           controller.abort();
           return events;
         }
@@ -294,13 +294,13 @@ async function main() {
 
   // 1. bootstrap → conversation → run → 终态
   let accepted1;
-  await check("1. bootstrap/conversation/run 到终态 succeeded", async () => {
+  await check("1. bootstrap/conversation/run 到终态 completed", async () => {
     accepted1 = await submitRun(cookieA, conversationId, "帮我查询 000001.SZ 最近一期净利润和 ROE。", "verify-cm-1");
     assert(accepted1.snapshotUrl === `/api/runs/${accepted1.runId}`, "snapshotUrl 契约不符");
     const snapshot = await waitTerminal(accepted1.runId, cookieA);
-    assert(snapshot.status === "succeeded", `终态=${snapshot.status}`);
+    assert(snapshot.status === "completed", `终态=${snapshot.status}`);
     assert(snapshot.events[0].type === "run_status", "首事件应为 run_status");
-    assert(snapshot.events.at(-1).type === "run_result", "末事件应为 run_result");
+    assert(snapshot.events.at(-1).type === "agent_end", "末事件应为 agent_end");
     assert(snapshot.events.every((event, index) => event.sequence === index + 1), "事件 sequence 不连续");
   });
 
@@ -314,35 +314,22 @@ async function main() {
     const sequences = all.map((event) => event.sequence);
     assert(new Set(sequences).size === sequences.length, `重连后出现重复 sequence: ${sequences}`);
     sequences.forEach((sequence, index) => assert(sequence === index + 1, `sequence 缺失/乱序: ${sequences}`));
-    assert(["run_result", "run_error"].includes(all.at(-1).type), "终态事件未到达");
-    assert(all.at(-1).type === "run_result", `SSE run 未成功: ${all.at(-1).type}`);
+    assert(["agent_end", "run_error"].includes(all.at(-1).type), "终态事件未到达");
+    assert(all.at(-1).type === "agent_end", `SSE run 未成功: ${all.at(-1).type}`);
   });
 
-  // 3. 读取链路 + 审批 + workflow/artifact/PDF + citation
+  // 3. 读取链路 + workflow/artifact/PDF + citation
   const ctx = {};
-  await check("3a. 读取链路 messages/snapshot/trace", async () => {
+  await check("3a. 读取链路 messages/snapshot/run_events", async () => {
     const messages = await api("GET", `/api/conversations/${conversationId}/messages`, { cookie: cookieA });
     assert(messages.status === 200 && messages.json.data.items.length > 0, `messages 读取失败: ${messages.text}`);
     const snapshot = await api("GET", `/api/runs/${accepted1.runId}`, { cookie: cookieA });
-    assert(snapshot.status === 200 && snapshot.json.data.status === "succeeded", "run snapshot 读取失败");
-    const trace = await api("GET", `/api/traces/${accepted1.requestId}`, { cookie: cookieA });
-    assert(trace.status === 200 && trace.json.data.requestId === accepted1.requestId, `trace 读取失败: ${trace.text}`);
+    assert(snapshot.status === 200 && snapshot.json.data.status === "completed", "run snapshot 读取失败");
+    const runEvents = await api("GET", `/api/runs/${accepted1.runId}/events?afterSequence=0`, { cookie: cookieA });
+    assert(runEvents.status === 200 && runEvents.json.data.items.length > 0, `run_events 读取失败: ${runEvents.text}`);
   });
 
-  await check("3b. 审批决定 + 同决定幂等重放", async () => {
-    const accepted = await submitRun(cookieA, conversationId, "执行 SQL: SELECT * FROM metrics", "verify-cm-approval");
-    const snapshot = await waitTerminal(accepted.runId, cookieA);
-    const approval = snapshot.result.trace.events.find((event) => event.type === "approval" && event.status === "requested");
-    assert(approval, "trace 中缺少 approval requested 事件");
-    assert(typeof approval.inputDigest === "string" && approval.inputDigest.length > 0, "approval inputDigest 为空");
-    const url = `/api/runs/${accepted.runId}/approvals/${approval.approvalId}/decision`;
-    const decided = await api("POST", url, { cookie: cookieA, body: { decision: "approved", inputDigest: approval.inputDigest } });
-    assert(decided.status === 200 && decided.json.data.decision === "approved", `决定失败: ${decided.text}`);
-    const replay = await api("POST", url, { cookie: cookieA, body: { decision: "approved", inputDigest: approval.inputDigest } });
-    assert(replay.status === 200 && replay.json.data.decision === "approved", `幂等重放失败: ${replay.text}`);
-  });
-
-  await check("3c. report workflow 审批 → PDF 导出 → 下载", async () => {
+  await check("3b. report workflow 直接导出 PDF → 下载", async () => {
     const accepted = await submitRun(
       cookieA, conversationId,
       "基于最近两年公告和财务数据，为 000001.SZ 生成研究简报 PDF。",
@@ -352,18 +339,10 @@ async function main() {
     const snapshot = await waitTerminal(accepted.runId, cookieA);
     const workflow = snapshot.result.reportWorkflow;
     assert(workflow, "结果缺少 reportWorkflow");
-    assert(workflow.run.status === "paused", `workflow 状态=${workflow.run.status}`);
-    assert(workflow.artifact.status === "html_preview_only", `artifact 状态=${workflow.artifact.status}`);
-    const approvalRequest = workflow.run.approvalRequest;
-    assert(typeof approvalRequest.inputDigest === "string" && approvalRequest.inputDigest.length > 0, "workflow 审批 digest 为空");
-    const decided = await api("POST", `/api/runs/${accepted.runId}/approvals/${approvalRequest.approvalId}/decision`, {
-      cookie: cookieA, body: { decision: "approved", inputDigest: approvalRequest.inputDigest }
-    });
-    assert(decided.status === 200, `workflow 审批决定失败: ${decided.text}`);
+    assert(workflow.run.status === "succeeded", `workflow 状态=${workflow.run.status}`);
+    assert(workflow.artifact.status === "pdf_ready", `artifact 状态=${workflow.artifact.status}`);
     ctx.artifactId = workflow.artifact.artifactId;
     ctx.artifactCitations = workflow.artifact.citations ?? [];
-    const exported = await api("POST", `/api/report-artifacts/${ctx.artifactId}/pdf`, { cookie: cookieA });
-    assert(exported.status === 200 && exported.json.data.status === "pdf_ready", `PDF 导出失败: ${exported.text}`);
     const download = await fetch(`${BASE}/api/report-artifacts/${ctx.artifactId}/download`, { headers: { cookie: cookieA } });
     assert(download.status === 200, `PDF 下载状态 ${download.status}`);
     const bytes = Buffer.from(await download.arrayBuffer());
@@ -396,7 +375,7 @@ async function main() {
   });
 
   // 5. 跨重启持久化 + stale run 恢复
-  await check("5a. SIGKILL 重启后 conversation/messages/run/trace/artifact/PDF 全部可读且终态一致", async () => {
+  await check("5a. SIGKILL 重启后 conversation/messages/run/run_events/artifact/PDF 全部可读且终态一致", async () => {
     await stopApi("SIGKILL");
     await startApi();
     const conversationRead = await api("GET", "/api/conversations", { cookie: cookieA });
@@ -406,9 +385,9 @@ async function main() {
     const messages = await api("GET", `/api/conversations/${conversationId}/messages`, { cookie: cookieA });
     assert(messages.status === 200 && messages.json.data.items.length > 0, "重启后 messages 丢失");
     const snapshot = await api("GET", `/api/runs/${accepted1.runId}`, { cookie: cookieA });
-    assert(snapshot.status === 200 && snapshot.json.data.status === "succeeded", "重启后 run 终态不一致");
-    const trace = await api("GET", `/api/traces/${accepted1.requestId}`, { cookie: cookieA });
-    assert(trace.status === 200, "重启后 trace 丢失");
+    assert(snapshot.status === 200 && snapshot.json.data.status === "completed", "重启后 run 终态不一致");
+    const runEvents = await api("GET", `/api/runs/${accepted1.runId}/events?afterSequence=0`, { cookie: cookieA });
+    assert(runEvents.status === 200 && runEvents.json.data.items.length > 0, "重启后 run_events 丢失");
     const artifact = await api("GET", `/api/report-artifacts/${ctx.artifactId}`, { cookie: cookieA });
     assert(artifact.status === 200 && artifact.json.data.status === "pdf_ready", "重启后 artifact 状态不一致");
     const download = await fetch(`${BASE}/api/report-artifacts/${ctx.artifactId}/download`, { headers: { cookie: cookieA } });
@@ -417,23 +396,21 @@ async function main() {
 
   await check("5b. stale run（running 且 10 分钟未更新）重启恢复为 failed/run_interrupted", async () => {
     // 复用一个已终态 run 行伪造“重启前在途”：状态拨回 running、updated_at 拨到 10 分钟前。
-    await psql(DB_NAME, `UPDATE agent_runs SET status='running', updated_at=now()-interval '10 minutes', completed_at=NULL WHERE id='${ctx.reportRunId}'`);
+    await psql(DB_NAME, `UPDATE runs SET status='running', updated_at=now()-interval '10 minutes', completed_at=NULL WHERE id='${ctx.reportRunId}'`);
     await stopApi("SIGKILL");
     await startApi();
     const snapshot = await api("GET", `/api/runs/${ctx.reportRunId}`, { cookie: cookieA });
-    assert(snapshot.status === 200 && snapshot.json.data.status === "failed", `stale 恢复后状态=${snapshot.json?.data?.status}`);
+    assert(snapshot.status === 200 && snapshot.json.data.status === "interrupted", `stale 恢复后状态=${snapshot.json?.data?.status}`);
     const errorCode = snapshot.json.data.error?.code ?? "";
     assert(errorCode.includes("run_interrupted"), `error.code=${errorCode} 不含 run_interrupted`);
   });
 
   // 6. 跨用户越权：全部 403/404
-  await check("6. 第二用户访问第一用户 run/trace/decision/artifact/pdf/messages 全部被拒", async () => {
+  await check("6. 第二用户访问第一用户 run/run_events/artifact/pdf/messages 全部被拒", async () => {
     const cookieB = await bootstrap("verify-user-b-00000002");
     const targets = [
       ["GET", `/api/runs/${accepted1.runId}`],
       ["GET", `/api/runs/${accepted1.runId}/events`],
-      ["GET", `/api/traces/${accepted1.requestId}`],
-      ["POST", `/api/runs/${accepted1.runId}/approvals/approval_any/decision`, { decision: "approved", inputDigest: "x" }],
       ["GET", `/api/report-artifacts/${ctx.artifactId}`],
       ["GET", `/api/report-artifacts/${ctx.artifactId}/download`],
       ["GET", `/api/conversations/${conversationId}/messages`]
@@ -467,11 +444,11 @@ async function main() {
     const accepted = await submitRun(cookieA, conversationId, "帮我查询 000001.SZ 最近一期净利润和 ROE。", "verify-cm-cancel-race");
     await api("DELETE", `/api/runs/${accepted.runId}`, { cookie: cookieA });
     const snapshot = await waitTerminal(accepted.runId, cookieA);
-    assert(["cancelled", "succeeded"].includes(snapshot.status), `竞争后状态=${snapshot.status}`);
-    // 终态标记唯一：成功路径是 run_result/run_error，取消路径是 run_status:cancelled，二者互斥只能出现一次。
+    assert(["cancelled", "completed"].includes(snapshot.status), `竞争后状态=${snapshot.status}`);
+    // 终态标记唯一：成功路径是 agent_end，失败/取消路径是 run_error / run_status:cancelled，二者互斥只能出现一次。
     const terminalEvents = snapshot.events.filter((event) =>
-      event.type === "run_result" || event.type === "run_error"
-      || (event.type === "run_status" && TERMINAL.has(event.status)));
+      event.type === "agent_end" || event.type === "run_error"
+      || (event.type === "run_status" && TERMINAL.has(event.payload?.status)));
     assert(terminalEvents.length === 1, `终态事件数=${terminalEvents.length}: ${JSON.stringify(snapshot.events.map((event) => [event.type, event.status ?? event.error?.code]))}`);
   });
 
@@ -508,16 +485,16 @@ async function main() {
     // 伪造一条当前在途 run（updated_at 为现在），shutdown drain 后应被标记 interrupted。
     const accepted = await submitRun(cookieA, conversationId, "帮我查询 000001.SZ 最近一期净利润和 ROE。", "verify-cm-shutdown");
     await waitTerminal(accepted.runId, cookieA);
-    await psql(DB_NAME, `UPDATE agent_runs SET status='running', updated_at=now(), started_at=now(), completed_at=NULL WHERE id='${accepted.runId}'`);
+    await psql(DB_NAME, `UPDATE runs SET status='running', updated_at=now(), started_at=now(), completed_at=NULL WHERE id='${accepted.runId}'`);
     const exitCode = await stopApi("SIGTERM");
     assert(exitCode === 0, `SIGTERM 后退出码=${exitCode}`);
     // 等 shutdown 落库事务可见后再查。
     await sleep(300);
-    const status = await psql(DB_NAME, `SELECT status FROM agent_runs WHERE id='${accepted.runId}'`);
-    assert(status === "failed", `shutdown 后 run 状态=${status}`);
+    const status = await psql(DB_NAME, `SELECT status FROM runs WHERE id='${accepted.runId}'`);
+    assert(status === "interrupted", `shutdown 后 run 状态=${status}`);
     const interruptedEvents = await psql(DB_NAME,
-      `SELECT count(*) FROM run_events WHERE run_id='${accepted.runId}' AND event_type='run_error' AND payload->'error'->>'code'='run_interrupted'`);
-    assert(Number(interruptedEvents) >= 1, "run_events 缺少 run_interrupted 事件");
+      `SELECT count(*) FROM run_events WHERE run_id='${accepted.runId}' AND event_type='run_status' AND payload->>'status'='interrupted'`);
+    assert(Number(interruptedEvents) >= 1, "run_events 缺少 interrupted 事件");
   });
 
   // 9. 故障注入：PostgreSQL 停止 → readiness 503 + 结构化错误无泄漏 → 恢复 200。

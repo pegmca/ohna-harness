@@ -103,7 +103,7 @@ export function registerRunRoutes(app: FastifyInstance, deps: RunRoutesDeps): vo
     return { ok: true, requestId: lookupRequestId, data: run };
   });
 
-  /** 以 SSE 重放历史事件并继续推送新增事件；Last-Event-ID 映射 run_events_v2.sequence。 */
+  /** 以 SSE 重放历史事件并继续推送新增事件；Last-Event-ID 映射 run_events.sequence。 */
   app.get<{ Params: { runId: string }; Querystring: { afterSequence?: string } }>("/api/runs/:runId/events", async (request, reply) => {
     const userId = requestUserId(identityByRequest, request);
     const parsedQuery = runEventsQuerySchema.safeParse(request.query);

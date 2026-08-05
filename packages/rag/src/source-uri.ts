@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { TraceRetrievalEventDto } from "@aiagent/types";
+import type { RetrievalTraceDto } from "@aiagent/types";
 import type {
   NewRagChunkRecord,
   RagChunkRecord,
@@ -229,7 +229,7 @@ export function readMetadataNumber(metadata: Record<string, string | number | bo
 export function createTraceRetrievalEvent(
   query: string,
   result: HybridRetrievalResult
-): TraceRetrievalEventDto {
+): RetrievalTraceDto {
   const now = new Date().toISOString();
 
   return {

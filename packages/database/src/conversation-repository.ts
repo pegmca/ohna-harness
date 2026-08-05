@@ -10,8 +10,8 @@ import type pg from "pg";
 import { isPostgresUniqueViolation, postgresTimestampToIso } from "./postgres.js";
 
 /**
- * 创建会话主体（conversations_v2）的 PostgreSQL adapter。
- * 消息职责已由 message-repository.ts（messages_v2 线性模型）承接。
+ * 创建会话主体（conversations）的 PostgreSQL adapter。
+ * 消息职责已由 message-repository.ts（messages 线性模型）承接。
  *
  * @param pool composition root 提供的 PostgreSQL 连接池。
  * @returns Conversation repository。
@@ -35,7 +35,7 @@ class PostgresConversationRepository implements ConversationRepository {
     const now = input.now ?? new Date().toISOString();
     try {
       const result = await this.pool.query<ConversationRow>(
-        `insert into conversations_v2(id,user_id,title,status,created_at,updated_at,last_message_at)
+        `insert into conversations(id,user_id,title,status,created_at,updated_at,last_message_at)
          values ($1,$2,$3,'active',$4,$4,$4)
          returning *`,
         [input.id ?? randomUUID(), userId, input.title, now]
@@ -58,7 +58,7 @@ class PostgresConversationRepository implements ConversationRepository {
     const cursor = input.cursor ? decodeConversationCursor(input.cursor) : undefined;
     try {
       const result = await this.pool.query<ConversationListRow>(
-        `select *,last_message_at::text as cursor_last_message_at from conversations_v2
+        `select *,last_message_at::text as cursor_last_message_at from conversations
           where user_id=$1 and status=$2
             and ($3::timestamptz is null or (last_message_at,id) < ($3::timestamptz,$4::uuid))
           order by last_message_at desc,id desc
@@ -91,7 +91,7 @@ class PostgresConversationRepository implements ConversationRepository {
   async find(userId: string, conversationId: string): Promise<Conversation | undefined> {
     try {
       const result = await this.pool.query<ConversationRow>(
-        "select * from conversations_v2 where id=$1 and user_id=$2",
+        "select * from conversations where id=$1 and user_id=$2",
         [conversationId, userId]
       );
       return result.rows[0] ? mapConversation(result.rows[0]) : undefined;
@@ -112,7 +112,7 @@ class PostgresConversationRepository implements ConversationRepository {
   async updateTitle(userId: string, conversationId: string, title: string, now = new Date().toISOString()): Promise<Conversation> {
     try {
       const result = await this.pool.query<ConversationRow>(
-        "update conversations_v2 set title=$3,updated_at=$4 where id=$1 and user_id=$2 returning *",
+        "update conversations set title=$3,updated_at=$4 where id=$1 and user_id=$2 returning *",
         [conversationId, userId, title, now]
       );
       if (!result.rows[0]) throw notFound();
@@ -133,7 +133,7 @@ class PostgresConversationRepository implements ConversationRepository {
   async archive(userId: string, conversationId: string, now = new Date().toISOString()): Promise<Conversation> {
     try {
       const result = await this.pool.query<ConversationRow>(
-        `update conversations_v2
+        `update conversations
             set status='archived',
                 archived_at=coalesce(archived_at,$3),
                 updated_at=case when status='archived' then updated_at else $3 end

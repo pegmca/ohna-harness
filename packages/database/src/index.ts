@@ -31,30 +31,9 @@ import { createPostgresArtifactRepository, createPostgresWorkflowRepository } fr
 export { createPostgresArtifactRepository, createPostgresWorkflowRepository } from "./report.js";
 import { createPostgresRunRepository, type RunRepository } from "./run-repository.js";
 export { createPostgresRunRepository, type CreateRunInputV2, type RunRepository } from "./run-repository.js";
-import { createPostgresApprovalRepository } from "./approval-repository.js";
-export { createPostgresApprovalRepository } from "./approval-repository.js";
-export {
-  APPROVAL_REQUEST_TTL_MS,
-  ApprovalRepositoryError,
-  type ApprovalDecideResult,
-  type ApprovalDecisionInput,
-  type ApprovalRecord,
-  type ApprovalRepository,
-  type ApprovalRequestInput,
-  type ApprovalStatus
-} from "./approval-types.js";
-import type { ApprovalRepository } from "./approval-types.js";
-import { createPostgresTraceStore } from "./trace-repository.js";
-export { createPostgresTraceStore } from "./trace-repository.js";
+import { listPendingMigrations } from "./migrate.js";
 import { createPostgresCitationRepository } from "./citation-repository.js";
 export { createPostgresCitationRepository } from "./citation-repository.js";
-import { createPostgresApprovalDecisionService, type ApprovalDecisionService } from "./approval-decision.js";
-export {
-  createPostgresApprovalDecisionService,
-  type ApprovalDecisionService,
-  type PostgresApprovalDecisionOutcome
-} from "./approval-decision.js";
-import { listPendingMigrations } from "./migrate.js";
 import { createPostgresAttachmentRepository, type AttachmentRepository } from "./attachment-repository.js";
 export {
   createPostgresAttachmentRepository,
@@ -75,9 +54,6 @@ export interface DatabaseRuntime {
   workflowRepository: WorkflowRepository;
   artifactRepository: ArtifactRepository;
   runRepository: RunRepository;
-  approvalRepository: ApprovalRepository;
-  approvalDecisionService: ApprovalDecisionService;
-  traceStore: import("@aiagent/trace").TraceStore;
   attachmentRepository: AttachmentRepository;
   close(): Promise<void>;
   ping(): Promise<boolean>;
@@ -109,9 +85,6 @@ export function createDatabaseRuntime(databaseUrl: string): DatabaseRuntime {
     workflowRepository: createPostgresWorkflowRepository(pool),
     artifactRepository: createPostgresArtifactRepository(pool),
     runRepository: createPostgresRunRepository(pool),
-    approvalRepository: createPostgresApprovalRepository(pool),
-    approvalDecisionService: createPostgresApprovalDecisionService(pool),
-    traceStore: createPostgresTraceStore(pool),
     attachmentRepository: createPostgresAttachmentRepository(pool),
     async close() { await pool.end(); },
     async listPendingMigrations() { return listPendingMigrations(pool); },

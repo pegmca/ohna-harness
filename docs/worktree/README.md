@@ -83,7 +83,7 @@ pi-mono 的内核是经典 ReAct（Reasoning + Acting）循环
 │ packages/agent         │   │ packages/database           │
 │ ≈ pi-agent-core        │   │   线性 message + run 表、     │
 │   agentLoop /          │   │   compaction message、       │
-│   agentLoopContinue、  │   │   trace 持久化               │
+│   agentLoopContinue、  │   │   run_events 持久化          │
 │   AgentTool 执行、     │   └─────────────────────────────┘
 │   loop hooks           │
 └───────────▲────────────┘
@@ -99,11 +99,11 @@ pi-mono 的内核是经典 ReAct（Reasoning + Acting）循环
   packages/report、packages/workflow（报告生成与 PDF，作为工具/子流程）
   packages/mcp（MCP 工具桥接为 AgentTool）
   packages/eval（评测，跑在新 loop 之上）
-  packages/trace（事件类型 + 记录器，职责收窄；去留见 01 取舍论证）
+  packages/trace（事件类型契约 + 脱敏工具，职责收窄；去留见 01 取舍论证）
 
-注：packages/tools 不保留为独立包——registry/executor/工具实现并入
-packages/agent 的 tool 层（zod schema + 超时/重试/deadline 语义随迁，
-approval 体系删除），论证见 01 取舍论证。
+注：packages/tools 仍保留为独立 workspace package，但其 registry/executor/
+工具实现已对齐 `packages/agent` 的 `AgentTool` 接口；approval 权限门已删除
+（zod schema + 超时/重试/deadline 语义随迁），论证见 01 取舍论证。
 ```
 
 依赖方向严格向下：`packages/ai` 不依赖任何本项目包；`packages/agent` 只依赖
@@ -122,12 +122,13 @@ approval 体系删除），论证见 01 取舍论证。
    beforeToolCall/afterToolCall/prepareNextTurn/shouldStopAfterTurn 各 hook 的
    本项目用法（观测、block、compaction 触发、RAG 注入）。
 5. [05 Postgres 持久化](05-persistence.md) — 线性消息 + run 的新 schema、
-   compaction message、trace 落库、旧 schema 废弃。
+   compaction message、旧 schema 废弃。
 6. [06 能力包接入](06-capability-integration.md) — RAG、report/workflow、MCP、eval
    如何挂到新 loop 与工具接口上。
 7. [07 分阶段实施计划](07-migration-plan.md) — 6 个阶段的任务拆分、依赖、验收标准。
+8. [08 目标提示词](08-goal-prompts.md) — 与当前改造配套的目标模式提示词模板。
 
-除 README 与 07 外，每篇结构统一为：`## 现状` → `## pi 参照` → `## 目标设计`
+除 README、07 与 08 外，每篇结构统一为：`## 现状` → `## pi 参照` → `## 目标设计`
 （含关键类型/接口签名草案）→ `## 取舍论证` → `## 删除清单`。
 
 ## 阶段划分索引

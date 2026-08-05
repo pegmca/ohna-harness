@@ -25,7 +25,7 @@ export function createPostgresCitationRepository(pool: pg.Pool): CitationReposit
   return {
     async listMessageCitations(userId, messageId) {
       try {
-        const owned = await pool.query("select 1 from messages_v2 where id=$1 and user_id=$2", [messageId, userId]);
+        const owned = await pool.query("select 1 from messages where id=$1 and user_id=$2", [messageId, userId]);
         if (!owned.rowCount) return undefined;
         const result = await pool.query<CitationJoinRow>(
           `${CITATION_SELECT} from message_citations r ${CITATION_JOINS}

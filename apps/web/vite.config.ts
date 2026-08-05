@@ -9,7 +9,9 @@ export default defineConfig({
       "/api": {
         target: "http://localhost:3001",
         changeOrigin: true
-      }
+      },
+      "/health": "http://localhost:3001",
+      "/ready": "http://localhost:3001"
     }
   },
   preview: {

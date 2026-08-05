@@ -3,7 +3,6 @@ import type { ConversationRepository, MessageStore } from "@aiagent/conversation
 import type { DataSourceRuntime } from "@aiagent/rag";
 import { createLocalArtifactStorage, createReportTool } from "@aiagent/report";
 import type { ArtifactRepository, ArtifactStorage, WorkflowRepository } from "@aiagent/report";
-import type { TraceStore } from "@aiagent/trace";
 import type { AgentTool } from "@aiagent/agent";
 import { createDefaultToolRegistry } from "@aiagent/tools";
 import type { IdentityMeDto } from "@aiagent/types";
@@ -27,7 +26,6 @@ import { registerErrorHandler } from "./http/hooks/error-handler.js";
 import { registerHealthRoutes } from "./http/routes/health.js";
 import { registerIdentityRoutes } from "./http/routes/identity.js";
 import { registerConversationRoutes } from "./http/routes/conversations.js";
-import { registerTraceRoutes } from "./http/routes/traces.js";
 import { registerRunRoutes } from "./http/routes/runs.js";
 import { registerDataSourceRoutes } from "./http/routes/data-sources.js";
 import { registerRagRoutes } from "./http/routes/rag.js";
@@ -62,8 +60,6 @@ export interface ApiServerOptions {
   runStore: RunStore;
   /** compaction 注入点（测试用小 contextWindow 触发压缩）。 */
   compaction?: RunCompactionOptions;
-  /** 旧 trace 查询路由的可选事实源；run 主路径不再写 trace 表（阶段 6 收敛）。 */
-  traceStore?: TraceStore;
   staleRunThresholdMs?: number;
 }
 
@@ -75,7 +71,7 @@ declare module "fastify" {
 }
 
 /**
- * 创建 HTTP API：run 主路径为 agentLoop → run_events_v2 落库 + SSE fan-out 的新协议。
+ * 创建 HTTP API：run 主路径为 agentLoop → run_events 落库 + SSE fan-out 的新协议。
  *
  * @returns 已注册路由的 Fastify 实例。
  */
@@ -121,7 +117,7 @@ export function createApiServer(options: ApiServerOptions): FastifyInstance {
     citationRepository: options.citationRepository,
     compaction: options.compaction,
     // report 工具按 run 装配（阶段 5 方案 A）：模型自主调用 generate_report，
-    // 事件经 recordEvent 落 run_events_v2 + SSE，PDF 在工具内直接发布（无 approval 门）。
+    // 事件经 recordEvent 落 run_events + SSE，PDF 在工具内直接发布（无 approval 门）。
     reportToolFactory: ({ recordEvent, userId, conversationId, runId }) => createReportTool({
       dataSourceRuntime,
       workflowRepository,
@@ -162,9 +158,6 @@ export function createApiServer(options: ApiServerOptions): FastifyInstance {
     qqBotStatus: options.qqBotStatus
   });
   registerConversationRoutes(app, { identityByRequest, conversationService });
-  if (options.traceStore) {
-    registerTraceRoutes(app, { traceStore: options.traceStore, identityByRequest });
-  }
   registerRunRoutes(app, { runService, identityByRequest });
 
   const staleThresholdMs = options.staleRunThresholdMs ?? 5 * 60_000;

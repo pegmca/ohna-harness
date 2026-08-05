@@ -1,4 +1,4 @@
-CREATE TABLE message_citations (
+CREATE TABLE IF NOT EXISTS message_citations (
   id uuid PRIMARY KEY,
   user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   message_id uuid NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
@@ -12,9 +12,9 @@ CREATE TABLE message_citations (
   created_at timestamptz NOT NULL,
   UNIQUE (message_id, ordinal)
 );
-CREATE INDEX message_citations_chunk_idx ON message_citations (chunk_id);
-CREATE INDEX message_citations_document_version_idx ON message_citations (document_version_id);
-CREATE INDEX message_citations_user_message_idx ON message_citations (user_id, message_id, ordinal);
+CREATE INDEX IF NOT EXISTS message_citations_chunk_idx ON message_citations (chunk_id);
+CREATE INDEX IF NOT EXISTS message_citations_document_version_idx ON message_citations (document_version_id);
+CREATE INDEX IF NOT EXISTS message_citations_user_message_idx ON message_citations (user_id, message_id, ordinal);
 
 COMMENT ON COLUMN message_citations.id IS '引用记录唯一标识';
 COMMENT ON COLUMN message_citations.user_id IS '生成该引用的回答所属用户标识，用于授权过滤';
@@ -28,7 +28,7 @@ COMMENT ON COLUMN message_citations.score IS '生成时检索/排序分数快照
 COMMENT ON COLUMN message_citations.verifier_status IS '校验状态：unverified 待校验、verified/rejected 自动校验终态、manual_verified/manual_rejected 人工终态不可被自动覆盖';
 COMMENT ON COLUMN message_citations.created_at IS '引用记录创建时间';
 
-CREATE TABLE artifact_citations (
+CREATE TABLE IF NOT EXISTS artifact_citations (
   id uuid PRIMARY KEY,
   user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   artifact_id text NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE,
@@ -42,9 +42,9 @@ CREATE TABLE artifact_citations (
   created_at timestamptz NOT NULL,
   UNIQUE (artifact_id, ordinal)
 );
-CREATE INDEX artifact_citations_chunk_idx ON artifact_citations (chunk_id);
-CREATE INDEX artifact_citations_document_version_idx ON artifact_citations (document_version_id);
-CREATE INDEX artifact_citations_user_artifact_idx ON artifact_citations (user_id, artifact_id, ordinal);
+CREATE INDEX IF NOT EXISTS artifact_citations_chunk_idx ON artifact_citations (chunk_id);
+CREATE INDEX IF NOT EXISTS artifact_citations_document_version_idx ON artifact_citations (document_version_id);
+CREATE INDEX IF NOT EXISTS artifact_citations_user_artifact_idx ON artifact_citations (user_id, artifact_id, ordinal);
 
 COMMENT ON COLUMN artifact_citations.id IS '引用记录唯一标识';
 COMMENT ON COLUMN artifact_citations.user_id IS '生成该引用的报告所属用户标识，用于授权过滤';

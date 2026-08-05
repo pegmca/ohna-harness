@@ -16,10 +16,12 @@
 │   │   └── src/
 │   └── api/
 ├── packages/
+│   ├── ai/
 │   ├── agent/
 │   ├── identity/
 │   ├── database/
 │   ├── channels/
+│   ├── conversation/
 │   ├── types/
 │   ├── filings/
 │   ├── rag/
@@ -27,6 +29,8 @@
 │   ├── workflow/
 │   ├── report/
 │   ├── eval/
+│   ├── mcp/
+│   ├── security/
 │   └── trace/
 ├── datasets/
 ├── notes/
@@ -48,19 +52,22 @@
 
 - `apps/web`：Vite + React + TypeScript Web 应用入口，负责承载 Immersive 产品界面，只通过 HTTP API 调用 Agent。
 - `apps/api`：Fastify HTTP adapter，负责请求校验、异步 Run 生命周期、SSE 事件投影和结构化响应。
-- `packages/agent`：Agent 能力边界，后续承载意图识别、循环调度和模型交互。
+- `packages/ai`：统一 LLM 抽象边界，对齐 pi-ai：`Message` 类型族、`AssistantMessageEvent`、provider 适配与 `stream` / `streamSimple`。
+- `packages/agent`：ReAct Agent 循环边界，提供 `agentLoop` / `agentLoopContinue`、`AgentTool` 契约与工具执行；不再有独立的意图路由器或 LLM Client。
 - `packages/identity`：浏览器指纹、稳定 `userId`、session 与 QQ 绑定规则的领域边界。
-- `packages/database`：PostgreSQL 连接池、migration runner，以及 Identity、Conversation、Run、Trace、Approval、RAG、Citation、Workflow、Artifact repository adapter（原生 `pg`，不使用 ORM）。
-- `packages/conversation`：Conversation/Message 领域模型、稳定游标页与 repository port。
+- `packages/database`：PostgreSQL 连接池、migration runner，以及 Identity、Conversation/Message、Run/RunEvent、RAG、Citation、Workflow、Artifact repository adapter（原生 `pg`，不使用 ORM）。
+- `packages/conversation`：pi `Message` 与线性消息存储之间的映射层，提供 `MessageStore` port 与上下文投影。
 - `packages/channels`：QQ Bot WebSocket 消息适配、命令处理和 Agent 私聊入口。
 - `packages/types`：前后端共享类型边界，承载 API contract、DTO、结构化错误和稳定枚举。
 - `packages/filings`：公告/财报 ingestion 边界，负责文件来源、document metadata 和原始文本来源信息。
 - `packages/rag`：RAG 运行时边界，负责 chunking、embedding 抽象、检索、引用和 grounded answer 的稳定类型入口。
-- `packages/eval`：RAG 评测边界，负责 eval case、metrics、runner 输入和报告输出结构。
-- `packages/workflow`：通用顺序 workflow runtime，负责节点 schema 校验、状态流转、max steps、结构化错误和节点 trace。
-- `packages/report`：研报领域节点边界，负责节点、真实 PDF renderer、Workflow/Artifact repository port 与本地 ArtifactStorage port。
-- `packages/tools`：工具注册与工具调用边界，后续承载外部数据和函数工具。
-- `packages/trace`：运行轨迹边界，后续承载事件记录、时间线和调试视图。
+- `packages/eval`：RAG/Agent 评测边界，负责 eval case、metrics、runner 输入和报告输出结构。
+- `packages/workflow`：通用顺序 workflow runtime，负责节点 schema 校验、状态流转、max steps、结构化错误和节点事件 sink。
+- `packages/report`：研报领域边界，`generate_report` 工具实现、真实 PDF renderer、Workflow/Artifact repository port 与本地 ArtifactStorage port。
+- `packages/tools`：内置 mock 工具注册与执行边界（calculator、financial_metric_mock、filing_search_mock 等）。
+- `packages/mcp`：独立 MCP stdio server 与 client adapter，把 MCP tools 包装为 `AgentTool` 并入 loop。
+- `packages/security`：prompt-injection 评估与不可信上下文封装边界。
+- `packages/trace`：最小运行事件类型契约与跨边界值脱敏工具。
 
 `packages/*` 作为独立 workspace package 构建和类型检查。`apps/web` 保持前端应用边界，不直接依赖 `agent`、`tools`、`trace` 这些核心运行时包；当前通过 `apps/api` 接入 Agent。
 
@@ -77,7 +84,7 @@ Immersive Playground 已演进为带实时执行过程的研究 Workbench：
 - 会话 API 提供创建、稳定游标分页、终态消息读取、改标题与归档。所有 route 从 HttpOnly session 取得 `userId`，不存在与越权统一返回 `not_found`。
 - 每次提交先调用 `POST /api/runs` 获得 `runId`，请求字段为 `message`、`conversationId`、稳定的 `clientMessageId`、`mode: auto | report` 和 `source: composer | report_button`；Report Mode 开关/研报按钮额外带 `metadata: { hint: "report" }`（只做 system prompt 约束，不落库），研报由模型自主调用 `generate_report` 工具完成；网络重试复用同一个 client ID，再订阅 `GET /api/runs/:runId/events`。
 - `GET /api/runs/:runId` 提供 PostgreSQL 可恢复快照，`DELETE /api/runs/:runId` 取消尚未结束的运行。SSE 支持 `Last-Event-ID` 或 `afterSequence` 持久回放；最终回答作为终态事件一次提交。
-- run state、工具调用和 trace 以“分类过程入口 → 最终答案”的顺序归属于对应 assistant 消息；Summary、Steps、Tools、Trace、Report 与 Approvals 分别打开右侧对应类型，不混排全部详情。历史消息通过 `runId` 恢复 PostgreSQL Run 快照，刷新后仍可查看。桌面端压缩主区，移动端覆盖显示，不设置常驻调试侧栏。
+- run state、工具调用和 trace 以“分类过程入口 → 最终答案”的顺序归属于对应 assistant 消息；Summary、Steps、Tools、Trace 与 Report 分别打开右侧对应类型，不混排全部详情。历史消息通过 `runId` 恢复 PostgreSQL Run 快照，刷新后仍可查看。桌面端压缩主区，移动端覆盖显示，不设置常驻调试侧栏。
 - 行情工具返回稳定的 60 根 mock OHLCV，详情面板使用 A 股红涨绿跌 K 线；图表按 lightweight-charts 要求保留 TradingView attribution。
 - `/`、`/data-sources`、`/workflow`、`/citations`、`/eval`、`/architecture`、`/settings` 均为可刷新路由；设置页支持浅色、深色和跟随系统。
 
@@ -129,7 +136,7 @@ docker compose up -d --build
 docker compose ps
 ```
 
-打开 `http://localhost:8080`。Web 仅对宿主机暴露 `8080`（可用 `AIAGENT_WEB_PORT` 修改），API 的 `3001` 只在 Compose 网络内暴露，由 Nginx 将浏览器 `/api/*` 请求代理到 `api:3001`。PostgreSQL 只绑定宿主机 `127.0.0.1:5432`；身份、session、Conversation/Message、Run/RunEvent、Trace、Approval、Citation、Workflow、Artifact metadata 与 RAG 文档 lineage 保存在 `postgres_data` volume，PDF bytes 保存在独立 `artifact_data` volume。
+打开 `http://localhost:8080`。Web 仅对宿主机暴露 `8080`（可用 `AIAGENT_WEB_PORT` 修改），API 的 `3001` 只在 Compose 网络内暴露，由 Nginx 将浏览器 `/api/*` 请求代理到 `api:3001`。PostgreSQL 只绑定宿主机 `127.0.0.1:5432`；身份、session、Conversation/Message、Run/RunEvent、Citation、Workflow、Artifact metadata 与 RAG 文档 lineage 保存在 `postgres_data` volume，PDF bytes 保存在独立 `artifact_data` volume。
 
 本地热更新与断点调试使用“数据库在 Docker、Web/API 在宿主机”的组合：
 
@@ -181,35 +188,36 @@ docker compose down
 
 如果 real 模式的 API 长期 `unhealthy`，先查看 `/ready`、migration 或 API 日志，并核对数据库与 provider 配置；端口冲突时修改 `.env` 中的 `AIAGENT_WEB_PORT` 或 `AIAGENT_POSTGRES_PORT`。普通 `docker compose down` 会保留身份数据；只有显式执行 `docker compose down -v` 才会删除 PostgreSQL volume。
 
-## LLM Client
+## LLM Abstraction
 
-`packages/agent` 导出统一 LLM Client，当前支持 OpenAI compatible `/chat/completions`。公开 contract 放在 `packages/types/src/llm.ts`，实现放在 `packages/agent/src/llm-client.ts`，`packages/agent/src/index.ts` 只保留 package 入口导出。
+`packages/ai` 导出统一 LLM 抽象，对齐 pi-ai：
 
-- `createLlmClient(config)`：通过显式配置创建 client。
-- `createLlmClientFromEnv(env)`：从环境变量创建 client。
-- `chat()`：普通聊天调用。
-- `streamChat()`：SSE streaming chat 初版，返回 `AsyncIterable` 事件。
-- `jsonChat()`：解析模型 JSON 输出，解析失败返回结构化 `json_parse_error`。
-- `toolChat()`：发送 function tool schema，并返回规范化后的工具名和参数。
+- `Message` 类型族：`UserMessage`、`AssistantMessage`、`ToolResultMessage`。
+- `AssistantMessageEvent`：流式增量事件（`start` / `text_start` / `text_delta` / `text_end` / `toolcall_start` / `toolcall_delta` / `toolcall_end` / `done` / `error`）。
+- `stream` / `streamSimple`：统一 LLM 流式入口；当前实现 OpenAI-compatible `/chat/completions` adapter（含 tool_call 增量拼接、usage/finish 处理、429 指数退避）。
+- `createAssistantMessageEventStream()`：用于测试的同步事件流构造器。
 
-环境变量：
+环境变量（`apps/api` 的 real 模式读取）：
 
-```bash
-AIAGENT_LLM_API_KEY=...
-AIAGENT_LLM_BASE_URL=https://api.openai.com/v1
-AIAGENT_LLM_MODEL=...
-AIAGENT_LLM_TIMEOUT_MS=30000
+```dotenv
+AIAGENT_PROVIDER_MODE=real
+AIAGENT_LLM_API_KEY_DEEPSEEK=...
+AIAGENT_LLM_BASE_URL_DEEPSEEK=https://api.deepseek.com/v1
+AIAGENT_LLM_MODEL_DEEPSEEK=...
+AIAGENT_LLM_API_KEY_OPENROUTER=...
+AIAGENT_LLM_BASE_URL_OPENROUTER=https://openrouter.ai/api/v1
+AIAGENT_LLM_MODEL_OPENROUTER=...
 ```
 
-兼容 fallback：`OPENAI_API_KEY`、`OPENAI_BASE_URL`、`OPENAI_MODEL`。调用方只依赖 `LlmResult<T>` 结构化结果，不需要处理底层 HTTP 异常。
+调用方只依赖 `packages/ai` 的 `Message` / `AssistantMessageEvent` 结构化结果，不需要处理底层 HTTP 异常。
 
 可调用验证入口：
 
 ```bash
-pnpm --filter @aiagent/agent test
+pnpm --filter @aiagent/ai test
 ```
 
-测试使用 mock provider 覆盖普通 chat、JSON 输出和 tool call，不需要真实 API key。
+测试使用 mock `fetch` 覆盖纯文本流、单/多 tool_call 增量拼接、4xx/5xx error event、AbortSignal 中断与 usage 透传，不需要真实 API key。
 
 ## Tools Infrastructure
 
@@ -223,18 +231,17 @@ pnpm --filter @aiagent/agent test
 默认权限：
 
 - `safe`：`calculator`、`market_data_mock`、`filing_search_mock`、`financial_metric_mock` 可直接执行。
-- `needs_approval`：`sql_query_mock` 的只读查询需要人工批准后执行。
 - `blocked`：`sql_query_mock` 发现写 SQL 或 schema 变更关键词时直接阻断，返回 `permission_denied`。
 
-SQL readonly 第一版是启发式白名单：只允许 `SELECT` / `WITH` 开头的单条查询，并禁止 `insert`、`update`、`delete`、`drop`、`alter`、`truncate`、`create` 等写操作关键词。它适合学习阶段保护工具边界，但不能替代真实数据库只读账号、SQL parser 或服务端权限隔离。
+SQL readonly 第一版是启发式白名单：只允许 `SELECT` / `WITH` 开头的单条查询，并禁止 `insert`、`update`、`delete`、`drop`、`alter`、`truncate`、`create` 等写操作关键词。它适合学习阶段保护工具边界，但不能替代真实数据库只读账号、SQL parser 或服务端权限隔离。pi 化改造已删除人工审批门，`beforeToolCall` 仅作观测/block 挂载点。
 
 源码按职责拆分在 `packages/tools/src`：`types.ts` 保存公共 contract，`registry.ts` 保存注册表，`executor.ts` 保存执行与 trace 写入，`default-registry.ts` 组合默认 mock tools，`tools/*.ts` 按工具名分别保存 schema 和实现。`index.ts` 只作为 package 入口导出公共 API。
 
-工具执行可注入 `@aiagent/trace` 的 `TraceRecorder`。每次调用会写入 `tool_call` 事件，包含工具名、参数、结果、耗时和结构化错误；trace 写入失败不会打断工具主流程。
+工具执行在 `beforeToolCall`/`afterToolCall` 钩子中可观测，事件经 `run-service` 脱敏后落入 `run_events`；trace 写入失败不会打断工具主流程。
 
 ## Security Hardening
 
-Week 4 的基础安全边界已加入不可信 context 隔离、组合式 prompt injection policy、请求级 tool allowlist、审批 request/input 绑定、严格 SQL readonly gate 和统一 PII redactor。安全决策以 `security` trace event 记录 `decision` 与稳定 `reasonCode`，可通过 `GET /api/traces/:requestId` 回放；UI 只展示可理解状态，不展示检测规则正文。
+Week 4 的基础安全边界已加入不可信 context 隔离、组合式 prompt injection policy、请求级 tool allowlist、严格 SQL readonly gate 和统一 PII redactor。安全决策以 `security` trace event 记录 `decision` 与稳定 `reasonCode`；UI 只展示可理解状态，不展示检测规则正文。
 
 SQL gate 只允许单条 `SELECT/WITH` 并拒绝注释、危险关键词和常见绕过。部署时仍必须使用真正的数据库只读账号，移除写入、DDL、文件、扩展和跨库权限；代码校验不能替代数据库授权。完整信任边界、PII 保留策略和残余风险见 `docs/SECURITY_THREAT_MODEL.md`。
 
@@ -410,26 +417,18 @@ Week 2-014 完成 RAG eval 闭环：30 条 QA case、eval runner、四个指标�
 
 ## Agent Loop
 
-`packages/agent` 现在导出 pi 形态的 `agentLoop` / `agentLoopContinue` 与 hook 体系（详见 ``）；早期版本的 `createAgent()`、Intent Router 与 report planner 特例路径已在 pi 化改造中删除，report 由 `generate_report` 工具承接（见 ``）。
+`packages/agent` 导出 pi 形态的 `agentLoop` / `agentLoopContinue` 与 hook 体系（详见 ``）。早期版本的 `createAgent()`、Intent Router 与 report planner 特例路径已在 pi 化改造中删除，report 由 `generate_report` 工具承接（见 ``）。
 
-Intent Router 第一版采用可审查规则优先：
+多轮 ReAct 循环：
 
-- 自然语言 report skill 触发不只看单一关键词，必须同时具备报告交付诉求和数据需求信号，例如 ticker、公告、财务数据、年报或风险等。
-- `mode: "report"` 会显式进入 report skill；`source` 区分 composer 与生成研报按钮，自然语言仍可在 `mode: "auto"` 下由 Agent 路由。
-- 年报、公告、披露、检索、资产质量等公告文本诉求路由到 `filing_search_mock`。
-- 营收、净利润、ROE、毛利率、现金流、最近一期、同比等财务指标查询路由到 `financial_metric_mock`。
-- “解释 ROE 是什么”这类概念问题保留在 `chat` 路径，不调用工具。
-- report 和 tool 同时命中时，优先进入 report skill planner，因为用户表达的是研报交付，而不是一次性数据查询。
+- 每一轮调用一次 LLM；模型返回的 `AssistantMessage` 若含 `toolCall` 内容块，loop 就并行执行对应 `AgentTool`，把 `ToolResultMessage` 追加进上下文，然后开始下一轮；直到模型不再发起工具调用（或 `shouldStopAfterTurn` 判定停止）。
+- 意图选择、工具选择、回答时机全部由模型在多轮中自主完成，没有预定义的意图分支。
+- 上层通过 `transformContext` / `convertToLlm` / `beforeToolCall` / `afterToolCall` / `prepareNextTurn` / `shouldStopAfterTurn` 等 hook 定制行为，而不是改 loop 本体。
+- `maxTurns` 在每个 turn 后检查，达到上限时返回用户可理解的终态，不会无限等待或抛出原始异常。
 
-Report Planner 第一版是 deterministic planner，不调用真实 Workflow。公共 DTO 包括 `ReportTriggerSourceDto`、`ReportPlanStatusDto`、`ReportTypeDto`、`ReportPlannerInputDto`、`ReportPlanStepDto` 和 `ReportPlanDto`。Planner 会识别报告类型、研究对象、时间范围和数据需求；信息不足时返回 `needs_clarification` 或 `partial`，信息足够时返回 `ready`，并把默认时间范围等选择写入 `assumptions`。
+工具路径只通过 `AgentTool.execute()` 调用工具，不直接依赖工具实现。工具参数错误、工具不存在、工具执行错误会以结构化错误返回，同时保留底层 `toolError` details。
 
-Agent Loop 每一步都会返回结构化 `AgentStep`：`route_intent`、`model_answer`、`select_tool`、`call_tool`、`report_skill_activation`、`report_skill_plan`、`final_response` 或 `max_steps_exceeded`。`maxSteps` 在每个步骤前检查，达到上限时返回用户可理解的 `max_steps_exceeded`，不会无限等待或抛出原始异常。
-
-工具路径只通过 `ToolRegistry.execute()` 调用工具，不直接依赖工具实现。工具参数错误、工具不存在、工具执行错误会以 `validation_error`、`tool_not_found`、`execution_error` 等结构化 `AgentError` 返回，同时保留底层 `toolError` details。
-
-`@aiagent/trace` 现在提供统一生产 trace contract：事件包含 `requestId`、`traceId`、`spanId`、`parentSpanId`，覆盖 request、model、tool/MCP、retrieval、Report activation/planner、workflow、approval、citation verifier、PDF export 和 final response。`Trace.summary` 在运行时边界聚合模型/工具/检索调用数、毫秒耗时、已知 token、未知 usage 调用数和错误数；未知 token 显式为 `unknown`。`0030_trace.sql` 持久化 Trace summary 与事件；`GET /api/traces/:requestId` 按当前 session user 查询，进程重启后仍可恢复。
-
-Trace recorder 会在写库前递归脱敏密钥、authorization、password、secret、认证 token 与常见 PII，清理文本中的 Bearer/API key，并把长字符串截断到 500 字符。Trace 明细与 Run `trace_event` 投影由同一个 canonical event 在同一数据库事务写入；持久化失败不会打断 Agent，但最终 Run result 的 `tracePersistence` 会标记 `degraded` 并只暴露稳定诊断。
+`@aiagent/trace` 现在只保留最小运行事件类型契约与跨边界值脱敏工具。loop 事件（`agent_start` / `turn_start` / `message_*` / `tool_execution_*` / `agent_end`）与能力事件（`retrieval`、`workflow_node`、`pdf_export`、`mcp_tool_discovered`、`run_status`、`run_error`）直接由 `run_events` 表持久化，SSE 重放与运行详情同源。`packages/trace` 的 `redactSensitiveValue` 在 `run-service` 落库前递归脱敏密钥、authorization、password、secret、认证 token 与常见 PII，并把长字符串截断到 500 字符。
 
 可调用验证入口：
 
@@ -442,10 +441,10 @@ pnpm --filter @aiagent/tools test
 
 Week 3-016 新增两个 package：
 
-- `@aiagent/workflow`：通用节点执行器。每个节点必须声明 `inputSchema` 和 `outputSchema`，runtime 在节点执行前后用 zod 校验，节点异常、输入错误、输出错误和 max steps 超限都会转换成 `WorkflowErrorDto`。Week 3-017 为其增加 `decideNext` 能力，支持节点执行成功后跳转到指定节点，从而实现 verifier loop 等有限循环。Week 3-018 增加 `createApprovalRequest()`，敏感节点未批准前返回 `paused`，拒绝后返回 `rejected`。
-- `@aiagent/report`：研报领域 workflow 节点实现。`runReportWorkflow(plan, options)` 从 `ReportPlanDto` 创建 workflow run，依次执行 Data Collector、Analyzer、Risk Checker、Citation Verifier、Report Writer 和 PDF Exporter；`renderResearchReportPdf()` 生成合法 PDF 二进制。pi 化阶段 5 起 report 降级为 loop 工具 `generate_report`（`createReportTool()`），模型自主触发，节点事件经 sink 写入 run_events（`workflow_node`/`pdf_export` 事件名不变）；approval 体系删除后 PDF 由工具内 `publishArtifactPdf` saga 直接发布，不再有人工审批门。
+- `@aiagent/workflow`：通用节点执行器。每个节点必须声明 `inputSchema` 和 `outputSchema`，runtime 在节点执行前后用 zod 校验，节点异常、输入错误、输出错误和 max steps 超限都会转换成 `WorkflowErrorDto`。Week 3-017 为其增加 `decideNext` 能力，支持节点执行成功后跳转到指定节点，从而实现 verifier loop 等有限循环。
+- `@aiagent/report`：研报领域 workflow 节点实现。`runReportWorkflow(plan, options)` 从 `ReportPlanDto` 创建 workflow run，依次执行 Data Collector、Analyzer、Risk Checker、Citation Verifier、Report Writer 和 PDF Exporter；`renderResearchReportPdf()` 生成合法 PDF 二进制。pi 化阶段 5 起 report 降级为 loop 工具 `generate_report`（`createReportTool()`），模型自主触发，节点事件经 sink 写入 run_events（`workflow_node`/`pdf_export` 事件名不变）；PDF 由工具内 `publishArtifactPdf` saga 直接发布，不再有人工审批门。
 
-Workflow DTO 放在 `packages/types`：`WorkflowRunDto`、`WorkflowNodeDto`、`WorkflowNodeStatusDto`、`WorkflowEdgeDto`、`WorkflowEventDto`、`WorkflowErrorDto`、`ToolApprovalRequestDto` 和 `ToolApprovalDecisionDto`。Workflow、节点 attempt 与 Artifact metadata/预览由 PostgreSQL 持久化；PDF bytes 经 `ArtifactStorage` 原子写入专用目录。Approval queue 仍属于后续独立持久化任务。
+Workflow DTO 放在 `packages/types`：`WorkflowRunDto`、`WorkflowNodeDto`、`WorkflowNodeStatusDto`、`WorkflowEdgeDto`、`WorkflowEventDto`、`WorkflowErrorDto`。Workflow、节点 attempt 与 Artifact metadata/预览由 PostgreSQL 持久化；PDF bytes 经 `ArtifactStorage` 原子写入专用目录。
 
 Report Workflow 当前节点输出：
 
@@ -455,17 +454,15 @@ Report Workflow 当前节点输出：
 - Citation Verifier：检查每个 claim 是否有 citation 支撑、required metric 是否齐全。决策类型为 `pass | needs_more_evidence | needs_metric | retry_tool | fail`；缺证据时生成 follow-up queries，并通过 `decideNext` 跳回 Data Collector 做补充检索，受 `maxRetries` 限制。
 - Runtime reliability：模型仅对 timeout/network/429/5xx 做最多 3 次指数退避重试，并按 structured output/tool calling 能力选择 fallback；工具默认 10 秒单次 timeout，有副作用工具只有声明幂等且传入 idempotency key 才会重试；Workflow 同时受节点 timeout、总 deadline 与 `maxSteps` 约束，非关键来源失败可生成带 `partial`/`sourceErrors` 的降级报告。
 - Report Writer：生成 Markdown 和最小 HTML 草稿；证据不足时保留“资料不足说明”，不编造结论。
-- PDF Exporter：未审批时 workflow 暂停；批准后由 artifact API 生成真实 `application/pdf`，失败标为 `pdf_failed` 且可安全重试，拒绝时不产生 PDF。
-
-Approval trace 使用 `approval` event 记录 `requested`、`approved`、`rejected`，只保存 `inputPreview` 和 reviewer note，不记录完整敏感 payload。
+- PDF Exporter：由 `publishArtifactPdf` 生成真实 `application/pdf`，失败标为 `pdf_failed` 且可安全重试。
 
 ### Week 3 Demo
 
 运行 `pnpm dev`，打开 Web 后开启 Report Mode、点击“生成研报”，或输入 `基于最近两年公告和财务数据，为 000001.SZ 生成研究简报 PDF`。
 
-在 assistant 消息中展开 `Run details`，可检查 Activation、Planner、Data Collector、Analyzer、Risk Checker、Citation Verifier、Report Writer、PDF Exporter 的状态、耗时、输入/输出摘要和 workflow run id。下方提供 Markdown/HTML 预览，引用显示 source、documentId、chunkId 与所支持的 finding。
+在 assistant 消息中展开 `Run details`，可检查 Data Collector、Analyzer、Risk Checker、Citation Verifier、Report Writer、PDF Exporter 的状态、耗时、输入/输出摘要和 workflow run id。下方提供 Markdown/HTML 预览，引用显示 source、documentId、chunkId 与所支持的 finding。
 
-Report Workflow 由 canonical Run application service 内部启动，不再暴露浏览器手动编排入口。artifact 使用 `GET /api/report-artifacts/:artifactId`、`POST /api/report-artifacts/:artifactId/pdf`、下载接口和 `DELETE /api/report-artifacts/:artifactId` 软删除；审批使用 `POST /api/runs/:runId/approvals/:approvalId/decision`。
+Report Workflow 由 canonical Run application service 内部启动，不再暴露浏览器手动编排入口。artifact 使用 `GET /api/report-artifacts/:artifactId`、下载接口和 `DELETE /api/report-artifacts/:artifactId` 软删除。
 
 上述 workflow/artifact 路由都先使用服务端 session 的 `userId` 查询 repository；不存在与越权统一返回 404。PDF 下载不接受文件路径，数据库只保存服务端随机 storage key、大小和 SHA-256，软删除不会在数据库事务内同步删除物理文件。
 
@@ -482,9 +479,7 @@ pnpm --filter @aiagent/report test
 
 后端在需要 HTTP 服务时使用 `apps/api` + Fastify。Fastify route handler 只作为 HTTP adapter：完成请求校验、调用 `packages/agent` / `packages/tools` / `packages/trace`、返回结构化响应。Agent 编排、工具执行、trace 构造等运行时逻辑不得放进 `apps/api` 或 `apps/web`。
 
-`POST /api/approvals/decision` 是人工确认的最小 API 边界，只提交 `ToolApprovalDecisionDto`，不做权限判断；真正的 permission gate 在 `packages/tools` 和 `packages/workflow` 执行敏感动作前完成。Web 的确认 UI 放在 assistant message 的 `Run details -> Approvals` 区块，只展示 approval request 并提交 approve/reject decision。
-
-手动 demo：在 Agent Chat 输入 `执行 SQL：SELECT ticker, roe FROM metrics`，Agent 会路由到 `sql_query_mock` 并返回 `permission_required`，展开 assistant 消息的 Run details 可看到 Approvals；提交 Reject 后会调用 `/api/approvals/decision`。输入 `执行 SQL：DROP TABLE filings` 可验证写 SQL 被 readonly validator 阻断。
+`sql_query_mock` 的 permission gate 在工具执行前完成：写 SQL 或 schema 变更关键词直接返回 `permission_denied`，不再有人工确认门。Web 的 `Run details` 不再渲染任何审批入口。
 
 前后端共享的请求、响应、DTO、错误码和稳定枚举统一放在 `packages/types`，由 `apps/web`、`apps/api` 和 runtime packages 通过 `@aiagent/types` 引用。不要在前端或 API route 中重复声明协议类型；包内也不要放 UI-only props、数据库私有模型或只属于单个 runtime package 的内部状态。
 

@@ -27,7 +27,7 @@ export function createPostgresWorkflowRepository(pool: pg.Pool): WorkflowReposit
              on conflict (id) do update set status=excluded.status,current_node_id=excluded.current_node_id,error=excluded.error,
                snapshot=excluded.snapshot,completed_at=excluded.completed_at,updated_at=excluded.updated_at
              where workflow_runs.user_id=excluded.user_id
-               and (workflow_runs.status not in ('rejected','succeeded','failed') or workflow_runs.status=excluded.status)
+               and (workflow_runs.status not in ('succeeded','failed') or workflow_runs.status=excluded.status)
              returning id`,
             [value.run.runId, value.context.userId, value.context.conversationId, value.context.agentRunId,
               value.context.planId, value.run.workflowName, value.run.status, currentNode ?? null,
@@ -42,7 +42,7 @@ export function createPostgresWorkflowRepository(pool: pg.Pool): WorkflowReposit
                  on conflict (workflow_run_id,node_id,attempt) do update set status=excluded.status,input_summary=excluded.input_summary,
                    output_summary=excluded.output_summary,error=excluded.error,started_at=excluded.started_at,
                    completed_at=excluded.completed_at,duration_ms=excluded.duration_ms,updated_at=excluded.updated_at
-                 where workflow_node_runs.status not in ('rejected','succeeded','failed','skipped')
+                 where workflow_node_runs.status not in ('succeeded','failed','skipped')
                     or workflow_node_runs.status=excluded.status`,
                 [randomUUID(), value.run.runId, node.nodeId, node.type, node.title, attempt.attempt, attempt.status,
                   attempt.inputSummary ?? null, attempt.outputSummary ?? null, attempt.error ?? null, attempt.startedAt ?? null,
@@ -189,19 +189,13 @@ function buildNodeAttempts(run: PersistedWorkflow["run"], nodeId: string): NodeA
       });
       continue;
     }
-    if (!["node_succeeded", "node_failed", "node_paused", "node_rejected"].includes(event.type)) continue;
+    if (!["node_succeeded", "node_failed"].includes(event.type)) continue;
     let current = attempts.at(-1);
     if (!current || isTerminalNodeStatus(current.status)) {
       current = { attempt: attempts.length + 1, status: "pending", durationMs: 0 };
       attempts.push(current);
     }
-    current.status = event.type === "node_succeeded"
-      ? "succeeded"
-      : event.type === "node_paused"
-        ? "paused"
-        : event.type === "node_rejected"
-          ? "rejected"
-          : "failed";
+    current.status = event.type === "node_succeeded" ? "succeeded" : "failed";
     current.outputSummary = toSummary(event.data?.outputSummary);
     current.error = event.error;
     current.completedAt = event.createdAt;
@@ -225,7 +219,7 @@ function buildNodeAttempts(run: PersistedWorkflow["run"], nodeId: string): NodeA
 
 /** @param status 节点状态。 @returns 是否已结束当前 attempt。 */
 function isTerminalNodeStatus(status: NodeAttemptSnapshot["status"]): boolean {
-  return ["paused", "rejected", "succeeded", "failed", "skipped"].includes(status);
+  return ["succeeded", "failed", "skipped"].includes(status);
 }
 
 /** @param value event data 中的未知摘要。 @returns 对象摘要或 undefined。 */

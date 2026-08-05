@@ -11,7 +11,7 @@ import type {
   RagDocumentDto,
   RetrievalResultDto,
   RetrievalScoreBreakdownDto,
-  TraceRetrievalEventDto,
+  RetrievalTraceDto,
   VectorSearchMatchDto
 } from "@aiagent/types";
 import type { RagDocumentRepository, RagDocumentScope } from "./document-repository.js";
@@ -201,12 +201,12 @@ export type DataSourceRuntimeResult<TData> =
 
 export interface RagSearchRuntimeResponse {
   results: RetrievalResult[];
-  trace: TraceRetrievalEventDto;
+  trace: RetrievalTraceDto;
 }
 
 export interface RagAnswerRuntimeResponse {
   answer: RagAnswer;
-  trace: TraceRetrievalEventDto;
+  trace: RetrievalTraceDto;
 }
 
 /**

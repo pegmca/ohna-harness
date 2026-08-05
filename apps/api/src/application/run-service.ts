@@ -1,12 +1,12 @@
 /**
  * Run application service（阶段 3 重写）：消费 packages/agent 的 agentLoop 事件流，
- * 逐事件落 run_events_v2（先落库后广播）+ SSE fan-out；消息在 message_end 一次性落
- * messages_v2（run 终态兜底补齐 toolResult 等未落消息）；compaction 由 transformContext
+ * 逐事件落 run_events（先落库后广播）+ SSE fan-out；消息在 message_end 一次性落
+ * messages（run 终态兜底补齐 toolResult 等未落消息）；compaction 由 transformContext
  * 触发后以 role='user'、message_type='compaction' 落表，上下文重建走 listForContext 投影。
  *
  * 与旧版的差异：trace 旁路（traceStore/trace_event 投影）与 report 编排移出 run 主路径
  * （阶段 5 回迁）；终态推导改为消费 agent_end / run_error；会话历史不再内存累积，
- * 每次 run 从 messages_v2 的 listForContext 投影重建（跨进程生效）。
+ * 每次 run 从 messages 的 listForContext 投影重建（跨进程生效）。
  */
 import { agentLoop, createCompactionTransform, defaultConvertToLlm } from "@aiagent/agent";
 import type { AgentEvent, AgentMessage, AgentTool, StreamFn } from "@aiagent/agent";
@@ -52,7 +52,7 @@ export const REPORT_HINT_SYSTEM_INSTRUCTION =
 
 /**
  * report 工具装配上下文：由 composition root 注入的 factory 在每个 run 内创建 generate_report 工具，
- * recordEvent 经 publish 先落 run_events_v2 再 SSE 广播（与 grounding 的 recordRetrieval 同一模式）。
+ * recordEvent 经 publish 先落 run_events 再 SSE 广播（与 grounding 的 recordRetrieval 同一模式）。
  * 取消语义不经此上下文传递：loop 会把 run 级 AbortSignal 作为 execute 参数传给工具。
  */
 export interface ReportToolFactoryContext {
@@ -275,7 +275,7 @@ export function createRunApplicationService(dependencies: RunServiceDependencies
         runId
       });
       const tools = reportTool ? [...dependencies.tools, reportTool] : dependencies.tools;
-      // metadata.hint 只做 system prompt 约束（不落库：messages_v2/runs_v2 无 metadata 列，避免动 schema）。
+      // metadata.hint 只做 system prompt 约束（不落库：messages/runs 无 metadata 列，避免动 schema）。
       const systemPrompt = request.metadata?.hint === "report"
         ? `${BASE_SYSTEM_PROMPT}\n${REPORT_HINT_SYSTEM_INSTRUCTION}`
         : BASE_SYSTEM_PROMPT;

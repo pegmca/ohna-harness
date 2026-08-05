@@ -2,8 +2,8 @@
  * 会话领域类型与存储端口（阶段 3 线性模型重写）。
  *
  * 结构：
- * - Conversation / ConversationRepository：会话主体 CRUD（表 conversations_v2）；
- * - StoredMessage / MessageStore：线性消息存储端口（表 messages_v2），
+ * - Conversation / ConversationRepository：会话主体 CRUD（表 conversations）；
+ * - StoredMessage / MessageStore：线性消息存储端口（表 messages），
  *   每方法映射一类 pi Message 的读写，不采用 pi 的 entry 树；
  * - message-mapping.ts：pi Message ↔ StoredMessage 的双向映射层。
  *   packages/database 不得依赖 @aiagent/ai（架构规则 5），映射因此放在本包。

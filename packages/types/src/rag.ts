@@ -1,6 +1,5 @@
 import type { IngestedFilingDocumentDto, FilingSourceKindDto } from "./filings.js";
 import type { ISODateTimeString } from "./primitives.js";
-import type { TraceRetrievalEventDto } from "./trace.js";
 
 /**
  * RAG 文档 DTO 表达可检索文档的稳定身份和来源，不包含全文。
@@ -200,11 +199,46 @@ export interface RagSearchRequestDto {
 }
 
 /**
+ * RAG 检索 trace DTO：阶段 6 从 trace.ts 迁移到 rag.ts，
+ * 作为检索结果公开 API 的一部分，不再依赖旧 trace 事件体系。
+ */
+export interface RetrievalTraceDto {
+  type: "retrieval";
+  id: string;
+  traceId: string;
+  requestId: string;
+  createdAt: ISODateTimeString;
+  queryPreview: string;
+  mode: "vector" | "keyword" | "hybrid";
+  topK: number;
+  candidateLimit: number;
+  durationMs: number;
+  chunkIds: string[];
+  scoreSummary: Array<{
+    chunkId: string;
+    documentId?: string;
+    vectorScore: number;
+    keywordScore: number;
+    hybridScore: number;
+    rerankScore?: number;
+    finalScore: number;
+    rank: number;
+  }>;
+  ok: boolean;
+  error?: {
+    code: string;
+    message: string;
+    stage?: string;
+    details?: Record<string, unknown>;
+  };
+}
+
+/**
  * RAG search 响应 DTO，包含可展示结果和脱敏检索 trace。
  */
 export interface RagSearchResponseDto {
   results: RetrievalResultDto[];
-  trace: TraceRetrievalEventDto;
+  trace: RetrievalTraceDto;
 }
 
 /**
@@ -220,5 +254,5 @@ export interface RagAnswerRequestDto {
  */
 export interface RagAnswerResponseDto {
   answer: RagAnswerDto;
-  trace: TraceRetrievalEventDto;
+  trace: RetrievalTraceDto;
 }

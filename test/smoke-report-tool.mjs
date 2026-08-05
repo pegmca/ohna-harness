@@ -104,7 +104,7 @@ async function main() {
       method: "GET", url: `/api/conversations/${conversationId}/messages?limit=100`, headers: { cookie }
     })).json().data.items;
     const toolResult = messages.find((message) => message.role === "toolResult" && message.content.toolName === "generate_report");
-    assert.ok(toolResult, "messages_v2 应有 generate_report 的 ToolResultMessage");
+    assert.ok(toolResult, "messages 应有 generate_report 的 ToolResultMessage");
     assert.equal(toolResult.content.isError, false, "generate_report 不应失败");
     const artifactId = toolResult.content.details.artifactId;
     console.log("toolResult artifactId:", artifactId);

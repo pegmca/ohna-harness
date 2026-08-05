@@ -16,9 +16,10 @@ Before implementing a task, read the relevant roadmap stage, architecture/design
 ## Repository Structure
 
 - `apps/web`: Vite + React + TypeScript web app for the Immersive product UI.
-- `packages/agent`: Agent orchestration boundary, intent routing, loops, and model-facing logic.
-- `packages/tools`: Tool schema, registry, execution, and external data/tool integration boundary.
-- `packages/trace`: Runtime observability events and trace data structures.
+- `packages/ai`: Unified LLM abstraction (`Message` types, `AssistantMessageEvent`, provider adapters, `stream` / `streamSimple`).
+- `packages/agent`: ReAct loop boundary (`agentLoop` / `agentLoopContinue`), `AgentTool` contract, and tool execution.
+- `packages/tools`: Built-in mock tool registry and execution boundary.
+- `packages/trace`: Minimal run-event type contract and cross-boundary value redaction.
 - `docs/LEARNING_AND_EVOLUTION_ROADMAP.md`: Ongoing learning stages, engineering outcomes, and acceptance evidence.
 
 Keep package boundaries explicit. Do not move runtime behavior into `apps/web` when it belongs in a package.
@@ -76,7 +77,7 @@ Update related docs in the same task when the change affects any of these:
 - App behavior, user-visible workflow, or demo input/output.
 - Directory structure or package responsibility.
 - Setup, scripts, environment variables, or validation commands.
-- Agent loop, intent routing, tool schema, trace event, RAG, workflow, report, or eval behavior.
+- Agent loop, tool schema, run event, RAG, workflow, report, or eval behavior.
 - Acceptance evidence or stage outcomes in `docs/LEARNING_AND_EVOLUTION_ROADMAP.md`.
 
 If no documentation update is needed, state that explicitly in the final response with the reason.

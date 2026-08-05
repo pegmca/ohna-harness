@@ -12,7 +12,7 @@ import type pg from "pg";
 import { isPostgresUniqueViolation, postgresTimestampToIso, withTransaction } from "./postgres.js";
 
 /**
- * 创建线性消息（messages_v2）的 PostgreSQL adapter。
+ * 创建线性消息（messages）的 PostgreSQL adapter。
  * 每方法映射一类 pi Message 的读写；不采用 pi 的 entry 树，投影退化为 sequence 过滤。
  *
  * @param pool composition root 提供的 PostgreSQL 连接池。
@@ -59,7 +59,7 @@ class PostgresMessageStore implements MessageStore {
       return await withTransaction(this.pool, async (client) => {
         await lockOwnedConversation(client, userId, input.conversationId);
         const existing = await client.query<MessageRow>(
-          `select * from messages_v2
+          `select * from messages
             where conversation_id=$1 and user_id=$2 and client_message_id=$3`,
           [input.conversationId, userId, input.clientMessageId]
         );
@@ -83,8 +83,8 @@ class PostgresMessageStore implements MessageStore {
     const cursor = input.cursor ? decodeMessageCursor(input.cursor) : undefined;
     try {
       const result = await this.pool.query<MessageRow>(
-        `select m.* from messages_v2 m
-          join conversations_v2 c on c.id=m.conversation_id
+        `select m.* from messages m
+          join conversations c on c.id=m.conversation_id
          where m.conversation_id=$1 and m.user_id=$2 and c.user_id=$2
            and ($3::bigint is null or (m.sequence,m.id) > ($3::bigint,$4::uuid))
          order by m.sequence asc,m.id asc
@@ -114,10 +114,10 @@ class PostgresMessageStore implements MessageStore {
   async listForContext(userId: string, conversationId: string): Promise<StoredMessage[]> {
     try {
       const result = await this.pool.query<MessageRow>(
-        `select * from messages_v2
+        `select * from messages
           where conversation_id=$1 and user_id=$2
             and sequence >= coalesce(
-              (select max(sequence) from messages_v2
+              (select max(sequence) from messages
                 where conversation_id=$1 and message_type='compaction'),
               1)
           order by sequence asc`,
@@ -157,7 +157,7 @@ interface MessageRow {
  */
 async function lockOwnedConversation(client: pg.PoolClient, userId: string, conversationId: string): Promise<void> {
   const result = await client.query(
-    "select id from conversations_v2 where id=$1 and user_id=$2 for update",
+    "select id from conversations where id=$1 and user_id=$2 for update",
     [conversationId, userId]
   );
   if (!result.rows[0]) {
@@ -180,12 +180,12 @@ async function insertNextMessage(
 ): Promise<StoredMessage> {
   const createdAt = input.createdAt ?? new Date().toISOString();
   const sequenceResult = await client.query<{ sequence: string }>(
-    "select coalesce(max(sequence),0)+1 as sequence from messages_v2 where conversation_id=$1",
+    "select coalesce(max(sequence),0)+1 as sequence from messages where conversation_id=$1",
     [input.conversationId]
   );
   const sequence = sequenceResult.rows[0]?.sequence ?? "1";
   const result = await client.query<MessageRow>(
-    `insert into messages_v2(
+    `insert into messages(
        id,conversation_id,user_id,run_id,role,content,message_type,client_message_id,sequence,
        usage,model_id,stop_reason,error_message,created_at
      ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
@@ -208,7 +208,7 @@ async function insertNextMessage(
     ]
   );
   await client.query(
-    `update conversations_v2
+    `update conversations
         set last_message_at=greatest(last_message_at,$2::timestamptz),updated_at=greatest(updated_at,$2::timestamptz)
       where id=$1 and user_id=$3`,
     [input.conversationId, createdAt, userId]

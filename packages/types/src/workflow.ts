@@ -1,9 +1,8 @@
 import type { ISODateTimeString } from "./primitives.js";
-import type { ToolApprovalRequestDto } from "./trace.js";
 
-export type WorkflowRunStatusDto = "pending" | "running" | "paused" | "approved" | "rejected" | "succeeded" | "failed";
+export type WorkflowRunStatusDto = "pending" | "running" | "succeeded" | "failed";
 
-export type WorkflowNodeStatusDto = "pending" | "running" | "paused" | "approved" | "rejected" | "succeeded" | "failed" | "skipped";
+export type WorkflowNodeStatusDto = "pending" | "running" | "succeeded" | "failed" | "skipped";
 
 export type WorkflowErrorCodeDto =
   | "invalid_workflow"
@@ -14,9 +13,7 @@ export type WorkflowErrorCodeDto =
   | "workflow_deadline_exceeded"
   | "workflow_cancelled"
   | "retry_exhausted"
-  | "max_steps_exceeded"
-  | "approval_required"
-  | "approval_rejected";
+  | "max_steps_exceeded";
 
 export interface WorkflowErrorDto {
   code: WorkflowErrorCodeDto;
@@ -49,12 +46,6 @@ export interface WorkflowEventDto {
     | "node_started"
     | "node_succeeded"
     | "node_failed"
-    | "node_paused"
-    | "node_approved"
-    | "node_rejected"
-    | "workflow_paused"
-    | "workflow_approved"
-    | "workflow_rejected"
     | "workflow_failed"
     | "workflow_succeeded";
   nodeId?: string;
@@ -75,7 +66,6 @@ export interface WorkflowRunDto {
   nodes: WorkflowNodeDto[];
   edges: WorkflowEdgeDto[];
   events: WorkflowEventDto[];
-  approvalRequest?: ToolApprovalRequestDto;
   error?: WorkflowErrorDto;
   partial?: boolean;
   recovery?: Array<{ nodeId: string; action: "retried" | "skipped" | "partial"; attempts: number; reason: string }>;

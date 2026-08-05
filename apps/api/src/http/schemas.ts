@@ -67,8 +67,3 @@ export const ragAnswerRequestSchema = z.object({
   question: z.string().min(1),
   topK: z.number().int().positive().optional()
 });
-export const approvalDecisionRequestSchema = z.object({
-  decision: z.enum(["approved", "rejected"]),
-  reviewerNote: z.string().max(240).optional(),
-  inputDigest: z.string().min(1)
-});

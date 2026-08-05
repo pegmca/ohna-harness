@@ -1,5 +1,3 @@
-import type { TraceRecorder } from "@aiagent/trace";
-
 export type UntrustedContentSource = "retrieval" | "external_document" | "tool_output";
 export type InjectionDecision = "allow" | "downrank" | "require_confirmation" | "block";
 
@@ -42,17 +40,16 @@ export function assessPromptInjection(content: string): InjectionAssessment {
  * 将不可信 context 封装为单个 data-only user message，永远不创建 system/tool role。
  *
  * @param items 带来源标签的外部内容。
- * @param trace 可选安全事件 recorder。
+ * @param onAssessment 可选回调，每个 item 评估完成后调用，供调用方记录安全事件；本包不再直接写 trace。
  * @returns 可追加到 prompt 的隔离消息；被阻止内容仅保留占位符。
  */
-export function assembleUntrustedContext(items: readonly UntrustedContent[], trace?: TraceRecorder): { role: "user"; content: string } {
+export function assembleUntrustedContext(
+  items: readonly UntrustedContent[],
+  onAssessment?: (assessment: InjectionAssessment) => void
+): { role: "user"; content: string } {
   const blocks = items.map((item) => {
     const assessment = assessPromptInjection(item.content);
-    trace?.record({
-      type: "security", id: `${trace.traceId}_injection_${item.id}`, traceId: trace.traceId, requestId: trace.requestId,
-      category: "prompt_injection", decision: assessment.decision, reasonCode: assessment.reasonCode,
-      sourceType: item.source, createdAt: new Date().toISOString()
-    });
+    onAssessment?.(assessment);
     const content = assessment.decision === "block" ? "[blocked untrusted content]" : escapeUntrustedBody(item.content);
     return `<untrusted_context id="${escapeAttribute(item.id)}" source="${item.source}" policy="${assessment.decision}">\n${content}\n</untrusted_context>`;
   });

@@ -26,20 +26,6 @@ export interface ConversationDto {
   archivedAt?: ISODateTimeString;
 }
 
-/** Web 历史时间线使用的消息 DTO；pending/streaming 仍由 live Run 表达。 */
-export interface ConversationMessageDto {
-  messageId: string;
-  conversationId: string;
-  runId?: string;
-  role: "user" | "assistant" | "system" | "tool";
-  content: string;
-  status: ConversationMessageStatusDto;
-  sequence: number;
-  createdAt: ISODateTimeString;
-  completedAt?: ISODateTimeString;
-  attachments: MessageAttachmentDto[];
-}
-
 export interface CreateConversationRequestDto {
   title: string;
 }
@@ -47,13 +33,6 @@ export interface CreateConversationRequestDto {
 export type UpdateConversationRequestDto =
   | { title: string; archive?: never }
   | { archive: true; title?: never };
-
-export interface ChatMessageDto {
-  id: string;
-  role: "user" | "assistant" | "system" | "tool";
-  content: string;
-  createdAt: ISODateTimeString;
-}
 
 /**
  * 阶段 3 线性消息 DTO：content 块原样透传（pi content JSON），

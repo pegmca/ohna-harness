@@ -320,11 +320,7 @@ importers:
         specifier: ^4.4.3
         version: 4.4.3
 
-  packages/security:
-    dependencies:
-      '@aiagent/trace':
-        specifier: workspace:*
-        version: link:../trace
+  packages/security: {}
 
   packages/tools:
     dependencies:

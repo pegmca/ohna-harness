@@ -21,7 +21,7 @@ export const COMPACTION_SUMMARY_PREFIX = "[以下是之前对话历史的压缩�
  * 生成 compaction 落库的 content（已包裹的摘要文本，单文本形式）。
  *
  * @param summary 压缩摘要原文。
- * @returns 可直接写入 messages_v2.content 的文本。
+ * @returns 可直接写入 messages.content 的文本。
  */
 export function compactionStoredContent(summary: string): string {
   return `${COMPACTION_SUMMARY_PREFIX}${summary}`;

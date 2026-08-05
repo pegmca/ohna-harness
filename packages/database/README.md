@@ -16,24 +16,23 @@ Reserved prefixes for persistence work are:
 
 | Prefix | Domain |
 | --- | --- |
-| `0010` | Conversation / Message |
-| `0020` | Run / RunEvent |
-| `0030` | Trace |
-| `0040` | Approval |
 | `0050` | RAG documents |
 | `0060` | pgvector / retrieval |
 | `0070` | Report / Artifact |
-| `0080` | Citation |
-| `0090` | Run model |
-| `0100` | Message attachments |
-| `0110` | 线性消息 + Run v2（阶段 3 新 schema） |
+| `0110` | 线性消息 + Run 新 schema（阶段 3） |
+| `0120` | Run event 类型扩展：retrieval |
+| `0140` | Run event 类型扩展：workflow_node / pdf_export |
+| `0150` | Run event 类型扩展：mcp_tool_discovered |
+| `0160` | 阶段 6：删除旧 schema 并把 `_v2` 新表收敛为最终表名 |
+| `0170` | Citation（在 `_v2` 表收敛为最终名后创建；脚本幂等，兼容旧文件名 `0080` 的已应用库） |
+| `0180` | Message attachments（在 `_v2` 表收敛为最终名后创建；脚本幂等，兼容旧文件名 `0100` 的已应用库） |
+| `0190`–`0210` | 阶段 6 死锁修复：删除 `run_events` / `runs` 上的 `conversation_id` 外键 |
+| `0220` | 阶段 6 后续：approval 删除后收紧 `workflow_runs` / `workflow_node_runs` 状态机 |
 
-PR-00 intentionally creates no business migration. `0010`–`0100` 为旧 schema（阶段 6 统一删除）。
-`0110_linear_messages.sql` 是 pi 化改造阶段 3 的新 schema：`conversations_v2` /
-`messages_v2`（线性，content jsonb）/ `runs_v2` / `run_events_v2`（append-only）。
-新表统一 `_v2` 后缀避免与旧表命名冲突；旧数据不迁移。
-
-PR-05 implements the `0040` prefix (`0040_approval.sql`): see "Approval adapters" below.
+`0010`–`0040` 及 `0090` 为旧 schema，已在阶段 6 由 `0160_drop_legacy_schema.sql` 删除，旧数据不迁移。
+`0110_linear_messages.sql` 创建 `conversations_v2` / `messages_v2` / `runs_v2` / `run_events_v2`，
+通过 `0160_drop_legacy_schema.sql` 重命名为最终表名 `conversations` / `messages` / `runs` / `run_events`。
+`0170`/`0180` 使用 `IF NOT EXISTS`，在已应用过旧名 migration 的库上可安全重跑。
 
 PR-06 implements the `0050` prefix (`0050_rag_documents.sql`): `documents` / `document_versions` /
 `chunks` ingestion lineage with checksum idempotency, immutable versions, retryable failures and
@@ -60,7 +59,9 @@ configured `ArtifactStorage`.
 
 ## Citation adapter
 
-`0080_citations.sql` creates `message_citations` and `artifact_citations`. Each row carries
+`0170_citations.sql` creates `message_citations` and `artifact_citations` after `0160` renames
+`messages_v2` to `messages`. `0170` is idempotent so existing databases that applied the
+file under its old name (`0080`) can safely re-run it. Each row carries
 user/message-or-artifact ownership, a citation `ordinal` (unique per parent), `claim`, a
 generation-time `quote` snapshot, an optional retrieval `score`, a `verifier_status`
 (`unverified/verified/rejected/manual_verified/manual_rejected`) and nullable FKs to the exact
@@ -78,40 +79,26 @@ accessibility per current document scope: `accessible` (full linkage + quote), `
 updates use an explicit state machine — automatic results cannot overwrite each other and manual
 terminal states cannot be overwritten at all.
 
-## Approval adapters
+## Linear conversation / message / run adapters
 
-`0040_approval.sql` creates `tool_approvals` (text approval id PK, FK to `agent_runs` and `users`,
-status `pending/approved/rejected/expired`, indexes on `(user_id,status,requested_at)` and
-`run_id`). The domain port `ApprovalRepository` is declared by `@aiagent/tools`;
-`createPostgresApprovalRepository(pool)` is exposed as `DatabaseRuntime.approvalRepository`.
-Registration is idempotent on approval id + input digest (`ON CONFLICT DO NOTHING` then re-read;
-a different digest/run/user is a structured conflict). Decisions use a single-row CAS predicate
-covering reviewer ownership, run, input digest, `status='pending'` and expiry, so concurrent
-approve/reject has exactly one winner; expired pending rows are atomically transitioned to
-`expired` by both `decide` and the export gate read path.
+`0110_linear_messages.sql` creates the `conversations_v2` / `messages_v2` / `runs_v2` /
+`run_events_v2` schema; `0160_drop_legacy_schema.sql` renames them to the final
+`conversations` / `messages` / `runs` / `run_events`.
 
-## Conversation adapters
+- `conversations` carries user ownership, title, status (`active`/`archived`), and a
+  `last_message_at` cursor for stable list ordering.
+- `messages` is the linear timeline: `sequence` is monotonically increasing per conversation,
+  `role` is one of `user`/`assistant`/`toolResult`, `content` is JSONB, and `client_message_id`
+  provides idempotency. `message_type` supports compaction summaries.
+- `runs` replaces the old `agent_runs` table with an append-only event stream model; `status` is
+  `queued`/`running`/`completed`/`failed`/`cancelled`/`interrupted`, and `last_event_sequence` is
+  the high-water mark for SSE replay and crash recovery.
+- `run_events` is the append-only event stream consumed by the UI and trace details; event types
+  are extended through `0120`–`0150`.
 
-`0010_conversation.sql` creates `conversations` and `messages`. The public
-`createPostgresConversationRepositories(pool)` factory returns the two domain ports declared by
-`@aiagent/conversation`. Ownership is part of every SQL predicate; conversation cursors use
-`(last_message_at,id)`, message cursors use `(sequence,id)`, and message writes lock the owned
-conversation row before idempotency checks and sequence allocation.
-
-## Run adapters
-
-`0020_runs.sql` creates `agent_runs` and canonical `run_events`, connects `messages.run_id`, and
-adds the partial one-assistant-message-per-Run constraint. `createPostgresRunRepository(pool)`
-validates Conversation ownership and reserves both messages in the creation transaction. Event
-append locks the Run, allocates `version + 1`, persists the event and projection together, and
-rejects all transitions after the first terminal event.
-
-## Trace adapter
-
-`0030_trace.sql` creates request/run-unique `traces` summaries and sequenced `trace_events`.
-`createPostgresTraceStore(pool)` requires user ownership on every operation. Its append transaction
-locks the Run and Trace, writes the already-redacted canonical event once, derives the Run
-`trace_event` projection from that object, and commits both before live fan-out.
+`createPostgresConversationRepository(pool)`, `createPostgresMessageStore(pool)`, and
+`createPostgresRunRepository(pool)` expose these as `DatabaseRuntime.conversationRepository`,
+`DatabaseRuntime.messageStore`, and `DatabaseRuntime.runRepository`.
 
 ## Integration tests
 

@@ -119,7 +119,7 @@ test("同一 conversationId 连续两个 run，第二个 run 的上下文包含�
 
   assert.equal(capturedContexts.length, 2);
   const secondTurnMessages = capturedContexts[1].messages;
-  // 第二轮上下文必须包含第一轮 user 与 assistant 消息（历史从 messages_v2 投影重建）。
+  // 第二轮上下文必须包含第一轮 user 与 assistant 消息（历史从 messages 投影重建）。
   assert.equal(
     secondTurnMessages.some((message) => message.role === "user" && message.content === "第一轮问题"),
     true

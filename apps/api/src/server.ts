@@ -129,7 +129,6 @@ const app = createApiServer({
   messageStore: database.messageStore,
   artifactStorage: createLocalArtifactStorage(artifactStorageRoot),
   runStore: database.runRepository,
-  traceStore: database.traceStore,
   readiness: async () => {
     if (providerMode !== "mock" && providerMode !== "real") {
       return { ok: false, dependency: "provider-config", message: "AIAGENT_PROVIDER_MODE must be mock or real." };

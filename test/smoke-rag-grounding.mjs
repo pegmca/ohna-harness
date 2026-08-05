@@ -129,7 +129,7 @@ async function main() {
   const assistantMessageId = lastAssistant.messageId;
   console.log("assistant messageId:", assistantMessageId);
 
-  // 7. 直连数据库验证 message_citations 与 run_events_v2
+  // 7. 直连数据库验证 message_citations 与 run_events
   const { execFileSync } = await import("node:child_process");
   const psql = (sql) => {
     const out = execFileSync("docker", [
@@ -146,7 +146,7 @@ async function main() {
   assert(Number(citations) > 0, "assistant 消息应有关联 citation");
 
   const retrievalEvents = psql(
-    `SELECT count(*) FROM run_events_v2 WHERE run_id = '${runId}' AND event_type = 'retrieval'`
+    `SELECT count(*) FROM run_events WHERE run_id = '${runId}' AND event_type = 'retrieval'`
   );
   console.log("retrieval events:", retrievalEvents);
   assert(Number(retrievalEvents) > 0, "应写入 retrieval 事件");

@@ -12,7 +12,7 @@ export interface CreateRunInputV2 {
   requestId: string;
   userId: string;
   conversationId: string;
-  /** 触发 Run 的用户消息文本（幂等写入 messages_v2）。 */
+  /** 触发 Run 的用户消息文本（幂等写入 messages）。 */
   message: string;
   clientMessageId: string;
   mode: "auto" | "report";
@@ -29,7 +29,7 @@ export interface RunRepository {
   create(input: CreateRunInputV2): Promise<{ snapshot: RunSnapshotDtoV2; created: boolean }>;
   findById(userId: string, runId: string): Promise<RunSnapshotDtoV2 | undefined>;
   /**
-   * 追加事件：同事务分配 sequence、推进 runs_v2.last_event_sequence 高水位、按事件推导 status。
+   * 追加事件：同事务分配 sequence、推进 runs.last_event_sequence 高水位、按事件推导 status。
    * run 不存在或已终态时返回 undefined。
    */
   appendEvent(userId: string, runId: string, event: RunEventInputDtoV2): Promise<RunStreamEventDtoV2 | undefined>;
@@ -63,12 +63,12 @@ class PostgresRunRepository implements RunRepository {
     try {
       return await withTransaction(this.pool, async (client) => {
         const conversation = await client.query(
-          "select id from conversations_v2 where id=$1 and user_id=$2 for update",
+          "select id from conversations where id=$1 and user_id=$2 for update",
           [input.conversationId, input.userId]
         );
         if (!conversation.rowCount) throw new RepositoryError("not_found", "Conversation not found.");
         const existing = await client.query<RunRow>(
-          "select * from runs_v2 where request_id=$1 and user_id=$2",
+          "select * from runs where request_id=$1 and user_id=$2",
           [input.requestId, input.userId]
         );
         if (existing.rows[0]) {
@@ -76,7 +76,7 @@ class PostgresRunRepository implements RunRepository {
         }
         const userMessageId = await findOrInsertUserMessage(client, input);
         const inserted = await client.query<RunRow>(
-          `insert into runs_v2(
+          `insert into runs(
              id,request_id,user_id,conversation_id,user_message_id,model_id,mode,source,status,
              last_event_sequence,created_at,updated_at
            ) values ($1,$2,$3,$4,$5,$6,$7,$8,'queued',0,$9,$9)
@@ -85,7 +85,7 @@ class PostgresRunRepository implements RunRepository {
             input.modelId, input.mode, input.source, input.createdAt]
         );
         // 循环外键要求先建 run 再回填消息的 run_id。
-        await client.query("update messages_v2 set run_id=$2 where id=$1", [userMessageId, input.runId]);
+        await client.query("update messages set run_id=$2 where id=$1", [userMessageId, input.runId]);
         return { snapshot: mapSnapshot(requireRow(inserted.rows[0])), created: true };
       });
     } catch (cause) {
@@ -97,7 +97,7 @@ class PostgresRunRepository implements RunRepository {
   async findById(userId: string, runId: string): Promise<RunSnapshotDtoV2 | undefined> {
     try {
       const result = await this.pool.query<RunRow>(
-        "select * from runs_v2 where id=$1 and user_id=$2",
+        "select * from runs where id=$1 and user_id=$2",
         [runId, userId]
       );
       return result.rows[0] ? mapSnapshot(result.rows[0]) : undefined;
@@ -107,7 +107,7 @@ class PostgresRunRepository implements RunRepository {
   }
 
   /**
-   * 追加 canonical 事件：行锁内分配 sequence、写 run_events_v2、推进高水位与状态机。
+   * 追加 canonical 事件：行锁内分配 sequence、写 run_events、推进高水位与状态机。
    * 先落库后广播由调用方保证（本方法提交后才 publish）。
    *
    * @param userId 当前用户。
@@ -123,7 +123,7 @@ class PostgresRunRepository implements RunRepository {
     try {
       return await withTransaction(this.pool, async (client) => {
         const locked = await client.query<RunRow>(
-          "select * from runs_v2 where id=$1 and user_id=$2 for update",
+          "select * from runs where id=$1 and user_id=$2 for update",
           [runId, userId]
         );
         const run = locked.rows[0];
@@ -134,7 +134,7 @@ class PostgresRunRepository implements RunRepository {
         const sequence = Number(run.last_event_sequence) + 1;
         const event: RunStreamEventDtoV2 = { ...eventInput, eventId: randomUUID(), sequence };
         await client.query(
-          `insert into run_events_v2(id,run_id,user_id,conversation_id,sequence,event_type,payload,created_at)
+          `insert into run_events(id,run_id,user_id,conversation_id,sequence,event_type,payload,created_at)
            values ($1,$2,$3,$4,$5,$6,$7,$8)`,
           [event.eventId, runId, userId, run.conversation_id, sequence, event.type,
             JSON.stringify(event.payload), event.createdAt]
@@ -142,7 +142,7 @@ class PostgresRunRepository implements RunRepository {
         const terminal = TERMINAL.has(nextStatus);
         const terminalError = terminalErrorFromEvent(eventInput, nextStatus);
         await client.query(
-          `update runs_v2 set status=$3,error=coalesce($4,error),last_event_sequence=$5,updated_at=$6,
+          `update runs set status=$3,error=coalesce($4,error),last_event_sequence=$5,updated_at=$6,
              started_at=case when $3='running' then coalesce(started_at,$6) else started_at end,
              completed_at=case when $7 then coalesce(completed_at,$6) else completed_at end
            where id=$1 and user_id=$2`,
@@ -159,11 +159,11 @@ class PostgresRunRepository implements RunRepository {
   /** @param userId 当前用户。 @param runId Run 标识。 @param afterSequence 已消费序号。 @returns 后续事件或 undefined。 */
   async listEvents(userId: string, runId: string, afterSequence: number): Promise<RunStreamEventDtoV2[] | undefined> {
     try {
-      const owned = await this.pool.query("select 1 from runs_v2 where id=$1 and user_id=$2", [runId, userId]);
+      const owned = await this.pool.query("select 1 from runs where id=$1 and user_id=$2", [runId, userId]);
       if (!owned.rowCount) return undefined;
       const result = await this.pool.query<RunEventRow>(
-        `select e.*, r.request_id from run_events_v2 e
-          join runs_v2 r on r.id=e.run_id
+        `select e.*, r.request_id from run_events e
+          join runs r on r.id=e.run_id
          where e.run_id=$1 and e.user_id=$2 and e.sequence>$3 order by e.sequence`,
         [runId, userId, afterSequence]
       );
@@ -183,7 +183,7 @@ class PostgresRunRepository implements RunRepository {
   async recoverStale(before: string, occurredAt: string): Promise<RunStreamEventDtoV2[]> {
     try {
       const stale = await this.pool.query<{ id: string; user_id: string; request_id: string; conversation_id: string }>(
-        `select id,user_id,request_id,conversation_id from runs_v2
+        `select id,user_id,request_id,conversation_id from runs
           where status in ('queued','running') and updated_at<$1 order by updated_at,id`,
         [before]
       );
@@ -244,18 +244,18 @@ interface RunEventRow {
  */
 async function findOrInsertUserMessage(client: pg.PoolClient, input: CreateRunInputV2): Promise<string> {
   const existing = await client.query<{ id: string }>(
-    "select id from messages_v2 where conversation_id=$1 and user_id=$2 and client_message_id=$3",
+    "select id from messages where conversation_id=$1 and user_id=$2 and client_message_id=$3",
     [input.conversationId, input.userId, input.clientMessageId]
   );
   if (existing.rows[0]) return existing.rows[0].id;
   const sequenceResult = await client.query<{ sequence: string }>(
-    "select coalesce(max(sequence),0)+1 as sequence from messages_v2 where conversation_id=$1",
+    "select coalesce(max(sequence),0)+1 as sequence from messages where conversation_id=$1",
     [input.conversationId]
   );
   const id = randomUUID();
   // run_id 先置空：循环外键要求 run 行插入后再由调用方回填。
   await client.query(
-    `insert into messages_v2(id,conversation_id,user_id,run_id,role,content,message_type,client_message_id,sequence,created_at)
+    `insert into messages(id,conversation_id,user_id,run_id,role,content,message_type,client_message_id,sequence,created_at)
      values ($1,$2,$3,null,'user',$4,'normal',$5,$6,$7)`,
     [id, input.conversationId, input.userId, JSON.stringify(input.message),
       input.clientMessageId, sequenceResult.rows[0]?.sequence ?? "1", input.createdAt]
@@ -283,7 +283,7 @@ function mapSnapshot(row: RunRow): RunSnapshotDtoV2 {
   };
 }
 
-/** @param row run_events_v2 行。 @returns canonical 事件 envelope。 */
+/** @param row run_events 行。 @returns canonical 事件 envelope。 */
 function mapRunEvent(row: RunEventRow): RunStreamEventDtoV2 {
   return {
     eventId: row.id,
@@ -330,7 +330,7 @@ function statusFromEvent(event: RunEventInputDtoV2, current: RunStatusDtoV2): Ru
 }
 
 /**
- * 终态事件的结构化错误（写 runs_v2.error，已脱敏）。
+ * 终态事件的结构化错误（写 runs.error，已脱敏）。
  *
  * @param event 事件输入。
  * @param nextStatus 推导后的终态。

@@ -42,7 +42,7 @@ test("Run v2 repository 保证幂等创建、事件 sequence、终态推导、�
     assert.equal(first.snapshot.runId, duplicate.snapshot.runId);
     assert.equal(first.snapshot.status, "queued");
     const messageRows = await context.pool.query(
-      "select role,content from messages_v2 where conversation_id=$1",
+      "select role,content from messages where conversation_id=$1",
       [conversation.id]
     );
     assert.equal(messageRows.rows.length, 1);

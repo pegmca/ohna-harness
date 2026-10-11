@@ -16,7 +16,6 @@
     "typecheck": "pnpm --filter @aiagent/identity build && tsc -p tsconfig.json --pretty false --noEmit"
   },
   "dependencies": {
-    "@aiagent/agent": "workspace:*",
     "@aiagent/identity": "workspace:*",
     "@tencent-connect/qqbot-nodejs": "1.0.4"
   }

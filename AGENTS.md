@@ -24,6 +24,16 @@ Before implementing a task, read the relevant roadmap stage, architecture/design
 
 Keep package boundaries explicit. Do not move runtime behavior into `apps/web` when it belongs in a package.
 
+## Type Organization Rules
+
+参考 pi-monorepo 范式，明确类型归属，避免"既抽了中央 types 包、各包又自行写类型"的半统一状态：
+
+- **领域类型归属拥有包**：`Message` / `AssistantMessageEvent`、`AgentTool`、`RunEvent`、`Conversation` 等领域类型定义在其拥有包（owning package），并从该包的公共 `index.ts` 导出；不要在 `@aiagent/types` 重复定义。
+- **跨包类型共享一律用 `import type`**：从拥有包的公共入口引入（如 `import type { Message } from "@aiagent/ai"`）。`import type` 在编译期擦除，不产生运行时模块边，因此类型级循环依赖无害。
+- **`@aiagent/types` 只收跨边界 DTO**：仅保留 api、conversation DTO、`run-v2` 信封、report DTO 等线格式 / 持久化形状，不收纳领域类型。
+- **值依赖必须单向**：值 / 运行时符号只能向下游消费（下游依赖上游），不可回指，以避免运行时循环依赖；`import type` 不受此限（纯类型循环除外）。
+- **依赖声明必须与实际引用一致**：每个包必须在 `package.json` 的 `dependencies` 中声明它引用的每一个 `@aiagent/*`（含仅 `import type` 的包）。不得存在"未声明却引用"的反向违规，也不得保留"已无任何源码引用却仍声明"的死依赖。
+
 ## Coding Rules
 
 - Use TypeScript strict typing.

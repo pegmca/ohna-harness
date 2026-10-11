@@ -1,12 +1,24 @@
 import type {
   ApiError,
+  LinearMessageDto,
   MessageAttachmentDto,
   RunStatusDtoV2,
   RunStreamEventDtoV2
 } from "@aiagent/types";
 
-export type MessageRole = "user" | "assistant";
-export type MessageStatus = "complete" | "pending" | "failed" | "cancelled";
+/**
+ * 时间线消息的 role 词表，锚定到 @aiagent/types 的权威 role 定义
+ * （LinearMessageDto.role = "user" | "assistant" | "toolResult"），
+ * 取 web 实际使用的子集。前端不再自创字面量，避免与权威定义漂移。
+ */
+export type MessageRole = Extract<LinearMessageDto["role"], "user" | "assistant">;
+
+/**
+ * UI 渲染生命周期状态（前端本地），区别于 @aiagent/types 的
+ * ConversationMessageStatusDto（持久化终态 completed/failed）。
+ * 含 pending（流式进行中）、cancelled（用户取消）等仅存在于前端的流式中间态。
+ */
+export type UiMessageStatus = "complete" | "pending" | "failed" | "cancelled";
 export type WorkspaceView = "chat" | "scheduled-tasks" | "data-sources" | "workflow" | "citations" | "eval" | "architecture" | "settings";
 
 /**
@@ -58,7 +70,7 @@ export interface UiMessage {
   /** assistant 结构化内容块。 */
   blocks: UiContentBlock[];
   createdAt: string;
-  status: MessageStatus;
+  status: UiMessageStatus;
   kind?: "normal" | "compaction";
   ok?: boolean;
   runId?: string;

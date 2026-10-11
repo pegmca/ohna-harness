@@ -18,13 +18,14 @@
     "build": "tsc -b",
     "start": "pnpm build && node dist/stdio.js",
     "test": "pnpm build && node --test test/*.test.mjs",
-    "typecheck": "pnpm --filter @aiagent/rag build && pnpm --filter @aiagent/tools build && pnpm --filter @aiagent/security build && tsc -p tsconfig.json --pretty false --noEmit"
+    "typecheck": "pnpm --filter @aiagent/types build && pnpm --filter @aiagent/rag build && pnpm --filter @aiagent/tools build && pnpm --filter @aiagent/security build && tsc -p tsconfig.json --pretty false --noEmit"
   },
   "dependencies": {
     "@aiagent/rag": "workspace:^",
     "@aiagent/tools": "workspace:^",
+    "@aiagent/types": "workspace:^",
+    "@aiagent/security": "workspace:^",
     "@modelcontextprotocol/sdk": "^1.29.0",
-    "zod": "^4.4.3",
-    "@aiagent/security": "workspace:^"
+    "zod": "^4.4.3"
   }
 }

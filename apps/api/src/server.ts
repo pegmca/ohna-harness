@@ -28,6 +28,9 @@ const mcpEnabled = process.env.AIAGENT_MCP_ENABLED === "true";
 let mcpClient: McpClient | undefined;
 const deepseekRuntime = providerMode === "real" ? createOpenAiCompatibleRuntime("deepseek", "https://api.deepseek.com/v1") : undefined;
 const openrouterRuntime = providerMode === "real" ? createOpenAiCompatibleRuntime("openrouter", "https://openrouter.ai/api/v1") : undefined;
+// profile id 必须与 env 后缀一致：createOpenAiCompatibleRuntime 用 profile.toUpperCase() 拼 AIAGENT_LLM_*_<SUFFIX>，
+// 因此这里用 bridge_ai（非 bridge-ai），对应 .env 的 AIAGENT_LLM_*_BRIDGE_AI。
+const bridgeAiRuntime = providerMode === "real" ? createOpenAiCompatibleRuntime("bridge_ai", "http://your-llm-endpoint.example.com/v1") : undefined;
 // 只注册「apiKey 与 model 同时配置齐全」的 profile；未配置的 profile 不进入目录，也不阻断 readiness。
 // 默认模型取第一个已配置 profile（配置 DeepSeek 时优先 DeepSeek）。
 const realEntries = [
@@ -52,6 +55,17 @@ const realEntries = [
       capabilities: { structuredOutput: true, toolCalling: true }
     },
     runtime: openrouterRuntime?.runtime
+  },
+  {
+    option: {
+      id: "bridge_ai",
+      label: "Bridge-AI",
+      provider: "bridge_ai",
+      description: "自托管 OpenAI-compatible 兼容端点",
+      isDefault: false,
+      capabilities: { structuredOutput: true, toolCalling: true }
+    },
+    runtime: bridgeAiRuntime?.runtime
   }
 ].filter((entry): entry is { option: ModelRuntimeEntry["option"]; runtime: ModelRuntime } => Boolean(entry.runtime));
 const defaultRealModelId = realEntries[0]?.option.id ?? "deepseek";
@@ -144,7 +158,7 @@ const app = createApiServer({
       return {
         ok: false,
         dependency: "llm-provider-config",
-        message: "real 模式未配置任何可用 provider：请在 .env 至少设置一组 AIAGENT_LLM_API_KEY_<PROFILE> 与 AIAGENT_LLM_MODEL_<PROFILE>（deepseek / openrouter）。"
+        message: "real 模式未配置任何可用 provider：请在 .env 至少设置一组 AIAGENT_LLM_API_KEY_<PROFILE> 与 AIAGENT_LLM_MODEL_<PROFILE>（deepseek / openrouter / bridge-ai）。"
       };
     }
     if (!await database.ping()) {

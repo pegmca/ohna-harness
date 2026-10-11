@@ -9,7 +9,7 @@ import { createDataSourceRuntime, createDeterministicMockEmbeddingClient } from 
 import { createDefaultToolRegistry } from "@aiagent/tools";
 import { stat } from "node:fs/promises";
 import { createApiServer } from "./index.js";
-import { createModelRuntimeRegistry, type ModelRuntime } from "./application/model-registry.js";
+import { createModelRuntimeRegistry, type ModelRuntime, type ModelRuntimeEntry } from "./application/model-registry.js";
 import { BASE_SYSTEM_PROMPT } from "./application/run-service.js";
 import { createMockModelRuntime } from "./adapters/mock-model.js";
 
@@ -28,31 +28,38 @@ const mcpEnabled = process.env.AIAGENT_MCP_ENABLED === "true";
 let mcpClient: McpClient | undefined;
 const deepseekRuntime = providerMode === "real" ? createOpenAiCompatibleRuntime("deepseek", "https://api.deepseek.com/v1") : undefined;
 const openrouterRuntime = providerMode === "real" ? createOpenAiCompatibleRuntime("openrouter", "https://openrouter.ai/api/v1") : undefined;
-const modelRegistry = providerMode === "real"
-  ? createModelRuntimeRegistry([
-      {
-        option: {
-          id: "deepseek",
-          label: "DeepSeek",
-          provider: "deepseek",
-          description: "快速、稳定的金融研究对话",
-          isDefault: true,
-          capabilities: { structuredOutput: true, toolCalling: true }
-        },
-        runtime: deepseekRuntime?.runtime
-      },
-      {
-        option: {
-          id: "openrouter",
-          label: "OpenRouter",
-          provider: "openrouter",
-          description: "通过 OpenRouter 调用配置模型",
-          isDefault: false,
-          capabilities: { structuredOutput: true, toolCalling: true }
-        },
-        runtime: openrouterRuntime?.runtime
-      }
-    ], "deepseek")
+// 只注册「apiKey 与 model 同时配置齐全」的 profile；未配置的 profile 不进入目录，也不阻断 readiness。
+// 默认模型取第一个已配置 profile（配置 DeepSeek 时优先 DeepSeek）。
+const realEntries = [
+  {
+    option: {
+      id: "deepseek",
+      label: "DeepSeek",
+      provider: "deepseek",
+      description: "快速、稳定的金融研究对话",
+      isDefault: false,
+      capabilities: { structuredOutput: true, toolCalling: true }
+    },
+    runtime: deepseekRuntime?.runtime
+  },
+  {
+    option: {
+      id: "openrouter",
+      label: "OpenRouter",
+      provider: "openrouter",
+      description: "通过 OpenRouter 调用配置模型",
+      isDefault: false,
+      capabilities: { structuredOutput: true, toolCalling: true }
+    },
+    runtime: openrouterRuntime?.runtime
+  }
+].filter((entry): entry is { option: ModelRuntimeEntry["option"]; runtime: ModelRuntime } => Boolean(entry.runtime));
+const defaultRealModelId = realEntries[0]?.option.id ?? "deepseek";
+const defaultRealEntry = realEntries.find((entry) => entry.option.id === defaultRealModelId);
+if (defaultRealEntry) defaultRealEntry.option.isDefault = true;
+// real 模式至少要有一个 provider 配置齐全；否则退回 mock 目录（readiness 会显式报告未配置）。
+const modelRegistry = providerMode === "real" && realEntries.length > 0
+  ? createModelRuntimeRegistry(realEntries, defaultRealModelId)
   : createModelRuntimeRegistry([{
       option: {
         id: "mock",
@@ -133,11 +140,11 @@ const app = createApiServer({
     if (providerMode !== "mock" && providerMode !== "real") {
       return { ok: false, dependency: "provider-config", message: "AIAGENT_PROVIDER_MODE must be mock or real." };
     }
-    if (providerMode === "real" && (!deepseekRuntime?.runtime || !openrouterRuntime?.runtime)) {
+    if (providerMode === "real" && realEntries.length === 0) {
       return {
         ok: false,
         dependency: "llm-provider-config",
-        message: llmConfigurationError(deepseekRuntime, openrouterRuntime)
+        message: "real 模式未配置任何可用 provider：请在 .env 至少设置一组 AIAGENT_LLM_API_KEY_<PROFILE> 与 AIAGENT_LLM_MODEL_<PROFILE>（deepseek / openrouter）。"
       };
     }
     if (!await database.ping()) {
@@ -181,22 +188,6 @@ function createOpenAiCompatibleRuntime(
     maxTokens: 8_192
   };
   return { runtime: { model, apiKey } };
-}
-
-/**
- * 从两个模型装配结果中提取稳定的就绪错误，避免可选链破坏联合类型收窄。
- *
- * @param deepseek DeepSeek 装配结果。
- * @param openrouter OpenRouter 装配结果。
- * @returns 首个配置错误消息。
- */
-function llmConfigurationError(
-  deepseek: typeof deepseekRuntime,
-  openrouter: typeof openrouterRuntime
-): string {
-  if (deepseek?.error) return deepseek.error;
-  if (openrouter?.error) return openrouter.error;
-  return "LLM provider is not configured.";
 }
 
 /**

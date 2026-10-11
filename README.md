@@ -171,10 +171,17 @@ node test/verify-runtime-integration.mjs
 
 ```dotenv
 AIAGENT_PROVIDER_MODE=real
-AIAGENT_LLM_API_KEY=replace-with-provider-key
-AIAGENT_LLM_BASE_URL=https://api.openai.com/v1
-AIAGENT_LLM_MODEL=replace-with-model-name
+# 每个具名 profile 必须同时配齐 API key 与 model 才会启用；至少配置一个即可。
+AIAGENT_LLM_API_KEY_DEEPSEEK=replace-with-deepseek-key
+AIAGENT_LLM_BASE_URL_DEEPSEEK=https://api.deepseek.com/v1
+AIAGENT_LLM_MODEL_DEEPSEEK=deepseek-chat
+# OpenRouter（可选）
+AIAGENT_LLM_API_KEY_OPENROUTER=replace-with-openrouter-key
+AIAGENT_LLM_BASE_URL_OPENROUTER=https://openrouter.ai/api/v1
+AIAGENT_LLM_MODEL_OPENROUTER=replace-with-model-name
 ```
+
+切换 `AIAGENT_PROVIDER_MODE=real` 后，run-service 复用同一条 `agentLoop` 控制流，只是把确定性 `MockModel` 的 `streamFn` 换成 `@aiagent/ai` 的 `streamSimple`（真实 OpenAI 兼容链路）。真实 provider 产出的 token 增量（`text_delta`）经 `message_update` 事件落 `run_events` 并由 SSE 原样广播到浏览器，逐字流式渲染——loop 控制流一行未改，证明 `StreamFn` 运行时边界抽象正确。
 
 然后重新执行 `docker compose up -d --build`。密钥只作为运行时环境变量注入 API，不进入 build context 或镜像层。镜像使用 lockfile 固定依赖；API 以 Node `node` 用户运行，Web 使用 unprivileged Nginx 用户运行。
 
@@ -201,6 +208,7 @@ docker compose down
 
 ```dotenv
 AIAGENT_PROVIDER_MODE=real
+# 下列具名 profile 至少配齐一个即可（deepseek / openrouter）；缺 API key 或 model 的 profile 不启用。
 AIAGENT_LLM_API_KEY_DEEPSEEK=...
 AIAGENT_LLM_BASE_URL_DEEPSEEK=https://api.deepseek.com/v1
 AIAGENT_LLM_MODEL_DEEPSEEK=...

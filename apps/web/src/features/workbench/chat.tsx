@@ -12,7 +12,7 @@ import {
   User,
   Wrench
 } from "lucide-react";
-import { type FormEvent, useState } from "react";
+import { type FormEvent, useEffect, useRef, useState } from "react";
 import { formatRunStatus, formatTime } from "./format";
 import { projectLiveRun } from "./live-run-projection";
 import { JsonDetails, RunDetails, StatusBadge } from "./run-details";
@@ -63,6 +63,7 @@ export function ChatHeader(props: ChatHeaderProps) {
 }
 
 interface ChatTimelineProps {
+  conversationId: string | undefined;
   error: string | undefined;
   hasMore: boolean;
   isLoading: boolean;
@@ -81,6 +82,51 @@ interface ChatTimelineProps {
  * @returns 对话消息列表。
  */
 export function ChatTimeline(props: ChatTimelineProps) {
+  const scrollRef = useRef<HTMLElement>(null);
+  // 用户是否贴近底部：滚动条离底小于阈值时视为「钉住底部」，可继续自动跟随。
+  const pinnedRef = useRef(true);
+  const prevConversationRef = useRef<string | undefined>(undefined);
+  // 末条消息签名：仅当末条新增或内容增长时才跟随滚动，避免「加载更多」顶部插入时跳到底部。
+  const prevTailSigRef = useRef<string>("");
+
+  /**
+   * 用户手动滚动时重算「是否钉住底部」，决定后续是否自动跟随流式输出。
+   *
+   * @returns void。
+   */
+  function handleScroll(): void {
+    const el = scrollRef.current;
+    if (!el) return;
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    // 容差 80px：流式增量较小时也能保持跟随，又不会把轻微上滑误判为「在底部」。
+    pinnedRef.current = distanceFromBottom < 80;
+  }
+
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    // 切换会话：直接跳到底部定位最新位置，并恢复强制跟随。
+    if (props.conversationId !== prevConversationRef.current) {
+      prevConversationRef.current = props.conversationId;
+      prevTailSigRef.current = "";
+      pinnedRef.current = true;
+      el.scrollTop = el.scrollHeight;
+      return;
+    }
+    const lastMessage = props.messages[props.messages.length - 1];
+    // 流式期输出来自 liveEvents 而非 content，二者长度任一增长都视为末条推进，需跟随滚动。
+    const tailSig = lastMessage
+      ? `${lastMessage.id}#${lastMessage.liveEvents?.length ?? 0}#${lastMessage.content.length}`
+      : "";
+    // 仅顶部「加载更多」导致消息变化时末条签名不变，此时不滚动，保留用户当前位置。
+    if (tailSig === prevTailSigRef.current) return;
+    prevTailSigRef.current = tailSig;
+    // 用户在底部才跟随流式输出，避免回看历史时被强行拽到底部。
+    if (pinnedRef.current) {
+      el.scrollTop = el.scrollHeight;
+    }
+  }, [props.messages, props.conversationId]);
+
   if (props.isLoading && props.messages.length === 0) {
     return <section className="chat-timeline empty-timeline" aria-label="消息列表"><p className="muted-row">正在加载会话历史…</p></section>;
   }
@@ -101,7 +147,7 @@ export function ChatTimeline(props: ChatTimelineProps) {
   }
 
   return (
-    <section className="chat-timeline" aria-label="消息列表">
+    <section className="chat-timeline" aria-label="消息列表" onScroll={handleScroll} ref={scrollRef}>
       <div className="timeline-inner">
         {props.hasMore ? <button className="secondary-button timeline-load-more" onClick={props.onLoadMore} type="button">加载更多消息</button> : null}
         {props.messages.map((message, index) => (

@@ -609,6 +609,7 @@ export function Workbench() {
           />
 
           <ChatTimeline
+            conversationId={activeConversationId}
             isSubmitting={isSubmitting}
             error={messageError}
             hasMore={Boolean(messageCursor)}

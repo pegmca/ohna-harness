@@ -217,27 +217,28 @@ export const chunks = pgTable("chunks", {
   index("chunks_document_version_idx").on(table.documentVersionId)
 ]);
 
-const vector32 = customType<{ data: number[]; driverData: string }>({
+// 生产默认维度 1536（DEFAULT_PRODUCTION_EMBEDDING_DIMENSIONS），与 P1 真实模型约定一致。
+const vector1536 = customType<{ data: number[]; driverData: string }>({
   dataType() {
-    return "public.vector(32)";
+    return "public.vector(1536)";
   }
 });
 
-// pgvector 表镜像 0060_rag_vectors.sql；HNSW operator class 由 migration 明确声明。
+// pgvector 表镜像 0060_rag_vectors.sql + 0070_rag_vector_dimensions.sql；HNSW operator class 由 migration 明确声明。
+// 维度与模型 CHECK 已放宽：维度仅约束 0 < dimensions <= 1536，模型不再锁死 deterministic mock。
 export const chunkEmbeddings = pgTable("chunk_embeddings", {
   id: uuid("id").primaryKey(),
   chunkId: uuid("chunk_id").notNull().references(() => chunks.id, { onDelete: "cascade" }),
   embeddingProvider: text("embedding_provider").notNull(),
   embeddingModel: text("embedding_model").notNull(),
   dimensions: integer("dimensions").notNull(),
-  embedding: vector32("embedding").notNull(),
+  embedding: vector1536("embedding").notNull(),
   chunkContentChecksum: text("chunk_content_checksum").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true, mode: "string" }).notNull()
 }, (table) => [
   uniqueIndex("chunk_embeddings_chunk_model_dimensions_uq").on(table.chunkId, table.embeddingModel, table.dimensions),
   index("chunk_embeddings_model_dimensions_idx").on(table.embeddingModel, table.dimensions),
-  check("chunk_embeddings_model_check", sql`${table.embeddingModel} = 'deterministic-mock-embedding-v1'`),
-  check("chunk_embeddings_dimensions_check", sql`${table.dimensions} = 32`)
+  check("chunk_embeddings_dimensions_check", sql`${table.dimensions} > 0 and ${table.dimensions} <= 1536`)
 ]);
 
 // ============================================================================

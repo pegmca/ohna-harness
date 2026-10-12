@@ -5,6 +5,7 @@ import type {
   DataSourceIngestResponseDto,
   EmbeddedChunkDto,
   EmbeddingUsageDto,
+  IngestedFilingDocumentDto,
   IngestedTextBlockDto,
   RagAnswerDto,
   RagChunkDto,
@@ -14,6 +15,7 @@ import type {
   RetrievalTraceDto,
   VectorSearchMatchDto
 } from "@aiagent/types";
+import type { QueryRewriter } from "./query-rewrite.js";
 import type { RagDocumentRepository, RagDocumentScope } from "./document-repository.js";
 
 export type RagDocument = RagDocumentDto;
@@ -257,6 +259,21 @@ export interface DataSourceRuntimeOptions {
   repository?: RagDocumentRepository;
   embeddingClient?: EmbeddingClient;
   vectorStoreFactory?: (ownerUserId: string | null) => VectorStore;
+  /**
+   * 真实 Reranker（cross-encoder / LLM-judge）注入点；缺省时 HybridRetriever 内部回退 HeuristicReranker。
+   * 通过 createRerankerFromEnv() 在生产组合中按 bridge 环境变量注入。
+   */
+  reranker?: Reranker;
+  /**
+   * Contextual Retrieval 前缀注入器：ingest 时对 chunk 拼接文档级 LLM 上下文前缀后再 embedding。
+   * 缺省不注入（恒等）。通过 createContextEnricherFromEnv() 在生产组合中按环境变量注入。
+   */
+  contextEnricher?: (document: IngestedFilingDocumentDto, chunks: RagChunk[]) => Promise<RagChunk[]>;
+  /**
+   * query 改写节点（Agentic 检索 / Self-RAG）：检索前把原始 query 改写为检索友好问句。
+   * 缺省不改写（恒等）。通过 createQueryRewriterFromEnv() 在生产组合中按环境变量注入。
+   */
+  queryRewriter?: QueryRewriter;
 }
 
 export interface HybridRetrieverOptions {

@@ -5,6 +5,11 @@ import type {
   IngestedFilingDocumentDto,
   IngestedTextBlockDto
 } from "@aiagent/types";
+// ingestFiling 内部同步调用 parsePdfBlocks，parseMarkdownBlocks/parseTxtBlocks 调用 splitLines，
+// 均需从 pdf.ts 引入本地绑定（re-export 不提供模块内绑定）。
+import { parsePdfBlocks, splitLines } from "./pdf.js";
+// FilingParsedBlock 仅在函数签名中作为类型引用，用 import type 单向引入（编译期擦除，无运行时依赖）。
+import type { FilingParsedBlock } from "./pdf.js";
 
 export type FilingDocument = FilingDocumentDto;
 export type FilingSource = FilingSourceDto;
@@ -83,17 +88,6 @@ export interface FilingsPackageSummary {
 }
 
 /**
- * 解析阶段的 block 草稿保留 heading 和行号，最终会补齐稳定 id 后进入 DTO。
- */
-export interface FilingParsedBlock {
-  text: string;
-  heading?: string;
-  lineStart: number;
-  lineEnd: number;
-  metadata?: Record<string, string | number | boolean | null>;
-}
-
-/**
  * 创建 filings package 的边界摘要，用于测试和 README 中说明 package 职责。
  *
  * @returns filings package 的稳定职责、来源类型和当前可识别文件类型。
@@ -155,10 +149,49 @@ export function ingestFiling(
   }
 
   if (fileType === "pdf") {
-    return ingestionFailure("pdf_parser_not_configured", "PDF 解析器尚未接入，当前不会静默生成文档。", {
-      fileName: request.fileName,
-      contentType: request.contentType ?? null
-    });
+    // PDF 内容必须是二进制字节；字符串形式无法解析，直接返回结构化错误而非抛异常。
+    if (typeof request.content === "string") {
+      return ingestionFailure("parse_failed", "PDF 内容应为二进制字节（Uint8Array），不支持字符串入参。", {
+        fileName: request.fileName,
+        contentType: request.contentType ?? null
+      });
+    }
+
+    try {
+      const parsedBlocks = parsePdfBlocks(request.content);
+
+      if (parsedBlocks.length === 0) {
+        return ingestionFailure("empty_file", "PDF 未解析出有效文本块。", {
+          fileName: request.fileName,
+          fileType
+        });
+      }
+
+      const documentId = options.idGenerator?.(request, fileType) ?? createStableDocumentId(request, fileType);
+      const metadata = normalizeMetadata(request.metadata);
+      const title = resolveTitle(request.fileName, fileType, parsedBlocks.map((block) => block.text).join("\n"), metadata);
+      const createdAt = (options.now?.() ?? new Date()).toISOString();
+
+      return {
+        ok: true,
+        document: {
+          documentId,
+          source: request.source,
+          fileName: request.fileName,
+          title,
+          fileType,
+          createdAt,
+          metadata,
+          blocks: parsedBlocks.map((block, index) => createTextBlock(documentId, index, block))
+        }
+      };
+    } catch (error) {
+      return ingestionFailure("parse_failed", "PDF 解析失败。", {
+        fileName: request.fileName,
+        fileType,
+        cause: error instanceof Error ? error.message : String(error)
+      });
+    }
   }
 
   try {
@@ -367,6 +400,10 @@ export function parseTxtBlocks(content: string, maxLinesPerBlock = 12): FilingPa
   return blocks;
 }
 
+// PDF 解析相关实现已抽到 ./pdf.ts，这里原样再导出以保持公共 API 不变。
+export { parsePdfBlocks, buildPdfBlocks, isTableRow, countTableColumns, splitLines } from "./pdf.js";
+export type { FilingParsedBlock } from "./pdf.js";
+
 /**
  * 将 string 或 Uint8Array 统一解码为文本，避免 package 直接依赖浏览器 File API。
  *
@@ -461,6 +498,7 @@ function createTextBlock(documentId: string, index: number, block: FilingParsedB
     heading: block.heading,
     lineStart: block.lineStart,
     lineEnd: block.lineEnd,
+    pageNumber: block.pageNumber,
     metadata: block.metadata ?? {}
   };
 }
@@ -486,22 +524,6 @@ function ingestionFailure(
       details
     }
   };
-}
-
-/**
- * 按平台无关方式拆分文本行，并去掉末尾由最后一个换行产生的空行。
- *
- * @param content 原始文本。
- * @returns 文本行数组。
- */
-function splitLines(content: string): string[] {
-  const lines = content.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
-
-  if (lines.at(-1) === "") {
-    return lines.slice(0, -1);
-  }
-
-  return lines;
 }
 
 /**

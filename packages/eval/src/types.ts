@@ -1,5 +1,6 @@
 import type { EvalCaseDto, EvalResultDto, RagEvalReportDto } from "@aiagent/types";
 import type { DataSourceRuntime, RagAnswer } from "@aiagent/rag";
+import type { LlmJudge } from "./judge.js";
 
 /**
  * RAG 评测用例，扩展共享 EvalCaseDto，并补充 runner 内部使用的位置信息。
@@ -47,6 +48,12 @@ export interface RagEvalRunnerOptions {
   correctnessPassThreshold?: number;
   faithfulnessPassThreshold?: number;
   citationCoveragePassThreshold?: number;
+  /**
+   * 可选 LLM judge（对齐 RAGAS faithfulness / context recall）。
+   * 不传时 runner 走纯 deterministic 基线，行为与旧版本一致（无回归）；
+   * 传入时会在每条 case 的指标中追加 llmFaithfulness / llmContextRecall 校准信号。
+   */
+  judge?: LlmJudge;
 }
 
 /**

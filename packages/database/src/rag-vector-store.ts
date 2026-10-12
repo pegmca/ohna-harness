@@ -17,12 +17,32 @@ export const POSTGRES_RAG_VECTOR_DIMENSIONS = 32;
 export const POSTGRES_RAG_VECTOR_MODEL = DEFAULT_MOCK_EMBEDDING_MODEL;
 /** 当前工程闭环的 provider 标识。 */
 export const POSTGRES_RAG_VECTOR_PROVIDER = "deterministic-mock";
+/**
+ * 生产 embedding 默认维度；与 P1 真实模型（如 OpenAI text-embedding-3-small 1536 维）约定一致。
+ * 该值仅用于 env 工厂在没有显式配置时的兜底，adapter 实际写入维度由调用方通过 options.dimensions 决定。
+ */
+export const PRODUCTION_EMBEDDING_DIMENSIONS = 1536;
 
 /** PostgreSQL VectorStore 的隔离配置。 */
 export interface PostgresVectorStoreOptions {
   ownerUserId: string | null;
   embeddingProvider?: string;
+  /** 写入向量库时绑定的维度；缺省回退到 32 维固定值以保持既有 fixture 向后兼容。 */
   dimensions?: number;
+  /** 写入向量库时绑定的模型名；缺省回退到 deterministic mock 模型以保持向后兼容。 */
+  embeddingModel?: string;
+  /**
+   * 允许的维度白名单，同时约束 chunk 校验（validateChunks）与索引配置（validateConfiguration）。
+   * - "any"：不限制维度（仅要求非空有限向量）。
+   * - number[]：仅允许列表内的维度。
+   * - undefined（缺省）：保持向后兼容，仅接受 POSTGRES_RAG_VECTOR_DIMENSIONS（32 维）。
+   */
+  allowedDimensions?: number[] | "any";
+  /**
+   * 允许的模型白名单；"any" 表示不限制模型，string[] 表示仅允许列表内模型。
+   * 缺省（undefined）保持向后兼容：仅接受 POSTGRES_RAG_VECTOR_MODEL（deterministic mock）。
+   */
+  allowedModels?: string[] | "any";
 }
 
 /**
@@ -39,9 +59,11 @@ export interface PostgresVectorStoreOptions {
 export function createPostgresVectorStore(pool: pg.Pool, options: PostgresVectorStoreOptions): VectorStore {
   return new PostgresVectorStore(pool, {
     ownerUserId: options.ownerUserId,
-    embeddingModel: POSTGRES_RAG_VECTOR_MODEL,
+    embeddingModel: options.embeddingModel ?? POSTGRES_RAG_VECTOR_MODEL,
     embeddingProvider: options.embeddingProvider ?? POSTGRES_RAG_VECTOR_PROVIDER,
-    dimensions: options.dimensions ?? POSTGRES_RAG_VECTOR_DIMENSIONS
+    dimensions: options.dimensions ?? POSTGRES_RAG_VECTOR_DIMENSIONS,
+    allowedDimensions: options.allowedDimensions,
+    allowedModels: options.allowedModels
   });
 }
 
@@ -50,6 +72,8 @@ interface NormalizedOptions {
   embeddingModel: string;
   embeddingProvider: string;
   dimensions: number;
+  allowedDimensions?: number[] | "any";
+  allowedModels?: string[] | "any";
 }
 
 interface ResolvedChunkRow {
@@ -181,7 +205,7 @@ class PostgresVectorStore implements VectorStore {
    * @returns 稳定排序的完整 EmbeddedChunk matches。
    */
   public async search(queryVector: EmbeddingVector, options: VectorSearchOptions = {}): Promise<VectorSearchResult> {
-    const validationError = this.validateConfiguration() ?? validateQuery(queryVector, options);
+    const validationError = this.validateConfiguration() ?? validateQuery(queryVector, options, this.options.dimensions);
     if (validationError) return { ok: false, error: validationError };
     const topK = Math.min(options.topK ?? 5, 50);
     const params: unknown[] = [
@@ -250,20 +274,50 @@ class PostgresVectorStore implements VectorStore {
    * @returns adapter 固定配置错误；合法时返回 undefined。
    */
   private validateConfiguration(): RagStructuredError | undefined {
-    if (this.options.dimensions !== POSTGRES_RAG_VECTOR_DIMENSIONS) {
+    // 结构校验：维度必须是正整数，拒绝 0/负数/小数。
+    if (!Number.isInteger(this.options.dimensions) || this.options.dimensions <= 0) {
       return {
         code: "vector_store_dimension_mismatch",
-        message: "当前 PostgreSQL 向量索引仅支持 32 维 embedding。",
+        message: "embedding 维度必须是大于 0 的整数。",
+        details: { actualDimensions: this.options.dimensions }
+      };
+    }
+    // 维度白名单：allowedDimensions==="any" 放行；数组则必须命中；缺省保持 32 维向后兼容。
+    if (this.options.allowedDimensions === "any") {
+      // 不限制维度。
+    } else if (Array.isArray(this.options.allowedDimensions)) {
+      if (!this.options.allowedDimensions.includes(this.options.dimensions)) {
+        return {
+          code: "vector_store_dimension_mismatch",
+          message: "当前 PostgreSQL 向量索引未将当前维度列入允许集合。",
+          details: { allowedDimensions: this.options.allowedDimensions, actualDimensions: this.options.dimensions }
+        };
+      }
+    } else if (this.options.dimensions !== POSTGRES_RAG_VECTOR_DIMENSIONS) {
+      return {
+        code: "vector_store_dimension_mismatch",
+        message: "当前 PostgreSQL 向量索引仅支持 32 维 embedding（向后兼容路径）。",
         details: { expectedDimensions: POSTGRES_RAG_VECTOR_DIMENSIONS, actualDimensions: this.options.dimensions }
       };
     }
     if (!this.options.embeddingModel.trim()) {
       return { code: "embedding_model_mismatch", message: "embedding model 不能为空。" };
     }
-    if (this.options.embeddingModel !== POSTGRES_RAG_VECTOR_MODEL) {
+    // 模型白名单：allowedModels==="any" 放行；数组则必须命中；缺省保持 deterministic mock 向后兼容。
+    if (this.options.allowedModels === "any") {
+      // 不限制模型。
+    } else if (Array.isArray(this.options.allowedModels)) {
+      if (!this.options.allowedModels.includes(this.options.embeddingModel)) {
+        return {
+          code: "embedding_model_mismatch",
+          message: "当前 PostgreSQL 向量索引未将当前模型列入允许集合。",
+          details: { allowedModels: this.options.allowedModels, actualModel: this.options.embeddingModel }
+        };
+      }
+    } else if (this.options.embeddingModel !== POSTGRES_RAG_VECTOR_MODEL) {
       return {
         code: "embedding_model_mismatch",
-        message: "当前 PostgreSQL 向量索引仅支持固定 deterministic mock 模型。"
+        message: "当前 PostgreSQL 向量索引仅支持固定 deterministic mock 模型（向后兼容路径）。"
       };
     }
     return undefined;
@@ -274,24 +328,70 @@ class PostgresVectorStore implements VectorStore {
    * @returns 首个安全结构化错误。
    */
   private validateChunks(chunks: readonly EmbeddedChunk[]): RagStructuredError | undefined {
+    // 维度校验尊重 allowedDimensions 语义：数组白名单命中、单维度相等、"any" 仅要求非空。
     const invalid = chunks.find((chunk) =>
-      chunk.embeddingModel !== this.options.embeddingModel ||
-      chunk.embedding.length !== this.options.dimensions ||
-      chunk.embedding.some((value) => !Number.isFinite(value))
+      !this.isDimensionAllowed(chunk.embedding.length) ||
+      chunk.embedding.some((value) => !Number.isFinite(value)) ||
+      !this.isModelAllowed(chunk.embeddingModel)
     );
     if (!invalid) return undefined;
-    if (invalid.embeddingModel !== this.options.embeddingModel) {
+    if (!this.isDimensionAllowed(invalid.embedding.length)) {
+      const expected = this.dimensionExpectation();
       return {
-        code: "embedding_model_mismatch",
-        message: "chunk embedding model 与向量库模型不一致。",
-        details: { expectedModel: this.options.embeddingModel, actualModel: invalid.embeddingModel, chunkId: invalid.chunkId }
+        code: "embedding_dimension_mismatch",
+        message: `chunk embedding 维度(${invalid.embedding.length}) 与向量库期望(${expected}) 不一致；pgvector 列维度固定为 ${expected}，请使用真实 ${expected} 维 embedding（配置 bridge 环境变量 AIAGENT_LLM_*_BRIDGE_AI）或去掉 DATABASE_URL 以使用内存 store。`,
+        details: { expectedDimensions: expected, actualDimensions: invalid.embedding.length, chunkId: invalid.chunkId }
+      };
+    }
+    if (invalid.embedding.some((value) => !Number.isFinite(value))) {
+      return {
+        code: "embedding_dimension_mismatch",
+        message: "chunk embedding 必须仅包含有限数值。",
+        details: { actualDimensions: invalid.embedding.length, chunkId: invalid.chunkId }
       };
     }
     return {
-      code: "embedding_dimension_mismatch",
-      message: "chunk embedding 必须是 32 维有限数值向量。",
-      details: { expectedDimensions: this.options.dimensions, actualDimensions: invalid.embedding.length, chunkId: invalid.chunkId }
+      code: "embedding_model_mismatch",
+      message: "chunk embedding model 不在向量库允许模型集合内。",
+      details: { allowedModels: this.options.allowedModels ?? [POSTGRES_RAG_VECTOR_MODEL], actualModel: invalid.embeddingModel, chunkId: invalid.chunkId }
     };
+  }
+
+  /**
+   * 判断 chunk 向量维度是否被允许；尊重 allowedDimensions 语义，避免 "any" 沦为 no-op。
+   *
+   * @param length chunk embedding 向量长度（维度）。
+   * @returns true 表示允许写入向量库。
+   */
+  private isDimensionAllowed(length: number): boolean {
+    const allowed = this.options.allowedDimensions;
+    if (allowed === "any") return length > 0;
+    if (Array.isArray(allowed)) return allowed.includes(length);
+    return length === this.options.dimensions;
+  }
+
+  /**
+   * 计算向量库期望维度的可读描述，用于结构化错误消息。
+   *
+   * "any" → "任意维度"；数组 → 以 / 连接的允许维度；缺省 → 单固定维度。
+   *
+   * @returns 期望维度描述（数字或字符串）。
+   */
+  private dimensionExpectation(): number | string {
+    const allowed = this.options.allowedDimensions;
+    if (allowed === "any") return "任意维度";
+    if (Array.isArray(allowed)) return allowed.length === 1 ? allowed[0] : allowed.join("/");
+    return this.options.dimensions;
+  }
+
+  /**
+   * @param model chunk 携带的 embedding 模型名。
+   * @returns 模型是否在允许集合内（缺省仅 deterministic mock）。
+   */
+  private isModelAllowed(model: string): boolean {
+    if (this.options.allowedModels === "any") return true;
+    if (Array.isArray(this.options.allowedModels)) return this.options.allowedModels.includes(model);
+    return model === POSTGRES_RAG_VECTOR_MODEL;
   }
 
   /**
@@ -338,14 +438,15 @@ class PostgresVectorStore implements VectorStore {
 /**
  * @param queryVector 查询向量。
  * @param options 检索参数。
+ * @param dimensions 向量库绑定维度，用于校验 query 维度一致性。
  * @returns 参数错误或 undefined。
  */
-function validateQuery(queryVector: EmbeddingVector, options: VectorSearchOptions): RagStructuredError | undefined {
-  if (queryVector.length !== POSTGRES_RAG_VECTOR_DIMENSIONS || queryVector.some((value) => !Number.isFinite(value))) {
+function validateQuery(queryVector: EmbeddingVector, options: VectorSearchOptions, dimensions: number): RagStructuredError | undefined {
+  if (queryVector.length !== dimensions || queryVector.some((value) => !Number.isFinite(value))) {
     return {
       code: "vector_store_dimension_mismatch",
-      message: "query vector 必须是 32 维有限数值向量。",
-      details: { expectedDimensions: POSTGRES_RAG_VECTOR_DIMENSIONS, actualDimensions: queryVector.length }
+      message: "query vector 必须是与向量库维度一致的有限数值向量。",
+      details: { expectedDimensions: dimensions, actualDimensions: queryVector.length }
     };
   }
   if (options.topK !== undefined && (!Number.isInteger(options.topK) || options.topK <= 0)) {

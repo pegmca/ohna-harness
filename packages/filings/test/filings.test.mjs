@@ -162,7 +162,7 @@ test("unknown extensions return a structured ingestion error", () => {
   assert.equal(result.error.details.fileName, "archive.bin");
 });
 
-test("pdf ingestion is explicit when parser dependency is not configured", () => {
+test("pdf ingestion returns a structured error for invalid PDF bytes (parser gap closed)", () => {
   const result = ingestFiling({
     source: "local://annual-report.pdf",
     fileName: "annual-report.pdf",
@@ -170,9 +170,21 @@ test("pdf ingestion is explicit when parser dependency is not configured", () =>
     content: new Uint8Array([37, 80, 68, 70])
   });
 
+  // 缺口已消除：不再返回 pdf_parser_not_configured，而是走真实解析；非法 PDF 收敛为结构化 parse_failed。
   assert.equal(result.ok, false);
-  assert.equal(result.error.code, "pdf_parser_not_configured");
-  assert.equal(result.error.details.fileName, "annual-report.pdf");
+  assert.equal(result.error.code, "parse_failed");
+});
+
+test("pdf ingestion rejects string content with a structured error", () => {
+  const result = ingestFiling({
+    source: "local://annual-report.pdf",
+    fileName: "annual-report.pdf",
+    contentType: "application/pdf",
+    content: "%PDF-1.4 string form"
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.error.code, "parse_failed");
 });
 
 test("file type detection uses content type before extension", () => {

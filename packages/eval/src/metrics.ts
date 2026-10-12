@@ -1,5 +1,6 @@
 import type { EvalMetricDto } from "@aiagent/types";
 import type { RagEvalAnswerContext, RagEvalCase, RagEvalRunnerOptions } from "./types.js";
+import type { ContextRecallJudgement, FaithfulnessJudgement } from "./judge.js";
 
 const DEFAULT_RETRIEVAL_PASS_THRESHOLD = 1;
 const DEFAULT_CORRECTNESS_PASS_THRESHOLD = 0.5;
@@ -85,27 +86,74 @@ const STOPWORDS = new Set([
 ]);
 
 /**
- * 计算单条 case 的四个 RAG 评测指标。
+ * 已解析的 LLM judge 结果快照，由异步编排层（runner）调用 judge 后传入，
+ * 便于 computeRagMetrics 在保持同步、零回归的前提下追加 judge 指标。
+ */
+export interface LlmJudgeResult {
+  /** faithfulness 判定结果（对齐 RAGAS faithfulness）。 */
+  faithfulness: FaithfulnessJudgement;
+  /** context recall 判定结果（对齐 RAGAS context recall）。 */
+  contextRecall: ContextRecallJudgement;
+}
+
+/**
+ * 计算单条 case 的 RAG 评测指标。
  *
  * 第一版全部使用 deterministic rubric，不调用 LLM judge，目的是让指标可解释、
  * 可复现、不依赖 API key；局限是 correctness/faithfulness 只能做关键词级近似，
  * 无法像人工或模型 judge 那样理解语义等价和同义改写。
  *
+ * 第二版可选地接入 LLM judge（对齐 RAGAS faithfulness / context recall）：
+ * 仅当传入已解析的 `judgeResult` 时，才在返回数组中追加 `llmFaithfulness` 与
+ * `llmContextRecall` 两个指标。**无论是否传入 judge，原有的四个 deterministic 字段
+ * 与顺序都完全不变**，不传时返回值与旧版本逐字节一致（无回归）。
+ *
+ * 设计上 judge 由异步编排层先调用，再把结果快照传入（保持本函数同步、不破坏既有调用方）；
+ * judge 指标属于校准信号、不参与 pass/fail 门禁，故 passed 恒为 true。
+ *
  * @param evalCase 评测用例。
  * @param context 从 RAG runtime 得到的回答与检索上下文。
  * @param options runner 选项，可调整通过阈值。
- * @returns 四个指标列表。
+ * @param judgeResult 可选已解析的 LLM judge 结果；缺省时不追加 judge 指标。
+ * @returns 指标列表（四个 deterministic 指标，外加可选的 judge 指标）。
  */
 export function computeRagMetrics(
   evalCase: RagEvalCase,
   context: RagEvalAnswerContext,
-  options: RagEvalRunnerOptions = {}
+  options: RagEvalRunnerOptions = {},
+  judgeResult?: LlmJudgeResult
 ): EvalMetricDto[] {
-  return [
+  const deterministicMetrics: EvalMetricDto[] = [
     computeRetrievalHitRate(evalCase, context, options),
     computeAnswerCorrectness(evalCase, context, options),
     computeFaithfulness(evalCase, context, options),
     computeCitationCoverage(evalCase, context, options)
+  ];
+
+  if (!judgeResult) {
+    return deterministicMetrics;
+  }
+
+  const { faithfulness, contextRecall } = judgeResult;
+  const faithfulnessDetail =
+    typeof faithfulness.reason === "string" && faithfulness.reason.length > 0
+      ? `LLM judge faithfulness：${faithfulness.reason}`
+      : "LLM judge faithfulness（无理由）";
+
+  return [
+    ...deterministicMetrics,
+    {
+      name: "llmFaithfulness",
+      score: roundScore(faithfulness.score),
+      passed: true,
+      details: faithfulnessDetail
+    },
+    {
+      name: "llmContextRecall",
+      score: roundScore(contextRecall.score),
+      passed: true,
+      details: "LLM judge context recall（校准信号，不计入门禁）"
+    }
   ];
 }
 

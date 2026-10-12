@@ -1,6 +1,7 @@
 import type { DataSourceRuntime, RagAnswer } from "@aiagent/rag";
 import type { EvalResultDto, RagEvalFailureDto, RagEvalReportDto } from "@aiagent/types";
-import { computeRagMetrics } from "./metrics.js";
+import { computeRagMetrics, type LlmJudgeResult } from "./metrics.js";
+import type { LlmJudge } from "./judge.js";
 import type {
   RagEvalAnswerContext,
   RagEvalCase,
@@ -58,6 +59,30 @@ export async function runRagEval(input: RagEvalRunnerInput): Promise<RagEvalRunn
 }
 
 /**
+ * 带 LLM judge 的 RAG eval 入口（演示用，默认路径 runRagEval 不受影响）。
+ *
+ * 内部把传入的 judge 注入 runner 选项；不传 judge 等价于 runRagEval，保证向后兼容。
+ *
+ * @param input 包含 case 集合和已初始化 RAG runtime 的输入。
+ * @param judge 可选 LLM judge 实例；缺省时退化为纯 deterministic 基线。
+ * @returns 与 runRagEval 相同的结果结构，并额外携带 judge 校准指标。
+ */
+export async function runRagEvalWithJudge(
+  input: RagEvalRunnerInput,
+  judge?: LlmJudge
+): Promise<RagEvalRunnerResult> {
+  const optionsWithJudge: RagEvalRunnerOptions = {
+    ...(input.options ?? {}),
+    judge
+  };
+
+  return runRagEval({
+    ...input,
+    options: optionsWithJudge
+  });
+}
+
+/**
  * 运行单条 case，从 RAG runtime 获取答案并计算指标。
  *
  * @param evalCase 评测用例。
@@ -91,7 +116,10 @@ async function runSingleCase(
 
   const answer = answerResult.data.answer;
   const context = createAnswerContext(evalCase.question, answer);
-  const metrics = computeRagMetrics(evalCase, context, options);
+
+  // judge 是可选校准信号：仅在 options.judge 存在时异步调用，默认路径完全不触网、零回归。
+  const judgeResult = options.judge ? await computeJudgeResult(options.judge, evalCase, context) : undefined;
+  const metrics = computeRagMetrics(evalCase, context, options, judgeResult);
 
   return {
     caseId: evalCase.id,
@@ -101,6 +129,34 @@ async function runSingleCase(
     metrics,
     passed: metrics.every((metric) => metric.passed)
   };
+}
+
+/**
+ * 异步调用 LLM judge，得到已解析结果快照供 computeRagMetrics 同步追加。
+ *
+ * judge 的两个判定均自带降级（key 缺失/网络失败返回中性分），这里直接透传，不向上抛。
+ *
+ * @param judge LLM judge 实例。
+ * @param evalCase 评测用例（提供 expectedAnswer/expectedKeywords 作为期望证据来源）。
+ * @param context 回答与检索上下文。
+ * @returns 已解析的 judge 结果快照。
+ */
+async function computeJudgeResult(
+  judge: LlmJudge,
+  evalCase: RagEvalCase,
+  context: RagEvalAnswerContext
+): Promise<LlmJudgeResult> {
+  const retrievedContexts = context.answer.retrievalResults.map((result) => result.text);
+  const expectedContexts = [evalCase.expectedAnswer, ...(evalCase.expectedKeywords ?? [])].filter(
+    (value): value is string => typeof value === "string" && value.length > 0
+  );
+
+  const [faithfulness, contextRecall] = await Promise.all([
+    judge.judgeFaithfulness(evalCase.question, context.answer.answer, retrievedContexts),
+    judge.judgeContextRecall(expectedContexts, retrievedContexts)
+  ]);
+
+  return { faithfulness, contextRecall };
 }
 
 /**

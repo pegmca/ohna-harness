@@ -1,11 +1,19 @@
 import { agentLoop, defaultConvertToLlm, type AgentMessage } from "@aiagent/agent";
 import type { Model } from "@aiagent/ai";
 import { createQqBotChannel } from "@aiagent/channels";
-import { createDatabaseRuntime, createPostgresVectorStore } from "@aiagent/database";
+import { createDatabaseRuntime, createVectorStoreFromEnv, DEFAULT_PRODUCTION_EMBEDDING_DIMENSIONS } from "@aiagent/database";
 import { createLocalArtifactStorage } from "@aiagent/report";
 import { createIdentityService } from "@aiagent/identity";
 import { discoverMcpAgentTools, createMcpStdioClient, type McpClient } from "@aiagent/mcp";
-import { createDataSourceRuntime, createDeterministicMockEmbeddingClient } from "@aiagent/rag";
+import {
+  createDataSourceRuntime,
+  createEmbeddingClientFromEnv,
+  createRerankerFromEnv,
+  createContextEnricherFromEnv,
+  createQueryRewriterFromEnv,
+  DEFAULT_MOCK_EMBEDDING_MODEL,
+  BRIDGE_ENV
+} from "@aiagent/rag";
 import { createDefaultToolRegistry } from "@aiagent/tools";
 import { stat } from "node:fs/promises";
 import { createApiServer } from "./index.js";
@@ -30,7 +38,9 @@ const deepseekRuntime = providerMode === "real" ? createOpenAiCompatibleRuntime(
 const openrouterRuntime = providerMode === "real" ? createOpenAiCompatibleRuntime("openrouter", "https://openrouter.ai/api/v1") : undefined;
 // profile id 必须与 env 后缀一致：createOpenAiCompatibleRuntime 用 profile.toUpperCase() 拼 AIAGENT_LLM_*_<SUFFIX>，
 // 因此这里用 bridge_ai（非 bridge-ai），对应 .env 的 AIAGENT_LLM_*_BRIDGE_AI。
-const bridgeAiRuntime = providerMode === "real" ? createOpenAiCompatibleRuntime("bridge_ai", "http://your-llm-endpoint.example.com/v1") : undefined;
+// baseUrl 缺省回退为环境变量 AIAGENT_LLM_BASE_URL_BRIDGE_AI（见 BRIDGE_ENV），去掉硬编码 IP；
+// 未配置时传空串，由 createOpenAiCompatibleRuntime 自身的 env 读取行为决定（不改动该函数）。
+const bridgeAiRuntime = providerMode === "real" ? createOpenAiCompatibleRuntime("bridge_ai", process.env[BRIDGE_ENV.baseUrl] ?? "") : undefined;
 // 只注册「apiKey 与 model 同时配置齐全」的 profile；未配置的 profile 不进入目录，也不阻断 readiness。
 // 默认模型取第一个已配置 profile（配置 DeepSeek 时优先 DeepSeek）。
 const realEntries = [
@@ -134,8 +144,17 @@ const app = createApiServer({
   identityService,
   dataSourceRuntime: createDataSourceRuntime({
     repository: database.ragDocumentRepository,
-    embeddingClient: createDeterministicMockEmbeddingClient(),
-    vectorStoreFactory: (ownerUserId) => createPostgresVectorStore(database.pool, { ownerUserId })
+    // 生产组合开关：bridge 环境变量就绪时自动切真实 provider，否则回退确定性 mock / 启发式 / 恒等，
+    // 保证本地 demo 与 CI 零外部依赖可复现；真实环境无需改码即热插拔（依赖倒置）。
+    embeddingClient: createEmbeddingClientFromEnv(),
+    reranker: createRerankerFromEnv(),
+    contextEnricher: createContextEnricherFromEnv(),
+    queryRewriter: createQueryRewriterFromEnv(),
+    // env 驱动：有 DATABASE_URL 走 pgvector（生产默认），无则退化为内存 fixture 保持本地 demo 可用。
+    vectorStoreFactory: createVectorStoreFromEnv(database.pool, {
+      embeddingModel: DEFAULT_MOCK_EMBEDDING_MODEL,
+      dimensions: DEFAULT_PRODUCTION_EMBEDDING_DIMENSIONS
+    })
   }),
   attachmentRepository: database.attachmentRepository,
   citationRepository: database.citationRepository,

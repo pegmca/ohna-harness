@@ -2,7 +2,8 @@ import { detectFilingFileType, ingestFiling } from "@aiagent/filings";
 import type {
   DataSourceDocumentDto,
   DataSourceIngestRequestDto,
-  DataSourceIngestResponseDto
+  DataSourceIngestResponseDto,
+  IngestedFilingDocumentDto
 } from "@aiagent/types";
 import {
   createInMemoryRagDocumentRepository,
@@ -43,10 +44,12 @@ import {
   type RagPackageSummary,
   type RagSearchRuntimeResponse,
   type RagStructuredError,
+  type Reranker,
   type RetrievalOptions,
   type Retriever,
   type VectorStore
 } from "./types.js";
+import type { QueryRewriter } from "./query-rewrite.js";
 import { createInMemoryVectorStoreFactory } from "./vector-store.js";
 
 /**
@@ -88,16 +91,28 @@ class DataSourceRuntimeService implements DataSourceRuntime {
   private readonly embeddingClient: EmbeddingClient;
   private readonly vectorStoreFactory: (ownerUserId: string | null) => VectorStore;
   private readonly repository: RagDocumentRepository;
+  private readonly reranker?: Reranker;
+  private readonly contextEnricher?: (
+    document: IngestedFilingDocumentDto,
+    chunks: RagChunk[]
+  ) => Promise<RagChunk[]>;
+  private readonly queryRewriter?: QueryRewriter;
 
   /**
    * 创建 runtime 实例。
    *
-   * @param options 显式 adapter 依赖。
+   * repository / embeddingClient / vectorStoreFactory 缺省回退到内存实现，保证零配置本地可用；
+   * reranker / contextEnricher / queryRewriter 均为可选生产增强，缺省保持启发式/恒等，不破坏默认链路。
+   *
+   * @param options 显式 adapter 依赖与可选生产增强。
    */
-  public constructor(options: Required<DataSourceRuntimeOptions>) {
-    this.repository = options.repository;
-    this.embeddingClient = options.embeddingClient;
-    this.vectorStoreFactory = options.vectorStoreFactory;
+  public constructor(options: DataSourceRuntimeOptions) {
+    this.repository = options.repository ?? createInMemoryRagDocumentRepository();
+    this.embeddingClient = options.embeddingClient ?? createDeterministicMockEmbeddingClient();
+    this.vectorStoreFactory = options.vectorStoreFactory ?? createInMemoryVectorStoreFactory();
+    this.reranker = options.reranker;
+    this.contextEnricher = options.contextEnricher;
+    this.queryRewriter = options.queryRewriter;
   }
 
   /**
@@ -221,13 +236,18 @@ class DataSourceRuntimeService implements DataSourceRuntime {
 
     // 统一从 repository 返回的记录重建 RagChunkDto，幂等命中与新建版本走完全相同的形状。
     const chunks = saved.result.chunks.map(ragChunkRecordToChunk);
-    const embeddingResult = await this.embeddingClient.embedTexts(chunks.map((chunk) => chunk.text));
+    // Contextual Retrieval 挂载点①：ingest 时对 chunk 拼接文档级 LLM 上下文前缀再 embedding，
+    // 让写入向量库的向量带上"全局坐标"，检索召回更准；缺省无注入（恒等）保持零依赖可复现。
+    const indexedChunks = this.contextEnricher
+      ? await this.contextEnricher(ingestionResult.document, chunks)
+      : chunks;
+    const embeddingResult = await this.embeddingClient.embedTexts(indexedChunks.map((chunk) => chunk.text));
 
     if (!embeddingResult.ok) {
       return { ok: false, error: embeddingResult.error };
     }
 
-    const embeddedChunks = chunks.map((chunk, index) => ({
+    const embeddedChunks = indexedChunks.map((chunk, index) => ({
       ...chunk,
       embedding: embeddingResult.embeddings[index].vector,
       embeddingModel: embeddingResult.model
@@ -309,8 +329,10 @@ class DataSourceRuntimeService implements DataSourceRuntime {
   ): Promise<DataSourceRuntimeResult<RagSearchRuntimeResponse>> {
     const retriever = await this.createRetriever(context.ownerUserId ?? null);
     if (!retriever.ok) return retriever;
-    const retrievalResult = await retriever.retriever.retrieve(query, options);
-    const trace = createTraceRetrievalEvent(query, retrievalResult);
+    // Agentic 检索挂载点：检索前把原始 query 改写为检索友好问句（缺省不改写），提升召回。
+    const resolvedQuery = this.queryRewriter ? (await this.queryRewriter(query)).rewritten : query;
+    const retrievalResult = await retriever.retriever.retrieve(resolvedQuery, options);
+    const trace = createTraceRetrievalEvent(resolvedQuery, retrievalResult);
 
     if (!retrievalResult.ok) {
       return {
@@ -342,8 +364,10 @@ class DataSourceRuntimeService implements DataSourceRuntime {
   ): Promise<DataSourceRuntimeResult<RagAnswerRuntimeResponse>> {
     const retriever = await this.createRetriever(context.ownerUserId ?? null);
     if (!retriever.ok) return retriever;
-    const retrievalResult = await retriever.retriever.retrieve(question, options);
-    const trace = createTraceRetrievalEvent(question, retrievalResult);
+    // Agentic 检索挂载点：检索前把原始 question 改写为检索友好问句（缺省不改写），提升召回。
+    const resolvedQuery = this.queryRewriter ? (await this.queryRewriter(question)).rewritten : question;
+    const retrievalResult = await retriever.retriever.retrieve(resolvedQuery, options);
+    const trace = createTraceRetrievalEvent(resolvedQuery, retrievalResult);
 
     if (!retrievalResult.ok) {
       return {
@@ -412,7 +436,9 @@ class DataSourceRuntimeService implements DataSourceRuntime {
         retriever: createHybridRetriever({
           embeddingClient: this.embeddingClient,
           vectorStore: this.vectorStoreFactory(ownerUserId),
-          chunks: embeddedChunks
+          chunks: embeddedChunks,
+          // 生产组合注入真实 Reranker（cross-encoder / LLM-judge）；缺省走内部 HeuristicReranker。
+          reranker: this.reranker
         })
       };
     } catch {

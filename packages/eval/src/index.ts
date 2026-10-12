@@ -1,8 +1,9 @@
 import type { RagAnswer } from "@aiagent/rag";
 import type { EvalCaseDto, EvalMetricDto, EvalResultDto } from "@aiagent/types";
 import { DEMO_DOCUMENTS, RAG_EVAL_CASES, createDemoRagRuntime } from "./cases.js";
-import { computeRagMetrics } from "./metrics.js";
-import { createRagEvalReport, runRagEval } from "./runner.js";
+import { computeRagMetrics, type LlmJudgeResult } from "./metrics.js";
+import { createRagEvalReport, runRagEval, runRagEvalWithJudge } from "./runner.js";
+import { createLlmJudge, type ContextRecallJudgement, type FaithfulnessJudgement, type LlmJudge, type LlmJudgeOptions } from "./judge.js";
 import type {
   RagEvalAnswerContext,
   RagEvalCase,
@@ -29,7 +30,18 @@ export type {
   RagEvalError
 };
 
-export { createRagEvalReport, runRagEval, computeRagMetrics, RAG_EVAL_CASES, DEMO_DOCUMENTS, createDemoRagRuntime };
+export type { LlmJudge, LlmJudgeOptions, LlmJudgeResult, FaithfulnessJudgement, ContextRecallJudgement };
+
+export {
+  createRagEvalReport,
+  runRagEval,
+  runRagEvalWithJudge,
+  computeRagMetrics,
+  createLlmJudge,
+  RAG_EVAL_CASES,
+  DEMO_DOCUMENTS,
+  createDemoRagRuntime
+};
 export * from "./automation.js";
 export {
   runLoopEval,

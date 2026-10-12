@@ -16,8 +16,14 @@ export {
   POSTGRES_RAG_VECTOR_DIMENSIONS,
   POSTGRES_RAG_VECTOR_MODEL,
   POSTGRES_RAG_VECTOR_PROVIDER,
+  PRODUCTION_EMBEDDING_DIMENSIONS,
   type PostgresVectorStoreOptions
 } from "./rag-vector-store.js";
+export {
+  createVectorStoreFromEnv,
+  DEFAULT_PRODUCTION_EMBEDDING_DIMENSIONS,
+  type VectorStoreEnvOptions
+} from "./vector-store-factory.js";
 export { RepositoryError, type RepositoryErrorCode } from "./repository-error.js";
 export { isPostgresUniqueViolation, postgresTimestampToIso } from "./postgres.js";
 export { createPostgresConversationRepository } from "./conversation-repository.js";

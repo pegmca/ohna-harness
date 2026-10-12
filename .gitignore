@@ -9,6 +9,7 @@ dist/
 apps/*/dist/
 packages/*/dist/
 packages/*/src/**/*.d.ts
+packages/*/src/**/*.js
 apps/api/var/
 packages/*/node_modules/.tmp/
 apps/*/node_modules/.tmp/

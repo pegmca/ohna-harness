@@ -1,0 +1,159 @@
+# 带读路线：评测增强（LLM-as-Judge）与可观测性对齐 OTel（v1.1）
+
+> 配套文档：`docs/v1.1/04-eval-observability.md`（需求、行业速览与改造方向）
+> 参考实现：`https://github.com/badlogic/pi-mono`（pi-agent，简称 pi）
+> 本路线把 Task 2 落地的内容按"评测校准信号 → trace 三位一体 → token/成本字段 → token 级 PII 治理"的顺序，
+> 把代码位置、设计思想、pi 对应物、零回归纪律与学习检查点串起来。
+> 读法建议：先通读一节的理论，再打开对应 `file_path:line` 读源码，最后回看该节的「学习检查点」。
+
+---
+
+## 0. 全局心智模型（先看这张图）
+
+```
+                         ┌──────────────────────────────────────────────┐
+  确定性质量闸门          │  runLoopEval（跑真 agentLoop + mock streamFn）   │
+  （baseline 门禁，        │  1) 跑真循环 → run_events 投影 evidence          │
+   7 项指标，零改动）       │  2) scoreCaseWithEvidence 确定性打分 + 门禁       │
+                         └───────────────┬──────────────────────────────┘
+                                         │ 可选注入 judge
+                                         ▼
+   ┌──────────────────────────────────────────────────────────────────┐
+   │  P0 LLM-as-Judge（校准信号，不计入门禁）                              │
+   │  createLoopLlmJudge → LoopLlmJudge（judgeAnswerCorrectness /       │
+   │  judgeFaithfulness）→ 追加 llmAnswerCorrectness / llmFaithfulness    │
+   │  默认确定性 mock（词元重叠，可复现）；可选真实模型（多数投票校准，降级）  │
+   └──────────────────────────────────────────────────────────────────┘
+
+                         ┌──────────────────────────────────────────────┐
+  P1 可观测性对齐 OTel     │  RunEvent → OtelSpan（gen_ai.* 语义约定）        │
+  + token/成本字段         │  agent.run / agent.generation / tool.call /    │
+  + token 级 PII          │  retrieval / internal；defensive token/cost     │
+                         │  redactTokenTrace / isSensitiveKey（字符串整值） │
+                         └──────────────────────────────────────────────┘
+```
+
+**一句话**：Task 2 没有动"确定性质量闸门"的任何门禁口径（零回归硬约束），只在它旁边**挂了一层 LLM-as-Judge 校准信号**，把 trace 包从"最小事件契约"升级成"对齐 OTel `gen_ai` 的可观测边界 + token/成本字段 + token 级 PII 治理"。新增能力都是**可选追加 / 防御式读取**，缺省不生效、不破坏既有形状。
+
+---
+
+## 1. P0 LLM-as-Judge 层（语义校准，不碰门禁）
+
+**读什么**
+- `packages/eval/src/judge-loop.ts`
+  - `LoopLlmJudge` 接口（`:27`）：两个 rubric——`judgeAnswerCorrectness`（答案是否覆盖期望要点）、`judgeFaithfulness`（答案论断是否被检索上下文支撑，无幻觉）。注意返回值 `JudgeScore { score, reason }`。
+  - `createLoopLlmJudge(options?)`（`:191`）：工厂。**未显式传 `baseUrl`/`apiKey` 时从 `@aiagent/rag` 的 `readBridgeConfig` 读 bridge env**；仅当两个都非空才绑定 `callModel`（真实模型模式），否则 `null` → 确定性 mock。
+  - `deterministicAnswerCorrectness`（`:142`）/ `deterministicFaithfulness`（`:164`）：用"有意义词元重叠率"打分（过滤中英文停用词，见 `STOPWORDS` `:64` / `extractMeaningfulTerms` `:92`）。**完全可复现**——测试与 CI 依赖它，真实模型模式只是可选的增强。
+  - `sampleAndAverage`（`:293`）：真实模型模式下每个 rubric 采样 `samples`（默认 3）次取平均（多数投票校准）；单次失败 `catch` 后降级中性分 `NEUTRAL_SCORE = 0.5`（`LOOP-JUDGE` 兜底，绝不 throw 到主流程）。
+  - `parseJudgeJson`（`:111`）：容错解析模型 JSON（支持 ```json 围栏与散落文本抽取），解析不出 → 中性分。
+- `packages/eval/src/automation.ts`
+  - `CaseMetrics`（`:44`）：在 7 项确定性指标基础上，**可选**追加 `llmAnswerCorrectness?` / `llmFaithfulness?`（带 `?`，缺省不存在）。
+  - `scoreCaseWithEvidence(item, f, judgeScores?)`（`:129`）：**`judgeScores` 为可选参数**。仅当传入时才在 `metrics` 追加两项校准分（`:156-159`）；**不传时函数行为与改造前逐字节一致**（字段数量、顺序、`passed`、返回形状全不变）——这是零回归的物理保证。
+  - `AGGREGATED_METRIC_KEYS`（`:165`）：聚合口径**显式写死 7 项确定性指标**，judge 校准分永不进入聚合。
+  - `renderMarkdownReport`（`:94`）：报告头 `LLM judge: ${report.run.llmJudge ? "已启用" : "未使用"}`——动态反映是否启用。
+- `packages/eval/src/loop-runner.ts`
+  - `LoopEvalOptions.judge?`（`:98`）：注入入口。
+  - `computeLoopJudgeScores(judge, item, evidence)`（`:185`）：把 `evidence.answer`/`expectedFacts+expectedCitations`/`retrievedChunks` 编排成两个 rubric 调用，返回已解析纯数字。`runLoopEval`（`:140-142`）仅在 `options.judge` 存在时才计算并透传；报告 `llmJudge: Boolean(options.judge)`（`:165`）。
+
+**pi 对应物**：pi 的 RAGAS 对齐 judge（`packages/eval/src/judge.ts` 的 `createLlmJudge` / `computeRagMetrics`）已有 `faithfulness` / `context_recall` 范式。本处把它**同构迁移到 loop eval**：rubric 文案（`:274` / `:279`）、`response_format: json_object`、`temperature=0`、失败降级中性分，都与 RAG judge 一致——体现"一套 judge 工程范式复用"。
+
+**零回归纪律（最关键）**
+- 门禁阈值（`checkAutomationRegression` `:193`）只看 7 项确定性指标；judge 校准分 `passed` 恒为 `true`（`:151`），绝不进 `failures`，绝不拉低门禁。
+- 不传 judge 时：`AutomationReport.run.llmJudge === false`，逐条 `metrics` 无 `llm*` 键，聚合无 `llm*` 键，与改造前完全一致。测试 `loop-runner-judge.test.mjs` 用 `deterministicKeys` 只比 7 项来守护这一点。
+
+**学习检查点**
+- 为什么 judge 必须"只做校准、不进门禁"？LLM-as-Judge 有偏差（RAGAS 论文已述），直接当门禁会让 CI 抖动、噪声变高；把它放成"人读报告时的语义参考 + 未来人工校准集"才是工程正解。
+- 为什么默认走确定性 mock 而非强制真实模型？真实模型有网络/密钥/成本依赖，会让 eval 不可复现；**默认可复现、真实模式可选**是"质量工程素养"的体现（对齐 `04-eval-observability.md` 的"LLM 初筛 + 人工抽检"混合）。
+- 多数投票校准：为什么采样 3 次取平均？单样本 LLM 打分方差大，多次采样平均近似降低方差、逼近"多数投票"稳定值。
+
+---
+
+## 2. P1 trace 对齐 OTel GenAI 语义约定
+
+**读什么**
+- `packages/trace/src/otel-semconv.ts`
+  - `OtelSpan` 接口（`:18`）：`traceId` / `spanId` / `parentSpanId` / `name` / `kind`（`agent`/`tool`/`retrieval`/`internal`）/ `startTime` / `endTime?` / `attributes`。
+  - `toOtelSpan(event)`（`:57`）：把单条 `RunEvent` 投影为 span。关键映射：
+    - `agent_start`/`agent_end` 共享 `spanId: agent-${traceId}`（后端合并为一个 run span），start 写请求侧（`gen_ai.request.model`/`gen_ai.system`/`gen_ai.agent.name`），end 写响应侧（`gen_ai.response.model` + `gen_ai.token.count.*` + `cost.total` + 错误标记）。
+    - `message_end` → `gen_ai.agent.generation` 子 span（parent 挂在 agent span）。
+    - `tool_execution_start/end` → `gen_ai.tool.call`（`gen_ai.tool.name` / `gen_ai.tool.call.id` / `gen_ai.tool.call.status` = ok|error）。
+    - `retrieval` → `gen_ai.retrieval.*`（`query_preview`/`top_k`/`mode`/`result_count` 等）。
+    - `workflow_node`/`pdf_export`/`mcp_tool_discovered` → `internal` span 透传关键 payload。
+  - `runEventsToOtelSpans(events)`（`:236`）：遍历并**自动过滤 `null`**（中间事件 `message_start/update`、`tool_execution_update`、`turn_*`、`run_*` 不映射），保证 span 集合只含可观测边界。测试验证 12 事件 → 6 span。
+  - `readTokenCounts`（`:251`）/ `readCostTotal`（`:266`）/ `toNumber`（`:281`）：token/cost **全部防御式读取**——字段可能缺失或类型不对，缺失填 0、成本无则省略，**绝不抛异常**（测试"agent_end 缺失 usage/cost 不抛错且填 0"）。
+- `packages/trace/src/index.ts`（`:410-411`）：re-export `toOtelSpan` / `runEventsToOtelSpans` / `OtelSpan`，与既有脱敏共用同一包，避免跨包耦合。
+
+**pi 对应物**：pi 把 trace 直接喂 Phoenix（`gen_ai.*` semconv + trace/metric/log 三位一体）。我们此处先把"RunEvent → OTel span"映射层做出来，落库/导出到 OTel Collector 或 Phoenix 是下一步（P3 成本归因可在 `cost.total` 上直接做）。
+
+**学习检查点**
+- 为什么 `agent_start`/`agent_end` 共享 `spanId`？OTel 里一次 agent run 是一个 span，start/end 是同一 span 的起止事件，而非两个 span；合并后后端才显示为一条 trace。这是对齐 semconv 的细节。
+- 为什么中间事件返回 `null` 而非跳过？因为 `runEventsToOtelSpans` 用 `if (span) push` 统一过滤，比在 `toOtelSpan` 内 `continue` 更清晰，也便于未来给"未知事件类型"加测试兜底。
+- 防御式读取为什么重要？trace 数据来自多包、多 provider，字段形状不可信；任何 `undefined.xxx` 都会让整条 trace 导出崩溃——这是 observability 边界必须"吞错"的原因。
+
+---
+
+## 3. token / 成本字段扩展（跨边界 DTO）
+
+**读什么**
+- `packages/trace/src/index.ts`
+  - `TraceTokenUsage`（`:270`）：对齐 `@aiagent/ai` 的 `Usage` 子集（`input`/`output`/`cacheRead?`/`cacheWrite?`/`totalTokens`，可选 `cost` 明细）。**定义在 trace 包内**而非 import ai 包——避免反向依赖（AGENTS.md 单向依赖硬规则）。
+  - `TraceCost`（`:286`）：仅保留 `total?` 总成本口径。
+  - 事件 payload 扩展：`AgentEndEvent`（`:80-82` `usage?`/`cost?`）、`MessageEndEvent`（`:123-125`）、`ToolExecutionEndEvent`（`:152-154`）均在原索引签名 `[key: string]: unknown` 上**追加可选字段**，向后兼容——旧 run_events 无这些字段时读取方防御式填 0。
+
+**学习检查点**
+- 为什么 token/cost 用"可选字段 + DTO 在 trace 包内自建"？`usage`/`cost` 是**跨边界线格式**（`@aiagent/types` 才收线格式），但这里只是 trace 事件 payload 的**可选增强**，且为不反向依赖 ai 包，把子集 DTO 定义在消费侧 trace 包——既对齐 OTel 又守住包边界。
+- 为什么给 `MessageEndEvent`/`ToolExecutionEndEvent` 也加 usage/cost？OTel 里每次 generation（消息）和 tool call 都是独立 span，要分别归因 token/成本（P3 成本归因的粒度基础）。
+
+---
+
+## 4. token 级 PII 治理（B1 教训：脱敏不能污染数据）
+
+**读什么**
+- `packages/trace/src/index.ts`
+  - `isSensitiveKey(key)`（`:323`）：在原有 `api[-_]?key`/`authorization`/`password`/`secret`/`token`/`session`/`cookie` 之外，**追加模型 I/O 文本常见键**：`prompt`/`completion`/`messages`/`content`/`output`/`input`/`answer`。命中即整值脱敏（"token 级 PII"）。键名带边界（`^|[-_]` 与 `$|[-_]`）避免误伤 `inputValidation` 等复合键。
+  - `sanitizeValue`（`:351-374`）：递归深拷贝脱敏。**关键修复（B1）**在 `:369-370`：
+    ```ts
+    sanitized[key] =
+      isSensitiveKey(key) && typeof child === "string" ? "[redacted]" : sanitizeValue(child);
+    ```
+    **仅当值为 `string` 才整值脱敏**；数字 / 数组 / 对象一律递归保留。
+  - `redactTokenTrace<TValue>`（`:404`）：对外语义入口，当前复用同一 `sanitizeValue` 核心（JSDoc 已如实说明两者等价），未来可在此独立增强（如对全部字符串强制跑 PII 模式）。
+
+**B1 事故复盘（务必理解）**
+- reviewer 初版把 `isSensitiveKey` 扩展到 `content`/`input`/`output`/`messages` 等键后，**全局 `redactSensitiveValue`（apps/api run-service 落 `run_events` 时对每个 payload 调用）会把**：
+  - `message.content`（字符串）→ 被抹成 `"[redacted]"`（可接受，是 PII 文本）；
+  - `usage.input`/`usage.output`（**数字**，token 计数）→ 被整值替换成字符串 `"[redacted]"`，**类型被污染**；
+  - `agent_end.messages`（**数组**）→ 被整值替换成 `"[redacted]"`，**落库数据整块丢失**。
+  这在静默中破坏了持久化的 `run_events`。
+- **修复**：脱敏只针对"敏感键 + 字符串整值"；数字/数组/对象递归保留。回归测试 `packages/trace/test/redact.test.mjs` 三类断言：content→redacted；usage 数字 `typeof === "number"` 且值不变；messages 数组保留且元素递归保留。
+
+**学习检查点**
+- 为什么"敏感键扩展"是高风险改动？脱敏是**跨边界全局应用**的（run-service 落库、报告输出都调），任何键名匹配规则都会放大到所有事件。扩展键集合前必须想清"该键的值是不是字符串 PII"。
+- 为什么用 `typeof child === "string"` 这一行就能救命？它把"敏感键"的语义从"整值抹除"降级为"仅文本整值抹除"，数字/结构数据天然豁免——一个 guard 表达式挡住一类数据损坏。
+- 为什么 `redactTokenTrace` 与 `redactSensitiveValue` 当前等价但仍分两个 API？语义边界清晰（token 轨迹级脱敏是高频敏感场景的独立入口），且未来增强 `redactTokenTrace` 时不影响既有 `redactSensitiveValue` 行为——留好扩展点。
+
+---
+
+## 5. 零回归纪律与包边界（Task 2 的两条红线）
+
+**红线一：确定性门禁零回归**
+- 不传 judge 时，报告 `metrics`/`results[].metrics`/`aggregateAutomationMetrics` 与改造前**逐字节一致**（B2 教训：测试曾用 `deepEqual` 比较含 `averageLatencyMs` 的整对象而失败——因为 latency 是墙钟实时测量，两次跑必不同；修正为只比 7 项确定性指标 + `passed` + `llm*` 键存在性）。
+
+**红线二：trace 不反向依赖 agent/ai**
+- grep `packages/trace/src` 实际 import 仅 `otel-semconv.ts:15` 的 `import type { RunEvent } from "./index.js"`（纯类型，单向）；无运行时回指。
+- eval 依赖 `@aiagent/agent`/`@aiagent/ai`/`@aiagent/rag`/`@aiagent/types` 均已在其 `package.json` 声明；`judge-loop.ts` 用的 `@aiagent/rag`（仅 `readBridgeConfig` 这一纯函数）已声明。
+- 无新增生产依赖（zod 本已存在）。
+
+**学习检查点**
+- 为什么 `import type` 不受单向依赖限制？类型在编译期擦除、不产生运行时模块边，所以类型级循环无害；但**运行时符号必须单向**，否则会出现初始化顺序 / 循环引用运行时错误。
+- 为什么新增公共 API（`createLoopLlmJudge`/`LoopLlmJudge`/`JudgeScore`）必须进 barrel `index.ts` 并同步文档？AGENTS.md 要求"公共 API 变更同步调用方与文档"，且 reviewer 曾因 `createMcpGenericTool` 漏导出而打回。
+
+---
+
+## 7. 最小可演示路径（动手顺序建议）
+
+1. `pnpm --filter @aiagent/eval test` 看 31 个用例（含 `judge-loop.test.mjs` 5 例 + `loop-runner-judge.test.mjs` 零回归 2 例）。
+2. `pnpm --filter @aiagent/trace test` 看 15 个用例（含 `otel-semconv.test.mjs` 14 例 + `redact.test.mjs` B1 回归 1 例）。
+3. 想看 judge 默认行为：在测试或脚本里 `createLoopLlmJudge()`（无 key）→ 走确定性 mock，`judgeAnswerCorrectness` 分数每次相同（可复现）。
+4. 想看 OTel 映射：构造几条 `RunEvent`（agent_start/end、message_end、tool_execution_end、retrieval），调 `runEventsToOtelSpans` 看生成的 `gen_ai.*` span 与 `cost.total`/`gen_ai.token.count.*` 属性。
+5. 想看 B1 防护：`redact.test.mjs` 直接读——断言 `usage.input` 仍是 `number` 且值不变，`messages` 数组保留。

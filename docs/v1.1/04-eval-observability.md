@@ -1,9 +1,10 @@
 # 04 · 评测、可观测性与成本工程
 
 > 维度：Evaluation / Observability / Cost Engineering
-> 现状：`packages/eval` 确定性 runner（跑真 agentLoop + mock streamFn，从 run_events 投影打分）+ 30 case + 4 指标 + baseline 门禁；
+> 现状：`packages/eval` 确定性 runner（跑真 agentLoop + mock streamFn，从 run_events 投影打分）+ 30+ case + 7 指标 + baseline 门禁；
 > `packages/trace` 最小 RunEvent 契约 + `redactSensitiveValue` 脱敏；run-service 落 `run_events` + SSE 广播。
-> 缺口：无 LLM-as-judge、无轨迹级评测、trace 未对齐 OTel、无 token/成本字段、无 SLO。
+> 缺口（已落地部分见 §3 标记）：无轨迹级评测、trace 未全量接 OTel 导出管线、无 SLO。
+> **已实现（本阶段）**：P0 LLM-as-Judge 校准层（`createLoopLlmJudge` 公共 API）、P1 trace 对齐 OTel `gen_ai` semconv + token/成本字段 + token 级 PII 治理。详见带读文档 `04-eval-observability-reading.md`。
 
 ## 1. 行业现状速览（2025–2026）
 
@@ -22,13 +23,18 @@
 
 ## 3. 改造方向（按优先级）
 
-### P0 加 LLM-as-Judge 层（低投入高收益）
+### P0 加 LLM-as-Judge 层（低投入高收益）— ✅ 已落地
 - **目标**：在 `packages/eval` 对 answerCorrectness/faithfulness 加 rubric 语义校验。
-- **落地**：新增 `judge/` 模块（ESM 导入），复用 `run_events` 投影证据；mock 模式用确定性 rubric，真模型走 `packages/ai` 的 `streamSimple`；现有 30+3 失败 case 作校准集，多数投票。
+- **落地**：新增 `judge-loop.ts`（`createLoopLlmJudge` 已导出为公共 API），复用 `run_events` 投影证据；
+  mock 模式用确定性 rubric（有意义词元重叠率，可复现），真模型走 `@aiagent/rag` bridge env 的 `/chat/completions`
+  （temperature=0、json_object、samples=3 多数投票、失败降级中性分）；
+  校准分仅追加到逐条 `metrics`（不计入门禁与聚合），**确定性门禁零回归**。现状：默认 mock、真实模式可选。
 
-### P1 trace 对齐 OTel GenAI 语义（低投入高收益）
+### P1 trace 对齐 OTel GenAI 语义（低投入高收益）— ✅ 已落地
 - **目标**：RunEvent → `gen_ai` span/attribute，补 token/成本字段。
-- **落地**：`packages/trace` 加 semconv 映射层（span=`agent.*/tool.*`，attr=`gen_ai.token.count.*`、`gen_ai.request.model`、`cost`）；run-service 落表同步 OTel 字段；`redactSensitiveValue` 扩到 token 级 PII。
+- **落地**：`packages/trace` 加 `otel-semconv.ts`（`toOtelSpan`/`runEventsToOtelSpans`，已 re-export）；
+  span 对齐 `gen_ai.agent.run`/`agent.generation`/`tool.call`/`retrieval`；attr 含 `gen_ai.token.count.*`、`gen_ai.request/response.model`、`cost.total`；
+  事件 payload 扩展可选 `usage`/`cost`/`model`（向后兼容）；`redactSensitiveValue`/`redactTokenTrace` 扩到 token 级 PII（仅字符串整值脱敏，保护数字/数组落库）。现状：映射层就绪，导出到 Phoenix/OTel Collector 为下一步。
 
 ### P2 轨迹评测 + 失败 taxonomy（中收益）
 - **目标**：重建 trajectory 评 tool 顺序/参数；定义失败分类（检索缺失/幻觉/工具误用/循环）。

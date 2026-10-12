@@ -50,15 +50,38 @@ interface RunEventBase {
 /** Agent 循环开始事件。 */
 export interface AgentStartEvent extends RunEventBase {
   type: "agent_start";
-  /** 当前 run 的 loop 配置快照；具体内容由 agent 包定义。 */
-  payload: unknown;
+  /**
+   * 当前 run 的 loop 配置快照；具体内容由 agent 包定义。
+   * 为对齐 OTel `gen_ai` semconv（P1），payload 开放 model/api/agentName 可选字段，
+   * 其余 loop 配置仍用索引签名保持开放、向后兼容。
+   */
+  payload: {
+    /** 本次 run 使用的请求模型，映射到 `gen_ai.request.model`。 */
+    model?: string;
+    /** 底层 api 标识（如 openai-completions），用于推导 `gen_ai.system`。 */
+    api?: string;
+    /** agent 名称（可选），映射到 `gen_ai.agent.name`。 */
+    agentName?: string;
+    [key: string]: unknown;
+  };
 }
 
 /** Agent 循环结束事件。 */
 export interface AgentEndEvent extends RunEventBase {
   type: "agent_end";
-  /** 本轮最终消息列表；具体内容由 agent 包定义。 */
-  payload: unknown;
+  /**
+   * 本轮最终消息列表与收尾统计；具体内容由 agent 包定义。
+   * 为对齐 OTel `gen_ai` semconv（P1），开放 model/usage/cost 可选字段。
+   */
+  payload: {
+    /** 响应模型名，映射到 `gen_ai.response.model`。 */
+    model?: string;
+    /** 本轮 token 用量，映射到 `gen_ai.token.count.*`。 */
+    usage?: TraceTokenUsage;
+    /** 本轮成本，映射到 `cost.total`。 */
+    cost?: TraceCost;
+    [key: string]: unknown;
+  };
 }
 
 /** 单个 turn 开始事件。 */
@@ -88,7 +111,20 @@ export interface MessageUpdateEvent extends RunEventBase {
 /** 消息生成结束事件。 */
 export interface MessageEndEvent extends RunEventBase {
   type: "message_end";
-  payload: unknown;
+  /**
+   * 本轮生成的消息与统计；具体内容由 agent 包定义。
+   * 为对齐 OTel `gen_ai` semconv（P1），开放 model/usage/cost 可选字段，
+   * 便于把单次 generation 映射为 `gen_ai.agent.generation` span。
+   */
+  payload: {
+    /** 请求/响应模型名，映射到 `gen_ai.request.model` / `gen_ai.response.model`。 */
+    model?: string;
+    /** 本次 generation 的 token 用量。 */
+    usage?: TraceTokenUsage;
+    /** 本次 generation 的成本。 */
+    cost?: TraceCost;
+    [key: string]: unknown;
+  };
 }
 
 /** 工具执行开始事件。 */
@@ -106,7 +142,18 @@ export interface ToolExecutionUpdateEvent extends RunEventBase {
 /** 工具执行结束事件。 */
 export interface ToolExecutionEndEvent extends RunEventBase {
   type: "tool_execution_end";
-  payload: unknown;
+  /**
+   * 工具执行结果；具体内容由 agent 包定义。
+   * 为对齐 OTel `gen_ai` semconv（P1），开放 usage/cost 可选字段，
+   * 便于把单次工具调用映射为 `gen_ai.tool.call` span 并带成本。
+   */
+  payload: {
+    /** 本次工具调用的 token 用量（可选）。 */
+    usage?: TraceTokenUsage;
+    /** 本次工具调用的成本（可选）。 */
+    cost?: TraceCost;
+    [key: string]: unknown;
+  };
 }
 
 /** Run 生命周期状态事件。 */
@@ -216,6 +263,31 @@ export interface McpToolDiscoveredEvent extends RunEventBase {
   };
 }
 
+/**
+ * trace 层 token 用量快照：对齐 @aiagent/ai 的 `Usage` 子集，作为跨边界 DTO。
+ * 放在 trace 包内定义，避免反向依赖 ai 包（保持单向依赖）。
+ */
+export interface TraceTokenUsage {
+  /** 输入 token 数。 */
+  input: number;
+  /** 输出 token 数。 */
+  output: number;
+  /** 缓存读命中 token 数（可选）。 */
+  cacheRead?: number;
+  /** 缓存写 token 数（可选）。 */
+  cacheWrite?: number;
+  /** 合计 token 数（按 input+output 或 provider 口径）。 */
+  totalTokens: number;
+  /** 按 token 计的成本明细（可选）。 */
+  cost?: { input?: number; output?: number; total?: number };
+}
+
+/** trace 层成本快照：跨边界 DTO，仅保留总成本口径。 */
+export interface TraceCost {
+  /** 总成本（货币单位由调用方约定，通常为 USD）。 */
+  total?: number;
+}
+
 /** Run 事件联合类型；消费侧按 type 收窄。 */
 export type RunEvent =
   | AgentStartEvent
@@ -240,11 +312,16 @@ const MAX_TRACE_STRING_LENGTH = 500;
 /**
  * 识别常见敏感字段名，避免 API key、token、密码或 Authorization 头进入 trace 或日志。
  *
+ * 除原有机密/令牌类键外，额外把模型 I/O 文本常见的 JSON 键（`prompt` / `completion` /
+ * `messages` / `content` / `output` / `input` / `answer`）也判为敏感键——这些键的值通常是
+ * 模型输入/输出文本，常夹带用户 PII。命中时整值脱敏（"token 级 PII" 治理）。
+ * 注意：键名匹配带边界（行首/`_`/`-` 或行尾/`_`/`-`），避免误伤 `inputValidation` 等复合键。
+ *
  * @param key 对象字段名。
  * @returns 是否应脱敏。
  */
-function isSensitiveKey(key: string): boolean {
-  return /api[-_]?key|authorization|password|secret|session|cookie|(^|[-_])(access[-_]?token|refresh[-_]?token|token)($|[-_])/i.test(key);
+export function isSensitiveKey(key: string): boolean {
+  return /api[-_]?key|authorization|password|secret|session|cookie|(^|[-_])(access[-_]?token|refresh[-_]?token|token)($|[-_])|(^|[-_])(prompt|completion|messages|content|output|input|answer)($|[-_])/i.test(key);
 }
 
 /**
@@ -287,7 +364,10 @@ function sanitizeValue(value: unknown): unknown {
   const sanitized: Record<string, unknown> = {};
 
   for (const [key, child] of Object.entries(value)) {
-    sanitized[key] = isSensitiveKey(key) ? "[redacted]" : sanitizeValue(child);
+    // 命中敏感键时仅当值为字符串才整值脱敏（PII 文本）；数字/数组/对象仍递归保留，
+    // 避免误把 usage.input/output 等数字 token 计数、messages 数组整值替换为 "[redacted]" 造成落库数据损坏。
+    sanitized[key] =
+      isSensitiveKey(key) && typeof child === "string" ? "[redacted]" : sanitizeValue(child);
   }
 
   return sanitized;
@@ -307,3 +387,26 @@ function truncate(value: string): string {
 export function redactSensitiveValue<TValue>(value: TValue): TValue {
   return sanitizeValue(value) as TValue;
 }
+
+/**
+ * "模型 token 轨迹"级别脱敏入口：当前实现直接复用 `redactSensitiveValue` 的同一递归脱敏核心
+ * （`sanitizeValue`），并不额外提供更强的脱敏强度——两者等价。
+ *
+ * 对外提供 token 轨迹级脱敏入口的意义在于：把"模型 I/O 文本/单条消息"这类高频敏感场景收敛到
+ * 一个语义明确的 API，未来可在此处独立增强（例如对全部字符串值强制跑一遍 PII 模式脱敏
+ * `redactSensitiveText`、或对命中敏感键的对象做更激进的整形），而不影响 `redactSensitiveValue`
+ * 的既有语义。
+ *
+ * @template TValue 输入值类型。
+ * @param value 可能含 token 级 PII 的值（如单条消息、模型输入输出文本）。
+ * @returns 深拷贝后的脱敏值（调用方原对象不会被修改）。
+ */
+export function redactTokenTrace<TValue>(value: TValue): TValue {
+  return sanitizeValue(value) as TValue;
+}
+
+// OTel `gen_ai` semconv 映射层（P1）：把 RunEvent 投影为 Phoenix/OTel 兼容的 span，
+// 与现有 trace 脱敏共用同一包，避免跨包耦合。
+export { toOtelSpan, runEventsToOtelSpans } from "./otel-semconv.js";
+export type { OtelSpan } from "./otel-semconv.js";
+

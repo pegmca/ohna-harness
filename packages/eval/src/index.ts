@@ -53,6 +53,12 @@ export {
   type LoopEvalRunEvent,
 } from "./loop-runner.js";
 export { projectRunEvents } from "./loop-projection.js";
+export {
+  createLoopLlmJudge,
+  type LoopLlmJudge,
+  type LoopLlmJudgeOptions,
+  type JudgeScore
+} from "./judge-loop.js";
 
 export interface EvalRunnerInput {
   case: EvalCase;

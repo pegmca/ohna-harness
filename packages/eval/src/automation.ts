@@ -40,11 +40,20 @@ export interface UnifiedEvalFixture {
 
 export interface EvalDataset { schemaVersion: "1.0.0"; datasetVersion: string; seed: number; cases: UnifiedEvalCase[] }
 export interface AutomationMetrics { citationCoverage: number; financialAccuracy: number; sourceGroundedness: number; successRate: number; workflowCompletion: number; reportSectionCoverage: number; exportStatusRate: number; averageLatencyMs: number; p95LatencyMs: number }
-export interface AutomationCaseResult { caseId: string; mode: EvalMode; query: string; passed: boolean; metrics: Omit<AutomationMetrics, "averageLatencyMs" | "p95LatencyMs">; latencyMs: number; traceId: string; requestId: string; evidence: UnifiedEvalFixture; failures: string[]; rootCause?: string; improvement?: string }
+/** 单条 case 的指标：7 项确定性指标 + 可选 LLM-as-Judge 校准信号（不计入门禁）。 */
+export type CaseMetrics = Omit<AutomationMetrics, "averageLatencyMs" | "p95LatencyMs"> & {
+  /** LLM 判定答案正确性的校准分（0~1）；仅当传入 judge 时存在。 */
+  llmAnswerCorrectness?: number;
+  /** LLM 判定忠实性的校准分（0~1）；仅当传入 judge 时存在。 */
+  llmFaithfulness?: number;
+};
+
+/** 单条 case 的打分结果（含逐条指标、失败项与归因）。 */
+export interface AutomationCaseResult { caseId: string; mode: EvalMode; query: string; passed: boolean; metrics: CaseMetrics; latencyMs: number; traceId: string; requestId: string; evidence: UnifiedEvalFixture; failures: string[]; rootCause?: string; improvement?: string }
 export interface RegressionThresholds { successRate: number; citationCoverage: number; financialAccuracy: number; sourceGroundedness: number; workflowCompletion: number; maxP95LatencyIncreaseMs: number }
 export interface EvalBaseline { schemaVersion: "1.0.0"; datasetVersion: string; createdAt: string; config: { seed: number; strategy: "deterministic_fixture"; thresholds: RegressionThresholds }; metrics: AutomationMetrics }
 export interface BaselineDiff { metric: keyof AutomationMetrics; current: number; baseline: number; delta: number };
-export interface AutomationReport { schemaVersion: "1.0.0"; datasetVersion: string; run: { id: string; startedAt: string; seed: number; strategy: "deterministic_fixture"; llmJudge: false }; metrics: AutomationMetrics; results: AutomationCaseResult[]; failures: AutomationCaseResult[]; baseline?: EvalBaseline; diff: BaselineDiff[]; regressionReasons: string[] }
+export interface AutomationReport { schemaVersion: "1.0.0"; datasetVersion: string; run: { id: string; startedAt: string; seed: number; strategy: "deterministic_fixture"; llmJudge: boolean }; metrics: AutomationMetrics; results: AutomationCaseResult[]; failures: AutomationCaseResult[]; baseline?: EvalBaseline; diff: BaselineDiff[]; regressionReasons: string[] }
 
 export const DEFAULT_REGRESSION_THRESHOLDS: RegressionThresholds = { successRate: 0.8, citationCoverage: 0.85, financialAccuracy: 0.8, sourceGroundedness: 0.85, workflowCompletion: 0.9, maxP95LatencyIncreaseMs: 50 };
 
@@ -82,7 +91,7 @@ export function createBaseline(report: AutomationReport, dataset: EvalDataset, t
 /** @param report 机器报告。 @returns 可读 Markdown。 */
 export function renderMarkdownReport(report: AutomationReport): string {
   const m = report.metrics;
-  const lines = [`# Eval 回归报告`, ``, `- Dataset: ${report.datasetVersion}`, `- Cases: ${report.results.length}`, `- Seed / strategy: ${report.run.seed} / ${report.run.strategy}`, `- LLM judge: 未使用`, ``, `## 指标`, ``, `| 指标 | 当前 | Baseline | 变化 |`, `|---|---:|---:|---:|`];
+  const lines = [`# Eval 回归报告`, ``, `- Dataset: ${report.datasetVersion}`, `- Cases: ${report.results.length}`, `- Seed / strategy: ${report.run.seed} / ${report.run.strategy}`, `- LLM judge: ${report.run.llmJudge ? "已启用" : "未使用"}`, ``, `## 指标`, ``, `| 指标 | 当前 | Baseline | 变化 |`, `|---|---:|---:|---:|`];
   for (const key of Object.keys(m) as Array<keyof AutomationMetrics>) { const d = report.diff.find((item) => item.metric === key); lines.push(`| ${key} | ${m[key]} | ${d?.baseline ?? "-"} | ${d?.delta ?? "-"} |`); }
   lines.push(``, `## 逐条结果`, ``, `| Case | Mode | Pass | Citation | Financial | Grounded | Latency |`, `|---|---|---:|---:|---:|---:|---:|`);
   for (const item of report.results) lines.push(`| ${item.caseId} | ${item.mode} | ${item.passed ? "yes" : "no"} | ${item.metrics.citationCoverage} | ${item.metrics.financialAccuracy} | ${item.metrics.sourceGroundedness} | ${item.latencyMs}ms |`);
@@ -107,23 +116,79 @@ function scoreCase(item: UnifiedEvalCase): AutomationCaseResult {
  * 用一份证据（旧口径为 fixture，新口径为 run_events 投影）给单条 case 打分。
  * 指标定义与阈值口径完全不变，是 deterministic fixture 策略的唯一打分入口。
  *
+ * `judgeScores` 为可选参数（由 `runLoopEval` 在调用 judge 后传入已解析分数）：仅当传入时，才在
+ * 逐条 `metrics` 中追加 `llmAnswerCorrectness` / `llmFaithfulness` 两个校准信号（passed 恒为 true、
+ * 不计入门禁与聚合）。**不传时函数行为与改造前完全一致**（metrics 字段数量、顺序、passed、返回形状
+ * 逐字节一致，零回归）。
+ *
  * @param item 数据集用例（期望值来源）。
  * @param f 待打分证据，形状与 fixture 相同。
+ * @param judgeScores 可选 LLM-as-Judge 已解析分数（答案正确性 + 忠实性）。
  * @returns 单条 case 的完整打分结果。
  */
-export function scoreCaseWithEvidence(item: UnifiedEvalCase, f: UnifiedEvalFixture): AutomationCaseResult {
+export function scoreCaseWithEvidence(
+  item: UnifiedEvalCase,
+  f: UnifiedEvalFixture,
+  judgeScores?: { answerCorrectness: number; faithfulness: number }
+): AutomationCaseResult {
   const citationCoverage = ratio(item.expectedCitations, (source) => f.citations.some((c) => c.source === source));
   const factChecks = item.expectedFacts.map((fact) => checkFact(fact, f)); const financialAccuracy = factChecks.length ? factChecks.filter(Boolean).length / factChecks.length : 1;
   const sourceGroundedness = ratio(f.citations, (citation) => f.retrievedChunks.some((chunk) => chunk.source === citation.source && normalize(chunk.text).includes(normalize(citation.quote))));
   const workflowCompletion = ratio(item.expectedWorkflow, (step) => f.workflow.includes(step)); const reportSectionCoverage = ratio(item.expectedSections, (section) => f.sections.includes(section));
   const exportStatusRate = item.expectedExportStatus ? Number(f.exportStatus === item.expectedExportStatus) : 1;
-  const metrics = { citationCoverage: round(citationCoverage), financialAccuracy: round(financialAccuracy), sourceGroundedness: round(sourceGroundedness), successRate: Number(f.ok), workflowCompletion: round(workflowCompletion), reportSectionCoverage: round(reportSectionCoverage), exportStatusRate };
-  const failures: string[] = []; for (const [name, score] of Object.entries(metrics)) if (score < 1) failures.push(`${name}=${score}`);
+
+  // 7 项确定性指标（顺序固定，作为门禁与聚合口径）。judge 校准信号不进入此集合。
+  const deterministic: Omit<AutomationMetrics, "averageLatencyMs" | "p95LatencyMs"> = {
+    citationCoverage: round(citationCoverage),
+    financialAccuracy: round(financialAccuracy),
+    sourceGroundedness: round(sourceGroundedness),
+    successRate: Number(f.ok),
+    workflowCompletion: round(workflowCompletion),
+    reportSectionCoverage: round(reportSectionCoverage),
+    exportStatusRate
+  };
+
+  // 失败项仅来自确定性指标；judge 校准分始终 passed=true，绝不进入 failures。
+  const failures: string[] = [];
+  for (const [name, score] of Object.entries(deterministic)) if (score < 1) failures.push(`${name}=${score}`);
+
+  const metrics: CaseMetrics = { ...deterministic };
+  if (judgeScores) {
+    metrics.llmAnswerCorrectness = round(judgeScores.answerCorrectness);
+    metrics.llmFaithfulness = round(judgeScores.faithfulness);
+  }
+
   return { caseId: item.id, mode: item.mode, query: item.query, passed: failures.length === 0, metrics, latencyMs: f.latencyMs, traceId: f.traceId, requestId: f.requestId, evidence: f, failures, rootCause: failures.length ? rootCause(failures) : undefined, improvement: failures.length ? improvement(failures) : undefined };
 }
 function checkFact(fact: FinancialFactExpectation, fixture: UnifiedEvalFixture): boolean { const text = `${fixture.answer} ${fixture.citations.map((c) => c.quote).join(" ")}`; return normalize(text).includes(normalize(String(fact.value))) && normalize(text).includes(normalize(fact.unit)) && normalize(text).includes(normalize(fact.period)) && (!fact.currency || normalize(text).includes(normalize(fact.currency))) && fixture.citations.some((c) => c.source === fact.source); }
+/** 参与聚合的 7 项确定性指标（固定顺序，judge 校准信号不进入聚合口径）。 */
+const AGGREGATED_METRIC_KEYS: Array<keyof Omit<AutomationMetrics, "averageLatencyMs" | "p95LatencyMs">> = [
+  "citationCoverage",
+  "financialAccuracy",
+  "sourceGroundedness",
+  "successRate",
+  "workflowCompletion",
+  "reportSectionCoverage",
+  "exportStatusRate"
+];
+
 /** @param results 全部 case 打分结果。 @returns 聚合后的总体指标（含 latency 分布）。 */
-export function aggregateAutomationMetrics(results: AutomationCaseResult[]): AutomationMetrics { const avg = (key: keyof AutomationCaseResult["metrics"]) => round(results.reduce((sum, item) => sum + item.metrics[key], 0) / results.length); const latencies = results.map((x) => x.latencyMs).sort((a,b)=>a-b); return { citationCoverage: avg("citationCoverage"), financialAccuracy: avg("financialAccuracy"), sourceGroundedness: avg("sourceGroundedness"), successRate: round(results.filter((x)=>x.passed).length/results.length), workflowCompletion: avg("workflowCompletion"), reportSectionCoverage: avg("reportSectionCoverage"), exportStatusRate: avg("exportStatusRate"), averageLatencyMs: round(latencies.reduce((a,b)=>a+b,0)/latencies.length), p95LatencyMs: latencies[Math.max(0, Math.ceil(latencies.length*.95)-1)] ?? 0 }; }
+export function aggregateAutomationMetrics(results: AutomationCaseResult[]): AutomationMetrics {
+  const avg = (key: (typeof AGGREGATED_METRIC_KEYS)[number]) =>
+    round(results.reduce((sum, item) => sum + item.metrics[key], 0) / results.length);
+  const latencies = results.map((x) => x.latencyMs).sort((a, b) => a - b);
+  return {
+    citationCoverage: avg("citationCoverage"),
+    financialAccuracy: avg("financialAccuracy"),
+    sourceGroundedness: avg("sourceGroundedness"),
+    successRate: round(results.filter((x) => x.passed).length / results.length),
+    workflowCompletion: avg("workflowCompletion"),
+    reportSectionCoverage: avg("reportSectionCoverage"),
+    exportStatusRate: avg("exportStatusRate"),
+    averageLatencyMs: round(latencies.reduce((a, b) => a + b, 0) / latencies.length),
+    p95LatencyMs: latencies[Math.max(0, Math.ceil(latencies.length * 0.95) - 1)] ?? 0
+  };
+}
 /** @param m 当前指标。 @param b 可选基线。 @param t 回归阈值。 @returns 触发的回归原因列表，空数组表示通过。 */
 export function checkAutomationRegression(m: AutomationMetrics, b: EvalBaseline | undefined, t: RegressionThresholds): string[] { const r:string[]=[]; for (const key of ["successRate","citationCoverage","financialAccuracy","sourceGroundedness","workflowCompletion"] as const) if (m[key] < t[key]) r.push(`${key} ${m[key]} 低于门槛 ${t[key]}`); if (b) { for (const key of ["successRate","citationCoverage","financialAccuracy","sourceGroundedness","workflowCompletion"] as const) if (m[key] < b.metrics[key]) r.push(`${key} 相对 baseline 回退 ${round(m[key]-b.metrics[key])}`); if (m.p95LatencyMs-b.metrics.p95LatencyMs>t.maxP95LatencyIncreaseMs) r.push(`p95 latency 增加 ${m.p95LatencyMs-b.metrics.p95LatencyMs}ms`); } return r; }
 function ratio<T>(items: readonly T[], predicate:(item:T)=>boolean):number { return items.length ? items.filter(predicate).length/items.length : 1; }

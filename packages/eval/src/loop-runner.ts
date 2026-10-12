@@ -50,6 +50,7 @@ import {
   type UnifiedEvalFixture,
 } from "./automation.js";
 import { projectRunEvents, type LoopEvalRunEvent } from "./loop-projection.js";
+import type { LoopLlmJudge } from "./judge-loop.js";
 
 export type { LoopEvalRunEvent } from "./loop-projection.js";
 
@@ -93,6 +94,8 @@ export interface LoopEvalOptions {
   streamFnFactory?: (item: UnifiedEvalCase) => StreamFn;
   /** 观测钩子：每个 case 跑完后回调其 run_events（供测试断言事件映射）。 */
   onCaseRun?: (run: LoopEvalCaseRun) => void;
+  /** 可选 LLM-as-Judge：传入后把答案正确性 / 忠实性作为校准信号追加到逐条结果（不计入门禁）。 */
+  judge?: LoopLlmJudge;
 }
 
 /** eval 专用 mock 模型条目；api 仅占位，mock streamFn 不会发起 HTTP 请求。 */
@@ -124,8 +127,8 @@ const TURN_USAGE: Usage = {
  * case 顺序执行保证可复现；证据来自 run_events 投影而非直接读 fixture。
  *
  * @param dataset 固定版本数据集（fixture 作为 mock 流/工具的确定性种子）。
- * @param options 基线、阈值与测试注入点。
- * @returns 机器报告（strategy 仍为 deterministic_fixture，llmJudge  false）。
+ * @param options 基线、阈值与测试注入点（含可选 judge）。
+ * @returns 机器报告（strategy 仍为 deterministic_fixture，llmJudge 反映是否启用 judge）。
  */
 export async function runLoopEval(dataset: EvalDataset, options: LoopEvalOptions = {}): Promise<AutomationReport> {
   const thresholds = options.thresholds ?? DEFAULT_REGRESSION_THRESHOLDS;
@@ -134,7 +137,9 @@ export async function runLoopEval(dataset: EvalDataset, options: LoopEvalOptions
   for (const item of dataset.cases) {
     const run = await runEvalCaseWithLoop(item, options);
     options.onCaseRun?.(run);
-    results.push(scoreCaseWithEvidence(item, run.evidence));
+    // 若传入 judge，先异步取校准分再透传给 scoreCaseWithEvidence；不传则完全不追加（零回归）。
+    const judgeScores = options.judge ? await computeLoopJudgeScores(options.judge, item, run.evidence) : undefined;
+    results.push(scoreCaseWithEvidence(item, run.evidence, judgeScores));
   }
 
   const metrics = aggregateAutomationMetrics(results);
@@ -157,7 +162,7 @@ export async function runLoopEval(dataset: EvalDataset, options: LoopEvalOptions
       startedAt: new Date().toISOString(),
       seed: dataset.seed,
       strategy: "deterministic_fixture",
-      llmJudge: false,
+      llmJudge: Boolean(options.judge),
     },
     metrics,
     results,
@@ -166,6 +171,36 @@ export async function runLoopEval(dataset: EvalDataset, options: LoopEvalOptions
     diff,
     regressionReasons,
   };
+}
+
+/**
+ * 调用 judge 得到答案正确性与忠实性校准分（已解析的纯数字，便于 scoreCaseWithEvidence 追加）。
+ * 跨边界不泄漏异常：judge 内部已实现降级（中性分），此处仅做并发编排。
+ *
+ * @param judge loop LLM-as-Judge 实例。
+ * @param item 数据集用例（提供 query / expectedFacts / expectedCitations）。
+ * @param evidence 本次 run 投影出的证据（提供 answer 与 retrievedChunks）。
+ * @returns 答案正确性 / 忠实性两个校准分。
+ */
+async function computeLoopJudgeScores(
+  judge: LoopLlmJudge,
+  item: UnifiedEvalCase,
+  evidence: UnifiedEvalFixture
+): Promise<{ answerCorrectness: number; faithfulness: number }> {
+  // 参考文本：由期望事实（label+value+unit+period）与期望引用拼接；两者皆空时用 query 兜底。
+  const expectedParts: string[] = [];
+  for (const fact of item.expectedFacts) expectedParts.push(`${fact.label} ${fact.value}${fact.unit} ${fact.period}`);
+  for (const citation of item.expectedCitations) expectedParts.push(citation);
+  const expectedText = expectedParts.length > 0 ? expectedParts.join("；") : item.query;
+
+  const contexts = evidence.retrievedChunks.map((chunk) => chunk.text);
+
+  const [correctness, faithfulness] = await Promise.all([
+    judge.judgeAnswerCorrectness(item.query, evidence.answer, expectedText),
+    judge.judgeFaithfulness(evidence.answer, contexts)
+  ]);
+
+  return { answerCorrectness: correctness.score, faithfulness: faithfulness.score };
 }
 
 /**

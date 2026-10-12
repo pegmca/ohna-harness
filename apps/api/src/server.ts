@@ -184,7 +184,10 @@ function createOpenAiCompatibleRuntime(
   defaultBaseUrl: string
 ): { runtime?: ModelRuntime; error?: string } {
   const suffix = profile.toUpperCase();
-  const apiKey = process.env[`AIAGENT_LLM_API_KEY_${suffix}`];
+  const rawApiKey = process.env[`AIAGENT_LLM_API_KEY_${suffix}`];
+  // 文档占位符（replace-with-...）按未配置处理：避免把占位 key 当成真实凭据注册成默认模型，
+  // 否则会静默用无效 key 请求导致 run 全部 401 失败（见用户切换 real 模式踩坑）。
+  const apiKey = rawApiKey && !/^replace-with-/i.test(rawApiKey) ? rawApiKey : undefined;
   const baseUrl = process.env[`AIAGENT_LLM_BASE_URL_${suffix}`] || defaultBaseUrl;
   const modelName = process.env[`AIAGENT_LLM_MODEL_${suffix}`];
   if (!apiKey) return { error: `Missing LLM API key for ${profile} (AIAGENT_LLM_API_KEY_${suffix}).` };

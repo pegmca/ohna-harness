@@ -8,6 +8,8 @@ dist/
 
 apps/*/dist/
 packages/*/dist/
+packages/*/src/**/*.d.ts
+apps/api/var/
 packages/*/node_modules/.tmp/
 apps/*/node_modules/.tmp/
 output/

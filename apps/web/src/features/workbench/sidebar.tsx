@@ -138,7 +138,7 @@ const PROFILE_MENU_VIEWS: ReadonlyArray<{ view: WorkspaceView; label: string; ic
 ];
 
 /** 默认头像；昵称头像当前只做展示占位，不提供编辑功能。 */
-const DEFAULT_AVATAR_URL = "http://43.130.49.34/cdn/img/march7-avatar-300.jpg";
+const DEFAULT_AVATAR_URL = "https://www.pegmca.cloud/cdn/img/march7-avatar-300.jpg";
 const NICKNAME_STORAGE_KEY = "immersive:nickname";
 const NICKNAME_POOL = ["捡垃圾的小帅", "不化妆的小美"] as const;
 

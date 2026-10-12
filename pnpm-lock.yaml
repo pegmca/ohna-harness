@@ -282,6 +282,13 @@ importers:
       zod:
         specifier: ^4.4.3
         version: 4.4.3
+    devDependencies:
+      '@aiagent/agent':
+        specifier: workspace:^
+        version: link:../agent
+      '@aiagent/ai':
+        specifier: workspace:^
+        version: link:../ai
 
   packages/memory:
     dependencies:

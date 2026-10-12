@@ -42,6 +42,13 @@ export type McpToolEventSink = (event: {
 export interface DiscoverMcpAgentToolsOptions {
   /** 可选事件出口；缺省时 discovery 只返回结构化结果，不产生任何事件。 */
   sink?: McpToolEventSink;
+  /**
+   * 是否并为未知（非本项目内置）MCP 工具生成通用 AgentTool 包装。
+   * 默认 false：未知工具被跳过，避免宽松 schema 破坏模型选择（见 wrapDiscoveredMcpTool）。
+   * 仅 extraServers 外部/社区 server 路径置 true——外部 server 的工具本就未知，
+   * 需要全部以宽松 schema 透传，才能被并入合并工具集。
+   */
+  includeUnknown?: boolean;
 }
 
 export interface DiscoverMcpAgentToolsResult {
@@ -167,7 +174,7 @@ export function createMcpTool<TInput, TOutput>(
  * 发现结果（含失败）经 sink 写 `mcp_tool_discovered` 事件，事件名与 payload 不变。
  *
  * @param client 已连接的 MCP client。
- * @param options 可选事件 sink。
+ * @param options 可选事件 sink 与 includeUnknown 开关。
  * @returns AgentTool 数组与发现结果。
  */
 export async function discoverMcpAgentTools(
@@ -182,7 +189,7 @@ export async function discoverMcpAgentTools(
     const tools: AgentTool[] = [];
 
     for (const summary of summaries) {
-      const tool = wrapDiscoveredMcpTool(client, summary);
+      const tool = wrapDiscoveredMcpTool(client, summary, options.includeUnknown ?? false);
       if (tool) {
         tools.push(tool);
       }
@@ -216,13 +223,16 @@ export async function discoverMcpAgentTools(
 }
 
 /**
- * 根据 MCP 发现结果创建已知工具的 wrapper；未知工具跳过，避免用宽松 schema 破坏模型选择。
+ * 根据 MCP 发现结果创建工具的 wrapper：已知工具按 schemas.ts 的 zod schema 精确包装；
+ * 未知工具仅在 `includeUnknown` 为 true（外部/社区 server 路径）时回退到通用宽松包装，
+ * 否则跳过，避免用宽松 schema 破坏模型选择（内置 server 工具均已知，默认行为不变）。
  *
  * @param client 已连接的 MCP client。
  * @param summary MCP tool 摘要。
- * @returns AgentTool 包装器；未知工具返回 undefined。
+ * @param includeUnknown 是否并为未知工具生成通用包装。
+ * @returns AgentTool 包装器；未知且未开启 includeUnknown 时返回 undefined。
  */
-function wrapDiscoveredMcpTool(client: McpClient, summary: McpToolSummary): AgentTool | undefined {
+function wrapDiscoveredMcpTool(client: McpClient, summary: McpToolSummary, includeUnknown: boolean): AgentTool | undefined {
   switch (summary.name) {
     case "search_filings":
       return createMcpSearchFilingsTool(client);
@@ -231,9 +241,34 @@ function wrapDiscoveredMcpTool(client: McpClient, summary: McpToolSummary): Agen
     case "get_market_data":
       return createMcpMarketDataTool(client);
     default:
-      return undefined;
+      return includeUnknown ? createMcpGenericTool(client, summary) : undefined;
   }
 }
+
+/**
+ * 未知（非本项目内置）MCP 工具的通用包装：输入/输出均用宽松 zod schema 透传。
+ * 外部/社区 server 的工具我们无法预知 schema，宽松透传既保证可执行，
+ * 又不破坏模型选择；回喂封装与已知工具一致（走 assembleUntrustedContext）。
+ *
+ * @param client 已连接的 MCP client。
+ * @param summary MCP tool 摘要（提供名称与描述）。
+ * @returns 符合 pi AgentTool 接口的通用包装器。
+ */
+export function createMcpGenericTool(client: McpClient, summary: McpToolSummary): AgentTool {
+  return createMcpTool(
+    client,
+    summary.name,
+    summary.description || `MCP tool ${summary.name}`,
+    genericMcpInputSchema,
+    genericMcpOutputSchema
+  );
+}
+
+/** 未知工具的宽松输入 schema：允许任意字段透传，避免为外部 server 硬编码参数。 */
+const genericMcpInputSchema = z.object({}).loose();
+
+/** 未知工具的宽松输出 schema：输出多为对象，宽松接受即可，结构化校验交给 server 侧。 */
+const genericMcpOutputSchema = z.object({}).loose();
 
 /**
  * 把 MCP 工具输出封装为 <untrusted_context> 文本后回喂模型：

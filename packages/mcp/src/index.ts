@@ -12,13 +12,15 @@ export {
 export {
   createCombinedAgentTools,
   type CreateCombinedAgentToolsOptions,
-  type CreateCombinedAgentToolsResult
+  type CreateCombinedAgentToolsResult,
+  type ExtraServerDiscovery
 } from "./combined-tools.js";
 export {
   createMcpFinancialMetricsTool,
   createMcpMarketDataTool,
   createMcpSearchFilingsTool,
   createMcpTool,
+  createMcpGenericTool,
   discoverMcpAgentTools,
   toMcpToolNames,
   type DiscoverMcpAgentToolsOptions,

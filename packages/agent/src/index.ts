@@ -39,6 +39,66 @@ export type {
 // 对外仍从 @aiagent/agent 拿到 AgentTool，命名与 pi 对齐。
 export type { AgentTool, AgentToolResult, AgentToolUpdateCallback, ToolExecutionMode } from "./types.js";
 
+// ---- v1.1 控制流增强（docs/v1.1/01-control-flow-multagent.md）----
+// P1 系统化 Context Engineering：分层上下文装配器 + token 预算分级。
+export {
+  buildSystemPromptWithMemory,
+  formatMemoryAsUserMessage,
+  assembleMemoryBlocks,
+  limitContextByBudget,
+  computeMemoryBudgetTokens,
+  defaultDeriveQuery,
+  createContextAssemblyTransform,
+  DEFAULT_CONTEXT_BUDGET,
+} from "./context-assembly.js";
+export type {
+  AssembleMemoryInput,
+  AssembledMemory,
+  ContextAssemblerOptions,
+  ContextBudgetSettings,
+  ContextBudgetTier,
+  MemoryBlock,
+  MemoryInjectionMode,
+  RetrievedMemoryProvider,
+  WorkingMemoryProvider,
+} from "./context-assembly.js";
+
+// P4 Goal 模式：loop 外挂目标守卫（零改 agentLoop，依赖倒置判定器）。
+export { createCommandJudger, createGoalController, createLlmJudger } from "./goal-controller.js";
+export type {
+  CommandJudgerOptions,
+  GoalController,
+  GoalControllerOptions,
+  GoalJudgeContext,
+  GoalJudgeResult,
+  GoalJudger,
+  GoalProgress,
+  LlmJudgerOptions,
+} from "./goal-controller.js";
+
+// P5 Plan-and-Execute + Reflexion：规划 DAG + 自评估重试（复用既有钩子，组合于 Goal 之上）。
+export {
+  createPlanner,
+  createReflexionHook,
+  defaultPlanSystemPrompt,
+  defaultReflectionPrompt,
+  parsePlanFromModel,
+} from "./plan-reflexion.js";
+export type {
+  Plan,
+  Planner,
+  PlannerError,
+  PlannerOptions,
+  ReflexionHookOptions,
+  ReflexionHooks,
+  ReflexionResult,
+  Subtask,
+  SubtaskStatus,
+} from "./plan-reflexion.js";
+
+// P3 多智能体 Supervisor 编排：复用 agentLoop 作 subagent 原语 + TeamCreate/SendMessage 消息总线。
+export * from "./team-controller.js";
+
 export interface AgentStatus {
   name: string;
   description: string;

@@ -2,7 +2,31 @@
 
 > 维度：Agent Control Flow / Multi-Agent / Memory / Context Engineering
 > 现状：已实现 Pi 风格纯函数多轮 ReAct loop（双层循环 + 事件流 + 错误即数据 + Hook 挂载点），
-> 单 Agent + 工具 + Report Workflow，**无多智能体、无显式状态机、无长期记忆**。
+> 单 Agent + 工具 + Report Workflow；**v1.1 已补齐** P1 系统化 Context Engineering、P2 长期记忆层
+> （`packages/memory`）、P3 多智能体 Supervisor 编排、P4 Goal 模式、P5 Plan-and-Execute + Reflexion——
+> 全部以「复用 `agentLoop` 内核 + 外挂 Hook 切片 / 独立 subagent 原语」方式落地，loop 内核零改动。
+> 实现落地与公开 API 见文末「0. 实现落地」。
+
+## 0. 实现落地（v1.1）
+
+本仓库已按本文件 P1–P5 完成改造，核心纪律是「复用既有 `agentLoop` 内核，所有新能力以
+`AgentLoopConfig` 钩子切片或独立 subagent 原语外挂，loop 内核一行不改」：
+
+| 优先级 | 能力 | 落地位置 | 关键公开 API |
+|---|---|---|---|
+| P1 | 系统化 Context Engineering（分层装配 + token 预算分级） | `packages/agent/src/context-assembly.ts` | `createContextAssemblyTransform` / `buildSystemPromptWithMemory` / `limitContextByBudget` |
+| P2 | 长期记忆层（短期/长期/语义三层，本地相似度替代向量库） | `packages/memory`（新包 `@aiagent/memory`） | `createMemoryStore` / `createMemoryRetrieveHook` / `createMemoryWriteHook` |
+| P3 | 多智能体 Supervisor 编排（TeamCreate/SendMessage 消息总线） | `packages/agent/src/team-controller.ts` + `team/*` | `createTeamController` / `createBullBearRiskTeam` |
+| P4 | Goal 模式（目标守卫，依赖倒置判定器） | `packages/agent/src/goal-controller.ts` | `createGoalController` / `createCommandJudger` / `createLlmJudger` |
+| P5 | Plan-and-Execute + Reflexion（规划 DAG + 自评估重试） | `packages/agent/src/plan-reflexion.ts` | `createPlanner` / `createReflexionHook` |
+
+- 包边界：P2 记忆层为独立 `@aiagent/memory` 包，不反向依赖 `@aiagent/agent`；P1 装配器只接受
+  provider 回调，两者在「组装 `AgentLoopConfig`」时组合，互不耦合（见 `packages/agent/src/index.ts` 出口）。
+- 所有新模块均已附带单元测试（`packages/agent/test/*`、`packages/memory/test/*`）与学习笔记
+  （``、``、``、
+  ``、``）。
+- 约束：`agentLoop` / `agentLoopContinue` 未被修改；新增能力均为 config 层挂载或独立包，符合
+  「控制逻辑外置、内核零改动」的工程纪律（见各 `notes/*` 与 `agent-loop.ts`）。
 
 ## 1. 行业现状速览（2025–2026）
 

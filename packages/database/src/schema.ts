@@ -330,7 +330,7 @@ export const runEvents = pgTable("run_events", {
   unique("run_events_run_sequence_uq").on(table.runId, table.sequence),
   index("run_events_user_run_sequence_idx").on(table.userId, table.runId, table.sequence),
   check("run_events_sequence_check", sql`${table.sequence} > 0`),
-  check("run_events_event_type_check", sql`${table.eventType} in ('agent_start','agent_end','turn_start','turn_end','message_start','message_update','message_end','tool_execution_start','tool_execution_update','tool_execution_end','retrieval','workflow_node','pdf_export','mcp_tool_discovered','run_status','run_error')`)
+  check("run_events_event_type_check", sql`${table.eventType} in ('agent_start','agent_end','turn_start','turn_end','message_start','message_update','message_end','tool_execution_start','tool_execution_update','tool_execution_end','retrieval','workflow_node','pdf_export','mcp_tool_discovered','run_status','run_error','cost_summary')`)
 ]);
 
 export const messageAttachments = pgTable("message_attachments", {

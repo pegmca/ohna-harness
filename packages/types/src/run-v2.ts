@@ -33,7 +33,8 @@ export type RunEventTypeDto =
   | "pdf_export"
   | "mcp_tool_discovered"
   | "run_status"
-  | "run_error";
+  | "run_error"
+  | "cost_summary";
 
 /**
  * SSE 与 run_events 共用的 canonical 事件 envelope。

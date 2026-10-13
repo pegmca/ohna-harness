@@ -40,9 +40,11 @@
 - **目标**：重建 trajectory 评 tool 顺序/参数；定义失败分类（检索缺失/幻觉/工具误用/工作流不完整/循环）。
 - **落地**：`packages/eval` 新增 `trajectory.ts`：`extractToolTrajectory`（run_events→有序工具序列）、`matchTrajectory`（strict/subset + 参数校验）、`classifyFailure`（6 类主分类优先级链，覆盖 fail-001 幻觉 / fail-002 检索缺失 / fail-003 工作流不完整）。分类结果作为可选字段挂到 `AutomationCaseResult`，**不进门禁与聚合**（零回归）；`trajectory.test.mjs` 8 例。
 
-### P3 成本归因 + SLO/错误预算（高价值）
+### P3 成本归因 + SLO/错误预算（高价值）— ✅ 已落地
 - **目标**：跨 run/tool/provider 的 token/成本归因；成功率/延迟 SLO + 错误预算。
-- **落地**：run-service 汇总 token→cost 按 provider/model/tool 维度；基线门禁升级为 SLO（P95、成功率预算）。
+- **落地**：
+  - 成本归因：`packages/eval` 新增 `cost-attribution.ts`（`computeCostAttribution`/`summarizeCost`，按 model/tool/provider 三维度聚合，防御式读 `usage`/`cost`，缺失/非有限归 0）；run-service 在 `agent_end` 后落 `cost_summary` 能力事件（按 **model/tool** 维度，provider 仅作为 eval 纯函数维度、不落库），`@aiagent/types` 的 `RunEventTypeDto` 与 `@aiagent/trace` 的 `RunEventType` 均扩展 `"cost_summary"`，并新增 DB 迁移 `0230` 扩展 `run_events_event_type_check` 白名单（幂等 + 中文 COMMENT）。
+  - SLO/错误预算：`automation.ts` 的 `RegressionThresholds` 增 `p95LatencyMs`（P95 延迟 SLO 预算），新增 `computeSloSummary`（P95 预算 + 错误预算：budget=`1-successRate`、consumed=`1-successRate`、remaining=`max(0,budget-consumed)`、`breached=consumed>budget`）；`checkAutomationRegression` 加 P95 绝对阈值规则（与既有 `maxP95LatencyIncreaseMs` baseline 比较共存）；`AutomationReport` 增可选 `slo?` 字段、`renderMarkdownReport` 增 `## SLO / 错误预算` 段（均增量、零回归）。
 
 ### P4 online eval + 真实 benchmark + 人工校准（进阶）
 - 采样线上 run 影子评测；接 GAIA/TAU-bench 适配器；人工标注回流校准 judge。

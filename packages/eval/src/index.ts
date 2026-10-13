@@ -44,6 +44,14 @@ export {
 };
 export * from "./automation.js";
 export {
+  computeCostAttribution,
+  summarizeCost,
+  extractCostInputs,
+  type CostDimension,
+  type CostAttributionRecord,
+  type CostAttributionInput
+} from "./cost-attribution.js";
+export {
   runLoopEval,
   runEvalCaseWithLoop,
   LOOP_EVAL_BUDGETS,

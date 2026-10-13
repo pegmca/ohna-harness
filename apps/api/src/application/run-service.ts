@@ -297,8 +297,52 @@ export function createRunApplicationService(dependencies: RunServiceDependencies
       // 顺序消费事件流：逐事件落库（先落库后广播由 publish 保证），message_end 落终态消息。
       let terminalMessages: AgentMessage[] = [];
       let lastUserMessageTimestamp: number | undefined;
+      // 在线成本汇总（P3 成本归因）：在事件循环内累加，agent_end 时落一条 cost_summary 能力事件。
+      const costByModel = new Map<string, { input: number; output: number; totalTokens: number; cost: number }>();
+      const costByTool = new Map<string, { input: number; output: number; totalTokens: number; cost: number }>();
+      let totalTokens = 0;
+      let totalCost = 0;
       for await (const event of stream) {
         await publish(userId, snapshot, event.type, event);
+        // 成本累加：message_end 仅 assistant 消息带 usage；tool_execution_end 可选携带 result.usage / details.usage。
+        // 全部数值防御式读取（缺失/非有限 → 0），缺失 usage 的 tool 事件直接跳过，绝不抛异常。
+        if (event.type === "message_end" && event.message.role === "assistant") {
+          const usage = event.message.usage;
+          const input = Number.isFinite(usage.input) ? usage.input : 0;
+          const output = Number.isFinite(usage.output) ? usage.output : 0;
+          const total = Number.isFinite(usage.totalTokens) ? usage.totalTokens : 0;
+          const cost = Number.isFinite(usage.cost?.total) ? (usage.cost?.total ?? 0) : 0;
+          const key = event.message.model;
+          const entry = costByModel.get(key) ?? { input: 0, output: 0, totalTokens: 0, cost: 0 };
+          entry.input += input;
+          entry.output += output;
+          entry.totalTokens += total;
+          entry.cost += cost;
+          costByModel.set(key, entry);
+          totalTokens += total;
+          totalCost += cost;
+        }
+        if (event.type === "tool_execution_end") {
+          const result = event.result as
+            | { usage?: { input?: number; output?: number; totalTokens?: number; cost?: { total?: number } }; details?: { usage?: { input?: number; output?: number; totalTokens?: number; cost?: { total?: number } } } }
+            | undefined;
+          const usage = result?.usage ?? result?.details?.usage;
+          if (usage) {
+            const input = Number.isFinite(usage.input ?? 0) ? (usage.input ?? 0) : 0;
+            const output = Number.isFinite(usage.output ?? 0) ? (usage.output ?? 0) : 0;
+            const total = Number.isFinite(usage.totalTokens ?? 0) ? (usage.totalTokens ?? 0) : 0;
+            const cost = Number.isFinite(usage.cost?.total ?? 0) ? (usage.cost?.total ?? 0) : 0;
+            const key = event.toolName;
+            const entry = costByTool.get(key) ?? { input: 0, output: 0, totalTokens: 0, cost: 0 };
+            entry.input += input;
+            entry.output += output;
+            entry.totalTokens += total;
+            entry.cost += cost;
+            costByTool.set(key, entry);
+            totalTokens += total;
+            totalCost += cost;
+          }
+        }
         if (event.type === "message_end") {
           if (!promptMarked && event.message.role === "user") {
             promptMarked = true;
@@ -318,6 +362,18 @@ export function createRunApplicationService(dependencies: RunServiceDependencies
         }
         if (event.type === "agent_end") {
           terminalMessages = event.messages;
+          // 落在线成本汇总事件（cost_summary）：对齐 trace 的 CostSummaryEvent payload 形状。
+          // 最佳努力：成本统计为观测性数据，落库失败不应让一次成功的 run 变为 failed。
+          try {
+            await publish(userId, snapshot, "cost_summary", {
+              byModel: Object.fromEntries(costByModel),
+              byTool: Object.fromEntries(costByTool),
+              totalTokens,
+              totalCost,
+            });
+          } catch {
+            // 观测性事件落库失败时忽略，不影响 run 终态。
+          }
         }
       }
       // 终态兜底：遗漏的消息一次性补落（保持 run 内顺序）。

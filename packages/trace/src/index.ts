@@ -25,7 +25,8 @@ export type RunEventType =
   | "retrieval"
   | "workflow_node"
   | "pdf_export"
-  | "mcp_tool_discovered";
+  | "mcp_tool_discovered"
+  | "cost_summary";
 
 /** 所有运行事件共有的 envelope 字段。 */
 interface RunEventBase {
@@ -264,6 +265,25 @@ export interface McpToolDiscoveredEvent extends RunEventBase {
 }
 
 /**
+ * 成本归因汇总能力事件（P3）：run 终态时由 run-service 在线累加产出，
+ * 按 model / tool 两个维度给出 token 与成本拆分，以及整体合计。
+ * payload 与旧 trace 脱敏策略兼容（纯数字统计，无 PII），并作为跨边界 DTO 直接序列化。
+ */
+export interface CostSummaryEvent extends RunEventBase {
+  type: "cost_summary";
+  payload: {
+    /** 按模型聚合：key 为 model 名，值为该模型的 token 与成本拆分。 */
+    byModel: Record<string, { input: number; output: number; totalTokens: number; cost: number }>;
+    /** 按工具聚合：key 为 toolName，值为该工具的 token 与成本拆分。 */
+    byTool: Record<string, { input: number; output: number; totalTokens: number; cost: number }>;
+    /** 全部事件合计 token 数。 */
+    totalTokens: number;
+    /** 全部事件合计成本。 */
+    totalCost: number;
+  };
+}
+
+/**
  * trace 层 token 用量快照：对齐 @aiagent/ai 的 `Usage` 子集，作为跨边界 DTO。
  * 放在 trace 包内定义，避免反向依赖 ai 包（保持单向依赖）。
  */
@@ -305,7 +325,8 @@ export type RunEvent =
   | RetrievalEvent
   | WorkflowNodeEvent
   | PdfExportEvent
-  | McpToolDiscoveredEvent;
+  | McpToolDiscoveredEvent
+  | CostSummaryEvent;
 
 const MAX_TRACE_STRING_LENGTH = 500;
 

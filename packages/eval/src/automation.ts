@@ -69,12 +69,23 @@ export interface AutomationCaseResult {
   /** 轨迹匹配摘要（便于报告展示）：actual 实际工具名序列、expected 期望工具名序列、是否匹配。可选字段。 */
   trajectory?: { actual: string[]; expected?: string[]; matched?: boolean };
 }
-export interface RegressionThresholds { successRate: number; citationCoverage: number; financialAccuracy: number; sourceGroundedness: number; workflowCompletion: number; maxP95LatencyIncreaseMs: number }
+export interface RegressionThresholds { successRate: number; citationCoverage: number; financialAccuracy: number; sourceGroundedness: number; workflowCompletion: number; maxP95LatencyIncreaseMs: number; p95LatencyMs: number }
 export interface EvalBaseline { schemaVersion: "1.0.0"; datasetVersion: string; createdAt: string; config: { seed: number; strategy: "deterministic_fixture"; thresholds: RegressionThresholds }; metrics: AutomationMetrics }
 export interface BaselineDiff { metric: keyof AutomationMetrics; current: number; baseline: number; delta: number };
-export interface AutomationReport { schemaVersion: "1.0.0"; datasetVersion: string; run: { id: string; startedAt: string; seed: number; strategy: "deterministic_fixture"; llmJudge: boolean }; metrics: AutomationMetrics; results: AutomationCaseResult[]; failures: AutomationCaseResult[]; baseline?: EvalBaseline; diff: BaselineDiff[]; regressionReasons: string[] }
+export interface AutomationReport { schemaVersion: "1.0.0"; datasetVersion: string; run: { id: string; startedAt: string; seed: number; strategy: "deterministic_fixture"; llmJudge: boolean }; metrics: AutomationMetrics; results: AutomationCaseResult[]; failures: AutomationCaseResult[]; baseline?: EvalBaseline; diff: BaselineDiff[]; regressionReasons: string[]; slo?: SloSummary }
 
-export const DEFAULT_REGRESSION_THRESHOLDS: RegressionThresholds = { successRate: 0.8, citationCoverage: 0.85, financialAccuracy: 0.8, sourceGroundedness: 0.85, workflowCompletion: 0.9, maxP95LatencyIncreaseMs: 50 };
+/**
+ * SLO / 错误预算摘要（P3 门禁增强，纯增量）：用阈值把现状指标翻译为"是否突破预算"的可读结论。
+ * 作为 AutomationReport 的可选字段，不破坏既有 7 项指标与回归门禁形状。
+ */
+export interface SloSummary {
+  /** P95 延迟 SLO：value 实测、budget 阈值、breached 是否突破。 */
+  p95LatencyMs: { value: number; budget: number; breached: boolean };
+  /** 错误预算：budget 允许最大失败率、consumed 已消耗失败率、remaining 剩余、breached 是否耗尽。 */
+  errorBudget: { budget: number; consumed: number; remaining: number; breached: boolean };
+}
+
+export const DEFAULT_REGRESSION_THRESHOLDS: RegressionThresholds = { successRate: 0.8, citationCoverage: 0.85, financialAccuracy: 0.8, sourceGroundedness: 0.85, workflowCompletion: 0.9, maxP95LatencyIncreaseMs: 50, p95LatencyMs: 10000 };
 
 /**
  * 读取并校验版本化 dataset；runner 只接受固定 schema，避免用例格式漂移。
@@ -101,7 +112,7 @@ export function runAutomationEval(dataset: EvalDataset, baseline?: EvalBaseline,
   const metrics = aggregateAutomationMetrics(results);
   const diff = baseline ? (Object.keys(metrics) as Array<keyof AutomationMetrics>).map((metric) => ({ metric, current: metrics[metric], baseline: baseline.metrics[metric], delta: round(metrics[metric] - baseline.metrics[metric]) })) : [];
   const regressionReasons = checkAutomationRegression(metrics, baseline, thresholds);
-  return { schemaVersion: "1.0.0", datasetVersion: dataset.datasetVersion, run: { id: `eval-${dataset.datasetVersion}-seed-${dataset.seed}`, startedAt: new Date().toISOString(), seed: dataset.seed, strategy: "deterministic_fixture", llmJudge: false }, metrics, results, failures: results.filter((item) => !item.passed), baseline, diff, regressionReasons };
+  return { schemaVersion: "1.0.0", datasetVersion: dataset.datasetVersion, run: { id: `eval-${dataset.datasetVersion}-seed-${dataset.seed}`, startedAt: new Date().toISOString(), seed: dataset.seed, strategy: "deterministic_fixture", llmJudge: false }, metrics, results, failures: results.filter((item) => !item.passed), baseline, diff, regressionReasons, slo: computeSloSummary(metrics, thresholds) };
 }
 
 /** @param report 当前报告。 @param dataset 数据集。 @param thresholds 阈值。 @returns 可显式保存的基线。 */
@@ -116,6 +127,16 @@ export function renderMarkdownReport(report: AutomationReport): string {
   for (const item of report.results) lines.push(`| ${item.caseId} | ${item.mode} | ${item.passed ? "yes" : "no"} | ${item.metrics.citationCoverage} | ${item.metrics.financialAccuracy} | ${item.metrics.sourceGroundedness} | ${item.latencyMs}ms |`);
   lines.push(``, `## 失败案例`, ``);
   for (const item of report.failures) lines.push(`### ${item.caseId}`, ``, `- Query: ${item.query}`, `- Trace / request: ${item.traceId} / ${item.requestId}`, `- Evidence: retrieved=[${item.evidence.retrievedChunks.map((c) => c.id).join(", ")}], citations=[${item.evidence.citations.map((c) => c.source).join(", ")}]`, `- Answer/report: ${item.evidence.answer || "（空）"}`, `- 失败项: ${item.failures.join("；")}`, `- 根因: ${item.rootCause}`, `- 改进: ${item.improvement}`, ``);
+  lines.push(``, `## SLO / 错误预算`, ``);
+  if (report.slo) {
+    const { p95LatencyMs: p95, errorBudget: eb } = report.slo;
+    lines.push(
+      `- P95 延迟: ${p95.value}ms / 预算 ${p95.budget}ms → ${p95.breached ? "突破" : "达标"}`,
+      `- 错误预算: 预算 ${eb.budget} / 已耗 ${eb.consumed} / 剩余 ${eb.remaining} → ${eb.breached ? "耗尽" : "充足"}`
+    );
+  } else {
+    lines.push("- 未计算（无 SLO 摘要）");
+  }
   lines.push(`## 回归门禁`, ``, report.regressionReasons.length ? report.regressionReasons.map((x) => `- ${x}`).join("\n") : "- 通过");
   return `${lines.join("\n")}\n`;
 }
@@ -208,8 +229,28 @@ export function aggregateAutomationMetrics(results: AutomationCaseResult[]): Aut
     p95LatencyMs: latencies[Math.max(0, Math.ceil(latencies.length * 0.95) - 1)] ?? 0
   };
 }
+/**
+ * 计算 SLO / 错误预算摘要（纯函数，零回归）：把现状指标与阈值翻译为"是否突破预算"的可读结论。
+ * - P95 延迟：value > budget 即 breached（与既有 maxP95LatencyIncreaseMs 的 baseline 比较互不影响）；
+ * - 错误预算：budget = 1 - successRate 门槛（允许的最大失败率），consumed = 1 - 实际 successRate，
+ *   remaining = max(0, budget - consumed)，consumed > budget 即 breached。
+ *
+ * @param m 当前总体指标。 @param t 回归阈值。 @returns SLO / 错误预算摘要。
+ */
+export function computeSloSummary(m: AutomationMetrics, t: RegressionThresholds): SloSummary {
+  const p95Value = m.p95LatencyMs;
+  const p95Budget = t.p95LatencyMs;
+  const errorBudget = 1 - t.successRate;
+  const consumed = 1 - m.successRate;
+  const remaining = Math.max(0, errorBudget - consumed);
+  return {
+    p95LatencyMs: { value: p95Value, budget: p95Budget, breached: p95Value > p95Budget },
+    errorBudget: { budget: errorBudget, consumed, remaining, breached: consumed > errorBudget },
+  };
+}
+
 /** @param m 当前指标。 @param b 可选基线。 @param t 回归阈值。 @returns 触发的回归原因列表，空数组表示通过。 */
-export function checkAutomationRegression(m: AutomationMetrics, b: EvalBaseline | undefined, t: RegressionThresholds): string[] { const r:string[]=[]; for (const key of ["successRate","citationCoverage","financialAccuracy","sourceGroundedness","workflowCompletion"] as const) if (m[key] < t[key]) r.push(`${key} ${m[key]} 低于门槛 ${t[key]}`); if (b) { for (const key of ["successRate","citationCoverage","financialAccuracy","sourceGroundedness","workflowCompletion"] as const) if (m[key] < b.metrics[key]) r.push(`${key} 相对 baseline 回退 ${round(m[key]-b.metrics[key])}`); if (m.p95LatencyMs-b.metrics.p95LatencyMs>t.maxP95LatencyIncreaseMs) r.push(`p95 latency 增加 ${m.p95LatencyMs-b.metrics.p95LatencyMs}ms`); } return r; }
+export function checkAutomationRegression(m: AutomationMetrics, b: EvalBaseline | undefined, t: RegressionThresholds): string[] { const r:string[]=[]; for (const key of ["successRate","citationCoverage","financialAccuracy","sourceGroundedness","workflowCompletion"] as const) if (m[key] < t[key]) r.push(`${key} ${m[key]} 低于门槛 ${t[key]}`); if (m.p95LatencyMs > t.p95LatencyMs) r.push(`p95 latency ${m.p95LatencyMs}ms 超过 SLO ${t.p95LatencyMs}ms`); if (b) { for (const key of ["successRate","citationCoverage","financialAccuracy","sourceGroundedness","workflowCompletion"] as const) if (m[key] < b.metrics[key]) r.push(`${key} 相对 baseline 回退 ${round(m[key]-b.metrics[key])}`); if (m.p95LatencyMs-b.metrics.p95LatencyMs>t.maxP95LatencyIncreaseMs) r.push(`p95 latency 增加 ${m.p95LatencyMs-b.metrics.p95LatencyMs}ms`); } return r; }
 function ratio<T>(items: readonly T[], predicate:(item:T)=>boolean):number { return items.length ? items.filter(predicate).length/items.length : 1; }
 function normalize(v:string):string { return v.toLowerCase().replace(/[\s,，]/g,""); } function round(v:number):number{return Math.round(v*1000)/1000;}
 function rootCause(f:string[]):string { if(f.some(x=>x.startsWith("financialAccuracy"))) return "财务事实的数值、单位、币种、期间或来源未同时满足。"; if(f.some(x=>x.startsWith("sourceGroundedness"))) return "引用文本无法在 retrieved chunk 中逐项回溯。"; if(f.some(x=>x.startsWith("workflowCompletion"))) return "Report workflow 在预期节点前终止。"; return "输出缺少预期引用、章节或导出状态。"; }

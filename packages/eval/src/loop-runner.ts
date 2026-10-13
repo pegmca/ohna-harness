@@ -38,6 +38,7 @@ import { z } from "zod";
 import {
   aggregateAutomationMetrics,
   checkAutomationRegression,
+  computeSloSummary,
   DEFAULT_REGRESSION_THRESHOLDS,
   scoreCaseWithEvidence,
   type AutomationCaseResult,
@@ -179,6 +180,8 @@ export async function runLoopEval(dataset: EvalDataset, options: LoopEvalOptions
       }))
     : [];
   const regressionReasons = checkAutomationRegression(metrics, baseline, thresholds);
+  // SLO / 错误预算为增量只读摘要：复用 automation.ts 同一纯函数，不改动 7 项门禁语义。
+  const slo = computeSloSummary(metrics, thresholds);
 
   return {
     schemaVersion: "1.0.0",
@@ -196,6 +199,7 @@ export async function runLoopEval(dataset: EvalDataset, options: LoopEvalOptions
     baseline,
     diff,
     regressionReasons,
+    slo,
   };
 }
 

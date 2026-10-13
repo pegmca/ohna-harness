@@ -203,3 +203,44 @@
 1. `pnpm --filter @aiagent/eval test` 现 **39 个用例**（原 31 + `trajectory.test.mjs` 8 例）。
 2. 想看失败分类：在 `trajectory.test.mjs` 里读 `fail-001→hallucination`、`fail-002→retrieval_missing`、`fail-003→workflow_incomplete`、rag→`none` 四个断言。
 3. 想看轨迹匹配：`matchTrajectory` 的 strict（extra 工具→matched=false）/ subset（extra→matched=true）/ requiredArgs 缺失→paramMismatches 三个用例。
+
+---
+
+## 10. P3 成本归因 + SLO/错误预算（Task 2 扩展，已落地）
+
+**读什么**
+- `packages/eval/src/cost-attribution.ts`
+  - `CostDimension`（`:14`）：`model` / `tool` / `provider`。
+  - `CostAttributionRecord`（`:17`）：单维度聚合（`key`/`inputTokens`/`outputTokens`/`totalTokens`/`cost`/`callCount`）。
+  - `extractCostInputs(events)`（`:69`）：从 `LoopEvalRunEvent[]` 防御式抽取用量——`message_end` 读 `message.usage`+`model`+`provider`（source=message），`tool_execution_end` 读可选 `result.usage`/`result.details.usage`（source=tool）；缺失 `usage` 跳过、非有限数字归 0。
+  - `computeCostAttribution(events, dimension)`（`:125`）：按维度聚合，`totalTokens` 降序；`summarizeCost(events)`（`:171`）便捷返回 byModel/byTool 两份聚合 + 总计。
+- `packages/eval/src/automation.ts`
+  - `RegressionThresholds` 新增 `p95LatencyMs`（`:72`）；`DEFAULT_REGRESSION_THRESHOLDS` 给 `p95LatencyMs: 10000`（起始 SLO，保守默认，不影响现有门禁）。
+  - `SloSummary`（`:81` 附近）+ `computeSloSummary(metrics, thresholds)`（`:240`）：P95 预算（`value>budget→breached`）+ 错误预算（`budget=1-successRate`、`consumed=1-successRate`、`remaining=max(0,budget-consumed)`、`breached=consumed>budget`）。
+  - `AutomationReport` 新增可选 `slo?`（`:75`）；`checkAutomationRegression` 追加 P95 绝对阈值规则（与既有 `maxP95LatencyIncreaseMs` baseline 比较共存）；`renderMarkdownReport` 在回归门禁前加 `## SLO / 错误预算` 段（`:130`）。
+- `packages/types/src/run-v2.ts`：`RunEventTypeDto` 加 `"cost_summary"`（线格式/DTO 归属正确）。
+- `packages/trace/src/index.ts`：`RunEventType` 加 `"cost_summary"` + 新增 `CostSummaryEvent`（payload 含 `byModel`/`byTool`/`totalTokens`/`totalCost`）并加入 `RunEvent` 联合（otel 映射 `default` 分支返回 `null`，不映射成 span）。
+- `apps/api/src/application/run-service.ts`：`execute` 事件循环前声明 `costByModel`/`costByTool`/`totalTokens`/`totalCost` 累加器；循环内紧跟 `publish` 后累加 `message_end`（仅 assistant 带 usage）与 `tool_execution_end`（用量可选、防御式）；`agent_end` 分支内 `publish("cost_summary", …)` 落在线汇总（try/catch 最佳努力，不把成功 run 变 failed）。
+- `packages/database/src/schema.ts`（`run_events_event_type_check`）+ 迁移 `0230_cost_summary_event_type.sql`：扩展白名单（幂等 `DROP CONSTRAINT IF EXISTS` + `ADD CONSTRAINT` + 中文 `COMMENT ON COLUMN`），使 `cost_summary` 可持久化。
+
+**pi 对应物**：pi 与 OpenTelemetry 的 cost/usage 都按 `gen_ai.token.count.*` + `cost.total` 做跨维度归因；本处把"离线 eval 聚合（eval 包纯函数）"与"在线 run 落库（run-service 能力事件）"分离，cost 信号既能在评测报告里看、也能在真实 run 的 `run_events` 里回放。
+
+**零回归纪律（P3 红线）**
+- SLO/错误预算是**增量可选**：`slo?` 字段、`p95LatencyMs` 阈值（默认 10000 远高于 mock 运行）都不改变既有 7 项门禁与 `AggregatedMetricKeys`；`runLoopEval passes regression gate`（regressionReasons===[]）仍成立。
+- run-service 改动只在既有事件循环**追加**累加与一条 publish，不触碰错误处理、快照形状、`agent_end` 终态推导；累加全程防御式，缺失/非有限归 0，绝不 throw 到主流程。
+- 验证：`pnpm --filter @aiagent/eval test` 48/48（原 39 + 新增 9）；types/trace/api/agent typecheck 全绿。
+
+**学习检查点**
+- 为什么成本归因分"离线纯函数（eval）"与"在线能力事件（run-service）"？eval 包不该被 api 反向依赖（包边界）；成本聚合逻辑放在 eval 作为**可测纯函数**，run-service 只负责在真实 run 里把原始用量落成 `cost_summary` 事件，消费侧（报告/Phoenix）再按需聚合——职责单一、可独立演进。
+- 为什么 `cost_summary` 事件只落 model/tool 维度、provider 仅作 eval 纯函数维度？在线事件应最小且跨 provider 稳定；provider 维度在离线评测里按需聚合即可，不必污染线格式。这体现了"线格式只收必要字段"的 DTO 纪律。
+- 为什么错误预算用 `1-successRate` 而非新增一个独立阈值？成功率阈值本就是"允许的最低成功率"，其补集天然是"允许的最大失败率=错误预算"，复用同一阈值避免双口径漂移（SLO/错误预算的经典定义）。
+
+**P3 演示**：`cost-attribution.test.mjs` 验证 model/tool 聚合、缺失用量防御、`computeSloSummary` 的 p95/errorBudget breached 与达标、以及 `checkAutomationRegression` 新 P95 规则；run-service 改动由 `pnpm --filter @aiagent/api typecheck` 守护。
+
+---
+
+## 11. 最小可演示路径（P3 追加）
+
+1. `pnpm --filter @aiagent/eval test` 现 **48 个用例**（原 39 + `cost-attribution.test.mjs` 9 例）。
+2. 想看 SLO 报告：`renderMarkdownReport` 在回归门禁前输出 `## SLO / 错误预算`；把 `DEFAULT_REGRESSION_THRESHOLDS.p95LatencyMs` 临时调到极小（如 0）可看到 `p95 latency ... 超过 SLO` 触发门禁（仅为演示，勿提交）。
+3. 想看在线成本汇总：起 api 跑一次真实 run，`run_events` 末尾会出现 `cost_summary` 事件（byModel/byTool 聚合），需先应用迁移 `0230`。

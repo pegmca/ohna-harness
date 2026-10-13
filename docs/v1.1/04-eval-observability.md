@@ -36,9 +36,9 @@
   span 对齐 `gen_ai.agent.run`/`agent.generation`/`tool.call`/`retrieval`；attr 含 `gen_ai.token.count.*`、`gen_ai.request/response.model`、`cost.total`；
   事件 payload 扩展可选 `usage`/`cost`/`model`（向后兼容）；`redactSensitiveValue`/`redactTokenTrace` 扩到 token 级 PII（仅字符串整值脱敏，保护数字/数组落库）。现状：映射层就绪，导出到 Phoenix/OTel Collector 为下一步。
 
-### P2 轨迹评测 + 失败 taxonomy（中收益）
-- **目标**：重建 trajectory 评 tool 顺序/参数；定义失败分类（检索缺失/幻觉/工具误用/循环）。
-- **落地**：`packages/eval` 增 trajectory 投影与 match 评分，把 3 失败 case 归类。
+### P2 轨迹评测 + 失败 taxonomy（中收益）— ✅ 已落地
+- **目标**：重建 trajectory 评 tool 顺序/参数；定义失败分类（检索缺失/幻觉/工具误用/工作流不完整/循环）。
+- **落地**：`packages/eval` 新增 `trajectory.ts`：`extractToolTrajectory`（run_events→有序工具序列）、`matchTrajectory`（strict/subset + 参数校验）、`classifyFailure`（6 类主分类优先级链，覆盖 fail-001 幻觉 / fail-002 检索缺失 / fail-003 工作流不完整）。分类结果作为可选字段挂到 `AutomationCaseResult`，**不进门禁与聚合**（零回归）；`trajectory.test.mjs` 8 例。
 
 ### P3 成本归因 + SLO/错误预算（高价值）
 - **目标**：跨 run/tool/provider 的 token/成本归因；成功率/延迟 SLO + 错误预算。

@@ -50,6 +50,13 @@ import {
   type UnifiedEvalFixture,
 } from "./automation.js";
 import { projectRunEvents, type LoopEvalRunEvent } from "./loop-projection.js";
+import {
+  classifyFailure,
+  deriveExpectedTrajectory,
+  extractToolTrajectory,
+  matchTrajectory,
+  type ToolCallStep,
+} from "./trajectory.js";
 import type { LoopLlmJudge } from "./judge-loop.js";
 
 export type { LoopEvalRunEvent } from "./loop-projection.js";
@@ -75,7 +82,7 @@ const RUNNER_HARD_TURN_SLACK = 2;
 /** runner 硬上限：单 case 墙钟兜底毫秒数。 */
 const RUNNER_HARD_DEADLINE_MS = 30_000;
 
-/** 单条 case 的 loop 执行产出：证据投影 + 完整 run_events。 */
+/** 单条 case 的 loop 执行产出：证据投影 + 完整 run_events + 工具调用轨迹。 */
 export interface LoopEvalCaseRun {
   caseId: string;
   /** 从 run_events 投影出的打分证据（形状与 fixture 相同，替代旧直接读 fixture）。 */
@@ -84,6 +91,8 @@ export interface LoopEvalCaseRun {
   events: LoopEvalRunEvent[];
   /** 是否因超预算被截停（turn 或 token 维度）。 */
   budgetExceeded: boolean;
+  /** 由 run_events 投影出的有序工具调用轨迹（供 trajectory 评测与失败 taxonomy 使用）。 */
+  trajectory: ToolCallStep[];
 }
 
 /** runLoopEval 选项。 */
@@ -139,7 +148,24 @@ export async function runLoopEval(dataset: EvalDataset, options: LoopEvalOptions
     options.onCaseRun?.(run);
     // 若传入 judge，先异步取校准分再透传给 scoreCaseWithEvidence；不传则完全不追加（零回归）。
     const judgeScores = options.judge ? await computeLoopJudgeScores(options.judge, item, run.evidence) : undefined;
-    results.push(scoreCaseWithEvidence(item, run.evidence, judgeScores));
+    const baseResult = scoreCaseWithEvidence(item, run.evidence, judgeScores);
+
+    // 轨迹评测（P2，可选字段，不进入 7 项门禁与聚合）：
+    // - expected 由 fixture 推导（有 workflow 期望 → generate_report；否则有检索 → search_filings）；
+    // - subset 模式用于报告展示（期望是实际轨迹的保序子序列即视为满足）；
+    // - failureCategory 由 classifyFailure 给出单一主分类，内部 strict 模式检测非预期工具。
+    const expected = deriveExpectedTrajectory(item);
+    const match = matchTrajectory(expected, run.trajectory, "subset");
+    const failureCategory = classifyFailure({ evidence: run.evidence, trajectory: run.trajectory, item });
+    results.push({
+      ...baseResult,
+      failureCategory,
+      trajectory: {
+        actual: run.trajectory.map((step) => step.toolName),
+        expected: expected.map((expectation) => expectation.toolName),
+        matched: match.matched,
+      },
+    });
   }
 
   const metrics = aggregateAutomationMetrics(results);
@@ -271,7 +297,9 @@ export async function runEvalCaseWithLoop(
   }
 
   const evidence = projectRunEvents(item, events, { budgetExceeded, latencyMs: Date.now() - startedAt });
-  return { caseId: item.id, evidence, events, budgetExceeded };
+  // 由 run_events 投影出有序工具调用轨迹（trajectory 评测的 input）。
+  const trajectory = extractToolTrajectory(events);
+  return { caseId: item.id, evidence, events, budgetExceeded, trajectory };
 }
 
 /**

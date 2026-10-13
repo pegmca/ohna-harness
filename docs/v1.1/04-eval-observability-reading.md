@@ -157,3 +157,49 @@
 3. 想看 judge 默认行为：在测试或脚本里 `createLoopLlmJudge()`（无 key）→ 走确定性 mock，`judgeAnswerCorrectness` 分数每次相同（可复现）。
 4. 想看 OTel 映射：构造几条 `RunEvent`（agent_start/end、message_end、tool_execution_end、retrieval），调 `runEventsToOtelSpans` 看生成的 `gen_ai.*` span 与 `cost.total`/`gen_ai.token.count.*` 属性。
 5. 想看 B1 防护：`redact.test.mjs` 直接读——断言 `usage.input` 仍是 `number` 且值不变，`messages` 数组保留。
+
+---
+
+## 8. P2 轨迹评测 + 失败 taxonomy（Task 2 扩展，已落地）
+
+**读什么**
+- `packages/eval/src/trajectory.ts`
+  - `ToolCallStep`（`:16`）：单步工具调用视图（`seq`/`toolName`/`args`/`isError`/`resultSummary`）。
+  - `extractToolTrajectory(events)`（`:37`）：从 `LoopEvalRunEvent[]`（run_events 投影）按 `seq` 排序，把 `tool_execution_start` 与同 `toolCallId` 的 `tool_execution_end` 配对，得到**有序工具调用序列**；缺 end 时用 start 信息、`isError` 默认 `false`（防御式）。
+  - `matchTrajectory(expected, actual, mode)`（`:151`）：轨迹匹配评分。
+    - `strict`：期望工具名序列须与 actual **顺序且数量一致**（actual 多余 → `extra`，expected 多 → `missing`）；
+    - `subset`：期望须是 actual 的**保序子序列**；
+    - 对匹配上的同名调用，检查 `requiredArgs` 是否出现在 `args`（缺失进 `paramMismatches`）。`matched = missing 空 && (subset? true : extra 空) && paramMismatches 空`。
+  - `deriveExpectedTrajectory(item)`（`:207`）：从 fixture 推导期望工具序列（有 workflow 期望 → 期望 `generate_report`；否则有检索证据 → 期望 `search_filings`）——与 `loop-runner.ts` 的 mock 脚本口径一致。
+  - `FailureCategory`（`:191`）：`retrieval_missing` / `hallucination` / `tool_misuse` / `workflow_incomplete` / `loop` / `none`。
+  - `classifyFailure(input)`（`:273`）：对单条 case 给**单一主分类**，按优先级链（越具体的结构性失败越先判）：
+    1. `workflow_incomplete`：期望工作流节点未跑完；
+    2. `retrieval_missing`：期望引用但 citation 未被检索接地（`isCitationsGrounded` `:224` 判 quote 是否出现在某 chunk 文本）；
+    3. `hallucination`：期望事实却无检索/引用支撑（编造）；
+    4. `tool_misuse`：工具执行报错或 strict 轨迹不匹配（调用了非预期工具）；
+    5. `loop`：连续 ≥3 次同名工具调用（`hasConsecutiveLoop` `:238`）；
+    6. 兜底：`ok=false` 未命中以上 → `tool_misuse`；默认 `none`。
+- `packages/eval/src/loop-runner.ts`：`LoopEvalCaseRun` 追加 `trajectory: ToolCallStep[]`（`runEvalCaseWithLoop` 内 `extractToolTrajectory(events)`）；`runLoopEval` 对每条结果附加 `failureCategory` 与 `trajectory`（subset 用于展示、strict 用于分类器内部检测非预期工具）。
+- `packages/eval/src/automation.ts`：`AutomationCaseResult` 追加**可选**字段 `failureCategory?` / `trajectory?`——**不进 7 项门禁与聚合**（零回归）。
+
+**pi 对应物**：pi 与多数 trace 系统都把"工具调用序列 / 图结构"作为轨迹评测对象（trajectory match：strict/subset + 参数校验）。本处把它从"结果级打分"上移到"过程级诊断"，与 `run_events` 投影天然对齐。
+
+**零回归纪律（P2 红线）**
+- `failureCategory` / `trajectory` 是可选字段，**不参与** `checkAutomationRegression`（7 项阈值）与 `aggregateAutomationMetrics`（7 键聚合）。`scoreCaseWithEvidence` 行为完全不变。
+- 数据集 `datasets/eval-financial-v1.json` **不改动**（schema 不变）；分类器只读 fixture/evidence，不写。
+- 验证：`pnpm --filter @aiagent/eval test` 39/39（新增 8，含 `runLoopEval passes regression gate` 7 指标门禁仍通过）。
+
+**学习检查点**
+- 为什么轨迹评测要分 strict/subset？真实 agent 常会多调工具（兜底/探查），严格相等会误报；subset 保序子序列更贴近"是否完成了关键步骤"，strict 则用于捕捉"是否调了不该调的工具"（tool_misuse）。
+- 为什么 `retrieval_missing` 用"citation 是否被 chunk 文本接地"而非"有无检索"？`fail-002` 的 `retrievedChunks` 非空（有检索动作）但 citation 文本并不在任何 chunk 中——这是"检索到了却没用上/编造引用"，比单纯"无检索"更隐蔽；接地校验能抓住这类未接地引用。
+- 为什么分类器不参与门禁？失败 taxonomy 是**诊断信号**（人读报告、未来人工校准集），不是硬门禁——直接当门禁会让分类边界的误判放大成 CI 抖动（同 LLM-as-Judge 的站位一致）。
+
+**P2 演示**：`trajectory.test.mjs` 直接用数据集 `fail-001/002/003` 与某 rag 用例验证 `classifyFailure` 四个分类断言 + `matchTrajectory` strict/subset/paramMismatch 行为。
+
+---
+
+## 9. 最小可演示路径（P2 追加）
+
+1. `pnpm --filter @aiagent/eval test` 现 **39 个用例**（原 31 + `trajectory.test.mjs` 8 例）。
+2. 想看失败分类：在 `trajectory.test.mjs` 里读 `fail-001→hallucination`、`fail-002→retrieval_missing`、`fail-003→workflow_incomplete`、rag→`none` 四个断言。
+3. 想看轨迹匹配：`matchTrajectory` 的 strict（extra 工具→matched=false）/ subset（extra→matched=true）/ requiredArgs 缺失→paramMismatches 三个用例。

@@ -38,6 +38,8 @@ export interface UnifiedEvalFixture {
   requestId: string;
 }
 
+import type { FailureCategory } from "./trajectory.js";
+
 export interface EvalDataset { schemaVersion: "1.0.0"; datasetVersion: string; seed: number; cases: UnifiedEvalCase[] }
 export interface AutomationMetrics { citationCoverage: number; financialAccuracy: number; sourceGroundedness: number; successRate: number; workflowCompletion: number; reportSectionCoverage: number; exportStatusRate: number; averageLatencyMs: number; p95LatencyMs: number }
 /** 单条 case 的指标：7 项确定性指标 + 可选 LLM-as-Judge 校准信号（不计入门禁）。 */
@@ -49,7 +51,24 @@ export type CaseMetrics = Omit<AutomationMetrics, "averageLatencyMs" | "p95Laten
 };
 
 /** 单条 case 的打分结果（含逐条指标、失败项与归因）。 */
-export interface AutomationCaseResult { caseId: string; mode: EvalMode; query: string; passed: boolean; metrics: CaseMetrics; latencyMs: number; traceId: string; requestId: string; evidence: UnifiedEvalFixture; failures: string[]; rootCause?: string; improvement?: string }
+export interface AutomationCaseResult {
+  caseId: string;
+  mode: EvalMode;
+  query: string;
+  passed: boolean;
+  metrics: CaseMetrics;
+  latencyMs: number;
+  traceId: string;
+  requestId: string;
+  evidence: UnifiedEvalFixture;
+  failures: string[];
+  rootCause?: string;
+  improvement?: string;
+  /** 失败 taxonomy 主分类（来自 trajectory 分类）；当 evidence.ok 且无分类时为 "none" 或省略。可选字段，不参与门禁与聚合。 */
+  failureCategory?: FailureCategory;
+  /** 轨迹匹配摘要（便于报告展示）：actual 实际工具名序列、expected 期望工具名序列、是否匹配。可选字段。 */
+  trajectory?: { actual: string[]; expected?: string[]; matched?: boolean };
+}
 export interface RegressionThresholds { successRate: number; citationCoverage: number; financialAccuracy: number; sourceGroundedness: number; workflowCompletion: number; maxP95LatencyIncreaseMs: number }
 export interface EvalBaseline { schemaVersion: "1.0.0"; datasetVersion: string; createdAt: string; config: { seed: number; strategy: "deterministic_fixture"; thresholds: RegressionThresholds }; metrics: AutomationMetrics }
 export interface BaselineDiff { metric: keyof AutomationMetrics; current: number; baseline: number; delta: number };

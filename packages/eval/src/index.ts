@@ -54,6 +54,17 @@ export {
 } from "./loop-runner.js";
 export { projectRunEvents } from "./loop-projection.js";
 export {
+  extractToolTrajectory,
+  matchTrajectory,
+  deriveExpectedTrajectory,
+  classifyFailure,
+  type ToolCallStep,
+  type TrajectoryExpectation,
+  type TrajectoryMatchMode,
+  type TrajectoryMatchResult,
+  type FailureCategory
+} from "./trajectory.js";
+export {
   createLoopLlmJudge,
   type LoopLlmJudge,
   type LoopLlmJudgeOptions,

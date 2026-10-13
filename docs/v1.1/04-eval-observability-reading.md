@@ -244,3 +244,45 @@
 1. `pnpm --filter @aiagent/eval test` 现 **48 个用例**（原 39 + `cost-attribution.test.mjs` 9 例）。
 2. 想看 SLO 报告：`renderMarkdownReport` 在回归门禁前输出 `## SLO / 错误预算`；把 `DEFAULT_REGRESSION_THRESHOLDS.p95LatencyMs` 临时调到极小（如 0）可看到 `p95 latency ... 超过 SLO` 触发门禁（仅为演示，勿提交）。
 3. 想看在线成本汇总：起 api 跑一次真实 run，`run_events` 末尾会出现 `cost_summary` 事件（byModel/byTool 聚合），需先应用迁移 `0230`。
+
+---
+
+## 12. P4 online eval + 真实 benchmark 适配器 + 人工校准（Task 2 扩展，已落地）
+
+> P4 是学习级进阶，**全部落在 `packages/eval`**——离线即可，未改 `apps/api` 与数据库。它把"评测闭环"从离线 fixture 扩展到三个方向：线上影子评测、外部 benchmark 接管、人工标注回流校准。
+
+**读什么**
+- `packages/eval/src/online-eval.ts`
+  - `ShadowEvaluator`（`:47`）+ `createShadowEvaluator(options?)`（`:67`）：默认用 `createLoopLlmJudge()`（确定性 mock，可复现、无网络）；`evaluate(input)` 只读取线上采样的 `{ caseId, query, answer, expectedText?, contexts? }` 跑 judge，**绝不写回生产、绝不改 run 状态**（JSDoc 与注释明确"影子"语义）。
+  - `sampleAndEvaluate(evaluator, samples)`（`:100`）：`Promise.all` 并发跑整批样本，返回与输入等长、顺序一致的结果。
+- `packages/eval/src/benchmark-adapters.ts`
+  - `BenchmarkCase`（`:20`）/ `BenchmarkAdapter`（`:36`）：外部基准的轻量契约——`loadCases()` 是唯一"接缝"。
+  - `benchmarkCaseToUnified(c, datasetVersion)`（`:61`）：把 `BenchmarkCase` 合成合法 `UnifiedEvalCase`（fixture 用 `expectedAnswer` 作 answer、`ok:true`、字段齐全）。
+  - `benchmarkDatasetToEvalDataset(adapter, seed)`：直接包成 `EvalDataset`（**无需 30~50 条**，因 `runLoopEval` 不校验数量，只有 `loadEvalDataset` 校验）。
+  - `createMockGaiaAdapter()`（`:125`）/ `createMockTauBenchAdapter()`（`:184`）：确定性 mock（不发起 HTTP）；文件头注释说明**真实 GAIA/TAU-bench 集成只需改写 `loadCases()`**，下游 `→ runLoopEval` 管线不变。
+- `packages/eval/src/calibration.ts`
+  - `HumanCalibrationStore`（`:15`）+ `createInMemoryCalibrationStore()`（`:49`）：同一 case 可录多条 label、取平均。
+  - `calibrateJudgeScores(judgeScores, store)`（`:103`）：**全局偏差** `bias = mean(人工标注均值) − mean(judge 原始分)`（仅在带标注的 case 集合上算；无标注→`bias=0`）；逐条 `calibratedScore = clamp01(rawScore + bias)`（`:124`，`clamp01` `:136` 钳制 [0,1]）。
+
+**pi 对应物**：pi 与 RAGAS/DeepEval 都强调"离线评测 + 在线影子 + 人工校准"的闭环；本处把这三块收敛成 eval 包内三个纯模块，复用已有的 `LoopLlmJudge` 与 `runLoopEval`，不重复造轮子。
+
+**零回归纪律（P4 红线）**
+- P4 全是**新增文件 + 新导出**；除 `index.ts` 追加导出外，`automation.ts`/`loop-runner.ts`/`judge-loop.ts` 现有行为零改动。
+- 默认 judge 走确定性 mock，**不引入任何网络依赖**（package.json 无 axios/fetch 类库）；benchmark mock 适配器纯返回常量。
+- 验证：`pnpm --filter @aiagent/eval test` 57/57（原 48 + 新增 9，含 `runLoopEval passes regression gate` 7 指标门禁零回归）；build/typecheck 全绿。
+
+**学习检查点**
+- 为什么影子评测必须"只读、不回写"？线上采样的 answer/contexts 是生产产物，离线评测只是"旁路打分"用于监控 judge 漂移；一旦回写就污染生产 run、破坏数据血缘。这也是"评测/生产分离"的工程纪律。
+- 为什么 benchmark 适配器只留 `loadCases()` 一个接缝？真实 GAIA/TAU-bench 是外部数据集/API，变化点只在"数据从哪来"；把摄取隔离在 `loadCases()`，下游 `→ UnifiedEvalCase → runLoopEval` 完全不动——这是"适配器模式"的最小扩展点。
+- 为什么校准用"全局偏差 + 钳制"而非逐 case 拟合？人工标注稀疏且噪声大，逐 case 拟合会过拟合；用全量标注估计一个系统性偏差（judge 整体偏高/偏低）再平移，是 RAGAS/LLM-as-Judge 校准的经典做法，配合 `clamp01` 保证分数仍合法。
+
+**P4 演示**：`online-eval.test.mjs`（可复现断言）、`benchmark-adapters.test.mjs`（GAIA/TAU 前缀 + 转换合法性）、`calibration.test.mjs`（偏差平移 + [0,1] 钳制边界）。
+
+---
+
+## 13. 最小可演示路径（P4 追加）
+
+1. `pnpm --filter @aiagent/eval test` 现 **57 个用例**（原 48 + `online-eval`/`benchmark-adapters`/`calibration` 各 3 例）。
+2. 想看影子评测：`createShadowEvaluator()` 对采样 `{answer, query}` 调用 `evaluate`，两次调用分数相同（可复现）。
+3. 想看 benchmark 接管：`benchmarkDatasetToEvalDataset(createMockGaiaAdapter(), 1)` 产出 `EvalDataset` 后直接喂 `runLoopEval(dataset, { judge })` 跑完整管线。
+4. 想看人工校准：`recordLabel` 录几条后 `calibrateJudgeScores` 会按全局偏差平移 judge 分并钳制到 [0,1]。

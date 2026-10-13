@@ -79,6 +79,34 @@ export {
   type JudgeScore
 } from "./judge-loop.js";
 
+// P4 在线影子评测（只读观测，绝不写回生产）。
+export {
+  createShadowEvaluator,
+  type ShadowEvaluator,
+  type ShadowResult,
+  type ShadowInput,
+  sampleAndEvaluate
+} from "./online-eval.js";
+
+// P4 真实 benchmark 适配器（离线 mock，留扩展点）。
+export {
+  type BenchmarkCase,
+  type BenchmarkAdapter,
+  benchmarkCaseToUnified,
+  benchmarkDatasetToEvalDataset,
+  createMockGaiaAdapter,
+  createMockTauBenchAdapter
+} from "./benchmark-adapters.js";
+
+// P4 人工校准（人工标注回流校准 judge 偏差）。
+export {
+  type HumanCalibrationStore,
+  createInMemoryCalibrationStore,
+  type CalibrationInput,
+  type CalibrationOutput,
+  calibrateJudgeScores
+} from "./calibration.js";
+
 export interface EvalRunnerInput {
   case: EvalCase;
   answer: RagAnswer;

@@ -46,8 +46,13 @@
   - 成本归因：`packages/eval` 新增 `cost-attribution.ts`（`computeCostAttribution`/`summarizeCost`，按 model/tool/provider 三维度聚合，防御式读 `usage`/`cost`，缺失/非有限归 0）；run-service 在 `agent_end` 后落 `cost_summary` 能力事件（按 **model/tool** 维度，provider 仅作为 eval 纯函数维度、不落库），`@aiagent/types` 的 `RunEventTypeDto` 与 `@aiagent/trace` 的 `RunEventType` 均扩展 `"cost_summary"`，并新增 DB 迁移 `0230` 扩展 `run_events_event_type_check` 白名单（幂等 + 中文 COMMENT）。
   - SLO/错误预算：`automation.ts` 的 `RegressionThresholds` 增 `p95LatencyMs`（P95 延迟 SLO 预算），新增 `computeSloSummary`（P95 预算 + 错误预算：budget=`1-successRate`、consumed=`1-successRate`、remaining=`max(0,budget-consumed)`、`breached=consumed>budget`）；`checkAutomationRegression` 加 P95 绝对阈值规则（与既有 `maxP95LatencyIncreaseMs` baseline 比较共存）；`AutomationReport` 增可选 `slo?` 字段、`renderMarkdownReport` 增 `## SLO / 错误预算` 段（均增量、零回归）。
 
-### P4 online eval + 真实 benchmark + 人工校准（进阶）
-- 采样线上 run 影子评测；接 GAIA/TAU-bench 适配器；人工标注回流校准 judge。
+### P4 online eval + 真实 benchmark + 人工校准（进阶）— ✅ 已落地
+- **目标**：采样线上 run 影子评测；接 GAIA/TAU-bench 适配器；人工标注回流校准 judge。
+- **落地**（全部在 `packages/eval`，离线学习级，未改 apps/api 与数据库）：
+  - 在线影子评测：`online-eval.ts` 的 `createShadowEvaluator`（默认确定性 mock judge、可复现、无网络）+ `sampleAndEvaluate`，只读取线上采样 `{answer, query, contexts}` 离线跑 judge，**绝不写回生产/改 run 状态**。
+  - 真实 benchmark 适配器：`benchmark-adapters.ts` 的 `BenchmarkAdapter` 接口 + `benchmarkCaseToUnified` → `benchmarkDatasetToEvalDataset` → 直接喂 `runLoopEval` 管线；`createMockGaiaAdapter`/`createMockTauBenchAdapter` 为确定性 mock（不发起 HTTP）；**真实 GAIA/TAU-bench 集成是扩展点**——只需改写 `loadCases()`，下游管线不变。
+  - 人工校准：`calibration.ts` 的 `HumanCalibrationStore`（in-memory）+ `calibrateJudgeScores`（全局偏差 `mean(human)-mean(judge)` + `clamp01` 钳制，纯函数）。
+  - 新增 `online-eval.test.mjs` / `benchmark-adapters.test.mjs` / `calibration.test.mjs` 共 9 例；eval 现 57/57 全绿（含 runLoopEval 7 指标门禁零回归）。
 
 ## 4. 学习路径（TS 友好）
 

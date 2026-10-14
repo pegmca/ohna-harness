@@ -30,11 +30,17 @@ import type {
 import {
   createAttachmentRetriever,
   createGroundingTransformContext,
+  createMultiSourceRetriever,
   type AttachmentStore,
   type Citation,
   type CitationRepository,
+  type DataSourceRuntime,
+  type DataSourceRuntimeResult,
   type EmbeddingClient,
-  type NewCitationInput
+  type InlineAttachment,
+  type NewCitationInput,
+  type RetrievalLeg,
+  type Retriever
 } from "@aiagent/rag";
 import { redactSensitiveValue } from "@aiagent/trace";
 import { createHash, randomUUID } from "node:crypto";
@@ -97,6 +103,11 @@ export interface RunServiceDependencies {
   attachmentStore?: AttachmentStore;
   /** embedding provider；附件检索需先 embed query，缺失时不启用附件 grounding。 */
   embeddingClient?: EmbeddingClient;
+  /**
+   * 内部知识库 runtime；P2 起作为多路召回的"内部库 leg"注入 grounding。
+   * 缺失时只走附件路（附件索引 leg + 内联附件），不影响 run 本身。
+   */
+  dataSourceRuntime?: DataSourceRuntimeWithRetriever;
   /** Citation repository，用于把 grounding 检索结果持久化到 assistant message。 */
   citationRepository: CitationRepository;
   /** 单 run 最大 turn 数预算。 */
@@ -233,19 +244,65 @@ export function createRunApplicationService(dependencies: RunServiceDependencies
       // 首个 user message_end 即 create 时已落库的 prompt，仅标记不重复写。
       let promptMarked = false;
 
-      // grounding：附件相关片段从**会话级** AttachmentStore 检索后封装为 <untrusted_context> user 消息注入上下文。
-      // citation 按“本轮最后一条用户消息时间戳”分槽保存，避免 event stream 异步消费导致 race。
-      // 附件存储与 embedding provider 缺一不可：都就绪才构造，否则跳过附件注入（run 本身不受影响）。
-      const grounding = dependencies.attachmentStore && dependencies.embeddingClient
-        ? createGroundingTransformContext({
-            attachmentRetriever: createAttachmentRetriever({
-              embeddingClient: dependencies.embeddingClient,
-              attachmentStore: dependencies.attachmentStore,
-              conversationId: request.conversationId
-            }),
+      // grounding：P2 多路召回（附件索引路 + 内部库路）+ 内联附件。
+      // 附件存储与 embedding provider 缺一不可：都就绪才构造附件 leg，否则跳过附件注入（run 本身不受影响）。
+      // 内部库 leg 由 dataSourceRuntime.retriever({ ownerUserId }) 构造；失败时跳过该 leg，不影响附件路。
+      // 仅当有检索腿或有内联附件时才构造 grounding；否则原样返回消息，不注入任何上下文。
+      const topK = 5;
+      const attachmentStore = dependencies.attachmentStore;
+      const embeddingClient = dependencies.embeddingClient;
+
+      // best-effort TTL 续期：会话附件可能在上传后过一段时间才被提问，续期避免过期。
+      if (attachmentStore) {
+        try {
+          await attachmentStore.touch(request.conversationId);
+        } catch {
+          // 续期失败不阻断 run：附件可能已过期，后续检索返回空结果即可。
+        }
+      }
+
+      // 构造多路召回 legs：附件索引路 + 内部库路。
+      const legs: RetrievalLeg[] = [];
+      if (attachmentStore && embeddingClient && request.attachmentDocumentIds && request.attachmentDocumentIds.length > 0) {
+        legs.push({
+          sourceKind: "attachment",
+          retriever: createAttachmentRetriever({
+            embeddingClient,
+            attachmentStore,
             conversationId: request.conversationId,
-            attachmentDocumentIds: request.attachmentDocumentIds ?? [],
-            ownerUserId: userId,
+            topK
+          })
+        });
+      }
+      if (dependencies.dataSourceRuntime) {
+        const retrieverResult = await dependencies.dataSourceRuntime.retriever({ ownerUserId: userId });
+        if (retrieverResult.ok) {
+          legs.push({ sourceKind: "internal", retriever: retrieverResult.data });
+        }
+      }
+
+      // 多路编排器：legs 为空时不创建（直接传 undefined 给 grounding）。
+      const multiSourceRetriever = legs.length > 0
+        ? createMultiSourceRetriever({ legs, topK })
+        : undefined;
+
+      // 解析内联附件：按 attachmentDocumentIds 从附件存储读取内联原文槽。
+      // 小附件走内联（不建向量索引），大附件走向量检索；两者可以共存（不同 documentId）。
+      const inlineAttachments: InlineAttachment[] = [];
+      if (attachmentStore && request.attachmentDocumentIds) {
+        for (const documentId of request.attachmentDocumentIds) {
+          const inline = await attachmentStore.getInline(request.conversationId, documentId);
+          if (inline) inlineAttachments.push(inline);
+        }
+      }
+
+      // grounding 门禁：既无检索腿又无内联附件时不注入。
+      const grounding = (multiSourceRetriever || inlineAttachments.length > 0)
+        ? createGroundingTransformContext({
+            retriever: multiSourceRetriever,
+            inlineAttachments,
+            conversationId: request.conversationId,
+            topK,
             recordRetrieval: async (event) => {
               await publish(userId, snapshot, "retrieval", event);
             }
@@ -598,3 +655,18 @@ export class RunAttachmentNotFoundError extends Error {
 
 /** 保持对 AgentEvent 类型的显式引用，文档化事件协议来源。 */
 export type { AgentEvent };
+
+/**
+ * DataSourceRuntime 的 P2 扩展形态：retriever 方法已在 DataSourceRuntimeService 实现类上公开，
+ * 但接口类型（types.ts）尚未同步声明。这里用结构化类型补充签名，使 run-service 可在编译期调用，
+ * 无需修改 @aiagent/rag 包。当 rag 包接口补上 retriever 后此类型可直接删除。
+ */
+interface DataSourceRuntimeWithRetriever extends DataSourceRuntime {
+  /**
+   * 构造绑定当前 owner 的内部库检索器（多路召回的 internal leg）。
+   *
+   * @param context 调用身份；ownerUserId 缺省匿名。
+   * @returns 成功时返回 Retriever，失败时返回结构化错误。
+   */
+  retriever(context?: { ownerUserId?: string }): Promise<DataSourceRuntimeResult<Retriever>>;
+}

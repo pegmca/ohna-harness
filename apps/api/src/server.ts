@@ -180,6 +180,7 @@ const app = createApiServer({
   attachmentRepository: database.attachmentRepository,
   attachmentStore: attachmentStoreRuntime.store,
   embeddingClient,
+  inlineMaxChars: Number(process.env.AIAGENT_ATTACHMENT_INLINE_MAX_CHARS) || undefined,
   citationRepository: database.citationRepository,
   requireIdentity: true,
   qqBotEnabled,

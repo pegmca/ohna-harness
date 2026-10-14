@@ -36,6 +36,11 @@ export function registerAttachmentRoutes(
     embeddingClient?: EmbeddingClient;
     attachmentRepository: AttachmentRepository;
     identityByRequest: WeakMap<object, IdentitySnapshot>;
+    /**
+     * 内联阈值（字符数）：解析文本 ≤ 该值走原文内联，否则切块 + embed + upsert。
+     * 缺省由 @aiagent/rag 常量 DEFAULT_ATTACHMENT_INLINE_MAX_CHARS (200_000) 决定。
+     */
+    inlineMaxChars?: number;
   }
 ): void {
   app.post(
@@ -137,7 +142,8 @@ export function registerAttachmentRoutes(
           source: `upload:${input.clientAttachmentId}`,
           fileName: input.fileName,
           contentType: input.contentType,
-          content: input.content
+          content: input.content,
+          inlineMaxChars: deps.inlineMaxChars
         });
       } finally {
         clearInterval(leaseTimer);

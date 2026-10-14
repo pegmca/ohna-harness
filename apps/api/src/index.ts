@@ -50,6 +50,11 @@ export interface ApiServerOptions {
   attachmentStore?: AttachmentStore;
   /** embedding provider；未注入时附件上传返回 503，grounding 不注入附件上下文。 */
   embeddingClient?: EmbeddingClient;
+  /**
+   * 附件内联阈值（字符数）：解析文本 ≤ 该值走原文内联，否则切块 + embed。
+   * 缺省由 @aiagent/rag 常量 DEFAULT_ATTACHMENT_INLINE_MAX_CHARS (200_000) 决定。
+   */
+  inlineMaxChars?: number;
   citationRepository: CitationRepository;
   requireIdentity?: boolean;
   qqBotQrUrl?: string;
@@ -119,6 +124,9 @@ export function createApiServer(options: ApiServerOptions): FastifyInstance {
     attachmentRepository: options.attachmentRepository,
     attachmentStore: options.attachmentStore,
     embeddingClient: options.embeddingClient,
+    // dataSourceRuntime 的实现类（DataSourceRuntimeService）已公开 retriever 方法，
+    // 但接口类型尚未声明；这里用结构化类型断言让 run-service 编译期可用。
+    dataSourceRuntime: options.dataSourceRuntime as Parameters<typeof createRunApplicationService>[0]["dataSourceRuntime"],
     citationRepository: options.citationRepository,
     compaction: options.compaction,
     // report 工具按 run 装配（阶段 5 方案 A）：模型自主调用 generate_report，
@@ -176,7 +184,8 @@ export function createApiServer(options: ApiServerOptions): FastifyInstance {
       attachmentStore: options.attachmentStore,
       embeddingClient: options.embeddingClient,
       attachmentRepository: options.attachmentRepository,
-      identityByRequest
+      identityByRequest,
+      inlineMaxChars: options.inlineMaxChars
     });
   }
   registerRagRoutes(app, { dataSourceRuntime, identityByRequest });

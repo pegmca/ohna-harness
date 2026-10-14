@@ -396,6 +396,106 @@ export interface AttachmentStore {
 - `REDIS_URL` 设置时走 Redis；未设置回退内存。
 - `AttachmentStore` 契约有单测（upsert 覆盖、convId 隔离、topK 上限、维度错误）。
 
+### 8.2 P2 冻结设计（文件级）
+
+> 本小节是 P2 的实施单一事实来源（coder 据此实现，reviewer 据此审核）。
+
+**已确认决策**
+- **D-P2-1 多路召回合并**：新增 `@aiagent/rag` 编排器（附件索引路 + 内部库路各自召回 → 合并去重 → 复用现有 `Reranker` 精排一次 → 输出）。内部库 leg 由组合根从 `DataSourceRuntime` 构造 `Retriever`，注入 run-service。
+- **D-P2-2 来源标注**：模型可见（`<untrusted_context>` 内标注 附件 / 内部知识库）+ retrieval trace 标注 + `RetrievedChunk` / `CitationDto` 增**可选** `sourceKind`；**不落库**（无 migration——`message_citations` 无 source_kind 列，且聊天 UI 尚不消费该表）。
+- **D-P2-3 阈值路由**：解析文本长度 ≤ 阈值 → 原文内联（Redis 字符串槽，**不建向量索引**）；> 阈值 → 现有 chunk + embed + `AttachmentStore.upsert`。
+- **D-P2-4 TTL 续期**：run 开始时调用 `attachmentStore.touch(conversationId)`，让 P1 定义但未接线的滑窗续期真正生效。
+
+**关键前提（决定实现形态）**
+- **当前聊天 grounding 只检索附件**（`grounding-hook.ts:74` 以 `attachmentDocumentIds` 为门禁），聊天 run **完全不检索内部库**；内置工具全是 mock。故 P2 的"多路"核心是**新增内部库 leg**，而不是给已有两路做合并。
+- `DataSourceRuntime` 已有私有 `createRetriever(ownerUserId)`（加载 owner 可见 chunks → embed → `createHybridRetriever`）。P2 把它提升为公开 `retriever(context?)` 供编排器复用，**不重造 hybrid/rerank**（对齐 §5.5）。
+- `Retriever.retrieve(query, { rerank: false })` 已能返回"未精排候选"，正是合并所需中间态；编排器在**合并后统一精排一次**，避免双重 rerank。
+- 内联槽放 **Redis**：§5.6 的"不写 Redis"解释为"**不写 Redis 向量索引**"；原文仍需跨轮/跨进程持久（不落主库，`document_versions.content NOT NULL` 约束见 §8.1），故用独立字符串 key。
+- `RetrievedChunk.chunkId`（`${docId}_chunk_0000`）与内联合成 chunk 的 `chunkId`（= docId，uuid）分属两个命名空间，不会碰撞；两者作为 citation 落库时都走 `resolveChunkReference` → 解析不到 → 存为 `unresolved`（quote 快照），**无需改 DB**。
+
+**A. `@aiagent/types` 改动**
+
+| 文件 | 内容 |
+|---|---|
+| `src/rag.ts` | `export type CitationSourceKindDto = "attachment" \| "internal";`；`CitationDto` 增 `sourceKind?: CitationSourceKindDto`；`RetrievalTraceDto.scoreSummary[]` 增 `sourceKind?: CitationSourceKindDto` |
+
+**B. `@aiagent/rag` 新增/改动**
+
+| 文件 | 内容 |
+|---|---|
+| `src/types.ts` | `RetrievedChunk` 增 `sourceKind?: CitationSourceKind`；`RetrievalTraceSummary.scoreSummary[]` 增 `sourceKind?: CitationSourceKind`；`export type CitationSourceKind = CitationSourceKindDto;` |
+| `src/multi-source-retriever.ts`（新） | `RetrievalLeg { sourceKind; retriever; topK? }` + `createMultiSourceRetriever({ legs, reranker?, topK?, candidateLimit? })` → `Retriever` |
+| `src/attachment-store.ts` | 接口增 `putInline(conversationId, attachment: InlineAttachment)` / `getInline(conversationId, documentId): Promise<InlineAttachment \| null>`；导出 `InlineAttachment { documentId; text; source; fileName }`；内存实现加 `Map<convId, Map<docId, InlineAttachment>>` |
+| `src/attachment-ingest.ts` | 入参增 `inlineMaxChars?: number`（缺省常量）；结果类型增 `mode: "inline" \| "indexed"`：解析文本 ≤ 阈值 → `putInline` → `{ ok:true, mode:"inline", chunks:[], indexedChunkCount:0 }`；否则原路径 → `{ ok:true, mode:"indexed", chunks, indexedChunkCount }`。**内联 `putInline` 必须 try/catch 包成结构化 `attachment_store_failed`**（details 带 `storeCode`），与 upsert 分支一致——否则 Redis 故障会以裸异常穿透上传路由 |
+| `src/grounding-hook.ts` | 重写为多路（签名见下） |
+| `src/answer.ts` | `createCitationFromRetrievedChunk` 复制 `result.sourceKind` 到 `citation.sourceKind` |
+| `src/data-source-runtime.ts` | 私有 `createRetriever(ownerUserId)` → 公开 `retriever(context?: DataSourceRetrievalContext): Promise<DataSourceRuntimeResult<Retriever>>`；`search`/`answer` 内部改用该公开方法 |
+| `src/index.ts` | 导出 `multi-source-retriever.js`；`InlineAttachment` 类型随 `attachment-store.js` 一并导出 |
+
+```ts
+// src/multi-source-retriever.ts
+export interface RetrievalLeg {
+  sourceKind: CitationSourceKind;   // "attachment" | "internal"
+  retriever: Retriever;
+  topK?: number;                    // 该路候选上限；缺省 candidateLimit
+}
+export interface MultiSourceRetrieverOptions {
+  legs: readonly RetrievalLeg[];
+  reranker?: Reranker;              // 缺省 createHeuristicReranker()
+  topK?: number;                    // 缺省 DEFAULT_VECTOR_SEARCH_TOP_K
+  candidateLimit?: number;          // 缺省 max(DEFAULT_RETRIEVAL_CANDIDATE_LIMIT, topK)
+}
+export function createMultiSourceRetriever(options: MultiSourceRetrieverOptions): Retriever;
+```
+
+编排器语义（必须可预测）：
+- 每条 leg 调 `leg.retriever.retrieve(query, { topK: leg.topK ?? candidateLimit, candidateLimit, rerank: false })`（附件路忽略后两者，hybrid 路返回未精排候选）。
+- **best-effort**：某 leg 失败则跳过；≥1 路成功即继续；全失败才返回 `ok:false`（取首个错误）。避免"内部库腿异常拖垮附件接地"。
+- 合并：`Map<chunkId, RetrievedChunk>`，**leg 顺序即优先级**（同 chunkId 先到者胜），每条结果打上 `sourceKind = leg.sourceKind`。
+- 精排：对合并集调一次 `reranker.rerank(query, merged)`，再截 `topK` 并重排 `rank`。
+- trace：`mode: "hybrid"`、`chunkIds`、`scoreSummary`（含 `sourceKind`）。
+
+```ts
+// src/grounding-hook.ts —— P2 新签名
+export interface GroundingHookOptions {
+  /** 多路检索编排（附件索引路 + 内部库路）；无 leg 时传 undefined。 */
+  retriever?: Retriever;
+  /** 本会话需内联注入的小附件（≤阈值）；run 层按 attachmentDocumentIds 解析后传入。 */
+  inlineAttachments?: readonly InlineAttachment[];
+  conversationId: string;
+  topK?: number;
+  recordRetrieval?: (event: RetrievalTraceDto) => void | Promise<void>;
+}
+```
+- 门禁：`!retriever && inlineAttachments.length === 0` → 原样返回（不注入）。
+- 每轮：内联附件 → 合成 `RetrievedChunk`（`chunkId = documentId`、`source = fileName`、`text = 全文`、`sourceKind = "attachment"`、score 置 1）∪ `retriever.retrieve(query)` 结果 → 按 `chunkId` 去重注入（内联在前）。
+- `formatChunkForModel` 增来源标签：`[n] 来源：{附件|内部知识库} · {heading} / {source}`。
+- 移除 `attachmentDocumentIds` / `ownerUserId` 两个仅作门禁/占位的字段（run 层改为按条件构造 hook）。
+
+**C. `@aiagent/database` 改动**
+
+| 文件 | 内容 |
+|---|---|
+| `src/attachment-store-redis.ts` | 实现 `putInline` / `getInline`：key `attach:conv:{convId}:doc:{docId}:inline`（JSON string：`{ text, source, fileName }`）；`putInline` 同时 `sAdd(docsKey, documentId)` + `expire`（同 TTL）；`collectKeys` 增补 inline key，使 `touch` / `drop` 一并覆盖；`getInline` 缺失返回 `null`，Redis 故障返回结构化 `attachment_store_failed`（与既有风格一致） |
+
+**D. `apps/api` 改动**
+
+| 文件 | 内容 |
+|---|---|
+| `src/application/run-service.ts` | deps 增 `dataSourceRuntime?: DataSourceRuntime`；execute 内：`await attachmentStore.touch(conversationId)`（best-effort）；构造 legs（附件 leg = `createAttachmentRetriever`，内部库 leg = `dataSourceRuntime.retriever({ ownerUserId: userId })`）→ `createMultiSourceRetriever`；`resolveInlineAttachments(store, convId, request.attachmentDocumentIds)`；仅当有 leg 或有内联附件时构造 grounding |
+| `src/http/routes/attachments.ts` | `ingestChatAttachment` 传 `inlineMaxChars`（组合根经 env 注入）；上传响应 `status` 保持 `"indexed"`（语义 = ready，内联/索引均适用） |
+| `src/index.ts` / `src/server.ts` | 组合根读 `AIAGENT_ATTACHMENT_INLINE_MAX_CHARS` 传给附件路由；run-service 注入 `dataSourceRuntime` |
+| `src/adapters/in-memory-test-runtime.ts` | 已提供 `dataSourceRuntime`（内存 repository + 共享 embedding 替身），确认无需改；如 run-service 新依赖需要显式传参则同步 |
+| `.env.example` / `docker-compose.yml` | 增 `AIAGENT_ATTACHMENT_INLINE_MAX_CHARS`（默认与常量一致） |
+
+**E. `apps/web` 改动**：无。`ChatAttachmentDto.status` 语义不变（`"indexed"` = ready），内联/索引对客户端透明。
+
+**P2 验收**
+- `pnpm typecheck` + `@aiagent/rag` / `@aiagent/database` / `@aiagent/api` 测试全绿。
+- 会话内上传**小文件**（≤阈值）→ 提问命中附件原文（内联注入；Redis 无该 doc 的 chunk key，只有 inline key）；上传**大文件**（>阈值）→ 命中附件向量路。
+- 内部库有文档时，同一提问合并返回附件 + 内部库候选，`<untrusted_context>` 标注来源（附件 / 内部知识库）；`retrieval` trace 的 `scoreSummary` 带 `sourceKind`。
+- 多路编排有单测（合并去重、leg 优先级、rerank 生效、单 leg 失败降级、`sourceKind` 标注）；`AttachmentStore` 内联槽有单测（put/get、convId 隔离、Redis TTL，env 门禁）。
+
 ## 9. 学习路径 / 验收证据
 
 - 学习点：

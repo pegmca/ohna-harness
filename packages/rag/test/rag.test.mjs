@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   chunkDocumentBlocks,
-  chunkIngestedFilingDocument,
+  chunkIngestedDocument,
   chunkText,
   createDataSourceRuntime,
   createHeuristicReranker,
@@ -215,8 +215,8 @@ test("oversized heading-aware block falls back to fixed-size chunks", () => {
   assert.ok(result.chunks.every((chunk) => chunk.heading === "风险提示"));
 });
 
-test("ingested filing documents can be chunked directly", () => {
-  const result = chunkIngestedFilingDocument(
+test("ingested documents can be chunked directly", () => {
+  const result = chunkIngestedDocument(
     {
       documentId: "filing_doc",
       source: "local://filing.md",

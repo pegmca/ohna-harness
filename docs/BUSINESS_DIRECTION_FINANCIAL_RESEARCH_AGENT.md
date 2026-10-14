@@ -226,7 +226,7 @@ packages/
 ├── eval/
 ├── trace/
 ├── financial-data/
-├── filings/
+├── parsing/
 └── mcp/
 ```
 

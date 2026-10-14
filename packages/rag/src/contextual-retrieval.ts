@@ -1,4 +1,4 @@
-import type { IngestedFilingDocumentDto } from "@aiagent/types";
+import type { IngestedDocumentDto } from "@aiagent/types";
 import type { RagChunk } from "./types.js";
 import { readLlmProviderConfig } from "./provider-config.js";
 
@@ -9,7 +9,7 @@ import { readLlmProviderConfig } from "./provider-config.js";
  * （如标题、各级 heading、摘要），用于拼接到每个 chunk 文本之前。
  */
 export interface ContextualEnricherOptions {
-  generateContextPrefix: (document: IngestedFilingDocumentDto) => Promise<string>;
+  generateContextPrefix: (document: IngestedDocumentDto) => Promise<string>;
 }
 
 /**
@@ -28,7 +28,7 @@ export interface ContextualEnricherOptions {
  */
 export function createContextualChunkEnricher(
   options: ContextualEnricherOptions
-): (document: IngestedFilingDocumentDto, chunks: RagChunk[]) => Promise<RagChunk[]> {
+): (document: IngestedDocumentDto, chunks: RagChunk[]) => Promise<RagChunk[]> {
   return async (document, chunks) => {
     const enriched: RagChunk[] = [];
 
@@ -80,7 +80,7 @@ export interface LlmContextPrefixGeneratorOptions {
  */
 export function createLlmContextPrefixGenerator(
   options: LlmContextPrefixGeneratorOptions
-): (document: IngestedFilingDocumentDto) => Promise<string> {
+): (document: IngestedDocumentDto) => Promise<string> {
   return async (document) => {
     try {
       const headings = collectHeadings(document);
@@ -126,7 +126,7 @@ export function createLlmContextPrefixGenerator(
  * @param document 已 ingestion 的文档。
  * @returns 章节 heading 列表文本。
  */
-function collectHeadings(document: IngestedFilingDocumentDto): string {
+function collectHeadings(document: IngestedDocumentDto): string {
   const headings = document.blocks
     .map((block) => block.heading)
     .filter((heading, index, arr): heading is string => Boolean(heading) && arr.indexOf(heading) === index)
@@ -146,7 +146,7 @@ function collectHeadings(document: IngestedFilingDocumentDto): string {
  * @returns provider 启用时返回 LLM 前缀生成 enricher，否则返回 null。
  */
 export function createContextEnricherFromEnv(): ((
-  document: IngestedFilingDocumentDto,
+  document: IngestedDocumentDto,
   chunks: RagChunk[]
 ) => Promise<RagChunk[]>) | null {
   const cfg = readLlmProviderConfig();

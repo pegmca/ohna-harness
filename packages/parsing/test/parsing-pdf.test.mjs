@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { ingestFiling, parsePdfBlocks } from "../dist/index.js";
+import { ingestDocument, parsePdfBlocks } from "../dist/index.js";
 
 /**
  * 生成最小合法 PDF（含 2 页，第 1 页含一行表格），确定性、无外部依赖。
@@ -64,8 +64,8 @@ test("parsePdfBlocks returns page-numbered blocks with a marked table row", () =
   assert.equal(tableBlock.metadata.tableColumnCount, 3);
 });
 
-test("ingestFiling on PDF no longer returns pdf_parser_not_configured", () => {
-  const result = ingestFiling({
+test("ingestDocument on PDF no longer returns pdf_parser_not_configured", () => {
+  const result = ingestDocument({
     source: "local://annual-report.pdf",
     fileName: "annual-report.pdf",
     contentType: "application/pdf",

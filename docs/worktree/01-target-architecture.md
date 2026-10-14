@@ -15,7 +15,7 @@
 - `packages/tools`：工具注册与执行。`registry.ts`（`ToolRegistry`）、`executor.ts`（`executeTool`，含权限门与超时/重试）、`approval-repository.ts`（内存审批仓储）、`default-registry.ts`、`tools/`（calculator、financial-metric、market-data、filing-search、sql-query 等 mock 工具）。
 - `packages/trace`：运行观测。`TraceRecorder` / `TraceStore` / `TraceEvent` 联合类型（含 `TraceApprovalEvent`、`TraceModelCallEvent`、`TraceToolCallEvent` 等 20+ 种），基于「一次请求 = 一条 trace」的模型。
 - `packages/conversation` + `packages/database`：会话领域类型（`Conversation`、`Message`（role: user/assistant/system/tool）、`CursorPage`）与 Postgres 持久化（drizzle，`packages/database/migrations/`，含 `conversation-repository.ts`、`run-repository.ts`、`trace-repository.ts`、`approval-repository.ts`、`approval-decision.ts`、`rag-vector-store.ts`、`rag-documents.ts` 等）。
-- 保留域：`packages/rag`（grounding/引用）、`packages/report` + `packages/workflow`（报告工作流含 PDF，`report/pdf.ts`）、`packages/mcp`（MCP 客户端/工具适配，`tool-adapter.ts`）、`packages/eval`（评测 runner）、`packages/filings`（财报数据）。
+- 保留域：`packages/rag`（grounding/引用）、`packages/report` + `packages/workflow`（报告工作流含 PDF，`report/pdf.ts`）、`packages/mcp`（MCP 客户端/工具适配，`tool-adapter.ts`）、`packages/eval`（评测 runner）、`packages/parsing`（文档解析）。
 - 其他：`packages/identity`（用户/QQ 绑定，含 HMAC challenge）、`packages/channels`（渠道适配占位，仅 `index.ts`）。
 - `apps/api`：HTTP 服务（`application/run-service.ts`、`application/conversation-service.ts`、`adapters/in-memory-*-repository.ts`），`apps/web` 为前端。
 
@@ -58,7 +58,7 @@ pi 的分层是三个包：
 │   Message/stream/compat/provider，不感知 agent        │
 ├─────────────────────────────────────────────────┤
 │ L0 领域能力层  packages/rag · report · workflow · mcp ·  │
-│   filings · eval —— 被 L2 以工具/钩子形式挂载          │
+│   parsing · eval —— 被 L2 以工具/钩子形式挂载          │
 └─────────────────────────────────────────────────┘
 ```
 
@@ -79,8 +79,8 @@ pi 的分层是三个包：
 | `packages/report` + `packages/workflow` | **保留，改挂载方式** | 报告触发从 intent 路由改为 agent 工具/技能调用；PDF 导出（`report/pdf.ts`）不动 |
 | `packages/mcp` | **保留，改挂载方式** | `tool-adapter.ts` 输出从内部 Tool 类型改为 pi 风格 `AgentTool`（zod schema 桥接，见 06 文档） |
 | `packages/eval` | **保留** | runner 改消费 `agentLoop` 事件流而不是 `runAgent` 返回值 |
-| `packages/filings` | **保留** | 仅作为工具数据源，接口不变 |
-| `packages/types` | **收缩后逐步消亡** | LLM 类型移入 `packages/ai`，agent 类型移入 `packages/agent`，trace 类型移入 `packages/trace`；仅保留纯跨域 DTO（identity、filings）。过渡期允许存在，改造完成后评估删除 |
+| `packages/parsing` | **保留** | 仅作为工具数据源，接口不变 |
+| `packages/types` | **收缩后逐步消亡** | LLM 类型移入 `packages/ai`，agent 类型移入 `packages/agent`，trace 类型移入 `packages/trace`；仅保留纯跨域 DTO（identity、documents）。过渡期允许存在，改造完成后评估删除 |
 | `packages/identity` | **原样保留** | 与 agent 改造正交；仍由 apps/api 依赖，不进入 agent 层 |
 | `packages/channels` | **原样保留** | 渠道适配属 L4，消费 conversation 服务 |
 
@@ -134,12 +134,12 @@ packages/ai/
 
 ### 包间禁止依赖规则
 
-依赖方向：`apps/* → conversation/database → agent → ai`，`agent → {rag, report, workflow, mcp, filings}`。禁止规则：
+依赖方向：`apps/* → conversation/database → agent → ai`，`agent → {rag, report, workflow, mcp, parsing}`。禁止规则：
 
 1. **`packages/ai` 不得依赖任何本项目包**（包括 types/trace/tools）。它是可独立发布的 LLM 层。
 2. **`packages/agent` 不得依赖 `packages/database` / `packages/conversation` / `apps/*`**。持久化通过 `AgentLoopConfig` 钩子与事件订阅在 L3 接线（对齐 pi：agent 包不 import 存储，存储在 harness/产品层）。
 3. **`apps/web` 不得直接依赖 `packages/ai`、`packages/agent`、`packages/database`**。前端只消费 `apps/api` 的事件流 DTO（trace/事件类型可经 `@aiagent/types` 或 api 包 re-export）。
-4. **L0 包（rag/report/workflow/mcp/filings/eval）不得依赖 `packages/agent`**。依赖方向只能是 agent 挂载它们；它们需要的 LLM 能力直接依赖 `packages/ai`。
+4. **L0 包（rag/report/workflow/mcp/parsing/eval）不得依赖 `packages/agent`**。依赖方向只能是 agent 挂载它们；它们需要的 LLM 能力直接依赖 `packages/ai`。
 5. **`packages/database` 不得依赖 `packages/agent` / `packages/ai`**。消息表 schema 与 pi 类型同构但独立定义（存储模型不随 LLM 层类型变动），映射层在 conversation 包。
 6. **`packages/identity` 只被 `apps/api` / `packages/channels` 依赖**，agent/ai 层不感知用户身份。
 7. **禁止环**：`conversation ↔ database` 单向为 `conversation`（领域类型+服务接口）不依赖 `database`（实现），`database` 依赖 `conversation` 的类型——与现状一致。
@@ -179,7 +179,7 @@ export function agentLoop(prompts: AgentMessage[], context: AgentContext, config
 - **为什么新建 `packages/ai` 而不是在 `packages/agent/llm/` 原地改造**：pi 的核心架构收益来自「LLM 层零 agent 感知」，`stream()` 可被 eval、report 工作流节点直接复用而不拖入 agent 循环。原地改造无法切断 types 包对 `LlmClient` 的泄漏（当前 `apps/api` 经 types 包直接构造 LLM 请求）。
 - **为什么 `packages/tools` 并入 agent 而不是保留独立包**：pi 中 `AgentTool` 类型定义在 agent 包内，工具与 loop 的 `beforeToolCall`/`afterToolCall` 钩子强耦合；独立 tools 包要么反向依赖 agent（违反规则 4），要么复制类型。保留 zod schema 意味着 `AgentTool` 泛型参数与 pi 不同（typebox→zod），这是与 pi 唯一的刻意偏离，换取不重写现有 5 个工具 + mcp 适配器的 schema 及 zod 校验错误消息体系。
 - **为什么 trace 收窄为事件流持久化而非沿用 TraceRecorder**：现有 `TraceEvent` 20+ 种事件与「一次请求一条 trace」模型无法表达多 turn loop 与 compaction。pi 的 `AgentEvent`（`agent/src/types.ts:422`）天然覆盖 turn/message/toolExecution 生命周期；rag/report/workflow 领域事件作为扩展联合成员追加，持久化走 run 事件表（05 文档）。`packages/trace` 包去留建议：**并入 `packages/database`（事件表 + writer）+ `packages/agent`（事件类型 re-export）后删除独立包**，减少一个边界；若团队希望前端直接 import 事件类型而不经 api，则保留包仅放类型。
-- **为什么 types 包收缩而非直接删除**：identity/filings 等纯 DTO 仍有跨包共享价值；但 LLM/agent/trace 类型必须随层归位，否则 types 包会成为绕过依赖规则的公共垃圾桶。改造完成后再评估是否整体删除。
+- **为什么 types 包收缩而非直接删除**：identity/documents 等纯 DTO 仍有跨包共享价值；但 LLM/agent/trace 类型必须随层归位，否则 types 包会成为绕过依赖规则的公共垃圾桶。改造完成后再评估是否整体删除。
 - **为什么依赖规则要落到 dependency-cruiser**：本仓库已有 `.dependency-cruiser.cjs` 基础设施，口头约束在 14 包重构中必然失效。
 - **identity/channels 不动的理由**：与本次改造正交，纳入会扩大爆炸半径；identity 的 session/challenge 逻辑与 approval 无关，不属于删除范围。
 

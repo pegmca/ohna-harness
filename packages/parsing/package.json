@@ -1,5 +1,5 @@
 {
-  "name": "@aiagent/filings",
+  "name": "@aiagent/parsing",
   "version": "0.1.0",
   "private": true,
   "type": "module",

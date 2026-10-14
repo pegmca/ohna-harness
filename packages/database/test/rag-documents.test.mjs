@@ -27,7 +27,7 @@ function createIngestionInput(overrides = {}) {
     contentType: "text/markdown",
     contentChecksum: `checksum-${randomUUID()}`,
     content: "# 资产质量\n公司不良率保持稳定。",
-    parserVersion: "filings-markdown-txt-v1",
+    parserVersion: "parsing-markdown-txt-v1",
     chunkerVersion: "heading-aware-1200-150-v1",
     outcome: {
       status: "indexed",

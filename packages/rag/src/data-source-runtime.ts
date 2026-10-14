@@ -1,9 +1,9 @@
-import { detectFilingFileType, ingestFiling } from "@aiagent/filings";
+import { detectDocumentFileType, ingestDocument } from "@aiagent/parsing";
 import type {
   DataSourceDocumentDto,
   DataSourceIngestRequestDto,
   DataSourceIngestResponseDto,
-  IngestedFilingDocumentDto
+  IngestedDocumentDto
 } from "@aiagent/types";
 import {
   createInMemoryRagDocumentRepository,
@@ -16,7 +16,7 @@ import {
   createRetrievalResultFromRetrievedChunk,
   synthesizeRagAnswer
 } from "./answer.js";
-import { chunkIngestedFilingDocument } from "./chunking.js";
+import { chunkIngestedDocument } from "./chunking.js";
 import { createHybridRetriever } from "./retrieval.js";
 import {
   createRagContentChecksum,
@@ -79,7 +79,7 @@ export function createDataSourceRuntime(options: DataSourceRuntimeOptions = {}):
 }
 
 /**
- * Data Sources runtime 实现，负责把 filings ingestion、lineage 持久化和 RAG 检索链路串起来。
+ * Data Sources runtime 实现，负责把 parsing ingestion、lineage 持久化和 RAG 检索链路串起来。
  *
  * 文档/版本/chunk 事实源是注入的 repository；VectorStore factory 按当前 owner 绑定具体 adapter。
  */
@@ -89,7 +89,7 @@ class DataSourceRuntimeService implements DataSourceRuntime {
   private readonly repository: RagDocumentRepository;
   private readonly reranker?: Reranker;
   private readonly contextEnricher?: (
-    document: IngestedFilingDocumentDto,
+    document: IngestedDocumentDto,
     chunks: RagChunk[]
   ) => Promise<RagChunk[]>;
   private readonly queryRewriter?: QueryRewriter;
@@ -172,7 +172,7 @@ class DataSourceRuntimeService implements DataSourceRuntime {
     // sourceUri 是脱敏后的逻辑标识：http(s) URL 剥离 query/fragment，
     // 同一文档带不带 token 命中同一 lineage，落库与 DTO 返回值永远不含敏感参数。
     const sourceUri = normalizeRagSourceUri(request.source);
-    const fileType = detectFilingFileType(request.fileName, request.contentType);
+    const fileType = detectDocumentFileType(request.fileName, request.contentType);
     const externalId = createRagContentChecksum(`${sourceUri}|${request.fileName}|${fileType ?? "unknown"}`);
     const contentChecksum = createRagContentChecksum(request.content);
     const contentType = request.contentType?.trim() || "unknown";
@@ -191,7 +191,7 @@ class DataSourceRuntimeService implements DataSourceRuntime {
       now
     } as const;
 
-    const ingestionResult = ingestFiling({
+    const ingestionResult = ingestDocument({
       source: sourceUri,
       fileName: request.fileName,
       contentType: request.contentType,
@@ -218,7 +218,7 @@ class DataSourceRuntimeService implements DataSourceRuntime {
       return { ok: false, error };
     }
 
-    const chunkingResult = chunkIngestedFilingDocument(ingestionResult.document);
+    const chunkingResult = chunkIngestedDocument(ingestionResult.document);
 
     if (!chunkingResult.ok) {
       await this.saveLineage({

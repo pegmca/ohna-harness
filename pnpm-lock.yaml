@@ -251,15 +251,6 @@ importers:
         specifier: ^4.4.3
         version: 4.4.3
 
-  packages/filings:
-    dependencies:
-      '@aiagent/types':
-        specifier: workspace:^
-        version: link:../types
-      pdf-parse:
-        specifier: ^1.1.1
-        version: 1.1.4
-
   packages/identity: {}
 
   packages/mcp:
@@ -299,11 +290,20 @@ importers:
         specifier: workspace:^
         version: link:../types
 
+  packages/parsing:
+    dependencies:
+      '@aiagent/types':
+        specifier: workspace:^
+        version: link:../types
+      pdf-parse:
+        specifier: ^1.1.1
+        version: 1.1.4
+
   packages/rag:
     dependencies:
-      '@aiagent/filings':
+      '@aiagent/parsing':
         specifier: workspace:^
-        version: link:../filings
+        version: link:../parsing
       '@aiagent/security':
         specifier: workspace:*
         version: link:../security

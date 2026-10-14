@@ -23,7 +23,7 @@
 │   ├── channels/
 │   ├── conversation/
 │   ├── types/
-│   ├── filings/
+│   ├── parsing/
 │   ├── rag/
 │   ├── tools/
 │   ├── workflow/
@@ -59,7 +59,7 @@
 - `packages/conversation`：pi `Message` 与线性消息存储之间的映射层，提供 `MessageStore` port 与上下文投影。
 - `packages/channels`：QQ Bot WebSocket 消息适配、命令处理和 Agent 私聊入口。
 - `packages/types`：前后端共享类型边界，承载 API contract、DTO、结构化错误和稳定枚举。
-- `packages/filings`：公告/财报 ingestion 边界，负责文件来源、document metadata 和原始文本来源信息。
+- `packages/parsing`：文档解析边界，负责文件来源、document metadata 和原始文本来源信息。
 - `packages/rag`：RAG 运行时边界，负责 chunking、embedding 抽象、检索、引用和 grounded answer 的稳定类型入口。
 - `packages/eval`：RAG/Agent 评测边界，负责 eval case、metrics、runner 输入和报告输出结构。
 - `packages/workflow`：通用顺序 workflow runtime，负责节点 schema 校验、状态流转、max steps、结构化错误和节点事件 sink。
@@ -309,11 +309,11 @@ AIAGENT_MCP_ENABLED=true pnpm dev  # 可选 AIAGENT_MCP_COMMAND / AIAGENT_MCP_AR
 
 Week 2 新增三个 RAG 相关 package，当前已具备 Markdown/TXT 公告 ingestion 入口、RAG 基础边界、纯函数 chunk 策略、deterministic mock embedding、内存测试 adapter、PostgreSQL pgvector adapter、hybrid retrieval 和 deterministic heuristic rerank；暂不接入真实 PDF 解析、真实 embedding provider、Qdrant、cross-encoder、LLM rerank 或 Agent Chat：
 
-- `@aiagent/filings`：保存公告/财报文件来源、document metadata、原始文本来源和 ingestion pipeline。`ingestFiling()` 支持 Markdown 与 TXT 解析，输出 `IngestedFilingDocument` 和带 `heading`、`lineStart`、`lineEnd` 的 blocks；PDF 当前返回 `pdf_parser_not_configured` 结构化错误，不静默生成文档。
-- `@aiagent/rag`：保存 `RagDocument`、`RagChunk`、`EmbeddedChunk`、`Citation`、`RetrievalResult`、`RagAnswer`、embedding/vector store/retriever/reranker 抽象和结构化错误类型，并导出 `chunkText()`、`chunkDocumentBlocks()`、`chunkIngestedFilingDocument()`、`createDeterministicMockEmbeddingClient()`、`createInMemoryVectorStore()`、`createHybridRetriever()` 和 `createHeuristicReranker()` 等入口。
+- `@aiagent/parsing`：保存文档来源、document metadata、原始文本来源和 document parsing pipeline。`ingestDocument()` 支持 Markdown、TXT 与 PDF 解析，输出 `IngestedDocument` 和带 `heading`、`lineStart`、`lineEnd` 的 blocks；解析失败返回 `parse_failed` 结构化错误，不静默生成文档。
+- `@aiagent/rag`：保存 `RagDocument`、`RagChunk`、`EmbeddedChunk`、`Citation`、`RetrievalResult`、`RagAnswer`、embedding/vector store/retriever/reranker 抽象和结构化错误类型，并导出 `chunkText()`、`chunkDocumentBlocks()`、`chunkIngestedDocument()`、`createDeterministicMockEmbeddingClient()`、`createInMemoryVectorStore()`、`createHybridRetriever()` 和 `createHeuristicReranker()` 等入口。
 - `@aiagent/eval`：保存 `EvalCase`、`EvalMetric`、`EvalResult`、`RagEvalMetrics`、`RagEvalReport`，并导出 `runRagEval()` runner、`createRagEvalReport()` 报告生成、`computeRagMetrics()` 指标计算、`RAG_EVAL_CASES` 30 条评测用例、`DEMO_DOCUMENTS` demo 文档和 `createDemoRagRuntime()` 预加载 runtime。
 
-跨 API 边界会复用的 DTO 放在 `packages/types`，包括 filing source/document、ingested filing document/block、RAG document/chunk/embedded chunk/vector search match/retrieval score breakdown/citation/retrieval/answer、retrieval trace event 和 eval case/metric/result。只属于运行时 package 的抽象，例如 ingestion options、chunking options、embedding client、vector store、retriever、reranker、package summary 和 runner input，保留在对应 package 内部导出。
+跨 API 边界会复用的 DTO 放在 `packages/types`，包括 document source/document、ingested document/block、RAG document/chunk/embedded chunk/vector search match/retrieval score breakdown/citation/retrieval/answer、retrieval trace event 和 eval case/metric/result。只属于运行时 package 的抽象，例如 ingestion options、chunking options、embedding client、vector store、retriever、reranker、package summary 和 runner input，保留在对应 package 内部导出。
 
 RAG chunk 策略当前规则：
 
@@ -343,7 +343,7 @@ RAG hybrid retrieval 和 rerank 当前规则：
 可调用验证入口：
 
 ```bash
-pnpm --filter @aiagent/filings test
+pnpm --filter @aiagent/parsing test
 pnpm --filter @aiagent/rag test
 pnpm --filter @aiagent/eval test
 pnpm typecheck
@@ -358,7 +358,7 @@ typecheck、test、build 与依赖架构检查；数据库集成测试不会连�
 
 Week 2-013 已把 RAG ingestion、chunk、retrieval 和 citation answer 接入 HTTP API 与 Web 页面，形成最小可演示的 Data Sources 工作区：
 
-- `packages/rag` 的 `createDataSourceRuntime()` 组合 `@aiagent/filings` ingestion、heading-aware chunking、embedding、可注入 VectorStore、hybrid retriever 和 grounded answer policy；生产 composition 使用 PostgreSQL document repository 与 pgvector store，测试/eval 显式使用内存 adapter。
+- `packages/rag` 的 `createDataSourceRuntime()` 组合 `@aiagent/parsing` ingestion、heading-aware chunking、embedding、可注入 VectorStore、hybrid retriever 和 grounded answer policy；生产 composition 使用 PostgreSQL document repository 与 pgvector store，测试/eval 显式使用内存 adapter。
 - `apps/api` 新增 `POST /api/data-sources/ingest`、`GET /api/data-sources/documents`、`GET /api/data-sources/chunks`、`POST /api/rag/search`、`POST /api/rag/answer`。Route handler 只做 zod 校验、调用 RAG runtime、DTO 映射和 `ApiResult` 结构化响应。
 - `packages/types` 新增 Data Sources/RAG API DTO，并扩展 `CitationDto`：每条 citation 包含 `chunkId`、`documentId`、`source`、`heading`、`chunkIndex`、`quote` 和 `confidence`，可以从 answer 追溯到原始文档、来源、章节和 chunk 顺序。
 - `apps/web` 左侧工作区导航新增 Data Sources 页面。页面通过 HTTP API 展示粘贴/上传文本、document list、chunk list、retrieval results、answer 和 citations；前端不直接依赖 RAG runtime。
@@ -507,7 +507,7 @@ pnpm test
 pnpm --filter @aiagent/agent test
 pnpm --filter @aiagent/tools test
 pnpm --filter @aiagent/api test
-pnpm --filter @aiagent/filings test
+pnpm --filter @aiagent/parsing test
 pnpm --filter @aiagent/rag test
 pnpm --filter @aiagent/eval test
 pnpm --filter @aiagent/workflow test

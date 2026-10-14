@@ -4,7 +4,7 @@
 > 实现仓库：`.`（pnpm monorepo，strict TS，ESM）
 > 本路线按"接口已就绪 → 只换实现 → 装配进组合根"的顺序，把代码位置、设计思想、业界对应物、学习检查点串起来。
 > 读法建议：先通读一节的理论，再打开对应 `file_path:line` 读源码，最后回看该节的「学习检查点」。
-> 状态：P1–P5 已实现，reviewer 复核 **GO**（1 个阻塞项 B-1 与全部 minor 已修复，仅 filings `index.ts` ~545 行作为软 follow-up）。
+> 状态：P1–P5 已实现，reviewer 复核 **GO**（1 个阻塞项 B-1 与全部 minor 已修复，仅 parsing `index.ts` ~545 行作为软 follow-up）。
 > B-1 的影响面：`createDataSourceRuntime()` 不再自带 embedding 默认值，调用方必须显式注入——
 > 测试注入 `packages/rag/src/testing.ts` 的测试替身，生产注入 `createEmbeddingClientFromEnv()` 的真实 client。
 > `packages/report` 的两个生产入口（`runReportWorkflow` / `createReportTool`）已把 `dataSourceRuntime` 改为必填。
@@ -37,7 +37,7 @@
                     │ 持久化 / 评测
    ┌────────────────┼───────────────────────────────────────────────┐
    │  VectorStore        (P3)  database: pgvector 或 内存回退          │
-   │  Filings            (P4)  filings: PDF/表格解析（pdf.ts）          │
+   │  Parsing            (P4)  parsing: PDF/表格解析（parsers/pdf.ts）  │
    │  Eval/Judge         (P5)  eval: LLM-as-judge + RAGAS 指标        │
    └─────────────────────────────────────────────────────────────────┘
                         组合根：apps/api/src/server.ts（env 驱动装配）
@@ -115,13 +115,15 @@ v1.1 起配置侧拆为 **LLM / Embedding / Rerank / Judge 四个独立 provider
 
 ## 4. P4 PDF/表格解析 + Contextual Retrieval（★★★  ingestion 升级）
 
+> 注：`packages/parsing` 的 `parsers/` 目录与 Facade 结构是 P0 前置改造引入的（见 `docs/v1.1/06-chat-attachments.md` §4），本节路径已按当前代码同步。
+
 **读什么**
-- `packages/filings/src/pdf.ts`（从 `index.ts` 抽取的 PDF 专用模块，单一方向依赖 `index.ts → pdf.ts`）
-  - `FilingParsedBlock`（`:10`）：带 `pageNumber` / `metadata.isTableRow` / `metadata.tableColumnCount` 的解析草稿，保留"第几页/第几行/是否表格"位置线索，供 chunk / citation 溯源。
-  - `PDF_WORKER_SOURCE`（pdf.ts `:33` 常量）：子进程源码——**为什么用子进程？** `ingestFiling` 边界是同步契约（rag runtime 同步调用），但 pdf.js 解析是异步重 CPU；把解析放进独立 Node 子进程、用 `execFileSync` 同步回收，既不改调用约定也把失败收敛为结构化错误。
-  - `parsePdfBlocks`（`:74`）：写临时 PDF → 子进程 `pdfParse` → 逐页按 `y` 坐标聚行 → 回传 `{ pages }`。**已知坑（已修）**：Node 26 下 `readFileSync` 返回 buffer-pool `Buffer`（`byteOffset≠0`），pdf.js 直接读底层 `ArrayBuffer` 会读错内存 → 已用 `new Uint8Array(raw.buffer, raw.byteOffset, raw.byteLength)` 包成独立切片。
-  - `buildPdfBlocks`（`:113`）/`isTableRow`（`:189`）/`countTableColumns`（`:210`）：表格行单独成块打标（多列空格 / 制表符 / `|`），便于上层区分"叙述"与"表格行"。
-- `packages/filings/src/index.ts`：`ingestFiling`（已退化为壳 + 路由），PDF 走 `parsePdfBlocks`，解析失败返回 `parse_failed` 结构化错误（不再有 `pdf_parser_not_configured` 缺口）。
+- `packages/parsing/src/parsers/pdf.ts`（PDF 格式 adapter，registry 里一个可替换 parser；子进程源码拆到 `pdf-worker.ts`）
+  - `ParsedBlock`（`types.ts:20`）：带 `pageNumber` / `metadata.isTableRow` / `metadata.tableColumnCount` 的解析草稿，保留"第几页/第几行/是否表格"位置线索，供 chunk / citation 溯源。
+  - `PDF_WORKER_SOURCE`（`pdf-worker.ts:16` 常量）：子进程源码——**为什么用子进程？** `ingestDocument` 边界是同步契约（rag runtime 同步调用），但 pdf.js 解析是异步重 CPU；把解析放进独立 Node 子进程、用 `execFileSync` 同步回收，既不改调用约定也把失败收敛为结构化错误。
+  - `parsePdfBlocks`（`parsers/pdf.ts:22`）：写临时 PDF → 子进程 `pdfParse` → 逐页按 `y` 坐标聚行 → 回传 `{ pages }`。**已知坑（已修）**：Node 26 下 `readFileSync` 返回 buffer-pool `Buffer`（`byteOffset≠0`），pdf.js 直接读底层 `ArrayBuffer` 会读错内存 → 已用 `new Uint8Array(raw.buffer, raw.byteOffset, raw.byteLength)` 包成独立切片。
+  - `buildPdfBlocks`（`parsers/pdf.ts:62`）/`isTableRow`（`parsers/pdf.ts:108`）/`countTableColumns`（`parsers/pdf.ts:129`）：表格行单独成块打标（多列空格 / 制表符 / `|`），便于上层区分"叙述"与"表格行"。
+- `packages/parsing/src/parse-document.ts`：`ingestDocument`（Facade 公共入口，委托 `parseDocument()` 做 detect → resolve → parse → assemble），PDF 走 `parsePdfBlocks`，解析失败返回 `parse_failed` 结构化错误（不再有 `pdf_parser_not_configured` 缺口）；`packages/parsing/src/index.ts` 现为纯 re-export barrel。
 - `packages/rag/src/contextual-retrieval.ts`
   - `createContextualChunkEnricher`（`:29`）：给每个 chunk 前拼接一段 **LLM 生成的 doc 级上下文前缀**（Anthropic 2024 "Contextual Retrieval"），提升检索命中率。
   - `createNoopContextualEnricher`（`packages/rag/src/testing.ts`，由 `contextual-retrieval.ts:60` re-export 保留历史导入路径）：恒等测试替身。
@@ -131,7 +133,7 @@ v1.1 起配置侧拆为 **LLM / Embedding / Rerank / Judge 四个独立 provider
 
 **学习检查点**
 - 为什么 ingestion 边界保持同步、把重解析丢给子进程？保持 rag runtime 调用约定不变（不强制全链路 async），同时把不可控的第三方解析失败收敛为结构化错误——边界清晰、可测试。
-- 为什么单列 `pdf.ts`？`filings/src/index.ts` 超过 ~500 行软上限后，按内聚领域拆分（PDF 解析独立成模块），公共 API 通过 `index.ts` 的 `export ... from "./pdf.js"` 原样透出，导入方零修改。
+- 为什么把 PDF 解析独立成 `parsers/pdf.ts`？P0-2 把解析层收敛为 Facade + Registry + 每格式 adapter：`parse-document.ts` 只做 detect → resolve → parse → assemble，PDF 的实现细节（子进程 + 坐标聚行）隔离在 `parsers/pdf.ts` + `pdf-worker.ts`；公共 API 仍从 `index.ts`（纯 re-export）原样透出，导入方零修改。
 
 ---
 
@@ -175,7 +177,7 @@ v1.1 起配置侧拆为 **LLM / Embedding / Rerank / Judge 四个独立 provider
   - readiness（`:188-221`）：返回 `RAG providers — embedding:on/off rerank:on/off judge:on/off`，未配置的 provider 以 `providerNote` 显式点名，不再静默降级。
 
 **学习检查点**
-- 为什么"组合根"是唯一读 env 的地方？`rag` / `database` / `filings` 包**不读 `DATABASE_URL` / provider 变量**——env 解析集中在 `server.ts` 与 `provider-config.ts` 的读取函数，领域包保持纯净、可单测（依赖倒置的落点）。
+- 为什么"组合根"是唯一读 env 的地方？`rag` / `database` / `parsing` 包**不读 `DATABASE_URL` / provider 变量**——env 解析集中在 `server.ts` 与 `provider-config.ts` 的读取函数，领域包保持纯净、可单测（依赖倒置的落点）。
 - 为什么四个 `fromEnv` 改成"可用即返回、不可用即 `null`"，降级决策交给组合根？工厂只回答"provider 是否可用"，不再替调用方猜一个默认值。这样 P1–P5 仍能"接口已就绪、只换实现"，但**默认链路的缺失是显式的**：本地/CI 要可复现就注入测试替身，生产要可靠就在 readiness 看到 on/off。
 
 ---
@@ -184,7 +186,7 @@ v1.1 起配置侧拆为 **LLM / Embedding / Rerank / Judge 四个独立 provider
 
 1. `pnpm --filter @aiagent/rag test`：看 70 个用例（含 rerank 三层兜底、query rewrite、contextual 注入的链路行为，
    以及"provider 未启用时 `createRerankerFromEnv()` 返回 `null`"）。
-2. `pnpm --filter @aiagent/filings test`：看 12 个用例（含真实 PDF 解析出带页码/表格标记的 block，以及"无效 PDF 返回结构化错误"的缺口闭合）。
+2. `pnpm --filter @aiagent/parsing test`：看 12 个用例（含真实 PDF 解析出带页码/表格标记的 block，以及"无效 PDF 返回结构化错误"的缺口闭合）。
 3. `pnpm --filter @aiagent/eval test`：看 62 个用例（含 `judgeFaithfulness`/`judgeContextRecall` 的容错、
    "judge provider 未启用时 `createLlmJudge()` 返回 `null`"，以及与历史基线的回归门禁）。
 4. `pnpm --filter @aiagent/database test`：5 个通过、22 个 skip（需 live Postgres）；重点看迁移编号检查。本地起 Postgres：`pnpm db:up && pnpm db:migrate`，再跑可观察 pgvector 路径。
@@ -198,7 +200,7 @@ v1.1 起配置侧拆为 **LLM / Embedding / Rerank / Judge 四个独立 provider
    `server.ts` 组合根即装配对应真实客户端，readiness 返回各 provider 的 on/off，无需改码。
 
 > 验收回执：reviewer 复核 **GO**；全量 `pnpm typecheck`（`tsc -b` 顺序构建）通过；
-> rag 70 / eval 62 / filings 12 / database 5 通过（22 skip 为无 DB 预期）/ api 25 通过（3 skip）/ report 13 通过，全部 **0 fail**。
+> rag 70 / eval 62 / parsing 12 / database 5 通过（22 skip 为无 DB 预期）/ api 25 通过（3 skip）/ report 13 通过，全部 **0 fail**。
 > B-1 破坏性变更（`createDataSourceRuntime()` 不再自带 embedding 默认值）已同步到全部 6 个裸调用点，
 > 测试侧一律显式注入 `testing.ts` 测试替身，生产侧一律改为调用方注入。
-> 唯一软 follow-up：`filings/src/index.ts` 仍约 545 行（PDF 已拆到 `pdf.ts`，markdown/txt 解析可后续再拆）。
+> 软 follow-up 已闭合：原 `parsing/src/index.ts` 约 545 行，P0-2 结构收敛后已退化为纯 re-export barrel（PDF/markdown/txt 解析各自拆入 `parsers/`）。

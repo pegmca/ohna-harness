@@ -16,7 +16,7 @@
       "path": "../agent"
     },
     {
-      "path": "../filings"
+      "path": "../parsing"
     },
     {
       "path": "../security"

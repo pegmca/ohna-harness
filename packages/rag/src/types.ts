@@ -5,7 +5,7 @@ import type {
   DataSourceIngestResponseDto,
   EmbeddedChunkDto,
   EmbeddingUsageDto,
-  IngestedFilingDocumentDto,
+  IngestedDocumentDto,
   IngestedTextBlockDto,
   RagAnswerDto,
   RagChunkDto,
@@ -275,7 +275,7 @@ export interface DataSourceRuntimeOptions {
    * Contextual Retrieval 前缀注入器：ingest 时对 chunk 拼接文档级 LLM 上下文前缀后再 embedding。
    * 缺省（undefined 或 null）不注入（恒等）。通过 createContextEnricherFromEnv() 注入，禁用时返回 null。
    */
-  contextEnricher?: ((document: IngestedFilingDocumentDto, chunks: RagChunk[]) => Promise<RagChunk[]>) | null;
+  contextEnricher?: ((document: IngestedDocumentDto, chunks: RagChunk[]) => Promise<RagChunk[]>) | null;
   /**
    * query 改写节点（Agentic 检索 / Self-RAG）：检索前把原始 query 改写为检索友好问句。
    * 缺省（undefined 或 null）不改写（恒等）。通过 createQueryRewriterFromEnv() 注入，禁用时返回 null。
@@ -351,7 +351,7 @@ export const DEFAULT_CHUNKING_OPTIONS: ChunkingOptions = {
 };
 
 /** 解析器版本标识：写入 document_versions，便于后续重放与兼容性诊断。 */
-export const RAG_PARSER_VERSION = "filings-markdown-txt-v1";
+export const RAG_PARSER_VERSION = "parsing-markdown-txt-v1";
 
 /** 切块器版本标识：由默认 chunking options 派生，策略或窗口变化时必须同步更新。 */
 export const RAG_CHUNKER_VERSION = `${DEFAULT_CHUNKING_OPTIONS.strategy}-${DEFAULT_CHUNKING_OPTIONS.maxChars}-${DEFAULT_CHUNKING_OPTIONS.overlapChars}-v1`;

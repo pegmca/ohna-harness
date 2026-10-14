@@ -25,7 +25,7 @@
 - 真实 embedding：`embedding-providers.ts` 的 `createOpenAiCompatibleEmbeddingClient`（POST `/embeddings`）。
 - 真实 rerank：`reranking-providers.ts` 的 `createOpenAiCompatibleReranker`（`/rerank`，失败回退 LLM-judge）。
 - pgvector：有 `DATABASE_URL` 即走 PostgreSQL，维度契约由 `DEFAULT_PRODUCTION_EMBEDDING_DIMENSIONS = 1536` 单一真相源约束。
-- PDF/表格解析：`packages/filings` 已用 `pdf-parse` + 子进程闭合，解析失败返回结构化 `parse_failed`。
+- PDF/表格解析：`packages/parsing` 已用 `pdf-parse` + 子进程闭合，解析失败返回结构化 `parse_failed`。
 - query 改写 / decomposition：`query-rewrite.ts` 的 `createLlmQueryRewriter`。
 - LLM-as-judge：`packages/eval` 的 `judge.ts` / `judge-loop.ts`（RAGAS 对齐的 faithfulness / context recall）。
 
@@ -53,7 +53,7 @@
 - **落地**：pgvector adapter 已在生产 composition 中默认启用（有 `DATABASE_URL` 即生效）。
 
 ### P4 PDF/表格解析 + Contextual Retrieval（难度★★★）— ✅ 已落地
-- **目标**：填 filings 缺口；ingest 时调 LLM 生成 chunk 上下文前缀，经挂载点①（`grounding-hook.ts`）注入。
+- **目标**：填 parsing 缺口；ingest 时调 LLM 生成 chunk 上下文前缀，经挂载点①（`grounding-hook.ts`）注入。
 - **配置**：上下文前缀复用 LLM provider 的 `AIAGENT_LLM_*`；未启用时 `createContextEnricherFromEnv()` 返回 `null`（chunk 保持原样）。
 
 ### P5 Agentic 检索 + RAGAS 校准（难度★★★）— ✅ 已落地

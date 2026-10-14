@@ -6,7 +6,7 @@ export type RagDocumentScope = "private" | "shared" | "demo";
 /** 文档摘要：与 API 层 DataSourceDocumentDto 同构，是 listDocuments 的返回元素。 */
 export type RagDocumentSummary = DataSourceDocumentDto;
 
-/** RAG 文档来源类型，与 filings 来源枚举保持一致。 */
+/** RAG 文档来源类型，与文档来源枚举保持一致。 */
 export type RagDocumentSourceType = "local_file" | "remote_url" | "mock_text";
 
 /** 文档版本状态：failed 是终态但允许同 checksum 重试覆盖。 */

@@ -247,7 +247,7 @@ export function discoverMcpAgentTools(
 
 ### 现状
 
-- `packages/filings/src/index.ts` 是纯解析/摄取库：`ingestFiling`（index.ts:135）、`parseMarkdownBlocks` / `parseTxtBlocks`、`detectFilingFileType`，产出 `FilingIngestionResult` 结构化结果；没有任何工具包装，目前只被数据摄取链路使用。
+- `packages/parsing/src/index.ts` 是纯解析/摄取库：`ingestDocument`（index.ts:135）、`parseMarkdownBlocks` / `parseTxtBlocks`、`detectDocumentFileType`，产出 `DocumentIngestionResult` 结构化结果；没有任何工具包装，目前只被数据摄取链路使用。`packages/parsing` 只提供通用文档解析，本节的 filings 域工具包未来独立成包、消费 `packages/parsing`。
 - 04 文档定义了新架构的 extension 机制（对齐 pi 的 `ToolDefinition` / `ExtensionRunner`，`packages/coding-agent/src/core/extensions/types.ts:449`、`runner.ts:267`）：extension 是"产出 AgentTool 集合 + 可选 hook 的装配单元"。
 
 ### pi 参照
@@ -257,7 +257,7 @@ export function discoverMcpAgentTools(
 ### 目标设计
 
 ```ts
-// packages/filings/src/extension.ts（新增）
+// 示例：filings 域 extension 工具包（未来独立包，非 packages/parsing）
 import type { AgentTool } from "@aiagent/agent";
 import type { DataSourceRuntime } from "@aiagent/rag";
 
@@ -269,7 +269,7 @@ export interface FilingsExtensionOptions {
 
 /**
  * filings extension：把公告/披露文件能力注册为三个 AgentTool。
- * - ingest_filing：解析 + 切块 + 入库（复用 ingestFiling），返回 documentId。
+ * - ingest_filing：解析 + 切块 + 入库（复用 ingestDocument），返回 documentId。
  * - search_filings：按 documentId/来源检索片段，输出经 <untrusted_context> 安全封装。
  * - get_filing_outline：返回已摄取文件的分块大纲，供模型规划引用。
  *
@@ -281,7 +281,7 @@ export function createFilingsExtension(options: FilingsExtensionOptions): {
 };
 ```
 
-- 解析/切块逻辑零改动，extension 只做 AgentTool 形状适配与错误结构化（沿用 `FilingIngestionError` 的 code 体系）。
+- 解析/切块逻辑零改动，extension 只做 AgentTool 形状适配与错误结构化（沿用 `DocumentIngestionError` 的 code 体系）。
 - 检索输出一律过 security 模块封装（与 RAG grounding 同一 `<untrusted_context>` 约定），作为"工具输出即不可信内容"的示例实现。
 
 ### 取舍论证

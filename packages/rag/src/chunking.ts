@@ -1,4 +1,4 @@
-import type { IngestedFilingDocumentDto } from "@aiagent/types";
+import type { IngestedDocumentDto } from "@aiagent/types";
 import {
   DEFAULT_CHUNKING_OPTIONS,
   type ChunkBlocksInput,
@@ -12,12 +12,12 @@ import {
 /**
  * 将 ingestion 文档切分为可检索 chunk。
  *
- * @param document filings package 输出的结构化文档，包含 blocks、source 和 documentId。
+ * @param document parsing package 输出的结构化文档，包含 blocks、source 和 documentId。
  * @param options chunk 策略配置；默认使用 heading-aware 以保留公告章节线索。
  * @returns 成功时返回连续 chunkIndex 的 chunks，配置非法时返回结构化错误。
  */
-export function chunkIngestedFilingDocument(
-  document: IngestedFilingDocumentDto,
+export function chunkIngestedDocument(
+  document: IngestedDocumentDto,
   options: ChunkingOptions = DEFAULT_CHUNKING_OPTIONS
 ): ChunkingResult {
   return chunkDocumentBlocks(
@@ -117,7 +117,7 @@ export function chunkDocumentBlocks(
 }
 
 /**
- * 直接切分一段纯文本，便于单元测试和后续非 filings 来源复用。
+ * 直接切分一段纯文本，便于单元测试和后续非 parsing 来源复用。
  *
  * @param input 文档身份、来源、文本和可选来源位置。
  * @param options chunk 策略配置。

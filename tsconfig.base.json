@@ -21,7 +21,7 @@
       "@aiagent/conversation": ["./packages/conversation/src/index.ts"],
       "@aiagent/database": ["./packages/database/src/index.ts"],
       "@aiagent/eval": ["./packages/eval/src/index.ts"],
-      "@aiagent/filings": ["./packages/filings/src/index.ts"],
+      "@aiagent/parsing": ["./packages/parsing/src/index.ts"],
       "@aiagent/mcp": ["./packages/mcp/src/index.ts"],
       "@aiagent/rag": ["./packages/rag/src/index.ts"],
       "@aiagent/report": ["./packages/report/src/index.ts"],

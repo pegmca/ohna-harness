@@ -231,7 +231,7 @@ export interface SlashCommandInfo {
 ### 4.4 金融场景扩展点实例
 
 - **研报写作 skill**：新增 `.agents/skills/research-report/SKILL.md`，frontmatter 声明 `name: research-report`、`description: 按模板撰写个股/行业深度研报`，正文规定章节结构、引用规范（必须挂 RAG citation）、数据时效要求。模型在报告意图下自主加载，用户也可 `/skill:research-report 贵州茅台` 显式触发。不动任何代码。
-- **filings 工具包作为 extension**：`packages/filings`（当前仅 `src/index.ts`）改造成一个 `ExtensionFactory`，`registerTool` 注册 `filing_search` / `filing_section_read` 等工具；通过 `on("tool_result")` 给结果附加 SEC/巨潮来源元数据（供 citation 落库）；通过 `on("before_agent_start")` 在金融语境追加 filings 使用规范到 systemPrompt。工具包的启停只改 bootstrap 装配一行。
+- **filings 工具包作为 extension**：`packages/parsing`（当前仅 `src/index.ts`）改造成一个 `ExtensionFactory`，`registerTool` 注册 `filing_search` / `filing_section_read` 等工具；通过 `on("tool_result")` 给结果附加 SEC/巨潮来源元数据（供 citation 落库）；通过 `on("before_agent_start")` 在金融语境追加 filings 使用规范到 systemPrompt。工具包的启停只改 bootstrap 装配一行。
 - **eval 钩子**：`packages/eval` 的 runner 注册一个评测 extension，`on("agent_end")` 收集完整消息序列与工具轨迹写入评测数据集，`on("tool_call")` 记录每个工具调用的输入快照用于回归比对。评测能力由此与产品内核解耦，不再需要从 eval 包反向 import agent 内部结构。
 
 ## 取舍论证

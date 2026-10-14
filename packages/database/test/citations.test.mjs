@@ -39,7 +39,7 @@ test("Citation 持久化：固定 chunk/version 回链、原子写入、用户�
       contentType: "text/markdown",
       contentChecksum: `checksum-${randomUUID()}`,
       content: "# 资产质量\n不良率保持稳定。",
-      parserVersion: "filings-markdown-txt-v1",
+      parserVersion: "parsing-markdown-txt-v1",
       chunkerVersion: "heading-aware-1200-150-v1",
       outcome: {
         status: "indexed",

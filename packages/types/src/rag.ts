@@ -1,4 +1,4 @@
-import type { IngestedFilingDocumentDto, FilingSourceKindDto } from "./filings.js";
+import type { IngestedDocumentDto, DocumentSourceKindDto } from "./documents.js";
 import type { ISODateTimeString } from "./primitives.js";
 
 /**
@@ -154,7 +154,7 @@ export interface DataSourceDocumentDto {
   documentId: string;
   title: string;
   scope: RagDocumentScopeDto;
-  sourceType: FilingSourceKindDto;
+  sourceType: DocumentSourceKindDto;
   externalId: string;
   sourceUri: string;
   latestVersion: number;
@@ -167,7 +167,7 @@ export interface DataSourceDocumentDto {
  * Data Sources ingestion 响应 DTO，展示文档、版本号、幂等命中标记和本次入库 chunk 数量。
  */
 export interface DataSourceIngestResponseDto {
-  document: IngestedFilingDocumentDto;
+  document: IngestedDocumentDto;
   chunks: RagChunkDto[];
   indexedChunkCount: number;
   documentVersion: number;

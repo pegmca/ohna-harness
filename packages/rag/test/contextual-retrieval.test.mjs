@@ -9,7 +9,7 @@ import {
 import { PROVIDER_ENV } from "../dist/provider-config.js";
 
 /**
- * 构造一个最小的 IngestedFilingDocumentDto，仅保留 enricher 用到的字段。
+ * 构造一个最小的 IngestedDocumentDto，仅保留 enricher 用到的字段。
  */
 function makeDocument(title, headings = []) {
   return {

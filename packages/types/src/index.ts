@@ -6,7 +6,7 @@ export * from "./run-v2.js";
 export * from "./market.js";
 export * from "./report.js";
 export * from "./workflow.js";
-export * from "./filings.js";
+export * from "./documents.js";
 export * from "./rag.js";
 export * from "./eval.js";
 export * from "./models.js";

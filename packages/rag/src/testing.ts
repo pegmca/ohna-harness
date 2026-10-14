@@ -10,7 +10,7 @@
  * 以保持历史导入路径不变。
  */
 
-import type { IngestedFilingDocumentDto } from "@aiagent/types";
+import type { IngestedDocumentDto } from "@aiagent/types";
 import {
   DEFAULT_MOCK_EMBEDDING_DIMENSIONS,
   DEFAULT_MOCK_EMBEDDING_MODEL,
@@ -106,7 +106,7 @@ class DeterministicMockEmbeddingClient implements EmbeddingClient {
  * @returns 不改变任何 chunk 的 enricher。
  */
 export function createNoopContextualEnricher(): (
-  document: IngestedFilingDocumentDto,
+  document: IngestedDocumentDto,
   chunks: RagChunk[]
 ) => Promise<RagChunk[]> {
   return async (_document, chunks) => chunks;

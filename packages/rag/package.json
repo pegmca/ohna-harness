@@ -14,10 +14,10 @@
   "scripts": {
     "build": "tsc -b",
     "test": "pnpm build && node --test test/*.test.mjs",
-    "typecheck": "pnpm --filter @aiagent/types build && pnpm --filter @aiagent/filings build && pnpm --filter @aiagent/agent build && pnpm --filter @aiagent/security build && tsc -p tsconfig.json --pretty false --noEmit"
+    "typecheck": "pnpm --filter @aiagent/types build && pnpm --filter @aiagent/parsing build && pnpm --filter @aiagent/agent build && pnpm --filter @aiagent/security build && tsc -p tsconfig.json --pretty false --noEmit"
   },
   "dependencies": {
-    "@aiagent/filings": "workspace:^",
+    "@aiagent/parsing": "workspace:^",
     "@aiagent/security": "workspace:*",
     "@aiagent/types": "workspace:^"
   },

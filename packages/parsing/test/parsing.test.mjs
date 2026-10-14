@@ -1,50 +1,20 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { test } from "node:test";
-import {
-  createFilingDocument,
-  createFilingsPackageSummary,
-  detectFilingFileType,
-  ingestFiling
-} from "../dist/index.js";
+import { createParsingPackageSummary, detectDocumentFileType, ingestDocument, PdfParser } from "../dist/index.js";
 
-test("filings package entry exposes its boundary summary", () => {
-  const summary = createFilingsPackageSummary();
+test("parsing package entry exposes its boundary summary", () => {
+  const summary = createParsingPackageSummary();
 
-  assert.equal(summary.packageName, "@aiagent/filings");
-  assert.equal(summary.boundary, "filing_ingestion_and_raw_text");
+  assert.equal(summary.packageName, "@aiagent/parsing");
+  assert.equal(summary.boundary, "document_parsing_and_raw_text");
   assert.deepEqual(summary.supportedSourceKinds, ["local_file", "remote_url", "mock_text"]);
   assert.deepEqual(summary.supportedFileTypes, ["markdown", "txt", "pdf"]);
 });
 
-test("filing documents keep metadata, source and raw text together", () => {
-  const document = createFilingDocument({
-    id: "filing_doc_001",
-    title: "平安银行 2024 年年度报告",
-    ticker: "000001.SZ",
-    reportType: "annual_report",
-    publishedAt: "2025-03-15T00:00:00.000Z",
-    source: {
-      kind: "mock_text",
-      uri: "mock://filings/000001-2024",
-      provider: "fixture"
-    },
-    metadata: {
-      fiscalYear: 2024,
-      language: "zh-CN"
-    },
-    rawText: "管理层讨论与分析示例文本"
-  });
-
-  assert.equal(document.id, "filing_doc_001");
-  assert.equal(document.source.kind, "mock_text");
-  assert.equal(document.metadata.fiscalYear, 2024);
-  assert.match(document.rawText, /管理层讨论/);
-});
-
 test("markdown ingestion returns a document with heading-aware blocks", async () => {
   const content = await readFile(new URL("./fixtures/annual-report.md", import.meta.url), "utf8");
-  const result = ingestFiling(
+  const result = ingestDocument(
     {
       source: "local://annual-report.md",
       fileName: "annual-report.md",
@@ -56,13 +26,13 @@ test("markdown ingestion returns a document with heading-aware blocks", async ()
       }
     },
     {
-      idGenerator: () => "filing_test_md",
+      idGenerator: () => "parsing_test_md",
       now: () => new Date("2026-01-02T03:04:05.000Z")
     }
   );
 
   assert.equal(result.ok, true);
-  assert.equal(result.document.documentId, "filing_test_md");
+  assert.equal(result.document.documentId, "parsing_test_md");
   assert.equal(result.document.source, "local://annual-report.md");
   assert.equal(result.document.fileName, "annual-report.md");
   assert.equal(result.document.fileType, "markdown");
@@ -77,12 +47,12 @@ test("markdown ingestion returns a document with heading-aware blocks", async ()
   assert.equal(managementBlock.heading, "管理层讨论与分析");
   assert.equal(managementBlock.lineStart, 5);
   assert.equal(managementBlock.lineEnd, 6);
-  assert.equal(managementBlock.id, "filing_test_md_block_0003");
+  assert.equal(managementBlock.id, "parsing_test_md_block_0003");
 });
 
 test("txt ingestion returns paragraph blocks with metadata and line ranges", async () => {
   const content = await readFile(new URL("./fixtures/announcement.txt", import.meta.url), "utf8");
-  const result = ingestFiling(
+  const result = ingestDocument(
     {
       source: "local://announcement.txt",
       fileName: "announcement.txt",
@@ -93,13 +63,13 @@ test("txt ingestion returns paragraph blocks with metadata and line ranges", asy
       }
     },
     {
-      idGenerator: () => "filing_test_txt",
+      idGenerator: () => "parsing_test_txt",
       now: () => new Date("2026-02-03T04:05:06.000Z")
     }
   );
 
   assert.equal(result.ok, true);
-  assert.equal(result.document.documentId, "filing_test_txt");
+  assert.equal(result.document.documentId, "parsing_test_txt");
   assert.equal(result.document.fileType, "txt");
   assert.equal(result.document.title, "平安银行董事会公告");
   assert.equal(result.document.blocks.length, 3);
@@ -115,14 +85,14 @@ test("txt ingestion returns paragraph blocks with metadata and line ranges", asy
 });
 
 test("txt ingestion splits long paragraphs by max line count", () => {
-  const result = ingestFiling(
+  const result = ingestDocument(
     {
       source: "mock://long-text",
       fileName: "long.txt",
       content: "第一行\n第二行\n第三行\n第四行\n第五行"
     },
     {
-      idGenerator: () => "filing_test_long_txt",
+      idGenerator: () => "parsing_test_long_txt",
       txtMaxLinesPerBlock: 2
     }
   );
@@ -139,7 +109,7 @@ test("txt ingestion splits long paragraphs by max line count", () => {
 });
 
 test("empty files return a structured ingestion error", () => {
-  const result = ingestFiling({
+  const result = ingestDocument({
     source: "local://empty.md",
     fileName: "empty.md",
     content: " \n\n "
@@ -151,7 +121,7 @@ test("empty files return a structured ingestion error", () => {
 });
 
 test("unknown extensions return a structured ingestion error", () => {
-  const result = ingestFiling({
+  const result = ingestDocument({
     source: "local://archive.bin",
     fileName: "archive.bin",
     content: "some content"
@@ -163,7 +133,7 @@ test("unknown extensions return a structured ingestion error", () => {
 });
 
 test("pdf ingestion returns a structured error for invalid PDF bytes (parser gap closed)", () => {
-  const result = ingestFiling({
+  const result = ingestDocument({
     source: "local://annual-report.pdf",
     fileName: "annual-report.pdf",
     contentType: "application/pdf",
@@ -176,7 +146,7 @@ test("pdf ingestion returns a structured error for invalid PDF bytes (parser gap
 });
 
 test("pdf ingestion rejects string content with a structured error", () => {
-  const result = ingestFiling({
+  const result = ingestDocument({
     source: "local://annual-report.pdf",
     fileName: "annual-report.pdf",
     contentType: "application/pdf",
@@ -188,9 +158,23 @@ test("pdf ingestion rejects string content with a structured error", () => {
 });
 
 test("file type detection uses content type before extension", () => {
-  assert.equal(detectFilingFileType("report.txt", "text/markdown"), "markdown");
-  assert.equal(detectFilingFileType("report.unknown", "application/pdf"), "pdf");
-  assert.equal(detectFilingFileType("report.markdown"), "markdown");
-  assert.equal(detectFilingFileType("report.text"), "txt");
-  assert.equal(detectFilingFileType("report.zip"), undefined);
+  assert.equal(detectDocumentFileType("report.txt", "text/markdown"), "markdown");
+  assert.equal(detectDocumentFileType("report.unknown", "application/pdf"), "pdf");
+  assert.equal(detectDocumentFileType("report.markdown"), "markdown");
+  assert.equal(detectDocumentFileType("report.text"), "txt");
+  assert.equal(detectDocumentFileType("report.zip"), undefined);
+});
+
+test("PdfParser accepts a valid header preceded by leading bytes (ISO 32000-1 §7.5.2)", () => {
+  // 允许文件头前有最多 1024 字节前导内容（BOM 等），不应被 magic bytes 门禁短路。
+  const header = "%PDF-1.4".split("").map((char) => char.charCodeAt(0));
+  const content = new Uint8Array([0xef, 0xbb, 0xbf, ...header]);
+
+  assert.equal(PdfParser.accepts({ fileName: "x.pdf", content, options: {} }), true);
+});
+
+test("PdfParser rejects bytes without a %PDF- header in the first 1024 bytes", () => {
+  const content = new Uint8Array(2000); // 全 0，前 1024 字节内无 %PDF-
+
+  assert.equal(PdfParser.accepts({ fileName: "x.pdf", content, options: {} }), false);
 });

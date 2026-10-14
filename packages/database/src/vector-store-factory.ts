@@ -14,15 +14,15 @@ export interface VectorStoreEnvOptions {
    * 避免 pgvector 侧把 model 记成 `""` 这类不可诊断的值。
    */
   embeddingModel?: string;
-  /** 生产 embedding 维度；缺省回退到 1536（DEFAULT_PRODUCTION_EMBEDDING_DIMENSIONS）。 */
+  /** 生产 embedding 维度；缺省回退到 2048（DEFAULT_PRODUCTION_EMBEDDING_DIMENSIONS）。 */
   dimensions?: number;
 }
 
 /**
  * 按环境变量选择 VectorStore 实现，作为 composition root 的注入边界。
  *
- * 存在 DATABASE_URL → 生产走 PostgreSQL pgvector，维度白名单为解析后的固定列表（如 [1536]，列维度固定），
- * 模型白名单为 "any" 以接受真实 1536 维生产 embedding；无 DATABASE_URL → 退化为内存 VectorStore fixture，
+ * 存在 DATABASE_URL → 生产走 PostgreSQL pgvector，维度白名单为解析后的固定列表（如 [2048]，列维度固定），
+ * 模型白名单为 "any" 以接受真实 2048 维生产 embedding；无 DATABASE_URL → 退化为内存 VectorStore fixture，
  * 仅供单测/eval/本地 demo 使用，无持久化。内存实现来自 @aiagent/rag，database 仅消费其类型与 factory。
  *
  * @param pool PostgreSQL 连接池（仅在启用 pgvector 时使用）。
@@ -42,7 +42,7 @@ export function createVectorStoreFromEnv(
         ownerUserId,
         embeddingModel,
         dimensions,
-        // 传入解析后的维度白名单（如 [1536]）而非 "any"：pgvector 列维度固定，
+        // 传入解析后的维度白名单（如 [2048]）而非 "any"：pgvector 列维度固定，
         // 早期结构化错误比静默放行后再在 SQL 层失败更可诊断（allowedDimensions 现已生效）。
         allowedDimensions: [dimensions],
         allowedModels: "any"

@@ -217,28 +217,30 @@ export const chunks = pgTable("chunks", {
   index("chunks_document_version_idx").on(table.documentVersionId)
 ]);
 
-// 生产默认维度 1536（DEFAULT_PRODUCTION_EMBEDDING_DIMENSIONS），与 P1 真实模型约定一致。
-const vector1536 = customType<{ data: number[]; driverData: string }>({
+// 生产向量列固定为 halfvec(2048)（migration 0250），覆盖 nvidia/llama-nemotron-embed-vl-1b-v2（2048）
+// 与 OpenAI text-embedding-3-small（1536）两种生产维度。使用 halfvec 半精度类型而非 vector：
+// pgvector 的 vector 类型 HNSW 索引最多 2000 维，halfvec 最多 4000 维，可容纳 2048 维。
+const halfvec2048 = customType<{ data: number[]; driverData: string }>({
   dataType() {
-    return "public.vector(1536)";
+    return "public.halfvec(2048)";
   }
 });
 
-// pgvector 表镜像 0060_rag_vectors.sql + 0070_rag_vector_dimensions.sql；HNSW operator class 由 migration 明确声明。
-// 维度与模型 CHECK 已放宽：维度仅约束 0 < dimensions <= 1536，模型不再锁死 deterministic mock。
+// pgvector 表镜像 0060_rag_vectors.sql + 0070_rag_vector_dimensions.sql + 0250_rag_vector_2048.sql；HNSW operator class 由 migration 明确声明。
+// 维度 CHECK 放宽至 0 < dimensions <= 2048，覆盖 1536 与 2048 两种生产维度。
 export const chunkEmbeddings = pgTable("chunk_embeddings", {
   id: uuid("id").primaryKey(),
   chunkId: uuid("chunk_id").notNull().references(() => chunks.id, { onDelete: "cascade" }),
   embeddingProvider: text("embedding_provider").notNull(),
   embeddingModel: text("embedding_model").notNull(),
   dimensions: integer("dimensions").notNull(),
-  embedding: vector1536("embedding").notNull(),
+  embedding: halfvec2048("embedding").notNull(),
   chunkContentChecksum: text("chunk_content_checksum").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true, mode: "string" }).notNull()
 }, (table) => [
   uniqueIndex("chunk_embeddings_chunk_model_dimensions_uq").on(table.chunkId, table.embeddingModel, table.dimensions),
   index("chunk_embeddings_model_dimensions_idx").on(table.embeddingModel, table.dimensions),
-  check("chunk_embeddings_dimensions_check", sql`${table.dimensions} > 0 and ${table.dimensions} <= 1536`)
+  check("chunk_embeddings_dimensions_check", sql`${table.dimensions} > 0 and ${table.dimensions} <= 2048`)
 ]);
 
 // ============================================================================

@@ -9,12 +9,12 @@
  *
  * 每个 provider 都有自己独立的 endpoint（baseUrl / apiKey / model）+ `enabled` 开关，
  * 互不干扰：缺某一组的 key 只禁用对应能力，不影响其它 provider（依赖倒置、各读各的 env）。
- * 生产维度约定：真实 embedding 默认 1536 维，与 database 侧向量列迁移保持一致；
+ * 生产维度约定：真实 embedding 默认 2048 维（nvidia/llama-nemotron-embed-vl-1b-v2），与 database 侧向量列迁移保持一致；
  * 调小需同步 migration，pgvector 列维度在创建时固定。
  */
 
 /** 生产默认 embedding 维度，需与 packages/database 的向量列迁移一致。 */
-export const DEFAULT_PRODUCTION_EMBEDDING_DIMENSIONS = 1536;
+export const DEFAULT_PRODUCTION_EMBEDDING_DIMENSIONS = 2048;
 
 /**
  * 四个 provider 的环境变量名集中在此，避免各处硬编码产生命名漂移。
@@ -108,8 +108,8 @@ export function readLlmProviderConfig(): LlmProviderConfig {
 /**
  * 读取 embedding provider 配置。
  *
- * embedding 模型无跨 provider 默认值；维度默认 1536，可由环境变量覆盖。
- * 维度解析失败或非正整数时回退 1536（与 database 向量列维度契约保持一致）。
+ * embedding 模型无跨 provider 默认值；维度默认 2048，可由环境变量覆盖。
+ * 维度解析失败或非正整数时回退 2048（与 database 向量列维度契约保持一致）。
  * baseUrl、apiKey、embeddingModel 均非空时才启用，避免把 chat 模型误发到 `/embeddings`。
  *
  * @returns embedding 端点配置与启用标记。

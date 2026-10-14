@@ -21,10 +21,10 @@ export const POSTGRES_RAG_VECTOR_MODEL = DEFAULT_MOCK_EMBEDDING_MODEL;
 /** 当前工程闭环的 provider 标识。 */
 export const POSTGRES_RAG_VECTOR_PROVIDER = "deterministic-mock";
 /**
- * 生产 embedding 默认维度；与 P1 真实模型（如 OpenAI text-embedding-3-small 1536 维）约定一致。
+ * 生产 embedding 默认维度；覆盖 nvidia/llama-nemotron-embed-vl-1b-v2（2048 维）。
  * 该值仅用于 env 工厂在没有显式配置时的兜底，adapter 实际写入维度由调用方通过 options.dimensions 决定。
  */
-export const PRODUCTION_EMBEDDING_DIMENSIONS = 1536;
+export const PRODUCTION_EMBEDDING_DIMENSIONS = 2048;
 
 /** PostgreSQL VectorStore 的隔离配置。 */
 export interface PostgresVectorStoreOptions {
@@ -171,7 +171,7 @@ class PostgresVectorStore implements VectorStore {
           `insert into chunk_embeddings(
              id, chunk_id, embedding_provider, embedding_model, dimensions, embedding,
              chunk_content_checksum, created_at
-           ) values ($1, $2, $3, $4, $5, $6::public.vector, $7, now())
+           ) values ($1, $2, $3, $4, $5, $6::public.halfvec, $7, now())
            on conflict (chunk_id, embedding_model, dimensions) do update
              set embedding_provider = excluded.embedding_provider,
                  embedding = excluded.embedding,
@@ -254,9 +254,9 @@ class PostgresVectorStore implements VectorStore {
          )
          select chunk_id, document_id, source_uri, chunk_index, chunk_text, heading, page_number,
                 metadata, chunker_version, embedding::text, embedding_model,
-                1 - (embedding OPERATOR(public.<=>) $4::public.vector) as score
+                1 - (embedding OPERATOR(public.<=>) $4::public.halfvec) as score
            from authorized_candidates
-          order by embedding OPERATOR(public.<=>) $4::public.vector, embedding_id
+          order by embedding OPERATOR(public.<=>) $4::public.halfvec, embedding_id
          limit $${params.length}`,
         params
       );

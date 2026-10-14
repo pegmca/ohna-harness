@@ -338,11 +338,11 @@ class DataSourceRuntimeService implements DataSourceRuntime {
     options: RetrievalOptions = {},
     context: DataSourceRetrievalContext = {}
   ): Promise<DataSourceRuntimeResult<RagSearchRuntimeResponse>> {
-    const retriever = await this.createRetriever(context.ownerUserId ?? null);
+    const retriever = await this.retriever(context);
     if (!retriever.ok) return retriever;
     // Agentic 检索挂载点：检索前把原始 query 改写为检索友好问句（缺省不改写），提升召回。
     const resolvedQuery = this.queryRewriter ? (await this.queryRewriter(query)).rewritten : query;
-    const retrievalResult = await retriever.retriever.retrieve(resolvedQuery, options);
+    const retrievalResult = await retriever.data.retrieve(resolvedQuery, options);
     const trace = createTraceRetrievalEvent(resolvedQuery, retrievalResult);
 
     if (!retrievalResult.ok) {
@@ -373,11 +373,11 @@ class DataSourceRuntimeService implements DataSourceRuntime {
     options: RetrievalOptions = {},
     context: DataSourceRetrievalContext = {}
   ): Promise<DataSourceRuntimeResult<RagAnswerRuntimeResponse>> {
-    const retriever = await this.createRetriever(context.ownerUserId ?? null);
+    const retriever = await this.retriever(context);
     if (!retriever.ok) return retriever;
     // Agentic 检索挂载点：检索前把原始 question 改写为检索友好问句（缺省不改写），提升召回。
     const resolvedQuery = this.queryRewriter ? (await this.queryRewriter(question)).rewritten : question;
-    const retrievalResult = await retriever.retriever.retrieve(resolvedQuery, options);
+    const retrievalResult = await retriever.data.retrieve(resolvedQuery, options);
     const trace = createTraceRetrievalEvent(resolvedQuery, retrievalResult);
 
     if (!retrievalResult.ok) {
@@ -421,12 +421,16 @@ class DataSourceRuntimeService implements DataSourceRuntime {
   /**
    * 从持久化 repository 分页加载当前 owner 可见 chunks，并创建 hybrid retriever。
    *
-   * @param ownerUserId 当前调用身份。
-   * @returns 绑定持久化向量库和 keyword candidates 的 retriever。
+   * P2 起提升为公开方法（原私有 createRetriever）：供多路召回编排器复用内部库 leg，
+   * 与附件 leg 合并（对齐 §5.5 / D-P2-1），避免重造 hybrid/rerank。
+   *
+   * @param context 调用身份；ownerUserId 缺省匿名（只见 shared/demo）。
+   * @returns 成功时返回绑定持久化向量库和 keyword candidates 的 retriever，失败时返回结构化错误。
    */
-  private async createRetriever(
-    ownerUserId: string | null
-  ): Promise<{ ok: true; retriever: Retriever } | { ok: false; error: RagStructuredError }> {
+  public async retriever(
+    context: DataSourceRetrievalContext = {}
+  ): Promise<DataSourceRuntimeResult<Retriever>> {
+    const ownerUserId = context.ownerUserId ?? null;
     const embeddingClient = this.embeddingClient;
     if (embeddingClient === undefined) {
       return {
@@ -456,7 +460,7 @@ class DataSourceRuntimeService implements DataSourceRuntime {
       }));
       return {
         ok: true,
-        retriever: createHybridRetriever({
+        data: createHybridRetriever({
           embeddingClient,
           vectorStore: this.vectorStoreFactory(ownerUserId),
           chunks: embeddedChunks,

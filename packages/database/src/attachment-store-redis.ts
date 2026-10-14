@@ -6,6 +6,7 @@ import {
   type AttachmentStore,
   type EmbeddedChunk,
   type EmbeddingVector,
+  type InlineAttachment,
   type RagStructuredError,
   type VectorSearchMatch,
   type VectorSearchResult,
@@ -294,7 +295,73 @@ class RedisAttachmentStore implements AttachmentStore {
   }
 
   /**
-   * 枚举会话内全部附件 key（docs 集合 + 每个 doc hash + 每个 chunk key）。
+   * 写入某会话某附件的内联原文槽（小附件走此路径，不建向量索引）。
+   *
+   * P2-B（§8.2 row C）：内联槽以 `attach:conv:{convId}:doc:{docId}:inline` 为键，
+   * 值为 JSON string `{ text, source, fileName }`。写入时同时 `sAdd(docsKey, documentId)`
+   * 使 docs SET 成为统一的会话锚点，`collectKeys` / `touch` / `drop` 据此覆盖内联键。
+   *
+   * scope 非法（空 conversationId/documentId）时**静默 no-op**——内联是 best-effort 的
+   * 优化路径，方法返回 void，与 upsert 的结构化报错语义区分。Redis 故障时异常直接传播，
+   * 由调用方（`ingestChatAttachment`）的 try/catch 封装为 `attachment_store_failed`。
+   *
+   * @param conversationId 会话标识；空白时忽略。
+   * @param attachment 内联附件（documentId / 原文 / source / fileName）。
+   * @returns 写入完成的 Promise。
+   */
+  public async putInline(conversationId: string, attachment: InlineAttachment): Promise<void> {
+    if (isBlank(conversationId) || isBlank(attachment.documentId)) return;
+    try {
+      await this.connect();
+      const inlineKey = conversationInlineKey(conversationId, attachment.documentId);
+      const docsKey = conversationDocsKey(conversationId);
+      const jsonString = JSON.stringify({
+        text: attachment.text,
+        source: attachment.source,
+        fileName: attachment.fileName
+      });
+      await this.client.set(inlineKey, jsonString);
+      await this.client.sAdd(docsKey, attachment.documentId);
+      await this.client.expire(inlineKey, this.ttlSeconds);
+      await this.client.expire(docsKey, this.ttlSeconds);
+    } catch {
+      // Redis 故障：异常传播给调用方，由 ingestChatAttachment 的 try/catch 封装为结构化错误。
+      throw new Error("attachment_store_failed");
+    }
+  }
+
+  /**
+   * 读取某会话某附件的内联原文槽。
+   *
+   * P2-B（§8.2 row C）：从 `attach:conv:{convId}:doc:{docId}:inline` 读取 JSON string，
+   * 解析为 `{ text, source, fileName }` 并补齐 documentId 后返回。缺失或解析失败返回 null。
+   *
+   * @param conversationId 会话标识；空白或不存在时返回 null。
+   * @param documentId 附件文档逻辑 id；空白或不存在时返回 null。
+   * @returns 内联附件；缺失时返回 null。
+   */
+  public async getInline(conversationId: string, documentId: string): Promise<InlineAttachment | null> {
+    if (isBlank(conversationId) || isBlank(documentId)) return null;
+    try {
+      await this.connect();
+      const raw = await this.client.get(conversationInlineKey(conversationId, documentId));
+      if (!raw) return null;
+      const parsed = JSON.parse(raw) as { text?: string; source?: string; fileName?: string };
+      if (typeof parsed.text !== "string" || typeof parsed.source !== "string" || typeof parsed.fileName !== "string") {
+        return null;
+      }
+      return { documentId, text: parsed.text, source: parsed.source, fileName: parsed.fileName };
+    } catch {
+      // JSON 解析失败或 Redis 故障：best-effort 返回 null。
+      return null;
+    }
+  }
+
+  /**
+   * 枚举会话内全部附件 key（docs 集合 + 每个 doc hash + 每个 chunk key + 每个 inline key）。
+   *
+   * P2-B 新增：对每个 docId 额外收集 `attach:conv:{convId}:doc:{docId}:inline` 键，
+   * 使 `touch` / `drop` 一并覆盖内联槽（§8.2 row C）。
    *
    * @param conversationId 会话标识。
    * @returns 该会话的全部 Redis key。
@@ -309,6 +376,8 @@ class RedisAttachmentStore implements AttachmentStore {
       for (let index = 0; index < chunkCount; index += 1) {
         keys.push(conversationChunkKey(conversationId, documentId, index));
       }
+      // 内联槽 key：可能不存在（大文件走向量索引路），但加入列表后 touch/drop 会安全地忽略缺失键。
+      keys.push(conversationInlineKey(conversationId, documentId));
     }
     return keys;
   }
@@ -489,6 +558,20 @@ function conversationDocKey(conversationId: string, documentId: string): string 
  */
 function conversationChunkKey(conversationId: string, documentId: string, index: number): string {
   return `attach:conv:${conversationId}:doc:${documentId}:chunk:${index}`;
+}
+
+/**
+ * 内联原文槽的 Redis key（P2-B / §8.2 row C）。
+ *
+ * 与 chunk key 共享 `attach:conv:{convId}:doc:{docId}:` 前缀，但后缀为 `:inline`，
+ * 值为 JSON string `{ text, source, fileName }`（无 chunkIndex 维度——内联槽以 documentId 为键唯一覆盖）。
+ *
+ * @param conversationId 会话标识。
+ * @param documentId 附件文档标识。
+ * @returns inline key。
+ */
+function conversationInlineKey(conversationId: string, documentId: string): string {
+  return `attach:conv:${conversationId}:doc:${documentId}:inline`;
 }
 
 /** @param value 待检查字符串。 @returns 是否为空或纯空白。 */

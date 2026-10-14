@@ -21,7 +21,9 @@ export function createCitationFromRetrievedChunk(result: RetrievedChunk): Citati
     chunkIndex: result.chunk.chunkIndex,
     quote: createQuote(result.chunk.text),
     pageNumber: result.chunk.pageNumber ?? result.chunk.page,
-    confidence: result.scoreBreakdown.finalScore
+    confidence: result.scoreBreakdown.finalScore,
+    // 仅在候选带 sourceKind 时才复制，保证旧单源 citation 形状不变（不出现 undefined 键）。
+    ...(result.sourceKind !== undefined ? { sourceKind: result.sourceKind } : {})
   };
 }
 

@@ -1,5 +1,6 @@
 import type {
   CitationDto,
+  CitationSourceKindDto,
   DataSourceDocumentDto,
   DataSourceIngestRequestDto,
   DataSourceIngestResponseDto,
@@ -27,6 +28,12 @@ export type RagAnswer = RagAnswerDto;
 export type EmbeddedChunk = EmbeddedChunkDto;
 export type EmbeddingUsage = EmbeddingUsageDto;
 export type VectorSearchMatch = VectorSearchMatchDto;
+
+/**
+ * 检索候选/引用的来源类型：attachment（会话级临时附件）或 internal（内部知识库）。
+ * 镜像 DTO 的 CitationSourceKindDto，保持 rag 内部领域类型与跨边界 DTO 命名一致。
+ */
+export type CitationSourceKind = CitationSourceKindDto;
 
 export type EmbeddingVector = readonly number[];
 
@@ -145,6 +152,8 @@ export interface RetrievedChunk {
   rank: number;
   score: number;
   scoreBreakdown: RetrievalScoreBreakdown;
+  /** 该候选来源：附件 / 内部知识库；缺省表示单源检索未标注来源。 */
+  sourceKind?: CitationSourceKind;
 }
 
 export interface RerankResult {
@@ -172,6 +181,8 @@ export interface RetrievalTraceSummary {
     rerankScore?: number;
     finalScore: number;
     rank: number;
+    /** 该候选来源：附件 / 内部知识库；缺省表示未标注。 */
+    sourceKind?: CitationSourceKind;
   }[];
 }
 

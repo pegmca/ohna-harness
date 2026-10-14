@@ -8,6 +8,24 @@ import {
 import { cosineSimilarity, normalizeTopK } from "./vector-math.js";
 
 /**
+ * 会话级内联附件：解析文本长度 ≤ 阈值时，原文直接内联进 prompt，**不建向量索引**（§5.6 / D-P2-3）。
+ *
+ * 与向量索引（chunk + embedding）是两条独立通道：内联槽只存原文与展示元数据，
+ * grounding hook 会把它合成为一条 score=1 的 synthetic RetrievedChunk 注入。
+ * 不落主库（`document_versions.content NOT NULL` 约束见 §8.1），故原文仍存临时存储（Redis）。
+ */
+export interface InlineAttachment {
+  /** 附件文档逻辑 id，与上传记录一致；内联合成 chunk 的 chunkId 即取该值。 */
+  documentId: string;
+  /** 解析后的完整原文。 */
+  text: string;
+  /** 逻辑来源标识，作为 citation.source 展示。 */
+  source: string;
+  /** 原始文件名，内联合成 chunk 的 source 展示名。 */
+  fileName: string;
+}
+
+/**
  * 会话级附件存储抽象。
  *
  * 设计取舍（docs/v1.1/06-chat-attachments.md §5.4）：故意与 VectorStore "同形"——
@@ -54,6 +72,28 @@ export interface AttachmentStore {
   ): Promise<VectorSearchResult>;
 
   /**
+   * 写入某会话某附件的内联原文槽（小附件走此路径，不建向量索引）。
+   *
+   * 与 upsert 的差异：内联槽以 documentId 为键直接存全文，同一 documentId 覆盖。
+   * scope 非法（空 conversationId/documentId）时**静默 no-op**——内联是 best-effort 的
+   * 优化路径，不引入结构化错误返回值（本方法返回 void），与 upsert 的结构化报错语义区分。
+   *
+   * @param conversationId 会话 id；空白视为非法 scope，直接忽略。
+   * @param attachment 内联附件（documentId / 原文 / source / fileName）。
+   * @returns 写入完成的 Promise。
+   */
+  putInline(conversationId: string, attachment: InlineAttachment): Promise<void>;
+
+  /**
+   * 读取某会话某附件的内联原文槽。
+   *
+   * @param conversationId 会话 id；空白或不存在时返回 null。
+   * @param documentId 附件文档逻辑 id；空白或不存在时返回 null。
+   * @returns 内联附件，缺失时返回 null。
+   */
+  getInline(conversationId: string, documentId: string): Promise<InlineAttachment | null>;
+
+  /**
    * 滑窗续期该会话所有附件 key 的 TTL（内存实现为 no-op）。
    *
    * @param conversationId 会话 id。
@@ -62,7 +102,7 @@ export interface AttachmentStore {
   touch(conversationId: string): Promise<void>;
 
   /**
-   * 主动回收该会话的全部附件（会话删除时调用；内存实现删除整桶）。
+   * 主动回收该会话的全部附件（会话删除时调用；内存实现删除整桶，含内联槽）。
    *
    * @param conversationId 会话 id。
    * @returns 回收完成的 Promise。
@@ -92,6 +132,7 @@ export function createInMemoryAttachmentStore(options: { dimensions?: number } =
  */
 class InMemoryAttachmentStore implements AttachmentStore {
   private readonly chunksByConversation = new Map<string, Map<string, EmbeddedChunk>>();
+  private readonly inlineByConversation = new Map<string, Map<string, InlineAttachment>>();
   private dimensions: number | undefined;
 
   /**
@@ -218,6 +259,49 @@ class InMemoryAttachmentStore implements AttachmentStore {
   }
 
   /**
+   * 写入某会话的内联附件原文槽，同一 documentId 覆盖。
+   *
+   * 内联是"小附件直接进 prompt"的 best-effort 优化路径，方法返回 void；
+   * scope 非法（空 conversationId/documentId）时**静默忽略**，不抛错、不写入，
+   * 与 upsert 返回结构化错误的行为区分（对齐 §8.2 对内联槽的宽松契约）。
+   *
+   * @param conversationId 会话 id；空白时忽略。
+   * @param attachment 内联附件（documentId / 原文 / source / fileName）。
+   * @returns 写入完成的 Promise。
+   */
+  public async putInline(conversationId: string, attachment: InlineAttachment): Promise<void> {
+    if (!isNonBlank(conversationId) || !isNonBlank(attachment.documentId)) {
+      return;
+    }
+
+    let bucket = this.inlineByConversation.get(conversationId);
+
+    if (!bucket) {
+      bucket = new Map<string, InlineAttachment>();
+      this.inlineByConversation.set(conversationId, bucket);
+    }
+
+    bucket.set(attachment.documentId, { ...attachment });
+  }
+
+  /**
+   * 读取某会话的内联附件原文槽。
+   *
+   * @param conversationId 会话 id；空白视为缺失。
+   * @param documentId 附件文档逻辑 id；空白视为缺失。
+   * @returns 内联附件；缺失时返回 null。
+   */
+  public async getInline(conversationId: string, documentId: string): Promise<InlineAttachment | null> {
+    if (!isNonBlank(conversationId) || !isNonBlank(documentId)) {
+      return null;
+    }
+
+    const stored = this.inlineByConversation.get(conversationId)?.get(documentId);
+
+    return stored ? { ...stored } : null;
+  }
+
+  /**
    * 内存实现没有 TTL，touch 为 no-op，仅满足接口契约。
    *
    * @param _conversationId 会话 id（内存实现忽略）。
@@ -228,13 +312,14 @@ class InMemoryAttachmentStore implements AttachmentStore {
   }
 
   /**
-   * 删除该会话的整桶附件，等价于 Redis 实现的主动回收。
+   * 删除该会话的整桶附件（向量索引桶 + 内联槽），等价于 Redis 实现的主动回收。
    *
    * @param conversationId 会话 id。
    * @returns 删除完成的 Promise。
    */
   public async drop(conversationId: string): Promise<void> {
     this.chunksByConversation.delete(conversationId);
+    this.inlineByConversation.delete(conversationId);
   }
 
   /**
@@ -326,4 +411,17 @@ function validateAttachmentScope(conversationId: string, documentId?: string): R
   }
 
   return undefined;
+}
+
+/**
+ * 判断字符串是否为非空（去空白后长度 > 0）。
+ *
+ * 内联槽的 put/get 需要宽松的 scope 判定：非法 scope 返回 null / no-op 而非结构化错误，
+ * 故单独抽出该谓词，避免与返回 RagStructuredError 的 validateAttachmentScope 混用。
+ *
+ * @param value 待判定字符串。
+ * @returns 非空返回 true。
+ */
+function isNonBlank(value: string): boolean {
+  return typeof value === "string" && value.trim().length > 0;
 }

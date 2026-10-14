@@ -73,6 +73,12 @@ export interface RetrievalScoreBreakdownDto {
 }
 
 /**
+ * 引用来源类型 DTO：attachment 表示会话级临时附件，internal 表示内部知识库。
+ * 可选字段，旧数据（未标注来源）保持 undefined，避免破坏既有 citation 形状。
+ */
+export type CitationSourceKindDto = "attachment" | "internal";
+
+/**
  * 引用 DTO 连接回答片段和原始 chunk，是 grounded answer 的最小证据结构。
  */
 export interface CitationDto {
@@ -84,6 +90,8 @@ export interface CitationDto {
   quote: string;
   pageNumber?: number;
   confidence: number;
+  /** 证据来源：附件 / 内部知识库；缺省表示来源未知（兼容旧数据）。 */
+  sourceKind?: CitationSourceKindDto;
 }
 
 /**
@@ -225,6 +233,8 @@ export interface RetrievalTraceDto {
     rerankScore?: number;
     finalScore: number;
     rank: number;
+    /** 该候选来源：附件 / 内部知识库；缺省表示未标注。 */
+    sourceKind?: CitationSourceKindDto;
   }>;
   ok: boolean;
   error?: {

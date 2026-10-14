@@ -152,3 +152,73 @@ test("attachment store drop reclaims a conversation bucket and touch is a no-op"
   assert.equal(search.ok, true);
   assert.deepEqual(search.matches, []);
 });
+
+test("attachment store round-trips inline attachments and overwrites by documentId", async () => {
+  const store = createInMemoryAttachmentStore();
+  const conversationId = "conv-inline";
+
+  await store.putInline(conversationId, {
+    documentId: "doc-1",
+    text: "第一版原文",
+    source: "upload:doc-1",
+    fileName: "note.md"
+  });
+
+  const first = await store.getInline(conversationId, "doc-1");
+  assert.equal(first.documentId, "doc-1");
+  assert.equal(first.text, "第一版原文");
+  assert.equal(first.source, "upload:doc-1");
+  assert.equal(first.fileName, "note.md");
+
+  await store.putInline(conversationId, {
+    documentId: "doc-1",
+    text: "第二版原文",
+    source: "upload:doc-1",
+    fileName: "note.md"
+  });
+
+  const overwritten = await store.getInline(conversationId, "doc-1");
+  assert.equal(overwritten.text, "第二版原文");
+});
+
+test("attachment store isolates inline attachments by conversation and returns null when missing", async () => {
+  const store = createInMemoryAttachmentStore();
+
+  await store.putInline("conv-a", {
+    documentId: "doc-1",
+    text: "会话 A 原文",
+    source: "upload:doc-1",
+    fileName: "note.md"
+  });
+
+  assert.equal(await store.getInline("conv-b", "doc-1"), null);
+  assert.equal(await store.getInline("conv-a", "doc-2"), null);
+});
+
+test("attachment store treats blank inline scope as a no-op / null", async () => {
+  const store = createInMemoryAttachmentStore();
+
+  await store.putInline("", { documentId: "doc-1", text: "x", source: "s", fileName: "f" });
+  await store.putInline("conv-a", { documentId: "   ", text: "x", source: "s", fileName: "f" });
+
+  assert.equal(await store.getInline("", "doc-1"), null);
+  assert.equal(await store.getInline("conv-a", "doc-1"), null);
+  assert.equal(await store.getInline("conv-a", "   "), null);
+});
+
+test("attachment store drop clears inline attachments for the conversation", async () => {
+  const store = createInMemoryAttachmentStore();
+  const conversationId = "conv-inline-drop";
+
+  await store.putInline(conversationId, {
+    documentId: "doc-1",
+    text: "待回收原文",
+    source: "upload:doc-1",
+    fileName: "note.md"
+  });
+  assert.ok(await store.getInline(conversationId, "doc-1"));
+
+  await store.drop(conversationId);
+
+  assert.equal(await store.getInline(conversationId, "doc-1"), null);
+});

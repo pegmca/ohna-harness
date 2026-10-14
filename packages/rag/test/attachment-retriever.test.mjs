@@ -24,9 +24,12 @@ async function createSeededRetriever(options = {}) {
     source: "upload:doc-1",
     fileName: "note.md",
     contentType: "text/markdown",
-    content: "公司 2024 年净利润 10 亿元，同比增长 25%。"
+    content: "公司 2024 年净利润 10 亿元，同比增长 25%。",
+    // 附件检索器只消费向量索引；阈值压到 0 强制走 indexed 路径（内联路径不建索引）。
+    inlineMaxChars: 0
   });
   assert.equal(ingest.ok, true);
+  assert.equal(ingest.mode, "indexed");
 
   return {
     embeddingClient,

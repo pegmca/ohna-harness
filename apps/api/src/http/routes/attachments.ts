@@ -9,7 +9,7 @@ import type { IdentitySnapshot } from "@aiagent/identity";
 import type { FastifyInstance } from "fastify";
 import { createHash } from "node:crypto";
 import { chatAttachmentUploadRequestSchema } from "../schemas.js";
-import { createRequestId, fail, toApiError, toApiErrorFromRagError } from "../errors.js";
+import { createRequestId, fail, ragErrorStatusCode, toApiError, toApiErrorFromRagError } from "../errors.js";
 
 const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
 const LEASE_RENEW_INTERVAL_MS = 60_000;
@@ -114,7 +114,7 @@ export function registerAttachmentRoutes(
         await deps.attachmentRepository.fail(
           userId, input.clientAttachmentId, claimed.upload.claimToken, new Date().toISOString()
         );
-        reply.code(400);
+        reply.code(ragErrorStatusCode(result.error));
         return fail(toApiErrorFromRagError(result.error, requestId), requestId);
       }
       await deps.attachmentRepository.complete(

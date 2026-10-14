@@ -69,11 +69,11 @@ export async function runRagEval(input: RagEvalRunnerInput): Promise<RagEvalRunn
  */
 export async function runRagEvalWithJudge(
   input: RagEvalRunnerInput,
-  judge?: LlmJudge
+  judge?: LlmJudge | null
 ): Promise<RagEvalRunnerResult> {
   const optionsWithJudge: RagEvalRunnerOptions = {
     ...(input.options ?? {}),
-    judge
+    judge: judge ?? undefined
   };
 
   return runRagEval({

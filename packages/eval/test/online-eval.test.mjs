@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createShadowEvaluator, sampleAndEvaluate } from "../dist/index.js";
+import { createDeterministicMockLoopLlmJudge } from "../dist/testing.js";
 
 test("shadow evaluator produces 0~1 scores and is reproducible", async () => {
-  const evaluator = createShadowEvaluator();
+  const evaluator = createShadowEvaluator({ judge: createDeterministicMockLoopLlmJudge() });
   const input = {
     caseId: "shadow-1",
     query: "特斯拉 2023 年交付量是多少？",
@@ -26,7 +27,7 @@ test("shadow evaluator produces 0~1 scores and is reproducible", async () => {
 });
 
 test("sampleAndEvaluate runs all samples concurrently and returns matching length", async () => {
-  const evaluator = createShadowEvaluator();
+  const evaluator = createShadowEvaluator({ judge: createDeterministicMockLoopLlmJudge() });
   const samples = [
     { caseId: "s-1", query: "苹果成立于哪一年？", answer: "苹果成立于 1976 年。", expectedText: "苹果公司成立于 1976 年。" },
     { caseId: "s-2", query: "伯克希尔 2022 净利润？", answer: "962 亿美元。", expectedText: "伯克希尔哈撒韦 2022 年净利润为 962 亿美元。" }

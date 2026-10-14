@@ -22,7 +22,7 @@
    │  P0 LLM-as-Judge（校准信号，不计入门禁）                              │
    │  createLoopLlmJudge → LoopLlmJudge（judgeAnswerCorrectness /       │
    │  judgeFaithfulness）→ 追加 llmAnswerCorrectness / llmFaithfulness    │
-   │  默认确定性 mock（词元重叠，可复现）；可选真实模型（多数投票校准，降级）  │
+   │  独立 Judge provider（多数投票校准）；测试显式注入确定性替身          │
    └──────────────────────────────────────────────────────────────────┘
 
                          ┌──────────────────────────────────────────────┐
@@ -42,18 +42,18 @@
 **读什么**
 - `packages/eval/src/judge-loop.ts`
   - `LoopLlmJudge` 接口（`:27`）：两个 rubric——`judgeAnswerCorrectness`（答案是否覆盖期望要点）、`judgeFaithfulness`（答案论断是否被检索上下文支撑，无幻觉）。注意返回值 `JudgeScore { score, reason }`。
-  - `createLoopLlmJudge(options?)`（`:191`）：工厂。**未显式传 `baseUrl`/`apiKey` 时从 `@aiagent/rag` 的 `readBridgeConfig` 读 bridge env**；仅当两个都非空才绑定 `callModel`（真实模型模式），否则 `null` → 确定性 mock。
-  - `deterministicAnswerCorrectness`（`:142`）/ `deterministicFaithfulness`（`:164`）：用"有意义词元重叠率"打分（过滤中英文停用词，见 `STOPWORDS` `:64` / `extractMeaningfulTerms` `:92`）。**完全可复现**——测试与 CI 依赖它，真实模型模式只是可选的增强。
-  - `sampleAndAverage`（`:293`）：真实模型模式下每个 rubric 采样 `samples`（默认 3）次取平均（多数投票校准）；单次失败 `catch` 后降级中性分 `NEUTRAL_SCORE = 0.5`（`LOOP-JUDGE` 兜底，绝不 throw 到主流程）。
-  - `parseJudgeJson`（`:111`）：容错解析模型 JSON（支持 ```json 围栏与散落文本抽取），解析不出 → 中性分。
+  - `createLoopLlmJudge(options?)`（`:119`）：工厂。未显式传 `baseUrl`/`apiKey`/`model` 时从 `@aiagent/rag` 的 `readJudgeProviderConfig` 读 **judge provider env**（`AIAGENT_JUDGE_BASE_URL` / `AIAGENT_JUDGE_API_KEY` / `AIAGENT_JUDGE_MODEL`）；仅当三者都非空才绑定 `callModel`（真实模型模式），**否则返回 `null`——不再静默回退确定性 mock**（会伪装成"judge 已运行"的无意义基线，掩盖 provider 未配置）。
+  - `createDeterministicMockLoopLlmJudge()`（`packages/eval/src/testing.ts`）：原"确定性 mock 打分"已降级为**测试替身**，需要可复现的 `deterministicAnswerCorrectness` / `deterministicFaithfulness`（有意义词元重叠率，过滤中英文停用词）时由测试/调用方显式注入。
+  - `sampleAndAverage`（`:217`）：真实模型模式下每个 rubric 采样 `samples`（默认 3）次取平均（多数投票校准）；单次失败 `catch` 后降级中性分 `NEUTRAL_SCORE = 0.5`（`:63`，兜底，绝不 throw 到主流程）。
+  - `parseJudgeJson`（`:82`）：容错解析模型 JSON（支持 ```json 围栏与散落文本抽取），解析不出 → 中性分。
 - `packages/eval/src/automation.ts`
   - `CaseMetrics`（`:44`）：在 7 项确定性指标基础上，**可选**追加 `llmAnswerCorrectness?` / `llmFaithfulness?`（带 `?`，缺省不存在）。
   - `scoreCaseWithEvidence(item, f, judgeScores?)`（`:129`）：**`judgeScores` 为可选参数**。仅当传入时才在 `metrics` 追加两项校准分（`:156-159`）；**不传时函数行为与改造前逐字节一致**（字段数量、顺序、`passed`、返回形状全不变）——这是零回归的物理保证。
   - `AGGREGATED_METRIC_KEYS`（`:165`）：聚合口径**显式写死 7 项确定性指标**，judge 校准分永不进入聚合。
   - `renderMarkdownReport`（`:94`）：报告头 `LLM judge: ${report.run.llmJudge ? "已启用" : "未使用"}`——动态反映是否启用。
 - `packages/eval/src/loop-runner.ts`
-  - `LoopEvalOptions.judge?`（`:98`）：注入入口。
-  - `computeLoopJudgeScores(judge, item, evidence)`（`:185`）：把 `evidence.answer`/`expectedFacts+expectedCitations`/`retrievedChunks` 编排成两个 rubric 调用，返回已解析纯数字。`runLoopEval`（`:140-142`）仅在 `options.judge` 存在时才计算并透传；报告 `llmJudge: Boolean(options.judge)`（`:165`）。
+  - `LoopEvalOptions.judge?`（`:108`，允许 `null`）：注入入口；`createLoopLlmJudge()` 在 judge provider 禁用时返回 `null`，可直接透传，等价不启用 judge。
+  - `computeLoopJudgeScores(judge, item, evidence)`（`:215`）：把 `evidence.answer`/`expectedFacts+expectedCitations`/`retrievedChunks` 编排成两个 rubric 调用，返回已解析纯数字。`runLoopEval`（`:151`）仅在 `options.judge` 存在时才计算并透传；报告 `llmJudge: Boolean(options.judge)`（`:194`）。
 
 **pi 对应物**：pi 的 RAGAS 对齐 judge（`packages/eval/src/judge.ts` 的 `createLlmJudge` / `computeRagMetrics`）已有 `faithfulness` / `context_recall` 范式。本处把它**同构迁移到 loop eval**：rubric 文案（`:274` / `:279`）、`response_format: json_object`、`temperature=0`、失败降级中性分，都与 RAG judge 一致——体现"一套 judge 工程范式复用"。
 
@@ -63,7 +63,7 @@
 
 **学习检查点**
 - 为什么 judge 必须"只做校准、不进门禁"？LLM-as-Judge 有偏差（RAGAS 论文已述），直接当门禁会让 CI 抖动、噪声变高；把它放成"人读报告时的语义参考 + 未来人工校准集"才是工程正解。
-- 为什么默认走确定性 mock 而非强制真实模型？真实模型有网络/密钥/成本依赖，会让 eval 不可复现；**默认可复现、真实模式可选**是"质量工程素养"的体现（对齐 `04-eval-observability.md` 的"LLM 初筛 + 人工抽检"混合）。
+- 为什么 judge 不应默认走确定性 mock？生产静默 mock 会伪装成真实 judge 信号；改为 provider 未启用即 `null`，由测试显式注入确定性替身，才能同时保证生产可观测性与 CI 可复现性。
 - 多数投票校准：为什么采样 3 次取平均？单样本 LLM 打分方差大，多次采样平均近似降低方差、逼近"多数投票"稳定值。
 
 ---
@@ -141,7 +141,7 @@
 
 **红线二：trace 不反向依赖 agent/ai**
 - grep `packages/trace/src` 实际 import 仅 `otel-semconv.ts:15` 的 `import type { RunEvent } from "./index.js"`（纯类型，单向）；无运行时回指。
-- eval 依赖 `@aiagent/agent`/`@aiagent/ai`/`@aiagent/rag`/`@aiagent/types` 均已在其 `package.json` 声明；`judge-loop.ts` 用的 `@aiagent/rag`（仅 `readBridgeConfig` 这一纯函数）已声明。
+- eval 依赖 `@aiagent/agent`/`@aiagent/ai`/`@aiagent/rag`/`@aiagent/types` 均已在其 `package.json` 声明；`judge-loop.ts` 用的 `@aiagent/rag`（仅 `readJudgeProviderConfig` 这一纯函数）已声明。
 - 无新增生产依赖（zod 本已存在）。
 
 **学习检查点**
@@ -154,7 +154,7 @@
 
 1. `pnpm --filter @aiagent/eval test` 看 31 个用例（含 `judge-loop.test.mjs` 5 例 + `loop-runner-judge.test.mjs` 零回归 2 例）。
 2. `pnpm --filter @aiagent/trace test` 看 15 个用例（含 `otel-semconv.test.mjs` 14 例 + `redact.test.mjs` B1 回归 1 例）。
-3. 想看 judge 默认行为：在测试或脚本里 `createLoopLlmJudge()`（无 key）→ 走确定性 mock，`judgeAnswerCorrectness` 分数每次相同（可复现）。
+3. 想看 judge 的两种形态：配好 `AIAGENT_JUDGE_BASE_URL` + `AIAGENT_JUDGE_API_KEY` 后 `createLoopLlmJudge()` 返回真实模型 judge；不配则返回 `null`（judge 信号缺席，由调用方决定是否注入 `createDeterministicMockLoopLlmJudge()` 测试替身——它的分数每次相同、可复现）。
 4. 想看 OTel 映射：构造几条 `RunEvent`（agent_start/end、message_end、tool_execution_end、retrieval），调 `runEventsToOtelSpans` 看生成的 `gen_ai.*` span 与 `cost.total`/`gen_ai.token.count.*` 属性。
 5. 想看 B1 防护：`redact.test.mjs` 直接读——断言 `usage.input` 仍是 `number` 且值不变，`messages` 数组保留。
 
@@ -253,7 +253,7 @@
 
 **读什么**
 - `packages/eval/src/online-eval.ts`
-  - `ShadowEvaluator`（`:47`）+ `createShadowEvaluator(options?)`（`:67`）：默认用 `createLoopLlmJudge()`（确定性 mock，可复现、无网络）；`evaluate(input)` 只读取线上采样的 `{ caseId, query, answer, expectedText?, contexts? }` 跑 judge，**绝不写回生产、绝不改 run 状态**（JSDoc 与注释明确"影子"语义）。
+  - `ShadowEvaluator`（`:47`）+ `createShadowEvaluator({ judge })`（`:70`）：**options.judge 必填**（v1.1 起不再内部回退确定性 mock 基线——那会伪装成"影子评测已运行"却给出无意义分数）。真实场景传 `createLoopLlmJudge()`（judge provider 未启用时返回 `null`，调用方需先判空），要可复现则显式传 `createDeterministicMockLoopLlmJudge()`；`evaluate(input)` 只读取线上采样的 `{ caseId, query, answer, expectedText?, contexts? }` 跑 judge，**绝不写回生产、绝不改 run 状态**（JSDoc 与注释明确"影子"语义）。
   - `sampleAndEvaluate(evaluator, samples)`（`:100`）：`Promise.all` 并发跑整批样本，返回与输入等长、顺序一致的结果。
 - `packages/eval/src/benchmark-adapters.ts`
   - `BenchmarkCase`（`:20`）/ `BenchmarkAdapter`（`:36`）：外部基准的轻量契约——`loadCases()` 是唯一"接缝"。
@@ -268,8 +268,8 @@
 
 **零回归纪律（P4 红线）**
 - P4 全是**新增文件 + 新导出**；除 `index.ts` 追加导出外，`automation.ts`/`loop-runner.ts`/`judge-loop.ts` 现有行为零改动。
-- 默认 judge 走确定性 mock，**不引入任何网络依赖**（package.json 无 axios/fetch 类库）；benchmark mock 适配器纯返回常量。
-- 验证：`pnpm --filter @aiagent/eval test` 57/57（原 48 + 新增 9，含 `runLoopEval passes regression gate` 7 指标门禁零回归）；build/typecheck 全绿。
+- judge 必须显式注入，生产可用独立 Judge provider，测试用确定性替身，影子评测器自身不再暗含网络或 mock 策略；benchmark mock 适配器纯返回常量。
+- 验证：`pnpm --filter @aiagent/eval test` 62/62（含 provider/model disabled 护栏与 `runLoopEval passes regression gate` 7 指标门禁零回归）；build/typecheck 全绿。
 
 **学习检查点**
 - 为什么影子评测必须"只读、不回写"？线上采样的 answer/contexts 是生产产物，离线评测只是"旁路打分"用于监控 judge 漂移；一旦回写就污染生产 run、破坏数据血缘。这也是"评测/生产分离"的工程纪律。
@@ -282,7 +282,7 @@
 
 ## 13. 最小可演示路径（P4 追加）
 
-1. `pnpm --filter @aiagent/eval test` 现 **57 个用例**（原 48 + `online-eval`/`benchmark-adapters`/`calibration` 各 3 例）。
-2. 想看影子评测：`createShadowEvaluator()` 对采样 `{answer, query}` 调用 `evaluate`，两次调用分数相同（可复现）。
+1. `pnpm --filter @aiagent/eval test` 现 **62 个用例**（含 online eval、benchmark、calibration 与 provider/model disabled 护栏）。
+2. 想看影子评测：`createShadowEvaluator({ judge: createDeterministicMockLoopLlmJudge() })` 对采样 `{answer, query}` 调用 `evaluate`，两次调用分数相同（可复现；options.judge 必填，测试替身来自 `packages/eval/src/testing.ts`）。
 3. 想看 benchmark 接管：`benchmarkDatasetToEvalDataset(createMockGaiaAdapter(), 1)` 产出 `EvalDataset` 后直接喂 `runLoopEval(dataset, { judge })` 跑完整管线。
 4. 想看人工校准：`recordLabel` 录几条后 `calibrateJudgeScores` 会按全局偏差平移 judge 分并钳制到 [0,1]。

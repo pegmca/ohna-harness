@@ -8,7 +8,11 @@ export const DEFAULT_PRODUCTION_EMBEDDING_DIMENSIONS = PRODUCTION_EMBEDDING_DIME
 
 /** env 驱动工厂的可选生产默认；由 composition root 从真实 embedding client 透传。 */
 export interface VectorStoreEnvOptions {
-  /** 生产 embedding 模型名；缺省回退到 deterministic mock 以保持兼容。 */
+  /**
+   * 生产 embedding 模型名；缺省或空串回退到 deterministic mock 模型（legacy/test fixture 默认）。
+   * 组合根在 embedding provider 关闭时会读到空串，这里显式把空串视作"未配置"再兜底，
+   * 避免 pgvector 侧把 model 记成 `""` 这类不可诊断的值。
+   */
   embeddingModel?: string;
   /** 生产 embedding 维度；缺省回退到 1536（DEFAULT_PRODUCTION_EMBEDDING_DIMENSIONS）。 */
   dimensions?: number;
@@ -30,7 +34,8 @@ export function createVectorStoreFromEnv(
   options: VectorStoreEnvOptions = {}
 ): (ownerUserId: string | null) => VectorStore {
   if (process.env.DATABASE_URL) {
-    const embeddingModel = options.embeddingModel ?? POSTGRES_RAG_VECTOR_MODEL;
+    // 空串（provider 关闭时组合根传来的值）按"未配置"处理：`??` 只兜 undefined，兜不住 ""。
+    const embeddingModel = normalizeEmbeddingModel(options.embeddingModel);
     const dimensions = options.dimensions ?? DEFAULT_PRODUCTION_EMBEDDING_DIMENSIONS;
     return (ownerUserId) =>
       createPostgresVectorStore(pool, {
@@ -44,4 +49,15 @@ export function createVectorStoreFromEnv(
       });
   }
   return createInMemoryVectorStoreFactory();
+}
+
+/**
+ * 归一化 embedding 模型名：空串或纯空白按"未配置"处理，回退到 fixture 默认模型。
+ *
+ * @param embeddingModel 组合根透传的模型名，未配置时可能是空串。
+ * @returns 非空模型名。
+ */
+function normalizeEmbeddingModel(embeddingModel: string | undefined): string {
+  const trimmed = embeddingModel?.trim();
+  return trimmed ? trimmed : POSTGRES_RAG_VECTOR_MODEL;
 }

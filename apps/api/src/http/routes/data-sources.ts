@@ -7,7 +7,7 @@ import type {
   DataSourceIngestResponseDto
 } from "@aiagent/types";
 import type { FastifyInstance } from "fastify";
-import { createRequestId, fail, toApiError, toApiErrorFromRagError } from "../errors.js";
+import { createRequestId, fail, ragErrorStatusCode, toApiError, toApiErrorFromRagError } from "../errors.js";
 import {
   dataSourceChunksQuerySchema,
   dataSourceDocumentsQuerySchema,
@@ -58,7 +58,7 @@ export function registerDataSourceRoutes(app: FastifyInstance, deps: DataSourceR
     );
 
     if (!result.ok) {
-      reply.code(400);
+      reply.code(ragErrorStatusCode(result.error));
       return fail(toApiErrorFromRagError(result.error, requestId), requestId);
     }
 

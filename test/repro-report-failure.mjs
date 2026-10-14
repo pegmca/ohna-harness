@@ -1,8 +1,9 @@
-import { createDataSourceRuntime } from "@aiagent/rag";
+import { createDataSourceRuntime, createDeterministicMockEmbeddingClient } from "@aiagent/rag";
 import { createReportTool, createLocalArtifactStorage } from "@aiagent/report";
 import fs from "node:fs/promises";
 
-const runtime = createDataSourceRuntime();
+// 手动复现脚本：显式注入测试替身（非生产配置），裸构造会导致 embedding provider disabled。
+const runtime = createDataSourceRuntime({ embeddingClient: createDeterministicMockEmbeddingClient() });
 const artifactStorage = createLocalArtifactStorage({ baseDir: "/tmp/repro-artifacts" });
 await fs.mkdir("/tmp/repro-artifacts", { recursive: true });
 

@@ -2,7 +2,7 @@ import type { IdentitySnapshot } from "@aiagent/identity";
 import type { DataSourceRuntime } from "@aiagent/rag";
 import type { ApiResult, RagAnswerResponseDto, RagSearchResponseDto } from "@aiagent/types";
 import type { FastifyInstance } from "fastify";
-import { createRequestId, fail, toApiError, toApiErrorFromRagError } from "../errors.js";
+import { createRequestId, fail, ragErrorStatusCode, toApiError, toApiErrorFromRagError } from "../errors.js";
 import { ragAnswerRequestSchema, ragSearchRequestSchema } from "../schemas.js";
 
 export interface RagRoutesDeps {
@@ -43,7 +43,7 @@ export function registerRagRoutes(app: FastifyInstance, deps: RagRoutesDeps): vo
     }, { ownerUserId: identityByRequest.get(request)?.userId ?? null });
 
     if (!result.ok) {
-      reply.code(400);
+      reply.code(ragErrorStatusCode(result.error));
       return fail(toApiErrorFromRagError(result.error, requestId), requestId);
     }
 
@@ -78,7 +78,7 @@ export function registerRagRoutes(app: FastifyInstance, deps: RagRoutesDeps): vo
     }, { ownerUserId: identityByRequest.get(request)?.userId ?? null });
 
     if (!result.ok) {
-      reply.code(400);
+      reply.code(ragErrorStatusCode(result.error));
       return fail(toApiErrorFromRagError(result.error, requestId), requestId);
     }
 

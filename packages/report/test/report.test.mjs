@@ -3,6 +3,7 @@ import { test } from "node:test";
 import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createDataSourceRuntime, createDeterministicMockEmbeddingClient } from "@aiagent/rag";
 import {
   createReportPackageSummary,
   assertStorageKey,
@@ -46,6 +47,18 @@ test("local artifact storage rejects paths and publishes only atomically complet
   }
 });
 
+/**
+ * 创建测试用 RAG runtime。
+ *
+ * workflow 不再自建 runtime，测试必须显式注入；embedding client 已无生产默认值，
+ * 这里注入 deterministic mock 测试替身（非生产配置）。
+ *
+ * @returns {import("@aiagent/rag").DataSourceRuntime} 已配置测试替身的 runtime。
+ */
+function createTestDataSourceRuntime() {
+  return createDataSourceRuntime({ embeddingClient: createDeterministicMockEmbeddingClient() });
+}
+
 test("report package exposes its boundary summary", () => {
   assert.deepEqual(createReportPackageSummary(), {
     packageName: "@aiagent/report",
@@ -80,6 +93,7 @@ test("report workflow executes a ready plan to completed PDF export boundary", a
   const runId = "report_wf_test_happy";
   const result = await runReportWorkflow(createReadyPlan(), {
     runId,
+    dataSourceRuntime: createTestDataSourceRuntime(),
     sink: (event) => { events.push(event); },
     documents: [createDemoDocument()]
   });
@@ -115,6 +129,7 @@ test("report workflow triggers supplementary retrieval when citations are missin
     },
     {
       runId,
+      dataSourceRuntime: createTestDataSourceRuntime(),
       sink: (event) => { events.push(event); },
       documents: [],
       maxRetries: 2
@@ -134,7 +149,11 @@ test("report workflow triggers supplementary retrieval when citations are missin
 });
 
 test("report workflow returns max step structured failure", async () => {
-  const result = await runReportWorkflow(createReadyPlan(), { maxSteps: 3, documents: [createDemoDocument()] });
+  const result = await runReportWorkflow(createReadyPlan(), {
+    maxSteps: 3,
+    dataSourceRuntime: createTestDataSourceRuntime(),
+    documents: [createDemoDocument()]
+  });
 
   assert.equal(result.ok, false);
   assert.equal(result.error.code, "max_steps_exceeded");
@@ -147,6 +166,7 @@ test("report workflow exports PDF directly without approval gate", async () => {
   const runId = "report_wf_test_no_approval";
   const result = await runReportWorkflow(createReadyPlan(), {
     runId,
+    dataSourceRuntime: createTestDataSourceRuntime(),
     documents: [createDemoDocument()]
   });
 
@@ -157,12 +177,15 @@ test("report workflow exports PDF directly without approval gate", async () => {
 });
 
 test("report workflow rejects plans without subject as structured invalid workflow", async () => {
-  const result = await runReportWorkflow({
-    ...createReadyPlan(),
-    status: "needs_clarification",
-    subject: undefined,
-    clarificationQuestions: ["请提供研究对象。"]
-  });
+  const result = await runReportWorkflow(
+    {
+      ...createReadyPlan(),
+      status: "needs_clarification",
+      subject: undefined,
+      clarificationQuestions: ["请提供研究对象。"]
+    },
+    { dataSourceRuntime: createTestDataSourceRuntime() }
+  );
 
   assert.equal(result.ok, false);
   assert.equal(result.error.code, "invalid_workflow");
@@ -179,6 +202,7 @@ test("report workflow risk review asks for more evidence when risk disclosure is
     },
     {
       runId,
+      dataSourceRuntime: createTestDataSourceRuntime(),
       documents: [
         {
           source: "demo/no-risk-doc",

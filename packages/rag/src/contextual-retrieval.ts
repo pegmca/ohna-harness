@@ -1,6 +1,6 @@
 import type { IngestedFilingDocumentDto } from "@aiagent/types";
 import type { RagChunk } from "./types.js";
-import { readBridgeConfig } from "./bridge-config.js";
+import { readLlmProviderConfig } from "./provider-config.js";
 
 /**
  * Contextual Retrieval 前缀生成器选项。
@@ -56,19 +56,8 @@ export function createContextualChunkEnricher(
   };
 }
 
-/**
- * 创建恒等 enricher：原样返回 chunks。
- *
- * 用于关闭 Contextual Retrieval 特性或作为单测基线；语义等价于"未注入任何上下文前缀"。
- *
- * @returns 不改变任何 chunk 的 enricher。
- */
-export function createNoopContextualEnricher(): (
-  document: IngestedFilingDocumentDto,
-  chunks: RagChunk[]
-) => Promise<RagChunk[]> {
-  return async (_document, chunks) => chunks;
-}
+// 恒等 enricher 已降级为测试替身（见 testing.ts），这里仅 re-export 以保持历史导入路径不变。
+export { createNoopContextualEnricher } from "./testing.js";
 
 /**
  * 真实 LLM 上下文前缀生成器选项：走 OpenAI 兼容 /chat/completions 端点。
@@ -147,20 +136,22 @@ function collectHeadings(document: IngestedFilingDocumentDto): string {
 }
 
 /**
- * 按环境变量创建 Contextual Retrieval enricher（生产组合开关）。
+ * 按 LLM provider 环境变量创建 Contextual Retrieval enricher（生产组合开关）。
  *
- * 为什么 env 缺省回退 noop：本地 / CI / eval 往往没有真实 bridge key，直接让 ingest 走 LLM
- * 会拖慢且依赖网络；缺省 noop 保持 chunk 原样，配置 bridge 后自动启用文档级上下文前缀，无需改代码。
+ * 为什么 env 缺失/禁用时返回 `null` 而不是静默回退 noop：
+ * v1.1 改造后，生产 ingest 必须显式注入可用的 LLM provider 才启用文档级上下文前缀；
+ * 缺省回退 noop 会掩盖"上下文增强未生效"的配置缺失。禁用时返回 `null`，
+ * 由组合根决定是否注入（或显式使用测试替身 `createNoopContextualEnricher`）。
  *
- * @returns bridge 启用时返回 LLM 前缀生成 enricher，否则返回恒等 enricher。
+ * @returns provider 启用时返回 LLM 前缀生成 enricher，否则返回 null。
  */
-export function createContextEnricherFromEnv(): (
+export function createContextEnricherFromEnv(): ((
   document: IngestedFilingDocumentDto,
   chunks: RagChunk[]
-) => Promise<RagChunk[]> {
-  const cfg = readBridgeConfig();
+) => Promise<RagChunk[]>) | null {
+  const cfg = readLlmProviderConfig();
   if (!cfg.enabled) {
-    return createNoopContextualEnricher();
+    return null;
   }
   return createContextualChunkEnricher({
     generateContextPrefix: createLlmContextPrefixGenerator({

@@ -1,6 +1,11 @@
 import type { AttachmentRepository } from "@aiagent/database";
 import { createIdentityService, createInMemoryIdentityRepository, type IdentityService } from "@aiagent/identity";
-import { createDataSourceRuntime, type CitationRepository, type DataSourceRuntime } from "@aiagent/rag";
+import {
+  createDataSourceRuntime,
+  createDeterministicMockEmbeddingClient,
+  type CitationRepository,
+  type DataSourceRuntime
+} from "@aiagent/rag";
 import type { ArtifactRepository, WorkflowRepository } from "@aiagent/report";
 import type { ConversationRepository, MessageStore } from "@aiagent/conversation";
 import type { RunStore } from "../application/run-ports.js";
@@ -43,7 +48,12 @@ export function createInMemoryApiTestRuntime(options: {
     identityService: createIdentityService(createInMemoryIdentityRepository(), {
       fingerprintPepper: "test-only-identity-pepper"
     }),
-    dataSourceRuntime: createDataSourceRuntime(),
+    // 测试替身显式注入（非生产配置）：embedding client 已无生产默认值，
+    // 这里必须注入 deterministic mock 替身，否则 ingest 直接返回 embedding_provider_disabled，
+    // agent-run / attachment-upload 等依赖 RAG 索引的用例会失败。
+    dataSourceRuntime: createDataSourceRuntime({
+      embeddingClient: createDeterministicMockEmbeddingClient()
+    }),
     workflowRepository: report.workflowRepository,
     artifactRepository: report.artifactRepository,
     attachmentRepository: createInMemoryAttachmentRepository(),

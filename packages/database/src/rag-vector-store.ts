@@ -13,7 +13,10 @@ import { DEFAULT_MOCK_EMBEDDING_MODEL } from "@aiagent/rag";
 
 /** PR-07 的固定向量列维度；真实模型不得混入此索引。 */
 export const POSTGRES_RAG_VECTOR_DIMENSIONS = 32;
-/** deterministic mock embedding 的稳定模型名。 */
+/**
+ * 未显式传模型时的 legacy/test fixture 默认值；生产 composition root 必须透传真实 provider 模型。
+ * 保留既有导出名以维持公共 API，不能把它理解为 PostgreSQL 生产模型。
+ */
 export const POSTGRES_RAG_VECTOR_MODEL = DEFAULT_MOCK_EMBEDDING_MODEL;
 /** 当前工程闭环的 provider 标识。 */
 export const POSTGRES_RAG_VECTOR_PROVIDER = "deterministic-mock";
@@ -339,7 +342,7 @@ class PostgresVectorStore implements VectorStore {
       const expected = this.dimensionExpectation();
       return {
         code: "embedding_dimension_mismatch",
-        message: `chunk embedding 维度(${invalid.embedding.length}) 与向量库期望(${expected}) 不一致；pgvector 列维度固定为 ${expected}，请使用真实 ${expected} 维 embedding（配置 bridge 环境变量 AIAGENT_LLM_*_BRIDGE_AI）或去掉 DATABASE_URL 以使用内存 store。`,
+        message: `chunk embedding 维度(${invalid.embedding.length}) 与向量库期望(${expected}) 不一致；pgvector 列维度固定为 ${expected}，请使用真实 ${expected} 维 embedding（配置 provider 环境变量 AIAGENT_EMBEDDING_* 与 AIAGENT_EMBEDDING_DIMENSIONS=${expected}）或去掉 DATABASE_URL 以使用内存 store。`,
         details: { expectedDimensions: expected, actualDimensions: invalid.embedding.length, chunkId: invalid.chunkId }
       };
     }

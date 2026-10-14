@@ -102,6 +102,20 @@ export function toApiErrorFromRagError(error: RagStructuredError, requestId: str
 }
 
 /**
+ * 把 RAG runtime 错误映射成 HTTP 状态码。
+ *
+ * provider 未配置（`embedding_provider_disabled`）属于"服务端尚未具备能力"，语义上是 503 而不是 400：
+ * 请求本身格式正确、重试不解决，只有组合根补上 provider 配置才恢复。其它 RAG 错误保持 400
+ * （输入/状态不被接受），错误码本体已放进 details.ragCode，可诊断性不受状态码影响。
+ *
+ * @param error RAG runtime 错误。
+ * @returns 应返回的 HTTP 状态码。
+ */
+export function ragErrorStatusCode(error: RagStructuredError): number {
+  return error.code === "embedding_provider_disabled" ? 503 : 400;
+}
+
+/**
  * 生成 API adapter 自己的请求标识，和 Agent trace request id 分层展示。
  *
  * @returns 带 api_req_ 前缀的请求标识。

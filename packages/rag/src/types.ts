@@ -257,23 +257,30 @@ export interface DataSourceRuntime {
 /** Data Sources runtime 的 adapter 依赖。 */
 export interface DataSourceRuntimeOptions {
   repository?: RagDocumentRepository;
-  embeddingClient?: EmbeddingClient;
+  /**
+   * embedding client 注入点；不提供生产默认值。
+   * 生产组合根应通过 createEmbeddingClientFromEnv() 注入真实 client；该函数禁用时返回 null，
+   * runtime 的 ingest/search/answer 会返回 `embedding_provider_disabled`，不会生成 mock 向量。
+   * 单测如需确定性向量，必须显式注入 testing.ts 的 test double。
+   */
+  embeddingClient?: EmbeddingClient | null;
   vectorStoreFactory?: (ownerUserId: string | null) => VectorStore;
   /**
-   * 真实 Reranker（cross-encoder / LLM-judge）注入点；缺省时 HybridRetriever 内部回退 HeuristicReranker。
-   * 通过 createRerankerFromEnv() 在生产组合中按 bridge 环境变量注入。
+   * 真实 Reranker（cross-encoder / LLM-judge）注入点；缺省（undefined 或 null）时
+   * HybridRetriever 内部回退 HeuristicReranker。通过 createRerankerFromEnv() 在生产组合中注入，
+   * 该函数禁用时返回 null，组合根应视为"未注入精排"。
    */
-  reranker?: Reranker;
+  reranker?: Reranker | null;
   /**
    * Contextual Retrieval 前缀注入器：ingest 时对 chunk 拼接文档级 LLM 上下文前缀后再 embedding。
-   * 缺省不注入（恒等）。通过 createContextEnricherFromEnv() 在生产组合中按环境变量注入。
+   * 缺省（undefined 或 null）不注入（恒等）。通过 createContextEnricherFromEnv() 注入，禁用时返回 null。
    */
-  contextEnricher?: (document: IngestedFilingDocumentDto, chunks: RagChunk[]) => Promise<RagChunk[]>;
+  contextEnricher?: ((document: IngestedFilingDocumentDto, chunks: RagChunk[]) => Promise<RagChunk[]>) | null;
   /**
    * query 改写节点（Agentic 检索 / Self-RAG）：检索前把原始 query 改写为检索友好问句。
-   * 缺省不改写（恒等）。通过 createQueryRewriterFromEnv() 在生产组合中按环境变量注入。
+   * 缺省（undefined 或 null）不改写（恒等）。通过 createQueryRewriterFromEnv() 注入，禁用时返回 null。
    */
-  queryRewriter?: QueryRewriter;
+  queryRewriter?: QueryRewriter | null;
 }
 
 export interface HybridRetrieverOptions {
@@ -287,6 +294,7 @@ export interface RagStructuredError {
   code:
     | "invalid_chunking_options"
     | "chunking_failed"
+    | "embedding_provider_disabled"
     | "invalid_embedding_input"
     | "embedding_failed"
     | "embedding_dimension_mismatch"

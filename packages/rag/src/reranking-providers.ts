@@ -3,19 +3,18 @@ import {
   type RerankResult,
   type RetrievedChunk
 } from "./types.js";
-import { createHeuristicReranker } from "./retrieval.js";
-import { readBridgeRerankConfig } from "./bridge-config.js";
+import { readRerankProviderConfig } from "./provider-config.js";
 
 /**
  * OpenAI 兼容 rerank 端点的配置。
  *
- * 统一走私有 bridge（base URL 形如 `http://host/v1`），所有真实 provider 调用都复用它，
+ * 走独立 rerank provider（base URL 形如 `http://host/v1`），由 provider-config 统一读取环境变量，
  * 避免在 rerank 实现里硬编码端点或 key；model 即 rerank/cross-encoder 模型名。
  */
 export interface OpenAiCompatibleRerankerOptions {
   /** OpenAI 兼容端点（含 /v1 前缀，base URL 不含具体路径）。 */
   baseUrl: string;
-  /** 鉴权 Bearer token，来自 bridge 环境变量。 */
+  /** 鉴权 Bearer token，来自 provider 环境变量。 */
   apiKey: string;
   /** rerank 模型名（如 bge-reranker-v2-m3）。 */
   model: string;
@@ -55,8 +54,8 @@ function tokenizeForRerank(text: string): string[] {
  *
  * 设计动机（WHY）：
  * - 优先调用专用 `/rerank` 端点（cross-encoder 精排，精度最高、延迟最低）。
- * - 若 bridge 不支持 `/rerank`（返回非 2xx），自动回退到 LLM-as-judge rerank：用严格 prompt
- *   让 chat 模型对每个 (query, chunk) 打 0..1 相关分，避免"有 bridge 但无 rerank 端点"时整体失效。
+ * - 若 rerank provider 不支持 `/rerank`（返回非 2xx），自动回退到 LLM-as-judge rerank：用严格 prompt
+ *   让 chat 模型对每个 (query, chunk) 打 0..1 相关分，避免"配了 provider 但无 rerank 端点"时整体失效。
  * - 两层都失败则安全回退为按输入 hybridScore 排序，**绝不抛原始异常**：rerank 是检索链路的
  *   一环，抛异常会破坏整条 grounded answer 流程；结构上保持 `RerankResult.ok` 永远成功返回。
  * - 所有分数写入 `scoreBreakdown.rerankScore` 与 `finalScore`，`finalScore = hybridScore*0.7 + rerankScore*0.3`，
@@ -196,7 +195,7 @@ class OpenAiCompatibleReranker implements Reranker {
         })
       });
 
-      // 非 2xx：bridge 很可能不支持 /rerank，交给 judge 回退。
+      // 非 2xx：provider 很可能不支持 /rerank，交给 judge 回退。
       if (!response.ok) {
         return null;
       }
@@ -354,18 +353,20 @@ function parseJudgeScores(content: string, count: number): (number | null)[] | n
 }
 
 /**
- * 根据环境变量创建生产级 reranker（组合开关）。
+ * 根据 rerank provider 环境变量创建生产级 reranker（组合开关）。
  *
- * 为什么 env 缺省回退 heuristic：本地开发 / CI / eval 往往没有真实 bridge key，
- * 直接失败会破坏检索链路；回退到 `HeuristicReranker` 可保证可复现、零外部依赖，
- * 真实环境配置 bridge rerank 变量后自动切换为模型精排，无需改代码（依赖倒置）。
+ * 为什么 env 缺失/禁用时返回 `null` 而不是静默回退 heuristic：
+ * v1.1 改造后，生产检索必须显式注入可用的 rerank provider，缺省回退会掩盖配置缺失、
+ * 让"精排未生效"悄悄发生。禁用时返回 `null`，由组合根决定是否注入；
+ * `HybridRetriever` 在未注入 reranker 时仍会用内置 `HeuristicReranker` 保底（那是检索器自身默认，
+ * 不是 env 工厂的静默兜底）。
  *
- * @returns bridge 启用时返回 OpenAI 兼容 reranker，否则返回 heuristic reranker。
+ * @returns provider 启用时返回 OpenAI 兼容 reranker，否则返回 null。
  */
-export function createRerankerFromEnv(): Reranker {
-  const cfg = readBridgeRerankConfig();
+export function createRerankerFromEnv(): Reranker | null {
+  const cfg = readRerankProviderConfig();
   if (!cfg.enabled) {
-    return createHeuristicReranker();
+    return null;
   }
   return createOpenAiCompatibleReranker({
     baseUrl: cfg.baseUrl,

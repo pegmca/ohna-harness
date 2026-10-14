@@ -3,8 +3,27 @@ import { test } from "node:test";
 import {
   createLlmQueryRewriter,
   createNoopQueryRewriter,
-  createQueryRewriter
+  createQueryRewriter,
+  createQueryRewriterFromEnv
 } from "../dist/query-rewrite.js";
+import { PROVIDER_ENV } from "../dist/provider-config.js";
+
+test("createQueryRewriterFromEnv returns null when LLM model is missing", () => {
+  const saved = {};
+  for (const key of Object.values(PROVIDER_ENV.llm)) saved[key] = process.env[key];
+  process.env[PROVIDER_ENV.llm.baseUrl] = "http://provider.test/v1";
+  process.env[PROVIDER_ENV.llm.apiKey] = "provider-key";
+  delete process.env[PROVIDER_ENV.llm.model];
+
+  try {
+    assert.equal(createQueryRewriterFromEnv(), null);
+  } finally {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
 
 test("createQueryRewriter uses injected rewrite and surfaces rewritten + subQueries", async () => {
   const rewrite = async (query) => ({
@@ -47,7 +66,7 @@ test("createQueryRewriter downgrades to original query when rewrite returns empt
   assert.equal(result.rewritten, "原始问题");
 });
 
-test("createLlmQueryRewriter parses JSON from the bridge chat response", async () => {
+test("createLlmQueryRewriter parses JSON from the provider chat response", async () => {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async () => ({
     ok: true,
@@ -80,7 +99,7 @@ test("createLlmQueryRewriter parses JSON from the bridge chat response", async (
   }
 });
 
-test("createLlmQueryRewriter downgrades to original query when bridge returns non-ok", async () => {
+test("createLlmQueryRewriter downgrades to original query when provider returns non-ok", async () => {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async () => ({ ok: false, status: 500, json: async () => ({}) });
 

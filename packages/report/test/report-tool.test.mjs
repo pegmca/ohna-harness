@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createHash } from "node:crypto";
-import { createDataSourceRuntime } from "@aiagent/rag";
+import { createDataSourceRuntime, createDeterministicMockEmbeddingClient } from "@aiagent/rag";
 import { createReportTool } from "../dist/index.js";
 
 /**
@@ -68,9 +68,21 @@ const DEMO_DOCUMENT = {
 `
 };
 
+/**
+ * 创建测试用 RAG runtime。
+ *
+ * embedding client 已无生产默认值，这里显式注入 deterministic mock 测试替身（非生产配置），
+ * 否则 ingest 会直接返回 embedding_provider_disabled。
+ *
+ * @returns {import("@aiagent/rag").DataSourceRuntime} 已配置测试替身的 runtime。
+ */
+function createTestDataSourceRuntime() {
+  return createDataSourceRuntime({ embeddingClient: createDeterministicMockEmbeddingClient() });
+}
+
 /** 装配一套带预置年报证据的 generate_report 工具与观测收集器。 */
 async function createToolHarness() {
-  const dataSourceRuntime = createDataSourceRuntime();
+  const dataSourceRuntime = createTestDataSourceRuntime();
   const ingest = await dataSourceRuntime.ingest(DEMO_DOCUMENT);
   assert.equal(ingest.ok, true);
   const repos = createMemoryReportRepositories();
@@ -139,7 +151,7 @@ test("generate_report runs full workflow, persists artifacts and publishes a rea
 });
 
 test("generate_report propagates persistence failures as structured tool errors", async () => {
-  const dataSourceRuntime = createDataSourceRuntime();
+  const dataSourceRuntime = createTestDataSourceRuntime();
   await dataSourceRuntime.ingest(DEMO_DOCUMENT);
   const repos = createMemoryReportRepositories();
   repos.workflowRepository.save = async () => { throw new Error("db down"); };

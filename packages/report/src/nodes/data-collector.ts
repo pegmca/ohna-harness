@@ -1,4 +1,3 @@
-import { createDataSourceRuntime } from "@aiagent/rag";
 import type { DataSourceRuntime, RetrievalResult } from "@aiagent/rag";
 import type { DataSourceIngestRequestDto } from "@aiagent/types";
 import type { WorkflowEventSink, WorkflowNodeDefinition } from "@aiagent/workflow";
@@ -36,7 +35,9 @@ export function createDataCollectorNode(_maxRetries: number): WorkflowNodeDefini
         throw new Error("Report workflow requires plan.subject before collecting data.");
       }
 
-      const runtime = context.state.dataSourceRuntime ?? createDataSourceRuntime();
+      // runtime 由组合根注入（必填），节点内不再自建缺省 runtime：
+      // 缺少注入时宁可在编译期/装配期暴露，也不要在运行期用不可用的 runtime 静默产出空证据。
+      const runtime = context.state.dataSourceRuntime;
       const timeRange = input.plan.timeRange ?? "最近两年";
 
       await ingestReportDocuments(runtime, context.state.documents);

@@ -2,11 +2,11 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   createDataSourceRuntime,
-  createDeterministicMockEmbeddingClient,
   createGroundingTransformContext,
   createInMemoryRagDocumentRepository,
   createInMemoryVectorStore
 } from "../dist/index.js";
+import { createDeterministicMockEmbeddingClient } from "../dist/testing.js";
 
 /**
  * 构造一个带私有文档的 runtime，供 grounding hook 测试复用。

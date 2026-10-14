@@ -4,7 +4,6 @@ import {
   chunkDocumentBlocks,
   chunkIngestedFilingDocument,
   chunkText,
-  createDeterministicMockEmbeddingClient,
   createDataSourceRuntime,
   createHeuristicReranker,
   createHybridRetriever,
@@ -20,6 +19,17 @@ import {
   MAX_VECTOR_SEARCH_TOP_K,
   normalizeRagSourceUri
 } from "../dist/index.js";
+import { createDeterministicMockEmbeddingClient } from "../dist/testing.js";
+
+/**
+ * 为 runtime 用例显式注入确定性 embedding 测试替身，避免生产边界暗含 mock。
+ */
+function createTestDataSourceRuntime(options = {}) {
+  return createDataSourceRuntime({
+    embeddingClient: createDeterministicMockEmbeddingClient(),
+    ...options
+  });
+}
 
 test("rag package entry exposes its boundary summary", () => {
   const summary = createRagPackageSummary();
@@ -617,8 +627,23 @@ test("rag answer can express citations and retrieval results", () => {
   assert.match(answer.answer, /净利润/);
 });
 
-test("data source runtime ingests, searches and answers with traceable citations", async () => {
+test("data source runtime returns a structured error when embedding provider is disabled", async () => {
   const runtime = createDataSourceRuntime();
+  const ingestResult = await runtime.ingest({
+    source: "demo",
+    fileName: "annual-report.md",
+    content: "# 资产质量\n公司不良率保持稳定。"
+  });
+
+  assert.equal(ingestResult.ok, false);
+  assert.equal(ingestResult.error.code, "embedding_provider_disabled");
+  assert.equal(ingestResult.error.details.reason, "embedding_client_not_injected");
+  assert.equal((await runtime.listDocuments()).documents.length, 0);
+  assert.equal((await runtime.listChunks()).chunks.length, 0);
+});
+
+test("data source runtime ingests, searches and answers with traceable citations", async () => {
+  const runtime = createTestDataSourceRuntime();
   const ingestResult = await runtime.ingest({
     source: "demo",
     fileName: "annual-report.md",
@@ -662,7 +687,7 @@ test("data source runtime ingests, searches and answers with traceable citations
 });
 
 test("data source runtime applies unknown answer policy when evidence is missing", async () => {
-  const runtime = createDataSourceRuntime();
+  const runtime = createTestDataSourceRuntime();
   const ingestResult = await runtime.ingest({
     source: "demo",
     fileName: "annual-report.md",
@@ -679,7 +704,7 @@ test("data source runtime applies unknown answer policy when evidence is missing
 
 test("re-ingesting identical content is deduplicated without new versions or chunks", async () => {
   const repository = createInMemoryRagDocumentRepository();
-  const runtime = createDataSourceRuntime({ repository });
+  const runtime = createTestDataSourceRuntime({ repository });
   const request = {
     source: "demo",
     fileName: "annual-report.md",
@@ -712,7 +737,7 @@ test("re-ingesting identical content is deduplicated without new versions or chu
 
 test("new content creates an immutable new version and keeps old chunks", async () => {
   const repository = createInMemoryRagDocumentRepository();
-  const runtime = createDataSourceRuntime({ repository });
+  const runtime = createTestDataSourceRuntime({ repository });
   const base = { source: "demo", fileName: "annual-report.md", contentType: "text/markdown" };
   const first = await runtime.ingest({ ...base, content: "# 资产质量\n公司不良率保持稳定。" });
   const second = await runtime.ingest({ ...base, content: "# 资产质量\n公司不良率上升，拨备覆盖率下降。" });
@@ -747,7 +772,7 @@ test("new content creates an immutable new version and keeps old chunks", async 
 
 test("failed ingestion is persisted with structured error and can be inspected", async () => {
   const repository = createInMemoryRagDocumentRepository();
-  const runtime = createDataSourceRuntime({ repository });
+  const runtime = createTestDataSourceRuntime({ repository });
   const result = await runtime.ingest({
     source: "demo",
     fileName: "annual-report.md",
@@ -790,7 +815,7 @@ test("failed ingestion is persisted with structured error and can be inspected",
 
 test("retrying the same failed content updates the failed version in place", async () => {
   const repository = createInMemoryRagDocumentRepository();
-  const runtime = createDataSourceRuntime({ repository });
+  const runtime = createTestDataSourceRuntime({ repository });
   const request = {
     source: "demo",
     fileName: "annual-report.md",
@@ -812,7 +837,7 @@ test("retrying the same failed content updates the failed version in place", asy
 });
 
 test("private documents are only visible to their owner", async () => {
-  const runtime = createDataSourceRuntime();
+  const runtime = createTestDataSourceRuntime();
   const ingestResult = await runtime.ingest(
     {
       source: "demo",
@@ -841,7 +866,7 @@ test("private documents are only visible to their owner", async () => {
 
 test("ingest rejects illegal owner/scope combinations with a structured error", async () => {
   const repository = createInMemoryRagDocumentRepository();
-  const runtime = createDataSourceRuntime({ repository });
+  const runtime = createTestDataSourceRuntime({ repository });
   const request = {
     source: "demo",
     fileName: "annual-report.md",
@@ -884,7 +909,7 @@ test("ingest rejects illegal owner/scope combinations with a structured error", 
 });
 
 test("ingest rejects unsafe source identifiers without persisting anything", async () => {
-  const runtime = createDataSourceRuntime();
+  const runtime = createTestDataSourceRuntime();
   const request = {
     fileName: "annual-report.md",
     contentType: "text/markdown",
@@ -924,7 +949,7 @@ test("ingest rejects unsafe source identifiers without persisting anything", asy
 });
 
 test("signed http source is normalized so lineage and DTOs never contain query or fragment", async () => {
-  const runtime = createDataSourceRuntime();
+  const runtime = createTestDataSourceRuntime();
   const request = {
     fileName: "annual-report.md",
     contentType: "text/markdown",
@@ -958,7 +983,7 @@ test("signed http source is normalized so lineage and DTOs never contain query o
 });
 
 test("non-sensitive query params stay in source identity while sensitive keys are stripped", async () => {
-  const runtime = createDataSourceRuntime();
+  const runtime = createTestDataSourceRuntime();
   const request = {
     fileName: "annual-report.md",
     contentType: "text/markdown",
@@ -1010,7 +1035,7 @@ test("non-sensitive query params stay in source identity while sensitive keys ar
 });
 
 test("credential-like query variants never reach lineage and still deduplicate per resource", async () => {
-  const runtime = createDataSourceRuntime();
+  const runtime = createTestDataSourceRuntime();
   const request = {
     fileName: "annual-report.md",
     contentType: "text/markdown",

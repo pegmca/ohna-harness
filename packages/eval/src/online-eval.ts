@@ -2,16 +2,16 @@
  * 在线影子评测（docs/v1.1/04-eval-observability.md P4）：
  *
  * 本文件实现"影子"评测——这是离线/只读的观测手段。它只读取线上已采样的
- * `{ query, answer, contexts }` 三元组，并在本地跑 LLM-as-Judge（默认确定性 mock，无网络），
+ * `{ query, answer, contexts }` 三元组，并通过调用方显式注入的 LLM-as-Judge 打分，
  * 输出答案正确性与忠实性分数。**它绝不写回生产、绝不修改任何 run / trace 状态**——线上采样的
  * 数据在进入本评测器之前已经落盘为只读样本，评测结果仅用于离线分析 dashboard。
  *
  * 设计要点：
- * - 纯函数为主，不依赖网络（默认 judge 为 createLoopLlmJudge 的确定性 mock，可复现）；
+ * - judge 必须由调用方显式注入；真实 provider 与确定性测试替身使用同一契约；
  * - evaluate 对单条样本打分，sampleAndEvaluate 并发跑整批样本；
  * - 无人工闭环、无状态副作用，便于在 CI / 离线批处理中复用。
  */
-import { createLoopLlmJudge, type LoopLlmJudge } from "./judge-loop.js";
+import type { LoopLlmJudge } from "./judge-loop.js";
 
 /** 单条影子评测结果（只读观测，不回写生产）。 */
 export interface ShadowResult {
@@ -58,16 +58,17 @@ export interface ShadowEvaluator {
 /**
  * 创建影子评测器。
  *
- * 若未传入 judge，则内部使用 `createLoopLlmJudge()` 的确定性 mock 模式——可复现、无网络，
- * 保证离线批处理与测试的稳定输出。evaluate 仅读取传入的 sample 并在本地打分，绝不与生产系统交互。
+ * v1.1 起：**必须显式注入 judge**，不再内部回退到 `createLoopLlmJudge()` 的确定性 mock——
+ * 那是伪装成"影子评测已运行"的无意义基线，会掩盖 judge provider 未配置的事实。
+ * 需要可复现确定性打分时，调用方应显式传入测试替身 `createDeterministicMockLoopLlmJudge()`。
  *
- * @param options 可选配置；其中 `judge` 允许注入真实或自定义 judge（如启用真实模型模式）。
+ * evaluate 仅读取传入的 sample 并在本地打分，绝不与生产系统交互（只读观测）。
+ *
+ * @param options 影子评测器依赖；judge 为必填的 LLM-as-Judge 实例。
  * @returns 影子评测器实例。
  */
-export function createShadowEvaluator(options?: { judge?: LoopLlmJudge }): ShadowEvaluator {
-  // 未传 judge 时回退到确定性 mock：可复现、无网络，符合"离线影子"定位。
-  const judge = options?.judge ?? createLoopLlmJudge();
-
+export function createShadowEvaluator(options: { judge: LoopLlmJudge }): ShadowEvaluator {
+  const { judge } = options;
   return {
     async evaluate(input: ShadowInput): Promise<ShadowResult> {
       // 答案正确性：参考文本缺省时退化到用 query 本身比对（与 loop-runner 的兜底口径一致）。

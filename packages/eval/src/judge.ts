@@ -9,16 +9,17 @@
  * - context recall（上下文召回）：期望应被召回的证据（expectedContexts）是否都出现在实际检索结果中。
  *
  * 设计原则：
- * 1. judge 是"校准信号"而非"阻塞信号"——任何失败（key 缺失、网络超时、返回非 JSON）都降级为中性分
+ * 1. judge 是"校准信号"而非"阻塞信号"——真实模型调用失败时（网络超时、返回非 JSON）降级为中性分
  *    （默认 0.5）并附 reason，绝不向上抛异常，避免把 eval 套件变成"有网才能跑"。
  * 2. 优先使用 @aiagent/ai 的 streamSimple；本实现统一走 OpenAI 兼容 `/chat/completions` fetch，
- *    与 P1/P2 的 bridge 调用模式一致，且不引入额外依赖。import type 隔离运行时依赖。
- * 3. 未显式传端点时从 bridge 环境变量读取（统一引用 @aiagent/rag 的 BRIDGE_ENV / readBridgeConfig，
- *    避免 env 名称在多个包各自硬编码产生漂移），但调用方若未配置 key，judge 返回中性分，不破坏 eval 默认行为。
+ *    与 P1/P2 的 provider 调用模式一致，且不引入额外依赖。import type 隔离运行时依赖。
+ * 3. 未显式传端点时从 judge provider 环境变量读取（统一引用 @aiagent/rag 的 readJudgeProviderConfig，
+ *    避免 env 名称在多个包各自硬编码产生漂移）。v1.1 起：**provider 禁用时工厂返回 null**，不再静默
+ *    回退中性分——需要中性基线请显式注入测试替身 `createNeutralLlmJudge()`（见 eval testing.ts）。
  */
 
-// 复用 @aiagent/rag 的 bridge 配置契约：env 名称的唯一真源，避免重复定义导致漂移。
-import { BRIDGE_ENV, readBridgeConfig } from "@aiagent/rag";
+// 复用 @aiagent/rag 的 provider 配置契约：env 名称的唯一真源，避免重复定义导致漂移。
+import { readJudgeProviderConfig } from "@aiagent/rag";
 
 /** 单条 faithfulness 判定结果。 */
 export interface FaithfulnessJudgement {
@@ -56,7 +57,7 @@ export interface LlmJudge {
   judgeContextRecall(expectedContexts: readonly string[], retrievedContexts: readonly string[]): Promise<ContextRecallJudgement>;
 }
 
-/** judge 工厂配置（未传则从 bridge env 读取）。 */
+/** judge 工厂配置（未传则从 judge provider env 读取，即 AIAGENT_JUDGE_*；禁用时返回 null）。 */
 export interface LlmJudgeOptions {
   baseUrl?: string;
   apiKey?: string;
@@ -121,51 +122,54 @@ function parseJudgeJson(text: string): { score?: unknown; reason?: unknown } | n
 /**
  * 创建 LLM judge。
  *
- * 未显式传入 baseUrl/apiKey/model 时，从 bridge 环境变量读取（复用 @aiagent/rag 的 readBridgeConfig，
- * 即 AIAGENT_LLM_*_BRIDGE_AI）。若 baseUrl 或 apiKey 缺失（无真实调用条件），judge 不抛异常，
- * 而是对每个判定返回中性分 + 说明，保证 eval 套件在无 key 环境下仍可运行。
+ * 未显式传入 baseUrl/apiKey/model 时，从 judge provider 环境变量读取（复用 @aiagent/rag 的
+ * readJudgeProviderConfig，即 AIAGENT_JUDGE_*）。若 baseUrl、apiKey 或 model 缺失（无真实调用条件），
+ * judge 工厂返回 `null`——**不再静默回退中性分**，因为那会伪装成"judge 已运行"却给出无意义基线，
+ * 掩盖 judge provider 未配置的事实。需要中性基线时应显式注入测试替身 `createNeutralLlmJudge()`。
  *
  * @param options 可选端点配置。
- * @returns LlmJudge 实例。
+ * @returns 具备真实调用条件时返回 LlmJudge 实例，否则返回 null。
  */
-export function createLlmJudge(options: LlmJudgeOptions = {}): LlmJudge {
-  // 优先使用显式传入配置；否则从 @aiagent/rag 的 bridge 契约读取唯一真源的 env 名称。
-  const bridge = readBridgeConfig();
-  const baseUrl = (options.baseUrl ?? bridge.baseUrl).trim();
-  const apiKey = (options.apiKey ?? bridge.apiKey).trim();
-  const model = (options.model ?? bridge.model).trim();
-  const enabled = baseUrl.length > 0 && apiKey.length > 0;
+export function createLlmJudge(options: LlmJudgeOptions = {}): LlmJudge | null {
+  // 优先使用显式传入配置；否则从 @aiagent/rag 的 provider 契约读取唯一真源的 env 名称。
+  const judge = readJudgeProviderConfig();
+  const baseUrl = (options.baseUrl ?? judge.baseUrl).trim();
+  const apiKey = (options.apiKey ?? judge.apiKey).trim();
+  const model = (options.model ?? judge.model).trim();
+  const enabled = baseUrl.length > 0 && apiKey.length > 0 && model.length > 0;
 
-  // 仅在具备真实调用条件时绑定 fetch 调用；否则保持 null，判定降级为中性分。
-  const callModel: ((systemPrompt: string, userPrompt: string) => Promise<string>) | null = enabled
-    ? async (systemPrompt: string, userPrompt: string): Promise<string> => {
-        const response = await fetch(`${baseUrl.replace(/\/$/, "")}/chat/completions`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${apiKey}`
-          },
-          body: JSON.stringify({
-            model,
-            messages: [
-              { role: "system", content: systemPrompt },
-              { role: "user", content: userPrompt }
-            ],
-            temperature: 0,
-            response_format: { type: "json_object" }
-          })
-        });
+  // 仅当具备真实调用条件时才创建 judge；否则返回 null，由调用方决定是否注入测试替身。
+  if (!enabled) {
+    return null;
+  }
 
-        if (!response.ok) {
-          throw new Error(`judge request failed with status ${response.status}`);
-        }
+  const callModel = async (systemPrompt: string, userPrompt: string): Promise<string> => {
+    const response = await fetch(`${baseUrl.replace(/\/$/, "")}/chat/completions`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`
+      },
+      body: JSON.stringify({
+        model,
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userPrompt }
+        ],
+        temperature: 0,
+        response_format: { type: "json_object" }
+      })
+    });
 
-        const data = (await response.json()) as {
-          choices?: Array<{ message?: { content?: string } }>;
-        };
-        return data?.choices?.[0]?.message?.content ?? "";
-      }
-    : null;
+    if (!response.ok) {
+      throw new Error(`judge request failed with status ${response.status}`);
+    }
+
+    const data = (await response.json()) as {
+      choices?: Array<{ message?: { content?: string } }>;
+    };
+    return data?.choices?.[0]?.message?.content ?? "";
+  };
 
   return {
     judgeFaithfulness: createFaithfulnessJudge(callModel),
@@ -176,20 +180,13 @@ export function createLlmJudge(options: LlmJudgeOptions = {}): LlmJudge {
 /**
  * 创建 faithfulness 判定函数。
  *
- * @param callModel 模型调用边界；为 null 时降级为中性分。
+ * @param callModel 模型调用边界（已确保非 null，仅在 judge 启用时构造）。
  * @returns faithfulness 判定函数。
  */
 function createFaithfulnessJudge(
-  callModel: ((systemPrompt: string, userPrompt: string) => Promise<string>) | null
+  callModel: (systemPrompt: string, userPrompt: string) => Promise<string>
 ): (question: string, answer: string, contexts: readonly string[]) => Promise<FaithfulnessJudgement> {
   return async (question: string, answer: string, contexts: readonly string[]): Promise<FaithfulnessJudgement> => {
-    if (!callModel) {
-      return {
-        score: NEUTRAL_SCORE,
-        reason: `bridge env 未配置（缺少 ${BRIDGE_ENV.baseUrl} / ${BRIDGE_ENV.apiKey}），judge 降级为中性分。`
-      };
-    }
-
     const contextText = contexts.length > 0 ? contexts.join("\n\n---\n\n") : "（无检索上下文）";
     const userPrompt =
       `用户问题：\n${question}\n\n` +
@@ -213,20 +210,16 @@ function createFaithfulnessJudge(
 /**
  * 创建 context recall 判定函数。
  *
- * @param callModel 模型调用边界；为 null 时降级为中性分。
+ * @param callModel 模型调用边界（已确保非 null，仅在 judge 启用时构造）。
  * @returns context recall 判定函数。
  */
 function createContextRecallJudge(
-  callModel: ((systemPrompt: string, userPrompt: string) => Promise<string>) | null
+  callModel: (systemPrompt: string, userPrompt: string) => Promise<string>
 ): (expectedContexts: readonly string[], retrievedContexts: readonly string[]) => Promise<ContextRecallJudgement> {
   return async (
     expectedContexts: readonly string[],
     retrievedContexts: readonly string[]
   ): Promise<ContextRecallJudgement> => {
-    if (!callModel) {
-      return { score: NEUTRAL_SCORE };
-    }
-
     const expectedText = expectedContexts.length > 0 ? expectedContexts.join("\n\n---\n\n") : "（无期望证据）";
     const retrievedText = retrievedContexts.length > 0 ? retrievedContexts.join("\n\n---\n\n") : "（无检索结果）";
     const userPrompt =

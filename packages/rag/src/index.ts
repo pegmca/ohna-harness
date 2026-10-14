@@ -38,14 +38,17 @@ export type {
 } from "./document-repository.js";
 
 export {
-  BRIDGE_ENV,
-  readBridgeConfig,
-  readBridgeEmbeddingConfig,
-  readBridgeRerankConfig,
+  PROVIDER_ENV,
+  readLlmProviderConfig,
+  readEmbeddingProviderConfig,
+  readRerankProviderConfig,
+  readJudgeProviderConfig,
   DEFAULT_PRODUCTION_EMBEDDING_DIMENSIONS
-} from "./bridge-config.js";
+} from "./provider-config.js";
 export * from "./types.js";
 export * from "./vector-math.js";
+// 以下模块为保持历史公共 API 仍 re-export testing.ts 的 deterministic/noop 替身；
+// 它们只供测试显式注入，生产组合必须调用对应的 fromEnv 工厂，禁止把 test double 当默认实现。
 export * from "./embedding.js";
 export * from "./embedding-providers.js";
 export * from "./vector-store.js";

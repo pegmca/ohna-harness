@@ -104,8 +104,8 @@ export interface LoopEvalOptions {
   streamFnFactory?: (item: UnifiedEvalCase) => StreamFn;
   /** 观测钩子：每个 case 跑完后回调其 run_events（供测试断言事件映射）。 */
   onCaseRun?: (run: LoopEvalCaseRun) => void;
-  /** 可选 LLM-as-Judge：传入后把答案正确性 / 忠实性作为校准信号追加到逐条结果（不计入门禁）。 */
-  judge?: LoopLlmJudge;
+  /** 可选 LLM-as-Judge：传入后把答案正确性 / 忠实性作为校准信号追加到逐条结果（不计入门禁）。允许为 null（如 createLoopLlmJudge 在 provider 禁用时返回 null），等价不传。 */
+  judge?: LoopLlmJudge | null;
 }
 
 /** eval 专用 mock 模型条目；api 仅占位，mock streamFn 不会发起 HTTP 请求。 */

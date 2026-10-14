@@ -4,7 +4,8 @@ import {
   createOpenAiCompatibleReranker,
   createRerankerFromEnv
 } from "../dist/reranking-providers.js";
-import { BRIDGE_ENV } from "../dist/bridge-config.js";
+import { createHeuristicReranker } from "../dist/retrieval.js";
+import { PROVIDER_ENV } from "../dist/provider-config.js";
 
 /**
  * 构造一个合法的 EmbeddedChunk（只填检索/rerank 所需字段）。
@@ -117,7 +118,7 @@ test("rerank 端点 404 → 自动走 LLM-judge 回退并正确排序", async ()
   const candidates = makeCandidates();
   const restore = stubFetch(async (url, init) => {
     if (url.endsWith("/rerank")) {
-      // bridge 不支持 /rerank：返回 404，应触发 judge 回退。
+      // provider 不支持 /rerank：返回 404，应触发 judge 回退。
       return new Response("not found", { status: 404 });
     }
     if (url.endsWith("/chat/completions")) {
@@ -207,30 +208,18 @@ test("judge 返回带围栏的 JSON 也能容错解析", async () => {
   }
 });
 
-test("createRerankerFromEnv：env 缺失时返回 heuristic（不发起网络请求）", async () => {
+test("createRerankerFromEnv：rerank 环境变量缺失时返回 null（不再静默回退 heuristic）", async () => {
   const saved = {};
-  for (const key of Object.values(BRIDGE_ENV)) {
+  for (const key of Object.values(PROVIDER_ENV.rerank)) {
     saved[key] = process.env[key];
     delete process.env[key];
   }
 
-  let fetchCalled = false;
-  const restore = stubFetch(async () => {
-    fetchCalled = true;
-    return new Response("boom", { status: 500 });
-  });
-
   try {
+    // v1.1：禁用时工厂返回 null，由组合根决定是否注入；HybridRetriever 未注入时会用内置 HeuristicReranker 保底。
     const reranker = createRerankerFromEnv();
-    const candidates = makeCandidates();
-    const result = await reranker.rerank("资产质量 不良率", candidates);
-
-    // heuristic 不调用 fetch；验证回退为 mock/heuristic 实现。
-    assert.equal(fetchCalled, false);
-    assert.equal(result.ok, true);
-    assert.equal(result.results.length, candidates.length);
+    assert.equal(reranker, null);
   } finally {
-    restore();
     for (const [key, value] of Object.entries(saved)) {
       if (value === undefined) {
         delete process.env[key];
@@ -238,5 +227,43 @@ test("createRerankerFromEnv：env 缺失时返回 heuristic（不发起网络请
         process.env[key] = value;
       }
     }
+  }
+});
+
+test("createRerankerFromEnv：model 缺失时保持 disabled", () => {
+  const saved = {};
+  for (const key of Object.values(PROVIDER_ENV.rerank)) saved[key] = process.env[key];
+  process.env[PROVIDER_ENV.rerank.baseUrl] = "http://provider.test/v1";
+  process.env[PROVIDER_ENV.rerank.apiKey] = "provider-key";
+  delete process.env[PROVIDER_ENV.rerank.model];
+
+  try {
+    assert.equal(createRerankerFromEnv(), null);
+  } finally {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
+test("HeuristicReranker 作为检索器内置保底：不发起网络请求即可重排", async () => {
+  let fetchCalled = false;
+  const restore = stubFetch(async () => {
+    fetchCalled = true;
+    return new Response("boom", { status: 500 });
+  });
+
+  try {
+    const reranker = createHeuristicReranker();
+    const candidates = makeCandidates();
+    const result = await reranker.rerank("资产质量 不良率", candidates);
+
+    // heuristic 不调用 fetch；验证其作为内置默认重排器的可复现行为。
+    assert.equal(fetchCalled, false);
+    assert.equal(result.ok, true);
+    assert.equal(result.results.length, candidates.length);
+  } finally {
+    restore();
   }
 });

@@ -11,7 +11,7 @@ import {
 } from "@aiagent/database";
 import { runMigrations } from "@aiagent/database";
 import { createIdentityService } from "@aiagent/identity";
-import { createDataSourceRuntime } from "@aiagent/rag";
+import { createDataSourceRuntime, createDeterministicMockEmbeddingClient } from "@aiagent/rag";
 import { createApiServer } from "../dist/index.js";
 import { createModelRuntimeRegistry } from "../dist/application/model-registry.js";
 
@@ -53,7 +53,10 @@ async function createPgContext() {
 function createServer(repos, extra = {}) {
   return createApiServer({
     ...repos,
-    dataSourceRuntime: createDataSourceRuntime(),
+    // 测试替身显式注入（非生产配置）：裸构造会导致 embedding provider disabled。
+    dataSourceRuntime: createDataSourceRuntime({
+      embeddingClient: createDeterministicMockEmbeddingClient()
+    }),
     requireIdentity: true,
     ...extra
   });

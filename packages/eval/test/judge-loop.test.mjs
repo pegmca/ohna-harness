@@ -1,9 +1,48 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createLoopLlmJudge } from "../dist/judge-loop.js";
+import { createDeterministicMockLoopLlmJudge } from "../dist/testing.js";
+
+test("createLoopLlmJudge 在 judge 环境变量缺失时返回 null（不再静默回退确定性 mock）", async () => {
+  const baseUrl = process.env.AIAGENT_JUDGE_BASE_URL;
+  const apiKey = process.env.AIAGENT_JUDGE_API_KEY;
+  delete process.env.AIAGENT_JUDGE_BASE_URL;
+  delete process.env.AIAGENT_JUDGE_API_KEY;
+
+  try {
+    // v1.1：provider 禁用时工厂返回 null；需要可复现判定应显式注入 createDeterministicMockLoopLlmJudge()。
+    const judge = createLoopLlmJudge();
+    assert.equal(judge, null);
+  } finally {
+    if (baseUrl !== undefined) process.env.AIAGENT_JUDGE_BASE_URL = baseUrl;
+    if (apiKey !== undefined) process.env.AIAGENT_JUDGE_API_KEY = apiKey;
+  }
+});
+
+test("createLoopLlmJudge 在 model 缺失时保持 disabled", () => {
+  const saved = {
+    baseUrl: process.env.AIAGENT_JUDGE_BASE_URL,
+    apiKey: process.env.AIAGENT_JUDGE_API_KEY,
+    model: process.env.AIAGENT_JUDGE_MODEL
+  };
+  process.env.AIAGENT_JUDGE_BASE_URL = "https://provider.example.com/v1";
+  process.env.AIAGENT_JUDGE_API_KEY = "test-key";
+  delete process.env.AIAGENT_JUDGE_MODEL;
+
+  try {
+    assert.equal(createLoopLlmJudge(), null);
+  } finally {
+    if (saved.baseUrl === undefined) delete process.env.AIAGENT_JUDGE_BASE_URL;
+    else process.env.AIAGENT_JUDGE_BASE_URL = saved.baseUrl;
+    if (saved.apiKey === undefined) delete process.env.AIAGENT_JUDGE_API_KEY;
+    else process.env.AIAGENT_JUDGE_API_KEY = saved.apiKey;
+    if (saved.model === undefined) delete process.env.AIAGENT_JUDGE_MODEL;
+    else process.env.AIAGENT_JUDGE_MODEL = saved.model;
+  }
+});
 
 test("mock judge answerCorrectness 确定性且高重叠得高分", async () => {
-  const judge = createLoopLlmJudge();
+  const judge = createDeterministicMockLoopLlmJudge();
   const a = await judge.judgeAnswerCorrectness("q", "净利润 同比增长", "净利润 同比增长");
   const b = await judge.judgeAnswerCorrectness("q", "净利润 同比增长", "净利润 同比增长");
   assert.equal(a.score, b.score, "分数应可复现（确定性）");
@@ -12,7 +51,7 @@ test("mock judge answerCorrectness 确定性且高重叠得高分", async () => 
 });
 
 test("mock judge answerCorrectness 低重叠得低分", async () => {
-  const judge = createLoopLlmJudge();
+  const judge = createDeterministicMockLoopLlmJudge();
   const high = await judge.judgeAnswerCorrectness("q", "苹果 香蕉 橙子", "苹果 香蕉 橙子");
   const low = await judge.judgeAnswerCorrectness("q", "苹果 香蕉 橙子", "西瓜 葡萄 芒果");
   assert.ok(low.score < high.score);
@@ -21,14 +60,14 @@ test("mock judge answerCorrectness 低重叠得低分", async () => {
 });
 
 test("mock judge faithfulness 无上下文返回中性分", async () => {
-  const judge = createLoopLlmJudge();
+  const judge = createDeterministicMockLoopLlmJudge();
   const r = await judge.judgeFaithfulness("某答案文本", []);
   assert.equal(r.score, 0.5);
   assert.match(r.reason, /中性分/);
 });
 
 test("mock judge faithfulness 上下文覆盖答案词元得分更高", async () => {
-  const judge = createLoopLlmJudge();
+  const judge = createDeterministicMockLoopLlmJudge();
   const covered = await judge.judgeFaithfulness("净利润 同比增长", ["净利润 同比增长 至 360 亿元"]);
   const uncovered = await judge.judgeFaithfulness("净利润 同比增长", ["天气 晴朗"]);
   assert.ok(covered.score > uncovered.score);
@@ -37,7 +76,7 @@ test("mock judge faithfulness 上下文覆盖答案词元得分更高", async ()
 });
 
 test("mock judge 不发起网络请求（无 key），返回结构化结果", async () => {
-  const judge = createLoopLlmJudge();
+  const judge = createDeterministicMockLoopLlmJudge();
   const r = await judge.judgeAnswerCorrectness("q", "答案", "参考");
   assert.equal(typeof r.score, "number");
   assert.equal(typeof r.reason, "string");

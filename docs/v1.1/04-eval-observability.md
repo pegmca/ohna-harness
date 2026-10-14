@@ -26,9 +26,12 @@
 ### P0 加 LLM-as-Judge 层（低投入高收益）— ✅ 已落地
 - **目标**：在 `packages/eval` 对 answerCorrectness/faithfulness 加 rubric 语义校验。
 - **落地**：新增 `judge-loop.ts`（`createLoopLlmJudge` 已导出为公共 API），复用 `run_events` 投影证据；
-  mock 模式用确定性 rubric（有意义词元重叠率，可复现），真模型走 `@aiagent/rag` bridge env 的 `/chat/completions`
+  v1.1 起 judge 走**独立的 judge provider**（`AIAGENT_JUDGE_BASE_URL` / `AIAGENT_JUDGE_API_KEY` / `AIAGENT_JUDGE_MODEL`，
+  由 `@aiagent/rag` 的 `readJudgeProviderConfig` 读取）的 `/chat/completions`
   （temperature=0、json_object、samples=3 多数投票、失败降级中性分）；
-  校准分仅追加到逐条 `metrics`（不计入门禁与聚合），**确定性门禁零回归**。现状：默认 mock、真实模式可选。
+  **provider 未启用时 `createLoopLlmJudge` 返回 `null`，不再静默回退确定性 mock**（避免伪装成"judge 已运行"的无意义基线），
+  需要可复现打分时由测试/调用方显式注入 `packages/eval/src/testing.ts` 的 `createDeterministicMockLoopLlmJudge()`；
+  校准分仅追加到逐条 `metrics`（不计入门禁与聚合），**确定性门禁零回归**。现状：judge provider 可选启用，禁用即 `null`。
 
 ### P1 trace 对齐 OTel GenAI 语义（低投入高收益）— ✅ 已落地
 - **目标**：RunEvent → `gen_ai` span/attribute，补 token/成本字段。
@@ -49,10 +52,12 @@
 ### P4 online eval + 真实 benchmark + 人工校准（进阶）— ✅ 已落地
 - **目标**：采样线上 run 影子评测；接 GAIA/TAU-bench 适配器；人工标注回流校准 judge。
 - **落地**（全部在 `packages/eval`，离线学习级，未改 apps/api 与数据库）：
-  - 在线影子评测：`online-eval.ts` 的 `createShadowEvaluator`（默认确定性 mock judge、可复现、无网络）+ `sampleAndEvaluate`，只读取线上采样 `{answer, query, contexts}` 离线跑 judge，**绝不写回生产/改 run 状态**。
+  - 在线影子评测：`online-eval.ts` 的 `createShadowEvaluator({ judge })` + `sampleAndEvaluate`，只读取线上采样 `{answer, query, contexts}` 离线跑 judge，**绝不写回生产/改 run 状态**。
+    v1.1 起 **options.judge 为必填依赖**（不再内部回退确定性 mock 基线）：真实场景传 `createLoopLlmJudge()`（judge provider 启用时返回实例，否则 `null` 需先判空），
+    要可复现就显式传 `packages/eval/src/testing.ts` 的 `createDeterministicMockLoopLlmJudge()`。
   - 真实 benchmark 适配器：`benchmark-adapters.ts` 的 `BenchmarkAdapter` 接口 + `benchmarkCaseToUnified` → `benchmarkDatasetToEvalDataset` → 直接喂 `runLoopEval` 管线；`createMockGaiaAdapter`/`createMockTauBenchAdapter` 为确定性 mock（不发起 HTTP）；**真实 GAIA/TAU-bench 集成是扩展点**——只需改写 `loadCases()`，下游管线不变。
   - 人工校准：`calibration.ts` 的 `HumanCalibrationStore`（in-memory）+ `calibrateJudgeScores`（全局偏差 `mean(human)-mean(judge)` + `clamp01` 钳制，纯函数）。
-  - 新增 `online-eval.test.mjs` / `benchmark-adapters.test.mjs` / `calibration.test.mjs` 共 9 例；eval 现 57/57 全绿（含 runLoopEval 7 指标门禁零回归）。
+  - `online-eval.test.mjs` / `benchmark-adapters.test.mjs` / `calibration.test.mjs` 初始新增 9 例；当前叠加 provider/model 护栏后 eval 62/62 全绿（含 runLoopEval 7 指标门禁零回归）。
 
 ## 4. 学习路径（TS 友好）
 

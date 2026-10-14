@@ -52,8 +52,9 @@ export interface RagEvalRunnerOptions {
    * 可选 LLM judge（对齐 RAGAS faithfulness / context recall）。
    * 不传时 runner 走纯 deterministic 基线，行为与旧版本一致（无回归）；
    * 传入时会在每条 case 的指标中追加 llmFaithfulness / llmContextRecall 校准信号。
+   * 允许为 null（如 createLlmJudge 在 provider 禁用时返回 null），等价不传。
    */
-  judge?: LlmJudge;
+  judge?: LlmJudge | null;
 }
 
 /**

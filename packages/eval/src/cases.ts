@@ -396,6 +396,12 @@ export const RAG_EVAL_CASES: RagEvalCase[] = [
 /**
  * 创建已加载 demo 文档的内存 RAG runtime，供 eval runner 使用。
  *
+ * 这是 eval benchmark 的**离线可复现基线**：全部走内存 adapter，
+ * embedding 使用 `@aiagent/rag` 的 deterministic mock 测试替身（显式注入，非生产配置）。
+ * 之所以固定在测试替身上，是为了让同一份 case 集在不同机器、不同网络环境下产出完全一致的
+ * 召回与打分，从而把 eval 差异归因到"检索/排序策略变化"而不是"provider 波动"。
+ * 生产路径请走组合根的 `createEmbeddingClientFromEnv()` 真实 provider，不要复用本函数。
+ *
  * @returns 已 ingest 全部 demo 文档的 runtime。
  */
 export async function createDemoRagRuntime(): Promise<DataSourceRuntime> {

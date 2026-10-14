@@ -1,4 +1,3 @@
-import { createDataSourceRuntime } from "@aiagent/rag";
 import type { ReportPlanDto, WorkflowErrorDto } from "@aiagent/types";
 import { runSequentialWorkflow } from "@aiagent/workflow";
 import { createReportWorkflowNodes } from "./nodes/index.js";
@@ -32,18 +31,20 @@ export function createReportPackageSummary(): ReportPackageSummary {
  * 最后由 Report Writer 生成草稿、PDF Exporter 占位导出。
  *
  * @param plan Report Planner 输出。
- * @param options max steps、max retries、节点事件 sink、可选 demo documents。
+ * @param options 必填 dataSourceRuntime（RAG runtime，由调用方显式注入），以及 max steps、
+ *   max retries、节点事件 sink、可选 demo documents。
  * @returns 结构化 workflow 结果。
  */
 export async function runReportWorkflow(
   plan: ReportPlanDto,
-  options: RunReportWorkflowOptions = {}
+  options: RunReportWorkflowOptions
 ): Promise<ReportWorkflowResult> {
   const readyError = validateExecutablePlan(plan);
   const initialState: ReportWorkflowState = {
     plan,
     documents: options.documents ?? [],
-    dataSourceRuntime: options.dataSourceRuntime ?? createDataSourceRuntime(),
+    // 必注入：report 包不自建 runtime，也不提供任何静默不可用的缺省实现。
+    dataSourceRuntime: options.dataSourceRuntime,
     followUpQueries: [],
     verifierRetryCount: 0
   };

@@ -35,8 +35,8 @@ export type ReportToolEventSink = (event: {
 }) => Promise<void>;
 
 export interface ReportToolOptions {
-  /** RAG runtime；缺省时 data collector 节点内部自建内存 runtime。 */
-  dataSourceRuntime?: DataSourceRuntime;
+  /** RAG runtime，必填：由组合根注入真实 runtime（测试注入 testing.ts 替身），工具层不自建缺省实现。 */
+  dataSourceRuntime: DataSourceRuntime;
   workflowRepository: WorkflowRepository;
   artifactRepository: ArtifactRepository;
   artifactStorage: ArtifactStorage;
@@ -66,7 +66,7 @@ export interface ReportToolDetails {
  * report 从「API 层编排」降级为模型自主调用的普通工具，approval 门删除后
  * PDF 在工具内直接发布（publishArtifactPdf saga），事件名 workflow_node / pdf_export 保持不变。
  *
- * @param options 持久化端口、归属上下文与事件 sink。
+ * @param options 必填 dataSourceRuntime（RAG runtime）与持久化端口、归属上下文、事件 sink。
  * @returns 可直接并入 agentLoop config.tools 的 AgentTool。
  */
 export function createReportTool(options: ReportToolOptions): AgentTool<typeof reportToolParametersSchema, ReportToolDetails> {

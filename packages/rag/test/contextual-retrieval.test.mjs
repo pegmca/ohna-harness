@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
+  createContextEnricherFromEnv,
   createContextualChunkEnricher,
   createLlmContextPrefixGenerator,
   createNoopContextualEnricher
 } from "../dist/contextual-retrieval.js";
+import { PROVIDER_ENV } from "../dist/provider-config.js";
 
 /**
  * 构造一个最小的 IngestedFilingDocumentDto，仅保留 enricher 用到的字段。
@@ -66,6 +68,23 @@ function makeChunks() {
     }
   ];
 }
+
+test("createContextEnricherFromEnv returns null when LLM model is missing", () => {
+  const saved = {};
+  for (const key of Object.values(PROVIDER_ENV.llm)) saved[key] = process.env[key];
+  process.env[PROVIDER_ENV.llm.baseUrl] = "http://provider.test/v1";
+  process.env[PROVIDER_ENV.llm.apiKey] = "provider-key";
+  delete process.env[PROVIDER_ENV.llm.model];
+
+  try {
+    assert.equal(createContextEnricherFromEnv(), null);
+  } finally {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
 
 test("noop enricher returns chunks unchanged", async () => {
   const enrich = createNoopContextualEnricher();

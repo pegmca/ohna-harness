@@ -1,4 +1,4 @@
-import { readBridgeConfig } from "./bridge-config.js";
+import { readLlmProviderConfig } from "./provider-config.js";
 
 /**
  * query 改写节点（Agentic 检索 / Self-RAG 轻量入口）。
@@ -62,16 +62,10 @@ export function createQueryRewriter(options: QueryRewriterOptions): QueryRewrite
   };
 }
 
-/**
- * 创建原样 rewriter（baseline / 关闭增强时使用）。
- *
- * @returns 永远返回原 query 的 rewriter。
- */
-export function createNoopQueryRewriter(): QueryRewriter {
-  return async (query: string): Promise<QueryRewriteResult> => ({ rewritten: query });
-}
+// 原样 rewriter 已降级为测试替身（见 testing.ts），这里仅 re-export 以保持历史导入路径不变。
+export { createNoopQueryRewriter } from "./testing.js";
 
-/** 真实 LLM rewrite 工厂配置（OpenAI 兼容 bridge 端点）。 */
+/** 真实 LLM rewrite 工厂配置（OpenAI 兼容 provider 端点）。 */
 export interface LlmQueryRewriterOptions {
   baseUrl: string;
   apiKey: string;
@@ -127,11 +121,11 @@ function parseRewriteJson(text: string): { rewritten?: unknown; subQueries?: unk
 /**
  * 创建真实 LLM query rewriter。
  *
- * 通过 OpenAI 兼容 `/chat/completions` 调用 bridge：prompt 要求模型把用户问题改写为检索友好问句，
+ * 通过 OpenAI 兼容 `/chat/completions` 调用 LLM provider：prompt 要求模型把用户问题改写为检索友好问句，
  * 并可选地拆分子问题用于多路召回，仅输出 JSON。
  * 本函数自身对网络/解析错误返回原 query（不抛），最外层 createQueryRewriter 仍会二次兜底。
  *
- * @param options bridge 端点配置。
+ * @param options LLM provider 端点配置（来自 provider-config 的 AIAGENT_LLM_*）。
  * @returns query rewriter 函数。
  */
 export function createLlmQueryRewriter(options: LlmQueryRewriterOptions): QueryRewriter {
@@ -183,17 +177,19 @@ export function createLlmQueryRewriter(options: LlmQueryRewriterOptions): QueryR
 }
 
 /**
- * 按环境变量创建 query rewriter（生产组合开关）。
+ * 按 LLM provider 环境变量创建 query rewriter（生产组合开关）。
  *
- * 为什么 env 缺省回退 noop：本地 / CI / eval 往往没有真实 bridge key，直接让检索走 LLM
- * 改写会依赖网络；缺省 noop 保持原 query，配置 bridge 后自动启用 Agentic 改写，无需改代码。
+ * 为什么 env 缺失/禁用时返回 `null` 而不是静默回退 noop：
+ * v1.1 改造后，生产检索增强必须显式注入可用的 LLM provider 才启用 Agentic 改写；
+ * 缺省回退 noop 会掩盖"查询改写未生效"的配置缺失。禁用时返回 `null`，
+ * 由组合根决定是否注入（或显式使用测试替身 `createNoopQueryRewriter`）。
  *
- * @returns bridge 启用时返回 LLM 改写器，否则返回原样 rewriter。
+ * @returns provider 启用时返回 LLM 改写器，否则返回 null。
  */
-export function createQueryRewriterFromEnv(): QueryRewriter {
-  const cfg = readBridgeConfig();
+export function createQueryRewriterFromEnv(): QueryRewriter | null {
+  const cfg = readLlmProviderConfig();
   if (!cfg.enabled) {
-    return createNoopQueryRewriter();
+    return null;
   }
   return createQueryRewriter({
     rewrite: createLlmQueryRewriter({

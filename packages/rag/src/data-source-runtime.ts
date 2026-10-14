@@ -17,7 +17,6 @@ import {
   synthesizeRagAnswer
 } from "./answer.js";
 import { chunkIngestedFilingDocument } from "./chunking.js";
-import { createDeterministicMockEmbeddingClient } from "./embedding.js";
 import { createHybridRetriever } from "./retrieval.js";
 import {
   createRagContentChecksum,
@@ -69,17 +68,14 @@ export function createRagPackageSummary(): RagPackageSummary {
  * 创建 Data Sources runtime。
  *
  * 文档 lineage、embedding client 与按 owner 绑定的 VectorStore 均可由 composition root 注入。
- * 零配置仅用于兼容本地测试；生产 server 必须显式注入 PostgreSQL repository/store factory。
+ * repository 与 VectorStore factory 缺省使用内存 adapter；embedding client 必须显式注入，
+ * 未注入时 ingest/search/answer 返回结构化的 provider disabled 错误，绝不生成 mock 向量。
  *
  * @param options repository、embedding client 与 owner-bound VectorStore factory。
  * @returns 可执行 ingest、list、search 和 grounded answer 的 runtime。
  */
 export function createDataSourceRuntime(options: DataSourceRuntimeOptions = {}): DataSourceRuntime {
-  return new DataSourceRuntimeService({
-    repository: options.repository ?? createInMemoryRagDocumentRepository(),
-    embeddingClient: options.embeddingClient ?? createDeterministicMockEmbeddingClient(),
-    vectorStoreFactory: options.vectorStoreFactory ?? createInMemoryVectorStoreFactory()
-  });
+  return new DataSourceRuntimeService(options);
 }
 
 /**
@@ -88,7 +84,7 @@ export function createDataSourceRuntime(options: DataSourceRuntimeOptions = {}):
  * 文档/版本/chunk 事实源是注入的 repository；VectorStore factory 按当前 owner 绑定具体 adapter。
  */
 class DataSourceRuntimeService implements DataSourceRuntime {
-  private readonly embeddingClient: EmbeddingClient;
+  private readonly embeddingClient?: EmbeddingClient;
   private readonly vectorStoreFactory: (ownerUserId: string | null) => VectorStore;
   private readonly repository: RagDocumentRepository;
   private readonly reranker?: Reranker;
@@ -101,18 +97,21 @@ class DataSourceRuntimeService implements DataSourceRuntime {
   /**
    * 创建 runtime 实例。
    *
-   * repository / embeddingClient / vectorStoreFactory 缺省回退到内存实现，保证零配置本地可用；
-   * reranker / contextEnricher / queryRewriter 均为可选生产增强，缺省保持启发式/恒等，不破坏默认链路。
+   * repository / vectorStoreFactory 缺省回退到内存实现，便于调用方按需替换持久化 adapter；
+   * embeddingClient 不设默认值：生产必须注入真实 client，测试必须显式注入 testing.ts 替身；
+   * reranker / contextEnricher / queryRewriter 均为可选生产增强，传 null/undefined 时视作"未注入"，
+   * 分别由 HybridRetriever 的 HeuristicReranker 保底、保持 chunk 原样、保持原 query。
    *
    * @param options 显式 adapter 依赖与可选生产增强。
    */
   public constructor(options: DataSourceRuntimeOptions) {
     this.repository = options.repository ?? createInMemoryRagDocumentRepository();
-    this.embeddingClient = options.embeddingClient ?? createDeterministicMockEmbeddingClient();
+    this.embeddingClient = options.embeddingClient ?? undefined;
     this.vectorStoreFactory = options.vectorStoreFactory ?? createInMemoryVectorStoreFactory();
-    this.reranker = options.reranker;
-    this.contextEnricher = options.contextEnricher;
-    this.queryRewriter = options.queryRewriter;
+    // 生产增强项为 null 时归一为 undefined，等价于"未注入"；HybridRetriever 会用自己的 HeuristicReranker 保底。
+    this.reranker = options.reranker ?? undefined;
+    this.contextEnricher = options.contextEnricher ?? undefined;
+    this.queryRewriter = options.queryRewriter ?? undefined;
   }
 
   /**
@@ -132,6 +131,18 @@ class DataSourceRuntimeService implements DataSourceRuntime {
     request: DataSourceIngestRequestDto,
     context: DataSourceIngestContext = {}
   ): Promise<DataSourceRuntimeResult<DataSourceIngestResponseDto>> {
+    const embeddingClient = this.embeddingClient;
+    if (embeddingClient === undefined) {
+      return {
+        ok: false,
+        error: {
+          code: "embedding_provider_disabled",
+          message: "Embedding provider 未启用，无法为 data source 建立向量索引。",
+          details: { reason: "embedding_client_not_injected" }
+        }
+      };
+    }
+
     const ownerUserId = context.ownerUserId ?? null;
     const scope = context.scope ?? (ownerUserId ? "private" : "shared");
     const ownerScopeViolation = validateRagOwnerScope({ ownerUserId, scope });
@@ -241,7 +252,7 @@ class DataSourceRuntimeService implements DataSourceRuntime {
     const indexedChunks = this.contextEnricher
       ? await this.contextEnricher(ingestionResult.document, chunks)
       : chunks;
-    const embeddingResult = await this.embeddingClient.embedTexts(indexedChunks.map((chunk) => chunk.text));
+    const embeddingResult = await embeddingClient.embedTexts(indexedChunks.map((chunk) => chunk.text));
 
     if (!embeddingResult.ok) {
       return { ok: false, error: embeddingResult.error };
@@ -416,6 +427,18 @@ class DataSourceRuntimeService implements DataSourceRuntime {
   private async createRetriever(
     ownerUserId: string | null
   ): Promise<{ ok: true; retriever: Retriever } | { ok: false; error: RagStructuredError }> {
+    const embeddingClient = this.embeddingClient;
+    if (embeddingClient === undefined) {
+      return {
+        ok: false,
+        error: {
+          code: "embedding_provider_disabled",
+          message: "Embedding provider 未启用，无法执行向量检索。",
+          details: { reason: "embedding_client_not_injected" }
+        }
+      };
+    }
+
     try {
       const chunks: RagChunk[] = [];
       let cursor: string | undefined;
@@ -424,7 +447,7 @@ class DataSourceRuntimeService implements DataSourceRuntime {
         chunks.push(...page.chunks.map(ragChunkRecordToChunk));
         cursor = page.nextCursor ?? undefined;
       } while (cursor !== undefined);
-      const embeddingResult = await this.embeddingClient.embedTexts(chunks.map((chunk) => chunk.text));
+      const embeddingResult = await embeddingClient.embedTexts(chunks.map((chunk) => chunk.text));
       if (!embeddingResult.ok) return embeddingResult;
       const embeddedChunks = chunks.map((chunk, index) => ({
         ...chunk,
@@ -434,7 +457,7 @@ class DataSourceRuntimeService implements DataSourceRuntime {
       return {
         ok: true,
         retriever: createHybridRetriever({
-          embeddingClient: this.embeddingClient,
+          embeddingClient,
           vectorStore: this.vectorStoreFactory(ownerUserId),
           chunks: embeddedChunks,
           // 生产组合注入真实 Reranker（cross-encoder / LLM-judge）；缺省走内部 HeuristicReranker。

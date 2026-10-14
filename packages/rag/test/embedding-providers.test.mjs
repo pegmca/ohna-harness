@@ -4,6 +4,8 @@ import {
   createEmbeddingClientFromEnv,
   createOpenAiCompatibleEmbeddingClient
 } from "../dist/embedding-providers.js";
+import { PROVIDER_ENV } from "../dist/provider-config.js";
+import { createDeterministicMockEmbeddingClient } from "../dist/testing.js";
 
 /**
  * 构造一个标准 OpenAI 兼容的 embeddings 响应体。
@@ -172,27 +174,84 @@ test("真实 client：响应 data 缺失返回 embedding_failed", async () => {
   }
 });
 
-test("createEmbeddingClientFromEnv：bridge 环境变量缺失时回退 mock", async () => {
-  const original = {
-    baseUrl: process.env["AIAGENT_LLM_BASE_URL_BRIDGE_AI"],
-    apiKey: process.env["AIAGENT_LLM_API_KEY_BRIDGE_AI"]
-  };
-  delete process.env["AIAGENT_LLM_BASE_URL_BRIDGE_AI"];
-  delete process.env["AIAGENT_LLM_API_KEY_BRIDGE_AI"];
+test("createEmbeddingClientFromEnv：embedding 环境变量缺失时返回 null（不再静默回退 mock）", async () => {
+  const saved = {};
+  for (const key of Object.values(PROVIDER_ENV.embedding)) {
+    saved[key] = process.env[key];
+    delete process.env[key];
+  }
 
   try {
     const client = createEmbeddingClientFromEnv();
-    // mock client 成功对空/非空输入产出 ok 结果。
+    // v1.1：禁用时工厂返回 null，由组合根显式决定降级或阻断，而非偷偷兜底 mock。
+    assert.equal(client, null);
+  } finally {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
+test("createEmbeddingClientFromEnv：model 缺失时保持 disabled", () => {
+  const saved = {};
+  for (const key of Object.values(PROVIDER_ENV.embedding)) saved[key] = process.env[key];
+  process.env[PROVIDER_ENV.embedding.baseUrl] = "http://provider.test/v1";
+  process.env[PROVIDER_ENV.embedding.apiKey] = "provider-key";
+  delete process.env[PROVIDER_ENV.embedding.model];
+
+  try {
+    assert.equal(createEmbeddingClientFromEnv(), null);
+  } finally {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
+test("createEmbeddingClientFromEnv：独立 embedding env 就绪时返回真实 client", async () => {
+  const saved = {};
+  for (const key of Object.values(PROVIDER_ENV.embedding)) {
+    saved[key] = process.env[key];
+  }
+  process.env[PROVIDER_ENV.embedding.baseUrl] = "http://provider.test/v1";
+  process.env[PROVIDER_ENV.embedding.apiKey] = "provider-key";
+  process.env[PROVIDER_ENV.embedding.model] = "provider-embedding-model";
+  process.env[PROVIDER_ENV.embedding.dimensions] = "6";
+  const restoreFetch = stubFetch(async (url, init) => {
+    const body = JSON.parse(init.body);
+    assert.equal(url, "http://provider.test/v1/embeddings");
+    assert.equal(body.model, "provider-embedding-model");
+    assert.equal(body.dimensions, 6);
+    return new Response(JSON.stringify(buildOkPayload(body.input, 6)), {
+      status: 200,
+      headers: { "content-type": "application/json" }
+    });
+  });
+
+  try {
+    const client = createEmbeddingClientFromEnv();
+    assert.notEqual(client, null);
     const result = await client.embedTexts(["hello"]);
     assert.equal(result.ok, true);
     if (!result.ok) return;
-    assert.equal(result.model, "deterministic-mock-embedding-v1");
+    assert.equal(result.model, "provider-embedding-model");
+    assert.equal(result.dimensions, 6);
   } finally {
-    if (original.baseUrl !== undefined) {
-      process.env["AIAGENT_LLM_BASE_URL_BRIDGE_AI"] = original.baseUrl;
-    }
-    if (original.apiKey !== undefined) {
-      process.env["AIAGENT_LLM_API_KEY_BRIDGE_AI"] = original.apiKey;
+    restoreFetch();
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
     }
   }
+});
+
+test("deterministic mock 仅能通过 testing 模块显式注入", async () => {
+  // 直接注入 deterministic mock 测试替身，验证可复现行为（生产工厂已不再自动回退）。
+  const client = createDeterministicMockEmbeddingClient();
+  const result = await client.embedTexts(["hello"]);
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.model, "deterministic-mock-embedding-v1");
 });

@@ -7,13 +7,15 @@
  * （不计入门禁）。
  *
  * 设计原则（对齐 judge.ts 的 RAG judge 范式）：
- * 1. 默认确定性 mock 模式（无网络）：用"有意义词元重叠率"打分，分数完全可复现，测试依赖它；
- * 2. 真实模型模式可选：仅当显式给出 baseUrl+apiKey（或从 bridge env 读到）时，用 fetch 调
- *    `/chat/completions`（temperature=0、response_format=json_object），解析 score，失败/解析不出
- *    → 降级中性分 0.5 并附 reason；对两个 rubric 各采样 `samples`（默认 3）次取平均（多数投票校准）；
- * 3. 任何失败一律降级为结构化中性结果，绝不 throw 到 eval 主流程。
+ * 1. 真实模型模式：baseUrl+apiKey+model 由调用方显式给出，或从 judge provider env `AIAGENT_JUDGE_*` 读到；
+ *    provider 未启用（缺 baseUrl/apiKey/model）时工厂返回 `null`——不再静默回退"确定性 mock"，
+ *    否则会伪装成 judge 已运行却给出无意义基线，掩盖配置缺失；
+ * 2. 真实模式用 fetch 调 `/chat/completions`（temperature=0、response_format=json_object），解析 score，
+ *    失败/解析不出 → 降级中性分 0.5 并附 reason；对两个 rubric 各采样 `samples`（默认 3）次取平均（多数投票校准）；
+ * 3. 需要可复现的确定性打分时，由测试/调用方显式注入 `testing.ts` 的 `createDeterministicMockLoopLlmJudge()`；
+ * 4. 任何失败一律降级为结构化中性结果，绝不 throw 到 eval 主流程。
  */
-import { BRIDGE_ENV, readBridgeConfig } from "@aiagent/rag";
+import { readJudgeProviderConfig } from "@aiagent/rag";
 
 /** 单条 judge 判定结果（分数 + 理由）。 */
 export interface JudgeScore {
@@ -45,7 +47,7 @@ export interface LoopLlmJudge {
   judgeFaithfulness(answer: string, contexts: readonly string[]): Promise<JudgeScore>;
 }
 
-/** judge 工厂配置（未传则从 bridge env 读取）。 */
+/** judge 工厂配置（未传则从 judge provider env 读取，即 AIAGENT_JUDGE_*；禁用时返回 null）。 */
 export interface LoopLlmJudgeOptions {
   /** OpenAI 兼容端点（不含末尾 /v1 也行，调用时统一拼 /chat/completions）。 */
   baseUrl?: string;
@@ -57,18 +59,8 @@ export interface LoopLlmJudgeOptions {
   samples?: number;
 }
 
-/** 缺失真实调用条件时使用的中性分，表示"无法判断、不奖励也不惩罚"。 */
+/** 缺失真实调用条件时使用的中性分，表示"无法判断、不奖励也不惩罚"（仅用于真实模式调用失败的降级）。 */
 const NEUTRAL_SCORE = 0.5;
-
-/** 中英文常用停用词，过滤后对"有意义词元"做重叠比较，逼近语义等价。 */
-const STOPWORDS = new Set([
-  "公司", "的", "了", "是", "和", "与", "或", "在", "为", "有", "我", "你", "他", "她", "它",
-  "我们", "你们", "他们", "这", "那", "这些", "那些", "一个", "一些", "什么", "怎么", "如何",
-  "多少", "是否", "可以", "已经", "现在", "当时", "目前", "the", "a", "an", "is", "are", "was",
-  "were", "be", "been", "have", "has", "had", "do", "does", "did", "will", "would", "could",
-  "should", "may", "might", "must", "of", "to", "in", "on", "at", "for", "with", "by", "from",
-  "as", "and", "or", "but", "not", "no", "this", "that", "these", "those"
-]);
 
 /**
  * 把分数限制在 [0,1] 并保留三位小数。
@@ -79,27 +71,6 @@ const STOPWORDS = new Set([
 function roundScore(score: number): number {
   const clamped = Number.isFinite(score) ? Math.min(1, Math.max(0, score)) : NEUTRAL_SCORE;
   return Math.round(clamped * 1000) / 1000;
-}
-
-/**
- * 提取文本中有意义的词元（过滤停用词与过短/纯短数字 token）。
- * 注：中文无空格时按非中英文数字边界切分，整句作为一个词元；这是 deterministic 近似，
- * 真实语义等价由可选的真实模型模式承担。
- *
- * @param text 输入文本。
- * @returns 词元集合。
- */
-function extractMeaningfulTerms(text: string): Set<string> {
-  const normalized = text.toLowerCase().replace(/\s+/g, " ").trim();
-  const tokens = normalized.split(/[^\u4e00-\u9fa5a-z0-9]+/);
-  return new Set(
-    tokens.filter((token) => {
-      if (token.length === 0) return false;
-      if (STOPWORDS.has(token)) return false;
-      if (/^[0-9]+$/.test(token) && token.length <= 2) return false;
-      return token.length >= 2 || /^[a-z0-9]{2,}$/.test(token);
-    })
-  );
 }
 
 /**
@@ -132,120 +103,76 @@ function parseJudgeJson(text: string): { score?: unknown; reason?: unknown } | n
 }
 
 /**
- * 确定性 answer correctness：答案词元被期望文本词元覆盖的比例。
- * 完全可复现，测试依赖它的确定性。
- *
- * @param answer 答案文本。
- * @param expectedText 期望参考文本。
- * @returns 分数与理由。
- */
-function deterministicAnswerCorrectness(answer: string, expectedText: string): JudgeScore {
-  const answerTerms = extractMeaningfulTerms(answer);
-  const expectedTerms = extractMeaningfulTerms(expectedText);
-  if (expectedTerms.size === 0) {
-    return { score: 1, reason: "期望文本无可提取词元，视为一致（确定性 mock）。" };
-  }
-  const hits = [...expectedTerms].filter((term) => answerTerms.has(term)).length;
-  const score = roundScore(hits / expectedTerms.size);
-  return {
-    score,
-    reason: `期望词元 ${expectedTerms.size} 个，答案命中 ${hits} 个（确定性 mock 重叠率 ${(score * 100).toFixed(0)}%）。`
-  };
-}
-
-/**
- * 确定性 faithfulness：答案词元被检索上下文词元覆盖的比例；无上下文返回中性分。
- * 完全可复现，测试依赖它的确定性。
- *
- * @param answer 答案文本。
- * @param contexts 检索到的上下文文本列表。
- * @returns 分数与理由。
- */
-function deterministicFaithfulness(answer: string, contexts: readonly string[]): JudgeScore {
-  const answerTerms = extractMeaningfulTerms(answer);
-  if (answerTerms.size === 0) {
-    return { score: 1, reason: "答案无可提取词元，默认认为忠实（确定性 mock）。" };
-  }
-  if (contexts.length === 0) {
-    return { score: NEUTRAL_SCORE, reason: "无检索上下文，确定性 mock 返回中性分。" };
-  }
-  const contextTerms = extractMeaningfulTerms(contexts.join(" "));
-  const hits = [...answerTerms].filter((term) => contextTerms.has(term)).length;
-  const score = roundScore(hits / answerTerms.size);
-  return {
-    score,
-    reason: `答案词元 ${answerTerms.size} 个，被上下文支撑 ${hits} 个（确定性 mock 覆盖率 ${(score * 100).toFixed(0)}%）。`
-  };
-}
-
-/**
  * 创建 loop eval 的 LLM-as-Judge。
  *
- * 未显式传入 baseUrl/apiKey 时，从 bridge 环境变量读取（复用 @aiagent/rag 的 readBridgeConfig，
- * 即 AIAGENT_LLM_*_BRIDGE_AI）。仅当 baseUrl 与 apiKey 均非空才启用真实模型模式；否则走确定性
- * mock 模式（无网络、分数可复现）。任何真实调用失败都降级为中性分，绝不抛异常。
+ * 未显式传入 baseUrl/apiKey 时，从 judge provider 环境变量读取（复用 @aiagent/rag 的
+ * readJudgeProviderConfig，即 AIAGENT_JUDGE_*）。仅当 baseUrl、apiKey 与 model 均非空才创建真实模型模式；
+ * 否则返回 `null`——**不再静默回退确定性 mock**，因为那是伪装成"judge 已运行"的无意义基线，
+ * 掩盖 judge provider 未配置的事实。需要可复现确定性判定时，显式注入测试替身
+ * `createDeterministicMockLoopLlmJudge()`（见 eval testing.ts）。
+ *
+ * 任何真实调用失败都降级为中性分，绝不抛异常。
  *
  * @param options 可选端点与采样配置。
- * @returns LoopLlmJudge 实例。
+ * @returns 具备真实调用条件时返回 LoopLlmJudge 实例，否则返回 null。
  */
-export function createLoopLlmJudge(options: LoopLlmJudgeOptions = {}): LoopLlmJudge {
-  const bridge = readBridgeConfig();
-  const baseUrl = (options.baseUrl ?? bridge.baseUrl).trim();
-  const apiKey = (options.apiKey ?? bridge.apiKey).trim();
-  const model = (options.model ?? bridge.model).trim();
+export function createLoopLlmJudge(options: LoopLlmJudgeOptions = {}): LoopLlmJudge | null {
+  const judge = readJudgeProviderConfig();
+  const baseUrl = (options.baseUrl ?? judge.baseUrl).trim();
+  const apiKey = (options.apiKey ?? judge.apiKey).trim();
+  const model = (options.model ?? judge.model).trim();
   const samples = Math.max(1, Math.floor(options.samples ?? 3));
-  const enabled = baseUrl.length > 0 && apiKey.length > 0;
+  const enabled = baseUrl.length > 0 && apiKey.length > 0 && model.length > 0;
 
-  // 仅在具备真实调用条件时绑定 fetch 调用；否则保持 null，判定降级为确定性 mock。
-  const callModel: ((systemPrompt: string, userPrompt: string) => Promise<string>) | null = enabled
-    ? async (systemPrompt: string, userPrompt: string): Promise<string> => {
-        const response = await fetch(`${baseUrl.replace(/\/$/, "")}/chat/completions`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${apiKey}`
-          },
-          body: JSON.stringify({
-            model,
-            messages: [
-              { role: "system", content: systemPrompt },
-              { role: "user", content: userPrompt }
-            ],
-            temperature: 0,
-            response_format: { type: "json_object" }
-          })
-        });
+  // 仅当具备真实调用条件时才创建 judge；否则返回 null，由调用方决定是否注入测试替身。
+  if (!enabled) {
+    return null;
+  }
 
-        if (!response.ok) {
-          throw new Error(`loop judge request failed with status ${response.status}`);
-        }
+  const callModel = async (systemPrompt: string, userPrompt: string): Promise<string> => {
+    const response = await fetch(`${baseUrl.replace(/\/$/, "")}/chat/completions`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`
+      },
+      body: JSON.stringify({
+        model,
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userPrompt }
+        ],
+        temperature: 0,
+        response_format: { type: "json_object" }
+      })
+    });
 
-        const data = (await response.json()) as {
-          choices?: Array<{ message?: { content?: string } }>;
-        };
-        return data?.choices?.[0]?.message?.content ?? "";
-      }
-    : null;
+    if (!response.ok) {
+      throw new Error(`loop judge request failed with status ${response.status}`);
+    }
+
+    const data = (await response.json()) as {
+      choices?: Array<{ message?: { content?: string } }>;
+    };
+    return data?.choices?.[0]?.message?.content ?? "";
+  };
 
   return createLoopJudgeWithCallModel(callModel, samples);
 }
 
 /**
- * 组装 judge 实现：根据 callModel 是否为 null 选择真实模型或确定性 mock，并对真实模式做多次采样平均。
+ * 组装 judge 实现：基于真实模型调用，并对每个 rubric 多次采样取平均（多数投票校准）。
  *
- * @param callModel 模型调用边界；为 null 时走确定性 mock。
+ * @param callModel 模型调用边界（已确保非 null，仅在 judge 启用时构造）。
  * @param samples 真实模式下每个 rubric 的采样次数。
  * @returns LoopLlmJudge 实现。
  */
 function createLoopJudgeWithCallModel(
-  callModel: ((systemPrompt: string, userPrompt: string) => Promise<string>) | null,
+  callModel: (systemPrompt: string, userPrompt: string) => Promise<string>,
   samples: number
 ): LoopLlmJudge {
   return {
     judgeAnswerCorrectness: async (question, answer, expectedText) => {
-      if (!callModel) {
-        return deterministicAnswerCorrectness(answer, expectedText);
-      }
       const userPrompt =
         `用户问题：\n${question}\n\n` +
         `模型答案：\n${answer}\n\n` +
@@ -256,9 +183,6 @@ function createLoopJudgeWithCallModel(
     },
 
     judgeFaithfulness: async (answer, contexts) => {
-      if (!callModel) {
-        return deterministicFaithfulness(answer, contexts);
-      }
       const contextText = contexts.length > 0 ? contexts.join("\n\n---\n\n") : "（无检索上下文）";
       const userPrompt =
         `用户答案：\n${answer}\n\n` +

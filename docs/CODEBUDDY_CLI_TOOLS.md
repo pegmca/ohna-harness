@@ -3,7 +3,7 @@
 - Source: captured CodeBuddy CLI chat request (`req_4.json`)
 - Model: `hy4-preview-f`
 - Tool count: 23
-- Note: these are sent by the CodeBuddy CLI client as OpenAI-format function-calling tools. They are **NOT** present when calling the bare `/v2/chat/completions` API (e.g. via bridge-ai).
+- Note: these are sent by the CodeBuddy CLI client as OpenAI-format function-calling tools. They are **NOT** present when calling the bare `/v2/chat/completions` API directly (i.e. without the CLI client).
 
 ## 1. Read
 

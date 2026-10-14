@@ -4,19 +4,18 @@ import {
   type EmbeddingResult,
   type RagStructuredError
 } from "./types.js";
-import { createDeterministicMockEmbeddingClient } from "./embedding.js";
-import { readBridgeEmbeddingConfig } from "./bridge-config.js";
+import { readEmbeddingProviderConfig } from "./provider-config.js";
 
 /**
  * 真实 OpenAI 兼容 embedding 端点的配置。
  *
- * 统一走私有 bridge（base URL 形如 `http://host/v1`），所有真实 provider 调用都复用它，
+ * 走独立 provider（base URL 形如 `http://host/v1`），由 provider-config 统一读取环境变量，
  * 避免在 embedding 实现里硬编码端点或 key；维度由调用方显式传入，便于与向量库列维度保持一致。
  */
 export interface OpenAiCompatibleEmbeddingClientOptions {
   /** OpenAI 兼容端点（含 /v1 前缀，base URL 不含具体路径）。 */
   baseUrl: string;
-  /** 鉴权 Bearer token，来自 bridge 环境变量。 */
+  /** 鉴权 Bearer token，来自 provider 环境变量。 */
   apiKey: string;
   /** 模型名（如 text-embedding-3-small / bge-m3）。 */
   model: string;
@@ -216,18 +215,19 @@ class OpenAiCompatibleEmbeddingClient implements EmbeddingClient {
 }
 
 /**
- * 根据环境变量创建生产级 embedding client（组合开关）。
+ * 根据 embedding provider 环境变量创建生产级 embedding client（组合开关）。
  *
- * 为什么 env 缺省回退 mock：本地开发 / CI / eval 往往没有真实 key，
- * 直接失败会破坏整条索引链路；回退到 deterministic mock 可保证可复现、零外部依赖，
- * 真实环境配置 bridge 变量后自动切换为真实 provider，无需改代码（依赖倒置）。
+ * 为什么 env 缺失/禁用时返回 `null` 而不是静默回退 mock：
+ * v1.1 改造后，生产运行必须显式注入可用的 embedding provider，缺省回退 mock 会伪装成"索引可用"
+ * 却产出毫无语义意义的确定性向量，掩盖配置缺失。因此禁用时返回 `null`，
+ * 由组合根（server）显式决定降级或阻断，而非在工厂里偷偷兜底。
  *
- * @returns bridge 启用时返回真实 client，否则返回 deterministic mock client。
+ * @returns provider 启用时返回真实 client，否则返回 null（调用方需自行处理禁用状态）。
  */
-export function createEmbeddingClientFromEnv(): EmbeddingClient {
-  const cfg = readBridgeEmbeddingConfig();
+export function createEmbeddingClientFromEnv(): EmbeddingClient | null {
+  const cfg = readEmbeddingProviderConfig();
   if (!cfg.enabled) {
-    return createDeterministicMockEmbeddingClient();
+    return null;
   }
   return createOpenAiCompatibleEmbeddingClient({
     baseUrl: cfg.baseUrl,

@@ -24,7 +24,8 @@ export interface ReportWorkflowDemoDocument {
 export interface ReportWorkflowState extends WorkflowState {
   plan: ReportPlanDto;
   documents: ReportWorkflowDemoDocument[];
-  dataSourceRuntime?: DataSourceRuntime;
+  /** 由调用方显式注入的 RAG runtime：workflow 内部不自建，避免引入静默不可用的缺省 runtime。 */
+  dataSourceRuntime: DataSourceRuntime;
   followUpQueries?: string[];
   verifierRetryCount?: number;
   collectedData?: ReportDataCollectorOutput;
@@ -44,7 +45,8 @@ export interface RunReportWorkflowOptions {
   documents?: ReportWorkflowDemoDocument[];
   deadlineMs?: number;
   signal?: AbortSignal;
-  dataSourceRuntime?: DataSourceRuntime;
+  /** 必填 RAG runtime：生产由组合根注入真实 runtime，测试显式注入 testing.ts 替身。 */
+  dataSourceRuntime: DataSourceRuntime;
 }
 
 export interface ReportWorkflowResultOk {

@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { resolve } from "node:path";
 import { test } from "node:test";
-import { createLoopLlmJudge, loadEvalDataset, runLoopEval } from "../dist/index.js";
+import { loadEvalDataset, runLoopEval } from "../dist/index.js";
+import { createDeterministicMockLoopLlmJudge } from "../dist/testing.js";
 
 const datasetPath = resolve(process.cwd(), "../../datasets/eval-financial-v1.json");
 
@@ -21,7 +22,7 @@ test("loop eval 不传 judge 时逐条 metrics 不含 llm 校准项（零回归�
 test("loop eval 传入 mock judge 时追加 llm 校准项且不影响门禁与聚合", async () => {
   const dataset = await loadEvalDataset(datasetPath);
   const noJudge = await runLoopEval(dataset);
-  const judge = createLoopLlmJudge(); // 无 key → 确定性 mock 模式
+  const judge = createDeterministicMockLoopLlmJudge(); // 显式注入确定性 mock 测试替身
   const withJudge = await runLoopEval(dataset, { judge });
 
   assert.equal(withJudge.results.length, noJudge.results.length);

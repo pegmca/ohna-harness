@@ -28,10 +28,12 @@ import type {
   RunStreamEventDtoV2
 } from "@aiagent/types";
 import {
+  createAttachmentRetriever,
   createGroundingTransformContext,
+  type AttachmentStore,
   type Citation,
   type CitationRepository,
-  type DataSourceRuntime,
+  type EmbeddingClient,
   type NewCitationInput
 } from "@aiagent/rag";
 import { redactSensitiveValue } from "@aiagent/trace";
@@ -86,10 +88,15 @@ export interface RunServiceDependencies {
   tools: AgentTool[];
   /** 可选 report 工具工厂：注入后每个 run 额外装配 generate_report（阶段 5 report 回迁，模型自主触发）。 */
   reportToolFactory?: (ctx: ReportToolFactoryContext) => AgentTool;
-  /** RAG runtime，供 grounding hook 检索附件片段。 */
-  dataSourceRuntime: DataSourceRuntime;
   /** 附件上传 repository，用于把附件绑定到触发 Run 的用户消息。 */
   attachmentRepository: AttachmentRepository;
+  /**
+   * 会话级临时附件存储；与 embeddingClient 同时存在时才构造附件 grounding。
+   * 缺失时 run 仍可执行，只是不注入附件上下文（对齐"附件可选"语义）。
+   */
+  attachmentStore?: AttachmentStore;
+  /** embedding provider；附件检索需先 embed query，缺失时不启用附件 grounding。 */
+  embeddingClient?: EmbeddingClient;
   /** Citation repository，用于把 grounding 检索结果持久化到 assistant message。 */
   citationRepository: CitationRepository;
   /** 单 run 最大 turn 数预算。 */
@@ -226,16 +233,24 @@ export function createRunApplicationService(dependencies: RunServiceDependencies
       // 首个 user message_end 即 create 时已落库的 prompt，仅标记不重复写。
       let promptMarked = false;
 
-      // grounding：附件相关片段经 RAG 检索后封装为 <untrusted_context> user 消息注入上下文。
+      // grounding：附件相关片段从**会话级** AttachmentStore 检索后封装为 <untrusted_context> user 消息注入上下文。
       // citation 按“本轮最后一条用户消息时间戳”分槽保存，避免 event stream 异步消费导致 race。
-      const grounding = createGroundingTransformContext({
-        runtime: dependencies.dataSourceRuntime,
-        attachmentDocumentIds: request.attachmentDocumentIds ?? [],
-        ownerUserId: userId,
-        recordRetrieval: async (event) => {
-          await publish(userId, snapshot, "retrieval", event);
-        }
-      });
+      // 附件存储与 embedding provider 缺一不可：都就绪才构造，否则跳过附件注入（run 本身不受影响）。
+      const grounding = dependencies.attachmentStore && dependencies.embeddingClient
+        ? createGroundingTransformContext({
+            attachmentRetriever: createAttachmentRetriever({
+              embeddingClient: dependencies.embeddingClient,
+              attachmentStore: dependencies.attachmentStore,
+              conversationId: request.conversationId
+            }),
+            conversationId: request.conversationId,
+            attachmentDocumentIds: request.attachmentDocumentIds ?? [],
+            ownerUserId: userId,
+            recordRetrieval: async (event) => {
+              await publish(userId, snapshot, "retrieval", event);
+            }
+          })
+        : undefined;
 
       // compaction 检测：transformContext 就地写回后，队首出现新 CompactionMessage 即落表
       // （role='user'、message_type='compaction'，content 为已包裹摘要文本）。
@@ -247,7 +262,7 @@ export function createRunApplicationService(dependencies: RunServiceDependencies
         summarizer: dependencies.compaction?.summarizer ?? defaultSummarizer
       });
       const transformContext = async (messages: AgentMessage[], signal?: AbortSignal): Promise<AgentMessage[]> => {
-        const grounded = await grounding(messages, signal);
+        const grounded = grounding ? await grounding(messages, signal) : messages;
         const transformed = await compactionTransform(grounded, signal);
         const head = transformed[0];
         if (head?.role === "compaction" && !seenCompactionTimestamps.has(head.timestamp)) {
@@ -353,7 +368,7 @@ export function createRunApplicationService(dependencies: RunServiceDependencies
             if (event.message.role === "user") {
               lastUserMessageTimestamp = event.message.timestamp;
             } else if (stored && event.message.role === "assistant" && lastUserMessageTimestamp !== undefined && isFinalAssistantMessage(event.message)) {
-              const turnCitations = grounding.getCitationsForTurn(lastUserMessageTimestamp);
+              const turnCitations = grounding?.getCitationsForTurn(lastUserMessageTimestamp) ?? [];
               if (turnCitations.length > 0) {
                 await dependencies.citationRepository.saveMessageCitations(userId, stored.id, toNewCitationInputs(turnCitations));
               }
@@ -380,7 +395,7 @@ export function createRunApplicationService(dependencies: RunServiceDependencies
       for (const message of terminalMessages) {
         const stored = await persistMessage(message);
         if (stored && message.role === "assistant" && lastUserMessageTimestamp !== undefined && isFinalAssistantMessage(message)) {
-          const turnCitations = grounding.getCitationsForTurn(lastUserMessageTimestamp);
+          const turnCitations = grounding?.getCitationsForTurn(lastUserMessageTimestamp) ?? [];
           if (turnCitations.length > 0) {
             await dependencies.citationRepository.saveMessageCitations(userId, stored.id, toNewCitationInputs(turnCitations));
           }

@@ -1,9 +1,9 @@
 import type { AgentMessage } from "@aiagent/agent";
 import type { RetrievalTraceDto } from "@aiagent/types";
 import { assembleUntrustedContext, type UntrustedContent } from "@aiagent/security";
-import { createQueryPreview } from "./retrieval.js";
+import { createRetrievalResultFromRetrievedChunk } from "./answer.js";
 import { createTraceRetrievalEvent } from "./source-uri.js";
-import type { Citation, DataSourceRuntime, RetrievalResult, RetrievalTraceSummary } from "./types.js";
+import type { Citation, RetrievalResult, Retriever } from "./types.js";
 
 /** 附件 grounding 默认召回数量，与旧 run-service 保持一致。 */
 const DEFAULT_ATTACHMENT_GROUNDING_TOP_K = 5;
@@ -13,12 +13,21 @@ const DEFAULT_ATTACHMENT_GROUNDING_TOP_K = 5;
  *
  * 设计依据 docs/worktree/06-capability-integration.md 第 1 节：
  * 附件与检索结果以 data-only user 消息形式注入 agent loop，经 <untrusted_context> 安全封装。
+ *
+ * v1.1 改造：附件源不再是 DataSourceRuntime（那会检索主库、无法表达"会话级临时附件"），
+ * 而是按会话绑定的 attachmentRetriever（AttachmentStore 之上的 Retriever）。
  */
 export interface GroundingHookOptions {
-  /** RAG 检索入口（复用现有 DataSourceRuntime）。 */
-  runtime: DataSourceRuntime;
-  /** 本次 run 的附件 documentId 快照。 */
+  /** 会话级附件检索入口；已按 conversationId 绑定，只检索本会话附件。 */
+  attachmentRetriever: Retriever;
+  /** 本次 run 的会话 id；用于显式声明 scope 与观测（检索器本身已按会话绑定）。 */
+  conversationId: string;
+  /** 本次 run 的附件 documentId 快照；为空时不注入任何 grounding。 */
   attachmentDocumentIds: readonly string[];
+  /**
+   * 当前调用身份。附件检索已由 attachmentRetriever 按会话绑定，本字段不再参与检索，
+   * 保留用于 run 层作用域标注与观测（与旧签名保持兼容，避免调用方无谓改动）。
+   */
   ownerUserId: string;
   /** topK，默认 5。 */
   topK?: number;
@@ -72,32 +81,20 @@ export function createGroundingTransformContext(options: GroundingHookOptions): 
 
     if (!query.trim()) return messages;
 
-    const result = await options.runtime.search(
-      query,
-      {
-        mode: "hybrid",
-        topK,
-        filter: { documentIds: [...documentIds] },
-      },
-      { ownerUserId: options.ownerUserId }
-    );
+    // 附件检索：AttachmentStore 已按会话隔离，这里只需给出 topK，无需再传 documentIds 过滤。
+    const retrievalResult = await options.attachmentRetriever.retrieve(query, { topK });
+    const traceEvent = createTraceRetrievalEvent(query, retrievalResult);
 
-    const traceEvent = result.ok
-      ? result.data.trace
-      : createTraceRetrievalEvent(query, {
-          ok: false,
-          error: result.error,
-          trace: emptyRetrievalTrace(query, topK),
-        });
-
-    if (!result.ok) {
+    if (!retrievalResult.ok) {
       if (options.recordRetrieval) {
         await options.recordRetrieval(traceEvent);
       }
       return messages;
     }
 
-    const newResults = result.data.results.filter((item) => !injectedChunkIds.has(item.chunkId));
+    const newResults = retrievalResult.results
+      .map(createRetrievalResultFromRetrievedChunk)
+      .filter((item) => !injectedChunkIds.has(item.chunkId));
     if (newResults.length === 0) return messages;
 
     if (options.recordRetrieval) {
@@ -186,23 +183,4 @@ function insertBeforeLastUserMessage(messages: readonly AgentMessage[], inject: 
 function formatChunkForModel(result: RetrievalResult, ordinal: number): string {
   const heading = result.citation.heading ? `${result.citation.heading} / ` : "";
   return `[${ordinal}] 来源：${heading}${result.citation.source}\n${result.text}`;
-}
-
-/**
- * 检索失败时生成最小 trace 摘要，保证 retrieval 事件仍写入 run_events。
- *
- * @param query 检索 query。
- * @param topK 请求 topK。
- * @returns 空 trace 摘要。
- */
-function emptyRetrievalTrace(query: string, topK: number): RetrievalTraceSummary {
-  return {
-    queryPreview: createQueryPreview(query),
-    mode: "hybrid",
-    topK,
-    candidateLimit: topK,
-    durationMs: 0,
-    chunkIds: [],
-    scoreSummary: [],
-  };
 }

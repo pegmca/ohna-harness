@@ -75,6 +75,7 @@ async function main() {
     method: "POST",
     body: {
       clientAttachmentId,
+      conversationId,
       fileName: "report.md",
       contentType: "text/markdown",
       sizeBytes: Buffer.byteLength(content, "utf8"),

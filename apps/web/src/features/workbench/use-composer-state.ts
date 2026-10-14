@@ -23,9 +23,14 @@ export interface ComposerDraftState {
  * 管理模型偏好与附件上传生命周期。
  *
  * @param reportError 将非阻塞校验错误展示到 Composer。
+ * @param ensureConversationId 解析当前会话 ID：已有会话直接返回，否则按需创建；创建失败返回 null。
+ *   附件是会话级临时资源，上传接口要求 conversationId，因此在发起上传前必须先拿到会话。
  * @returns Composer 草稿状态与操作。
  */
-export function useComposerState(reportError: (message: string) => void): ComposerDraftState {
+export function useComposerState(
+  reportError: (message: string) => void,
+  ensureConversationId: () => Promise<string | null>
+): ComposerDraftState {
   const [models, setModels] = useState<ModelOptionDto[]>([]);
   const [selectedModelId, setSelectedModelId] = useState("");
   const [attachments, setAttachments] = useState<DraftAttachment[]>([]);
@@ -92,8 +97,18 @@ export function useComposerState(reportError: (message: string) => void): Compos
       return;
     }
     try {
+      // 附件按会话隔离：上传前先确保会话存在，否则服务端会拒绝缺少 conversationId 的请求。
+      const conversationId = await ensureConversationId();
+      if (!conversationId) {
+        update(draft.clientAttachmentId, {
+          status: "failed",
+          error: "无法创建会话，附件上传已取消。"
+        });
+        return;
+      }
       const result = await uploadChatAttachment({
         clientAttachmentId: draft.clientAttachmentId,
+        conversationId,
         fileName: draft.fileName,
         contentType: draft.contentType,
         sizeBytes: draft.sizeBytes,

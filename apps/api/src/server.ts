@@ -1,7 +1,7 @@
 import { agentLoop, defaultConvertToLlm, type AgentMessage } from "@aiagent/agent";
 import type { Model } from "@aiagent/ai";
 import { createQqBotChannel } from "@aiagent/channels";
-import { createDatabaseRuntime, createVectorStoreFromEnv } from "@aiagent/database";
+import { createDatabaseRuntime, createAttachmentStoreFromEnv, createVectorStoreFromEnv } from "@aiagent/database";
 import { createLocalArtifactStorage } from "@aiagent/report";
 import { createIdentityService } from "@aiagent/identity";
 import { discoverMcpAgentTools, createMcpStdioClient, type McpClient } from "@aiagent/mcp";
@@ -153,6 +153,11 @@ const qqChannel = createQqBotChannel({
   }
 });
 const embeddingProvider = readEmbeddingProviderConfig();
+// 组合根只创建一次 embedding client，同时注入持久化 RAG runtime 与会话级附件路由/grounding，
+// 避免两路使用不同 provider 导致向量不可比。禁用（未配置）时工厂返回 null。
+const embeddingClient = createEmbeddingClientFromEnv() ?? undefined;
+// 会话级临时附件存储：REDIS_URL 存在走 Redis，否则回退内存（单进程 demo）；onClose 负责 quit。
+const attachmentStoreRuntime = createAttachmentStoreFromEnv();
 const app = createApiServer({
   modelRegistry,
   tools: agentTools,
@@ -162,7 +167,7 @@ const app = createApiServer({
     // v1.1 四组 provider 各自独立：env 就绪时注入真实 client，禁用时工厂返回 null。
     // embedding 未注入时 ingest 返回结构化错误；rerank 缺省使用检索器内建启发式排序，
     // enricher/rewriter 缺省不增强。组合根在 readiness 显式暴露各 provider 状态。
-    embeddingClient: createEmbeddingClientFromEnv() ?? undefined,
+    embeddingClient,
     reranker: createRerankerFromEnv() ?? undefined,
     contextEnricher: createContextEnricherFromEnv() ?? undefined,
     queryRewriter: createQueryRewriterFromEnv() ?? undefined,
@@ -173,6 +178,8 @@ const app = createApiServer({
     })
   }),
   attachmentRepository: database.attachmentRepository,
+  attachmentStore: attachmentStoreRuntime.store,
+  embeddingClient,
   citationRepository: database.citationRepository,
   requireIdentity: true,
   qqBotEnabled,
@@ -397,6 +404,8 @@ app.addHook("onClose", async () => {
   if (attachmentCleanupTimer) clearInterval(attachmentCleanupTimer);
   qqChannel.stop();
   if (mcpClient) await mcpClient.close().catch(() => { /* 关闭失败不阻断停机。 */ });
+  // 附件 store 的 close 只在 Redis 已连接时 quit，内存实现为 no-op。
+  await attachmentStoreRuntime.close().catch(() => { /* 关闭失败不阻断停机。 */ });
   await database.close();
 });
 

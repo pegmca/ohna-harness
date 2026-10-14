@@ -3,8 +3,11 @@ import { createIdentityService, createInMemoryIdentityRepository, type IdentityS
 import {
   createDataSourceRuntime,
   createDeterministicMockEmbeddingClient,
+  createInMemoryAttachmentStore,
+  type AttachmentStore,
   type CitationRepository,
-  type DataSourceRuntime
+  type DataSourceRuntime,
+  type EmbeddingClient
 } from "@aiagent/rag";
 import type { ArtifactRepository, WorkflowRepository } from "@aiagent/report";
 import type { ConversationRepository, MessageStore } from "@aiagent/conversation";
@@ -26,6 +29,10 @@ export interface InMemoryApiTestRuntime {
   runStore: RunStore;
   attachmentRepository: AttachmentRepository;
   citationRepository: CitationRepository;
+  /** 会话级临时附件存储（内存实现）；供附件路由与 run grounding 使用。 */
+  attachmentStore: AttachmentStore;
+  /** 确定性 embedding 替身；与 dataSourceRuntime 共用同一实例，保证两路向量一致可比。 */
+  embeddingClient: EmbeddingClient;
 }
 
 /**
@@ -44,6 +51,9 @@ export function createInMemoryApiTestRuntime(options: {
     messageStore: conversationStores.messageStore
   };
   const report = createInMemoryReportRepositories();
+  // 单例确定性 embedding 替身：同时注入 dataSourceRuntime（持久化 RAG）与附件路由/grounding，
+  // 保证附件路与内部库路在同一向量空间，测试断言可跨源比较。
+  const embeddingClient = createDeterministicMockEmbeddingClient();
   return {
     identityService: createIdentityService(createInMemoryIdentityRepository(), {
       fingerprintPepper: "test-only-identity-pepper"
@@ -51,13 +61,13 @@ export function createInMemoryApiTestRuntime(options: {
     // 测试替身显式注入（非生产配置）：embedding client 已无生产默认值，
     // 这里必须注入 deterministic mock 替身，否则 ingest 直接返回 embedding_provider_disabled，
     // agent-run / attachment-upload 等依赖 RAG 索引的用例会失败。
-    dataSourceRuntime: createDataSourceRuntime({
-      embeddingClient: createDeterministicMockEmbeddingClient()
-    }),
+    dataSourceRuntime: createDataSourceRuntime({ embeddingClient }),
     workflowRepository: report.workflowRepository,
     artifactRepository: report.artifactRepository,
     attachmentRepository: createInMemoryAttachmentRepository(),
     citationRepository: createInMemoryCitationRepository(),
+    attachmentStore: createInMemoryAttachmentStore(),
+    embeddingClient,
     ...stores
   };
 }

@@ -44,6 +44,8 @@ export const dataSourceIngestRequestSchema = z.object({
 });
 export const chatAttachmentUploadRequestSchema = z.object({
   clientAttachmentId: z.string().uuid(),
+  // 附件为会话级临时资源：conversationId 必填，客户端需先创建会话再上传。
+  conversationId: z.string().uuid(),
   fileName: z.string().trim().min(1).max(240).refine(
     (value) => /\.(?:md|markdown|txt)$/i.test(value),
     { message: "仅支持 Markdown 和 TXT 文件" }

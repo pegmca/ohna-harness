@@ -42,6 +42,7 @@ test("attachment upload is idempotent by user/client id and rejects checksum con
   const cookie = bootstrap.headers["set-cookie"].split(";")[0];
   const payload = {
     clientAttachmentId: "00000000-0000-4000-8000-000000000001",
+    conversationId: "00000000-0000-4000-8000-0000000000a1",
     fileName: "research.md",
     contentType: "text/markdown",
     sizeBytes: 7,
@@ -102,6 +103,7 @@ test("expired uploading claim resumes existing RAG lineage after complete failur
   const cookie = bootstrap.headers["set-cookie"].split(";")[0];
   const payload = {
     clientAttachmentId: "00000000-0000-4000-8000-000000000002",
+    conversationId: "00000000-0000-4000-8000-0000000000a2",
     fileName: "recovery.txt",
     contentType: "text/plain",
     sizeBytes: 7,

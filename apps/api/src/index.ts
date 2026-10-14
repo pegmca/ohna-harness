@@ -1,6 +1,6 @@
 import type { IdentityService, IdentitySnapshot } from "@aiagent/identity";
 import type { ConversationRepository, MessageStore } from "@aiagent/conversation";
-import type { DataSourceRuntime } from "@aiagent/rag";
+import type { AttachmentStore, DataSourceRuntime, EmbeddingClient } from "@aiagent/rag";
 import { createLocalArtifactStorage, createReportTool } from "@aiagent/report";
 import type { ArtifactRepository, ArtifactStorage, WorkflowRepository } from "@aiagent/report";
 import type { AgentTool } from "@aiagent/agent";
@@ -46,6 +46,10 @@ export interface ApiServerOptions {
   identityService: IdentityService;
   dataSourceRuntime: DataSourceRuntime;
   attachmentRepository: AttachmentRepository;
+  /** 会话级临时附件存储（生产 Redis，测试内存）；与 embeddingClient 同时存在时附件路由与 grounding 才启用。 */
+  attachmentStore?: AttachmentStore;
+  /** embedding provider；未注入时附件上传返回 503，grounding 不注入附件上下文。 */
+  embeddingClient?: EmbeddingClient;
   citationRepository: CitationRepository;
   requireIdentity?: boolean;
   qqBotQrUrl?: string;
@@ -112,8 +116,9 @@ export function createApiServer(options: ApiServerOptions): FastifyInstance {
     resolveModel: (modelId) => modelRegistry.resolve(modelId),
     hasModel: (modelId) => modelRegistry.has(modelId),
     defaultModelId: modelRegistry.defaultModelId,
-    dataSourceRuntime,
     attachmentRepository: options.attachmentRepository,
+    attachmentStore: options.attachmentStore,
+    embeddingClient: options.embeddingClient,
     citationRepository: options.citationRepository,
     compaction: options.compaction,
     // report 工具按 run 装配（阶段 5 方案 A）：模型自主调用 generate_report，
@@ -166,9 +171,10 @@ export function createApiServer(options: ApiServerOptions): FastifyInstance {
   });
 
   registerDataSourceRoutes(app, { dataSourceRuntime, identityByRequest });
-  if (options.attachmentRepository) {
+  if (options.attachmentRepository && options.attachmentStore) {
     registerAttachmentRoutes(app, {
-      dataSourceRuntime,
+      attachmentStore: options.attachmentStore,
+      embeddingClient: options.embeddingClient,
       attachmentRepository: options.attachmentRepository,
       identityByRequest
     });

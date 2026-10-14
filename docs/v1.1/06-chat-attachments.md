@@ -246,9 +246,11 @@ attach:conv:{convId}:doc:{docId}                 HASH
   { fileName, contentType, sizeBytes, checksum, chunkCount, createdAt, parserVersion }
 
 attach:conv:{convId}:doc:{docId}:chunk:{index}   HASH
-  { convId, docId, chunkIndex, text, heading, pageNumber, lineStart, lineEnd,
+  { convId, docId, chunkIndex, text, source, heading, pageNumber, lineStart, lineEnd,
     embedding: <FLOAT32 二进制> }
 ```
+
+> `source` 必须持久化：citation 的 `source` 直接来自 chunk，若不存会退化成 uuid（丢信息）。`embeddingModel` 不存，读回时用稳定占位常量补齐（不影响检索与展示）。
 
 - **TTL**：滑窗续期——每次该会话有活动（新消息/新提问）就对该会话的 `attach:conv:{convId}:*` 刷新 TTL（默认 **7 天**，对齐 OpenAI）。到期 Redis 自动回收，**无需清理任务**。
 - **隔离**：`convId` 强制过滤；建议 key 前缀再带 `userId` 做纵深防御。
@@ -324,6 +326,75 @@ interface AttachmentStore {
 - **P1（最小可用）**：`AttachmentStore`（内存 + Redis）+ 附件改道 + `convId` + 单源附件检索。
 - **P2**：多路召回合并 + citation 来源标注 + 阈值路由（小文件内联）。
 - **P3**：docx 插件（`mammoth`）+ PDF 后端选型（Docling/unstructured 或维持现状）+ 大文件异步化 +（可选）RediSearch 升级 + 跨源对比推理。
+
+### 8.1 P1 冻结设计（文件级）
+
+> 本小节是 P1 的实施单一事实来源（coder 据此实现，reviewer 据此审核）。
+
+**已确认决策**
+- `AttachmentStore` 接口 + 内存实现放 `@aiagent/rag`；Redis 适配器 + env 工厂放 `@aiagent/database`（照搬 `VectorStore` / `createVectorStoreFromEnv` / `rag-vector-store.ts` 范式）。
+- P1 即落地 Redis：`REDIS_URL` 存在走 Redis，未配置回退内存（对齐 `createVectorStoreFromEnv`）；Redis 集成测试用 env 门禁（对齐 `TEST_DATABASE_URL`）。
+- 客户端**上传前先创建会话**，`convId` 必填。
+
+**关键前提（决定 DB 改动）**
+- `document_versions.content` 是 `text NOT NULL`，即"落主库 = 存正文"。故附件"不落主库"必须**不建** `documents` / `document_versions` / `chunks` 行。
+- 因此 `chat_attachment_uploads.document_id` 必须**解除对 `documents` 的 FK**，改存 Redis 附件文档的逻辑 uuid；`findByDocumentId` / `bindMessageByDocumentId` / run 归属校验语义不变（仍按该 id 查 `chat_attachment_uploads`）。
+- `message_attachments` 表全仓零写入（死表），P1 不动它。
+
+**A. `@aiagent/rag` 新增/改动**
+
+| 文件 | 内容 |
+|---|---|
+| `src/attachment-store.ts` | `AttachmentStore` 接口（复用 `VectorStoreResult` / `VectorSearchResult` / `VectorSearchMatch`，做到"与 VectorStore 同形"）+ `createInMemoryAttachmentStore(options?)` |
+| `src/attachment-ingest.ts` | `ingestChatAttachment({ embeddingClient, attachmentStore, conversationId, documentId, source, fileName, contentType?, content })`：`ingestDocument` → `chunkIngestedDocument` → embed → `store.upsert` |
+| `src/attachment-retriever.ts` | `createAttachmentRetriever({ embeddingClient, attachmentStore, conversationId, topK? })` → `Retriever`：query embed → `store.search` → `RetrievedChunk[]`（scoreBreakdown 只填 vector 分量）→ trace 复用 `createTraceRetrievalEvent` |
+| `src/types.ts` | `RagStructuredError.code` 增 `"attachment_store_failed"`、`"invalid_attachment_scope"` |
+| `src/grounding-hook.ts` | 附件源从 `runtime.search(filter documentIds)` 换成 `attachmentRetriever.retrieve(query, { topK })`；`GroundingHookOptions` 去掉 `runtime`，改 `attachmentRetriever` + `conversationId`；保留"仅当本轮有附件时才注入"的门禁 |
+| `src/index.ts` | 导出上述新增符号 |
+
+```ts
+// src/attachment-store.ts —— 接口与 VectorStore 同形，便于依赖倒置与测试
+export interface AttachmentStore {
+  upsert(conversationId: string, documentId: string, chunks: readonly EmbeddedChunk[]): Promise<VectorStoreResult>;
+  search(conversationId: string, queryVector: EmbeddingVector, topK: number): Promise<VectorSearchResult>;
+  touch(conversationId: string): Promise<void>;  // 滑窗续期 TTL
+  drop(conversationId: string): Promise<void>;   // 主动回收
+}
+```
+
+**B. `@aiagent/database` 新增/改动**
+
+| 文件 | 内容 |
+|---|---|
+| `src/attachment-store-redis.ts` | `createRedisAttachmentStore({ client, ttlSeconds })`（key schema 见 §5.3；embedding 用 `FLOAT32` 二进制）；`createAttachmentStoreFromEnv()` 返回 `{ store, close }`，`REDIS_URL` 缺省回退 `createInMemoryAttachmentStore` |
+| `package.json` | 新增 `redis` 依赖（官方 node-redis v4+） |
+| `migrations/0240_attachment_ephemeral.sql` | `ALTER TABLE chat_attachment_uploads DROP CONSTRAINT IF EXISTS chat_attachment_uploads_document_id_fkey;` + `ADD COLUMN conversation_id uuid`；每列 `COMMENT ON COLUMN` |
+| `src/attachment-repository.ts` | `claim` 输入增 `conversationId`；`cleanupOrphans` 去掉 documents 软删分支（只删 upload 行，Redis 由 TTL 回收） |
+| `src/schema.ts` | 同步 `chatAttachmentUploads`（+`conversationId`，`documentId` 去掉 references） |
+| `test/foundation.test.mjs` | 迁移清单补 `0240_attachment_ephemeral.sql` |
+
+**C. `apps/api` 改动**
+
+| 文件 | 内容 |
+|---|---|
+| `packages/types/src/rag.ts` | `ChatAttachmentUploadRequestDto` 增 `conversationId` |
+| `src/http/schemas.ts` | `chatAttachmentUploadRequestSchema` 增 `conversationId: z.string().uuid()` |
+| `src/http/routes/attachments.ts` | 改道为 `ingestChatAttachment`；`documentId = randomUUID()`；保留 sha256 幂等 + 租约心跳；`complete` 写该 id（不再 `dataSourceRuntime.ingest`） |
+| `src/index.ts` / `src/server.ts` | 组合根创建 `embeddingClient` 一次，注入 runtime 与附件路由；创建 `attachmentStore`（`createAttachmentStoreFromEnv`），`onClose` 关闭 |
+| `src/application/run-service.ts` | 按 `request.conversationId` 构造 attachment retriever 传入 grounding |
+| `src/adapters/in-memory-test-runtime.ts` / `in-memory-attachment-repository.ts` | 同步新接口（注入内存 `AttachmentStore`） |
+
+**D. `apps/web` 改动**
+
+| 文件 | 内容 |
+|---|---|
+| `features/workbench/use-composer-state.ts` / `Workbench.tsx` | 首次选择附件时先创建会话，上传带 `conversationId` |
+
+**P1 验收**
+- `pnpm typecheck` + `@aiagent/rag` / `@aiagent/database` / `@aiagent/api` 测试全绿。
+- 上传 md/txt → 会话内提问命中附件（grounding 注入 `<untrusted_context>`）；主库**无**新增 `documents` / `document_versions` / `chunks` 行。
+- `REDIS_URL` 设置时走 Redis；未设置回退内存。
+- `AttachmentStore` 契约有单测（upsert 覆盖、convId 隔离、topK 上限、维度错误）。
 
 ## 9. 学习路径 / 验收证据
 

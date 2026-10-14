@@ -60,7 +60,7 @@ export function Workbench() {
   const [selectedRunDetail, setSelectedRunDetail] = useState<SelectedRunDetail>();
   const [reportMode, setReportMode] = useState(false);
   const [_activeRunId, setActiveRunId] = useState<string>();
-  const composer = useComposerState(setComposerError);
+  const composer = useComposerState(setComposerError, ensureConversationId);
   const retrySubmission = useRef<{ message: string; clientMessageId: string } | undefined>(undefined);
   const activeRunController = useRef<AbortController | undefined>(undefined);
   const activeRunIdRef = useRef<string | undefined>(undefined);
@@ -69,6 +69,8 @@ export function Workbench() {
   const messageRequestController = useRef<AbortController | undefined>(undefined);
   const messageRequestGeneration = useRef(0);
   const skipInitialHistoryConversationId = useRef<string | undefined>(undefined);
+  // 记录因附件上传而自动创建的占位"新会话"，发送首条消息时据此决定是否改写标题。
+  const autoCreatedConversationIdRef = useRef<string | null>(null);
 
   const activeConversation = useMemo(
     () => conversations.find((conversation) => conversation.conversationId === activeConversationId),
@@ -253,6 +255,25 @@ export function Workbench() {
   }
 
   /**
+   * 解析当前会话 ID：已有会话直接返回，否则先创建占位"新会话"再返回。
+   * 附件上传接口要求 conversationId，因此 Composer 选择附件时会先调用它。
+   *
+   * @returns 当前会话 ID；创建失败时返回 null。
+   */
+  async function ensureConversationId(): Promise<string | null> {
+    if (activeConversationIdRef.current) return activeConversationIdRef.current;
+    const created = await createConversation({ title: "新会话" });
+    if (!created.ok) {
+      setComposerError(formatApiError(created.error));
+      return null;
+    }
+    setConversations((current) => [created.data, ...current]);
+    selectConversation(created.data.conversationId, false, true);
+    autoCreatedConversationIdRef.current = created.data.conversationId;
+    return created.data.conversationId;
+  }
+
+  /**
    * 切换当前浏览器本地会话，同时关闭移动端 drawer。
    *
    * @param conversationId 会话 id。
@@ -393,7 +414,10 @@ export function Workbench() {
       || (!retryContext && indexedAttachments.length !== composer.attachments.length)) {
       return;
     }
-    let conversation = activeConversation;
+    // 附件上传可能已自动创建会话；优先复用当前 ref 指向的会话，再回退到已选中会话。
+    let conversation = conversations.find(
+      (item) => item.conversationId === activeConversationIdRef.current
+    ) ?? activeConversation;
     if (!conversation) {
       const created = await createConversation({ title: createConversationTitle(trimmed) });
       if (!created.ok) {
@@ -406,6 +430,22 @@ export function Workbench() {
     }
 
     const submittedConversationId = conversation.conversationId;
+    // 自动创建的占位"新会话"在首条消息发送时改写成问题摘要；改名是尽力而为，失败不阻塞发送。
+    if (submittedConversationId === autoCreatedConversationIdRef.current && conversation.title === "新会话") {
+      const title = createConversationTitle(trimmed);
+      autoCreatedConversationIdRef.current = null;
+      // 同步本地快照标题，避免下方通用改名分支重复请求。
+      conversation = { ...conversation, title };
+      void updateConversationApi(submittedConversationId, { title })
+        .then((result) => {
+          if (result.ok) setConversations((current) =>
+            current.map((item) => item.conversationId === submittedConversationId ? result.data : item));
+        })
+        .catch(() => {
+          // 改名失败不影响消息发送。
+        });
+    }
+
     const submittedReportMode = retryContext?.reportMode ?? reportMode;
     const pendingMessageId = createUiId("assistant");
     const clientMessageId = !retryContext && retrySubmission.current?.message === trimmed

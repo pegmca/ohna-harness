@@ -1,22 +1,41 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
-  createDataSourceRuntime,
+  createAttachmentRetriever,
   createGroundingTransformContext,
-  createInMemoryRagDocumentRepository,
-  createInMemoryVectorStore
+  createInMemoryAttachmentStore,
+  ingestChatAttachment
 } from "../dist/index.js";
 import { createDeterministicMockEmbeddingClient } from "../dist/testing.js";
 
+const CONVERSATION_ID = "33333333-3333-3333-3333-333333333333";
+const OWNER_USER_ID = "00000000-0000-0000-0000-000000000001";
+
 /**
- * 构造一个带私有文档的 runtime，供 grounding hook 测试复用。
+ * 构造一个已注入会话附件的 grounding fixture：附件检索器 + 会话 id。
  */
-function createFixtureRuntime() {
-  return createDataSourceRuntime({
-    repository: createInMemoryRagDocumentRepository(),
-    embeddingClient: createDeterministicMockEmbeddingClient(),
-    vectorStoreFactory: () => createInMemoryVectorStore()
+async function createFixture() {
+  const embeddingClient = createDeterministicMockEmbeddingClient();
+  const attachmentStore = createInMemoryAttachmentStore();
+  const ingest = await ingestChatAttachment({
+    embeddingClient,
+    attachmentStore,
+    conversationId: CONVERSATION_ID,
+    documentId: "doc-1",
+    source: "upload:doc-1",
+    fileName: "note.md",
+    contentType: "text/markdown",
+    content: "公司 2024 年净利润 10 亿元，同比增长 25%。"
   });
+  assert.equal(ingest.ok, true);
+
+  return {
+    attachmentRetriever: createAttachmentRetriever({
+      embeddingClient,
+      attachmentStore,
+      conversationId: CONVERSATION_ID
+    })
+  };
 }
 
 /**
@@ -27,25 +46,13 @@ function userMessage(text, timestamp) {
 }
 
 test("grounding hook injects <untrusted_context> before the last user message", async () => {
-  const runtime = createFixtureRuntime();
-  const ownerUserId = "00000000-0000-0000-0000-000000000001";
-  const ingest = await runtime.ingest(
-    {
-      source: "upload:attach-1",
-      fileName: "note.md",
-      contentType: "text/markdown",
-      content: "公司 2024 年净利润 10 亿元，同比增长 25%。"
-    },
-    { ownerUserId }
-  );
-  assert.equal(ingest.ok, true);
-
-  const documentId = ingest.data.document.documentId;
+  const fixture = await createFixture();
   const retrievalEvents = [];
   const grounding = createGroundingTransformContext({
-    runtime,
-    attachmentDocumentIds: [documentId],
-    ownerUserId,
+    attachmentRetriever: fixture.attachmentRetriever,
+    conversationId: CONVERSATION_ID,
+    attachmentDocumentIds: ["doc-1"],
+    ownerUserId: OWNER_USER_ID,
     recordRetrieval: (event) => {
       retrievalEvents.push(event);
     }
@@ -64,6 +71,7 @@ test("grounding hook injects <untrusted_context> before the last user message", 
   assert.equal(retrievalEvents.length, 1);
   assert.equal(retrievalEvents[0].type, "retrieval");
   assert.equal(retrievalEvents[0].ok, true);
+  assert.equal(retrievalEvents[0].mode, "vector");
 
   const citations = grounding.getCitationsForTurn(1000);
   assert.equal(citations.length, 1);
@@ -71,24 +79,12 @@ test("grounding hook injects <untrusted_context> before the last user message", 
 });
 
 test("grounding hook deduplicates citations across turns with the same user message", async () => {
-  const runtime = createFixtureRuntime();
-  const ownerUserId = "00000000-0000-0000-0000-000000000002";
-  const ingest = await runtime.ingest(
-    {
-      source: "upload:attach-2",
-      fileName: "note.md",
-      contentType: "text/markdown",
-      content: "公司 2024 年净利润 10 亿元，同比增长 25%。"
-    },
-    { ownerUserId }
-  );
-  assert.equal(ingest.ok, true);
-
-  const documentId = ingest.data.document.documentId;
+  const fixture = await createFixture();
   const grounding = createGroundingTransformContext({
-    runtime,
-    attachmentDocumentIds: [documentId],
-    ownerUserId
+    attachmentRetriever: fixture.attachmentRetriever,
+    conversationId: CONVERSATION_ID,
+    attachmentDocumentIds: ["doc-1"],
+    ownerUserId: OWNER_USER_ID
   });
 
   // 第一轮：注入 1 条 citation。
@@ -107,11 +103,12 @@ test("grounding hook deduplicates citations across turns with the same user mess
 });
 
 test("grounding hook returns empty citations when no attachment is referenced", async () => {
-  const runtime = createFixtureRuntime();
+  const fixture = await createFixture();
   const grounding = createGroundingTransformContext({
-    runtime,
+    attachmentRetriever: fixture.attachmentRetriever,
+    conversationId: CONVERSATION_ID,
     attachmentDocumentIds: [],
-    ownerUserId: "00000000-0000-0000-0000-000000000003"
+    ownerUserId: OWNER_USER_ID
   });
 
   const messages = [userMessage(" hello ", 3000)];

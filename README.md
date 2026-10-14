@@ -136,7 +136,7 @@ docker compose up -d --build
 docker compose ps
 ```
 
-打开 `http://localhost:8080`。Web 仅对宿主机暴露 `8080`（可用 `AIAGENT_WEB_PORT` 修改），API 的 `3001` 只在 Compose 网络内暴露，由 Nginx 将浏览器 `/api/*` 请求代理到 `api:3001`。PostgreSQL 只绑定宿主机 `127.0.0.1:5432`；身份、session、Conversation/Message、Run/RunEvent、Citation、Workflow、Artifact metadata 与 RAG 文档 lineage 保存在 `postgres_data` volume，PDF bytes 保存在独立 `artifact_data` volume。
+打开 `http://localhost:8080`。Web 仅对宿主机暴露 `8080`（可用 `AIAGENT_WEB_PORT` 修改），API 的 `3001` 只在 Compose 网络内暴露，由 Nginx 将浏览器 `/api/*` 请求代理到 `api:3001`。PostgreSQL 只绑定宿主机 `127.0.0.1:5432`；身份、session、Conversation/Message、Run/RunEvent、Citation、Workflow、Artifact metadata 与 RAG 文档 lineage 保存在 `postgres_data` volume，PDF bytes 保存在独立 `artifact_data` volume。聊天附件的**原文与向量索引**保存在 `redis` 服务的 Redis 中（会话级临时、带 TTL、**不落主库**）；`REDIS_URL` 留空时回退进程内内存实现（单实例、无 TTL，仅适合本地 demo/单测）。
 
 本地热更新与断点调试使用“数据库在 Docker、Web/API 在宿主机”的组合：
 

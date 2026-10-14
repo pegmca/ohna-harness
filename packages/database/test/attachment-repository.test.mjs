@@ -1,10 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
-import {
-  createPostgresAttachmentRepository,
-  createPostgresRagDocumentRepository
-} from "../dist/index.js";
+import { createPostgresAttachmentRepository } from "../dist/index.js";
 import { runMigrations } from "../dist/migrate.js";
 import { createDatabaseTestContext } from "./helpers/database-test-helper.mjs";
 
@@ -41,31 +38,25 @@ test("附件上传持久化幂等、冲突、失败重试与 orphan 清理", { s
     const retried = await attachments.claim(input, "2026-07-25T08:01:00.000Z");
     assert.equal(retried.created, true);
 
-    const rag = createPostgresRagDocumentRepository(context.pool);
-    const saved = await rag.saveIngestion({
-      ownerUserId: userId,
-      scope: "private",
-      sourceType: "chat_attachment",
-      externalId: "attachment:upload-1",
-      title: "a.txt",
-      sourceUri: "attachment://upload-1",
-      contentType: "text/plain",
-      contentChecksum: input.checksum,
-      content: "content",
-      parserVersion: "test-v1",
-      chunkerVersion: "test-v1",
-      outcome: { status: "indexed", chunks: [] },
-      now
-    });
+    // P1 起附件是会话级临时数据：document_id 只是 Redis 附件文档的逻辑 uuid，
+    // 不再外键关联 documents，也不产生 documents/document_versions/chunks 行。
+    const attachmentDocumentId = randomUUID();
     await attachments.complete(
-      userId, input.clientAttachmentId, retried.upload.claimToken, saved.document.id, "2026-07-25T08:01:00.000Z"
+      userId, input.clientAttachmentId, retried.upload.claimToken, attachmentDocumentId, "2026-07-25T08:01:00.000Z"
     );
+    const documents = await context.pool.query(
+      "select 1 from documents where id=$1",
+      [attachmentDocumentId]
+    );
+    assert.equal(documents.rowCount, 0);
+
+    // orphan 清理只删除上传记录；Redis 临时索引由 TTL 回收，不再软删 documents。
     assert.equal(await attachments.cleanupOrphans("2026-07-26T08:00:00.000Z", 100, "2026-07-26T08:00:00.000Z"), 1);
-    const rows = await context.pool.query(
-      "select deleted_at from documents where id=$1",
-      [saved.document.id]
+    const remaining = await context.pool.query(
+      "select 1 from chat_attachment_uploads where user_id=$1 and client_attachment_id=$2",
+      [userId, input.clientAttachmentId]
     );
-    assert.equal(rows.rows[0].deleted_at instanceof Date, true);
+    assert.equal(remaining.rowCount, 0);
   } finally {
     await context.cleanup();
   }

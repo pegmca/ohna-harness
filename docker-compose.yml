@@ -15,6 +15,19 @@ services:
       timeout: 3s
       retries: 20
     restart: unless-stopped
+  # 会话级临时附件的向量索引存储（v1.1 P1）。附件原文与索引都放 Redis（带 TTL），不落主库；
+  # 关闭 RDB/AOF 持久化——临时数据靠 TTL 回收，无需落盘。
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    ports:
+      - "127.0.0.1:${AIAGENT_REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
   migrate:
     build:
       context: .
@@ -47,6 +60,8 @@ services:
       AIAGENT_LLM_BASE_URL_OPENROUTER: ${AIAGENT_LLM_BASE_URL_OPENROUTER:-}
       AIAGENT_LLM_MODEL_OPENROUTER: ${AIAGENT_LLM_MODEL_OPENROUTER:-}
       AIAGENT_ATTACHMENT_ORPHAN_TTL_HOURS: ${AIAGENT_ATTACHMENT_ORPHAN_TTL_HOURS:-24}
+      REDIS_URL: redis://redis:6379
+      AIAGENT_ATTACHMENT_TTL_SECONDS: ${AIAGENT_ATTACHMENT_TTL_SECONDS:-604800}
       DATABASE_URL: postgresql://${POSTGRES_USER:-aiagent}:${POSTGRES_PASSWORD:-aiagent-local}@postgres:5432/${POSTGRES_DB:-aiagent}
       IDENTITY_FINGERPRINT_PEPPER: ${IDENTITY_FINGERPRINT_PEPPER:-change-me-in-production}
       IDENTITY_SESSION_TTL_DAYS: ${IDENTITY_SESSION_TTL_DAYS:-30}
@@ -62,6 +77,8 @@ services:
       - "3001"
     depends_on:
       postgres:
+        condition: service_healthy
+      redis:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully

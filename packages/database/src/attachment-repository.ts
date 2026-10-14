@@ -9,7 +9,10 @@ export interface AttachmentUploadRecord {
   userId: string;
   clientAttachmentId: string;
   checksum: string;
+  /** Redis 会话级临时附件文档的逻辑 uuid；不再指向 documents 行。 */
   documentId?: string;
+  /** 附件归属的会话标识；用于按会话检索与回收 Redis 临时索引。 */
+  conversationId?: string;
   fileName: string;
   contentType: string;
   sizeBytes: number;
@@ -54,11 +57,11 @@ export function createPostgresAttachmentRepository(pool: pg.Pool): AttachmentRep
         const inserted = await client.query<UploadRow>(
           `insert into chat_attachment_uploads(
              id,user_id,client_attachment_id,content_checksum,claim_token,lease_expires_at,
-             file_name,content_type,size_bytes,status,uploaded_at,updated_at
-           ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,'uploading',$10,$10)
+             file_name,content_type,size_bytes,conversation_id,status,uploaded_at,updated_at
+           ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'uploading',$11,$11)
            on conflict (user_id,client_attachment_id) do nothing returning *`,
           [randomUUID(), input.userId, input.clientAttachmentId, input.checksum, claimToken, leaseExpiresAt,
-            input.fileName, input.contentType, input.sizeBytes, now]
+            input.fileName, input.contentType, input.sizeBytes, input.conversationId ?? null, now]
         );
         if (inserted.rows[0]) return { created: true, upload: mapUpload(inserted.rows[0]) };
         const existing = await client.query<UploadRow>(
@@ -127,22 +130,18 @@ export function createPostgresAttachmentRepository(pool: pg.Pool): AttachmentRep
       }
     },
     async cleanupOrphans(before, limit, now) {
+      // 附件正文与索引都在 Redis（会话级临时），没有 documents 行需要软删；
+      // 这里只回收未绑定的上传记录，Redis 侧由 TTL 自动过期（故 now 仅保留在接口签名上）。
+      void now;
       return withTransaction(pool, async (client) => {
-        const candidates = await client.query<{ id: string; document_id: string | null }>(
-          `select id,document_id from chat_attachment_uploads
+        const candidates = await client.query<{ id: string }>(
+          `select id from chat_attachment_uploads
             where status in ('uploading','indexed','failed') and bound_message_id is null and uploaded_at<$1
             order by uploaded_at,id for update skip locked limit $2`,
           [before, Math.max(1, Math.min(500, limit))]
         );
         if (candidates.rows.length === 0) return 0;
         const ids = candidates.rows.map((row) => row.id);
-        const documentIds = candidates.rows.flatMap((row) => row.document_id ? [row.document_id] : []);
-        if (documentIds.length > 0) {
-          await client.query(
-            "update documents set deleted_at=$2 where id=any($1::uuid[]) and deleted_at is null",
-            [documentIds, now]
-          );
-        }
         await client.query("delete from chat_attachment_uploads where id=any($1::uuid[])", [ids]);
         return ids.length;
       });
@@ -157,6 +156,7 @@ function leaseExpiry(now: string): string {
 
 interface UploadRow {
   user_id: string; client_attachment_id: string; content_checksum: string; document_id: string | null;
+  conversation_id: string | null;
   file_name: string; content_type: string; size_bytes: string | number;
   status: AttachmentUploadRecord["status"]; uploaded_at: Date | string;
   claim_token: string; lease_expires_at: Date | string;
@@ -169,6 +169,7 @@ function mapUpload(row: UploadRow): AttachmentUploadRecord {
     clientAttachmentId: row.client_attachment_id,
     checksum: row.content_checksum,
     documentId: row.document_id ?? undefined,
+    conversationId: row.conversation_id ?? undefined,
     fileName: row.file_name,
     contentType: row.content_type,
     sizeBytes: Number(row.size_bytes),

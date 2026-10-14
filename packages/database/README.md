@@ -79,6 +79,19 @@ accessibility per current document scope: `accessible` (full linkage + quote), `
 updates use an explicit state machine — automatic results cannot overwrite each other and manual
 terminal states cannot be overwritten at all.
 
+## Chat attachment adapter
+
+`0180_message_attachments.sql` created `chat_attachment_uploads` and `message_attachments`.
+`0240_attachment_ephemeral.sql` (v1.1 P1) turns chat attachments into **conversation-scoped
+ephemeral data**: the attachment body and its vector index live in Redis (with TTL), not in
+PostgreSQL. Because `document_versions.content` is `NOT NULL`, writing a `documents` row for an
+attachment would store the attachment body in PostgreSQL — so `0240` drops the FK from
+`chat_attachment_uploads.document_id` to `documents(id)` and adds a nullable `conversation_id`.
+`document_id` now holds the logical uuid of the Redis-stored attachment document (also the Redis
+key component and the citation source); it is no longer a `documents` FK. `claim` accepts a
+`conversationId`, and `cleanupOrphans` only deletes stale upload rows (Redis reclaims the index via
+TTL). `message_attachments` is retained but currently unused.
+
 ## Linear conversation / message / run adapters
 
 `0110_linear_messages.sql` creates the `conversations_v2` / `messages_v2` / `runs_v2` /

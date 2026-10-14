@@ -62,6 +62,7 @@ test("空库 migration 可执行、可幂等，并回滚失败 migration", { ski
       "0000_identity.sql",
       "0050_rag_documents.sql",
       "0060_rag_vectors.sql",
+      "0070_rag_vector_dimensions.sql",
       "0070_report.sql",
       "0110_linear_messages.sql",
       "0120_run_events_retrieval.sql",
@@ -73,7 +74,9 @@ test("空库 migration 可执行、可幂等，并回滚失败 migration", { ski
       "0190_drop_run_events_conversation_fk.sql",
       "0200_drop_runs_conversation_fk.sql",
       "0210_drop_remaining_conversation_fks.sql",
-      "0220_trim_workflow_status.sql"
+      "0220_trim_workflow_status.sql",
+      "0230_cost_summary_event_type.sql",
+      "0240_attachment_ephemeral.sql"
     ]);
 
     await writeFile(join(fixtureDir, "9999_failure.sql"), "create table rolled_back(id integer); select missing_function();");

@@ -46,6 +46,13 @@ export {
   type AttachmentRepository,
   type AttachmentUploadRecord
 } from "./attachment-repository.js";
+export {
+  ATTACHMENT_TTL_ENV,
+  createAttachmentStoreFromEnv,
+  createRedisAttachmentStore,
+  DEFAULT_ATTACHMENT_TTL_SECONDS,
+  type RedisAttachmentStoreOptions
+} from "./attachment-store-redis.js";
 export { listPendingMigrations, runMigrations, MigrationError } from "./migrate.js";
 
 const { Pool } = pg;

@@ -60,6 +60,10 @@ export * from "./source-uri.js";
 export * from "./contextual-retrieval.js";
 export * from "./query-rewrite.js";
 export * from "./data-source-runtime.js";
+// 会话级临时附件：AttachmentStore 抽象 + 内存实现、ingest、单源附件检索。
+export * from "./attachment-store.js";
+export * from "./attachment-ingest.js";
+export * from "./attachment-retriever.js";
 export {
   createGroundingTransformContext
 } from "./grounding-hook.js";

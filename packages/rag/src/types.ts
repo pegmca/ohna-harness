@@ -306,6 +306,8 @@ export interface RagStructuredError {
     | "retrieval_failed"
     | "ingestion_failed"
     | "indexing_failed"
+    | "attachment_store_failed"
+    | "invalid_attachment_scope"
     | "answer_failed";
   message: string;
   details?: Record<string, unknown>;

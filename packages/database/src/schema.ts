@@ -357,7 +357,10 @@ export const chatAttachmentUploads = pgTable("chat_attachment_uploads", {
   contentChecksum: text("content_checksum").notNull(),
   claimToken: uuid("claim_token").notNull(),
   leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true, mode: "string" }).notNull(),
-  documentId: uuid("document_id").references(() => documents.id, { onDelete: "restrict" }),
+  // document_id 不再外键引用 documents：附件正文与索引都在 Redis（会话级临时），
+  // 这里只存 Redis 附件文档的逻辑 uuid（0240_attachment_ephemeral.sql 已解除 FK）。
+  documentId: uuid("document_id"),
+  conversationId: uuid("conversation_id"),
   boundMessageId: uuid("bound_message_id").references(() => messages.id, { onDelete: "restrict" }),
   fileName: text("file_name").notNull(),
   contentType: text("content_type").notNull(),
@@ -371,6 +374,7 @@ export const chatAttachmentUploads = pgTable("chat_attachment_uploads", {
   uniqueIndex("chat_attachment_uploads_message_document_uq").on(table.boundMessageId, table.documentId),
   index("chat_attachment_uploads_orphan_idx").on(table.uploadedAt, table.id).where(sql`${table.status} = 'indexed' and ${table.boundMessageId} is null`),
   index("chat_attachment_uploads_lease_idx").on(table.leaseExpiresAt, table.id).where(sql`${table.status} = 'uploading'`),
+  index("chat_attachment_uploads_conversation_idx").on(table.conversationId, table.uploadedAt, table.id),
   check("chat_attachment_uploads_size_check", sql`${table.sizeBytes} >= 0`)
 ]);
 

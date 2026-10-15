@@ -1,6 +1,6 @@
-import type { RunEventInputDtoV2, RunSnapshotDtoV2, RunStatusDtoV2, RunStreamEventDtoV2 } from "@aiagent/types";
+import type { AgentRunCreateRequestDto, RunEventInputDtoV2, RunSnapshotDtoV2, RunStatusDtoV2, RunStreamEventDtoV2 } from "@aiagent/types";
 import type { MessageStore } from "@aiagent/conversation";
-import type { RunEventBus, RunExecutionRegistry, RunScheduler, RunStore } from "../application/run-ports.js";
+import type { ClaimedRun, RunEventBus, RunExecutionRegistry, RunStore } from "../application/run-ports.js";
 
 const TERMINAL = new Set<RunStatusDtoV2>(["completed", "failed", "cancelled", "interrupted"]);
 
@@ -16,6 +16,9 @@ export function createInMemoryRunStore(options: { messageStore?: MessageStore } 
     snapshot: RunSnapshotDtoV2;
     userId: string;
     events: RunStreamEventDtoV2[];
+    requestPayload: AgentRunCreateRequestDto;
+    leaseUntil: string | null;
+    claimedBy: string | null;
   }
   const runs = new Map<string, StoredRun>();
   return {
@@ -47,7 +50,7 @@ export function createInMemoryRunStore(options: { messageStore?: MessageStore } 
         createdAt: input.createdAt,
         updatedAt: input.createdAt
       };
-      runs.set(input.runId, { snapshot, userId: input.userId, events: [] });
+      runs.set(input.runId, { snapshot, userId: input.userId, events: [], requestPayload: structuredClone(input.requestPayload), leaseUntil: null, claimedBy: null });
       return { snapshot: structuredClone(snapshot), created: true };
     },
     async findById(userId, runId) {
@@ -97,6 +100,32 @@ export function createInMemoryRunStore(options: { messageStore?: MessageStore } 
         if (event) recovered.push(event);
       }
       return recovered;
+    },
+    // 内存实现：遍历找第一个 queued，原子 claim（单进程无并发竞争，语义对齐 PG FOR UPDATE SKIP LOCKED）。
+    async claimNext(workerId, leaseDurationMs) {
+      for (const run of runs.values()) {
+        if (run.snapshot.status !== "queued") continue;
+        const leaseUntil = new Date(Date.now() + leaseDurationMs).toISOString();
+        run.claimedBy = workerId;
+        run.leaseUntil = leaseUntil;
+        run.snapshot = { ...run.snapshot, status: "running", updatedAt: new Date().toISOString(), startedAt: run.snapshot.startedAt ?? new Date().toISOString() };
+        return { snapshot: structuredClone(run.snapshot), request: structuredClone(run.requestPayload), userId: run.userId };
+      }
+      return undefined;
+    },
+    async renewLease(runId, workerId, leaseDurationMs) {
+      const run = runs.get(runId);
+      if (!run || run.claimedBy !== workerId || run.snapshot.status !== "running") return false;
+      // 内存实现不检查 lease 过期（单进程无竞争），直接续期。
+      run.leaseUntil = new Date(Date.now() + leaseDurationMs).toISOString();
+      return true;
+    },
+    async release(runId, workerId) {
+      const run = runs.get(runId);
+      if (!run || run.claimedBy !== workerId || run.snapshot.status !== "running") return;
+      run.claimedBy = null;
+      run.leaseUntil = null;
+      run.snapshot = { ...run.snapshot, status: "queued", updatedAt: new Date().toISOString() };
     }
   };
 }
@@ -176,16 +205,5 @@ export function createInMemoryExecutionRegistry(): RunExecutionRegistry {
       controllers.delete(runId);
     },
     list: () => [...controllers.keys()]
-  };
-}
-
-/** 创建微任务调度器；生产语义是不阻塞 HTTP 响应。 */
-export function createMicrotaskRunScheduler(): RunScheduler {
-  return {
-    schedule(task) {
-      queueMicrotask(() => {
-        void task().catch(() => undefined);
-      });
-    }
   };
 }

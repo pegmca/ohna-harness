@@ -129,15 +129,16 @@ export function registerRunRoutes(app: FastifyInstance, deps: RunRoutesDeps): vo
     const header = request.headers["last-event-id"];
     const headerSequence = Number(Array.isArray(header) ? header[0] : header ?? 0);
     const afterSequence = Math.max(parsedQuery.data.afterSequence ?? 0, Number.isSafeInteger(headerSequence) && headerSequence >= 0 ? headerSequence : 0);
-    const heartbeat = setInterval(() => reply.raw.write(": heartbeat\n\n"), 15_000);
+    const heartbeat = setInterval(() => { if (!reply.raw.writableEnded) reply.raw.write(": heartbeat\n\n"); }, 15_000);
     let unsubscribe = (): void => undefined;
     const stream = createOrderedRunEventStream({
       afterSequence,
       loadAfter: async (sequence) => await runService.listEvents(userId, run.runId, sequence) ?? [],
       write(event) {
         if (!reply.raw.writableEnded) {
-          reply.raw.write(`id: ${event.sequence}\nevent: run_event\ndata: ${JSON.stringify(event)}\n\n`);
+          return reply.raw.write(`id: ${event.sequence}\nevent: run_event\ndata: ${JSON.stringify(event)}\n\n`);
         }
+        return false;
       },
       close() {
         clearInterval(heartbeat);
@@ -145,6 +146,8 @@ export function registerRunRoutes(app: FastifyInstance, deps: RunRoutesDeps): vo
         if (!reply.raw.writableEnded) reply.raw.end();
       }
     });
+    // 背压恢复：Node 流缓冲排空后恢复 drain，保证事件零丢弃。
+    reply.raw.on("drain", () => { stream.resume(); });
     await stream.replay(await runService.listEvents(userId, run.runId, afterSequence) ?? []);
     if (stream.isClosed()) return;
     if (isTerminalRunStatus(run.status)) {

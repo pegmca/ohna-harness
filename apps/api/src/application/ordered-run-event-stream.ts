@@ -5,12 +5,25 @@ export interface OrderedRunEventStream {
   acceptLive(event: RunStreamEventDtoV2): Promise<void>;
   completeCatchUp(events: RunStreamEventDtoV2[]): Promise<void>;
   isClosed(): boolean;
+  /**
+   * 背压解除后恢复 drain。
+   *
+   * 当 `write()` 返回 `false`（Node 流内部缓冲达 highWaterMark）时，drainContinuous 暂停推送。
+   * Node 流的 `'drain'` 事件触发后调用此方法，恢复按 sequence 连续输出。
+   * 暂停期间 live 事件仍进入 `pending` buffer，resume 后零丢弃。
+   */
+  resume(): void;
 }
 
 export interface OrderedRunEventStreamDependencies {
   afterSequence: number;
   loadAfter(sequence: number): Promise<RunStreamEventDtoV2[]>;
-  write(event: RunStreamEventDtoV2): void;
+  /**
+   * 写入一条事件到下游 SSE 流。
+   *
+   * @returns `true` 表示可以继续写；`false` 表示下游缓冲已满（背压），需暂停 drain 直到 `resume()` 被调用。
+   */
+  write(event: RunStreamEventDtoV2): boolean;
   close(): void;
 }
 
@@ -50,6 +63,8 @@ export function createOrderedRunEventStream(
   /**
    * 仅发送水位后的连续事件；高 sequence 会留在 buffer，等待缺口补齐。
    *
+   * 检查 `write()` 返回值：`false` 表示下游背压，暂停 drain 等待 `resume()`。
+   *
    * @returns 无返回值。
    */
   function drainContinuous(): void {
@@ -57,12 +72,14 @@ export function createOrderedRunEventStream(
       const next = pending.get(lastSequence + 1);
       if (!next) return;
       pending.delete(next.sequence);
-      dependencies.write(next);
+      const canContinue = dependencies.write(next);
       lastSequence = next.sequence;
       if (isTerminalRunEvent(next)) {
         closed = true;
         dependencies.close();
+        return;
       }
+      if (!canContinue) return; // 背压：暂停 drain，等待 resume()
     }
   }
 
@@ -100,7 +117,15 @@ export function createOrderedRunEventStream(
         if (pending.size > 0 && !closed) await fillGapFromStore();
       });
     },
-    isClosed: () => closed
+    isClosed: () => closed,
+    resume() {
+      if (closed) return;
+      // 通过 schedule 串行化恢复，避免与 acceptLive 的 drain 竞争。
+      void schedule(async () => {
+        drainContinuous();
+        if (pending.size > 0 && !closed) await fillGapFromStore();
+      });
+    }
   };
 }
 

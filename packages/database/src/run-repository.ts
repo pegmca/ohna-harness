@@ -1,4 +1,4 @@
-import type { RunEventInputDtoV2, RunSnapshotDtoV2, RunStatusDtoV2, RunStreamEventDtoV2 } from "@aiagent/types";
+import type { AgentRunCreateRequestDto, RunEventInputDtoV2, RunSnapshotDtoV2, RunStatusDtoV2, RunStreamEventDtoV2 } from "@aiagent/types";
 import { randomUUID } from "node:crypto";
 import type pg from "pg";
 import { postgresTimestampToIso, withTransaction } from "./postgres.js";
@@ -19,6 +19,15 @@ export interface CreateRunInputV2 {
   source: "composer" | "report_button";
   modelId: string;
   createdAt: string;
+  /** create 时的完整请求快照，worker claim 后据此重建执行上下文。 */
+  requestPayload: AgentRunCreateRequestDto;
+}
+
+/** worker claim 后获得的 run 上下文（对齐 apps/api 的 ClaimedRun 端口）。 */
+export interface ClaimedRunRow {
+  snapshot: RunSnapshotDtoV2;
+  request: AgentRunCreateRequestDto;
+  userId: string;
 }
 
 /**
@@ -37,6 +46,15 @@ export interface RunRepository {
   listEvents(userId: string, runId: string, afterSequence: number): Promise<RunStreamEventDtoV2[] | undefined>;
   /** 崩溃恢复：把 updatedAt 早于 before 的非终态 run 标记 interrupted 并补 run_status 事件。 */
   recoverStale(before: string, occurredAt: string): Promise<RunStreamEventDtoV2[]>;
+  /**
+   * worker 抢占下一个 queued run：`FOR UPDATE SKIP LOCKED` + 设 lease_until + claimed_by + status='running'。
+   * 原子事务保证同一 run 只被一个 worker claim。
+   */
+  claimNext(workerId: string, leaseDurationMs: number): Promise<ClaimedRunRow | undefined>;
+  /** 续期租约：只有 claimed_by 匹配且 lease 未过期才能续期。 */
+  renewLease(runId: string, workerId: string, leaseDurationMs: number): Promise<boolean>;
+  /** 释放租约：把 running 但非终态的 run 重置为 queued。 */
+  release(runId: string, workerId: string): Promise<void>;
 }
 
 /**
@@ -78,11 +96,11 @@ class PostgresRunRepository implements RunRepository {
         const inserted = await client.query<RunRow>(
           `insert into runs(
              id,request_id,user_id,conversation_id,user_message_id,model_id,mode,source,status,
-             last_event_sequence,created_at,updated_at
-           ) values ($1,$2,$3,$4,$5,$6,$7,$8,'queued',0,$9,$9)
+             last_event_sequence,created_at,updated_at,request_payload
+           ) values ($1,$2,$3,$4,$5,$6,$7,$8,'queued',0,$9,$9,$10)
            returning *`,
           [input.runId, input.requestId, input.userId, input.conversationId, userMessageId,
-            input.modelId, input.mode, input.source, input.createdAt]
+            input.modelId, input.mode, input.source, input.createdAt, JSON.stringify(input.requestPayload)]
         );
         // 循环外键要求先建 run 再回填消息的 run_id。
         await client.query("update messages set run_id=$2 where id=$1", [userMessageId, input.runId]);
@@ -174,7 +192,8 @@ class PostgresRunRepository implements RunRepository {
   }
 
   /**
-   * 把早于阈值的非终态 Run 标记为 interrupted 并补 run_status 事件（崩溃/部署打断恢复入口）。
+   * 崩溃恢复：先重置 lease 过期的 running run 为 queued（让 worker 重新 claim），
+   * 再把长时间无人消费的 queued run 标记 interrupted。
    *
    * @param before 陈旧阈值。
    * @param occurredAt 恢复时间。
@@ -182,9 +201,16 @@ class PostgresRunRepository implements RunRepository {
    */
   async recoverStale(before: string, occurredAt: string): Promise<RunStreamEventDtoV2[]> {
     try {
+      // 步骤1：重置 lease 过期的 running run 为 queued（at-least-once 恢复）。
+      await this.pool.query(
+        `update runs set status='queued', lease_until=null, claimed_by=null, updated_at=$1
+          where status='running' and lease_until is not null and lease_until < now()`,
+        [occurredAt]
+      );
+      // 步骤2：queued 且 updated_at 早于 before 的 run（长时间无人消费）→ interrupted。
       const stale = await this.pool.query<{ id: string; user_id: string; request_id: string; conversation_id: string }>(
         `select id,user_id,request_id,conversation_id from runs
-          where status in ('queued','running') and updated_at<$1 order by updated_at,id`,
+          where status='queued' and updated_at<$1 order by updated_at,id`,
         [before]
       );
       const recovered: RunStreamEventDtoV2[] = [];
@@ -202,6 +228,74 @@ class PostgresRunRepository implements RunRepository {
       return recovered;
     } catch (cause) {
       throw mapRunError(cause);
+    }
+  }
+
+  /**
+   * worker 抢占下一个 queued run。
+   *
+   * 使用 `FOR UPDATE SKIP LOCKED` 原子选取并锁定一行 queued run，
+   * 随后设 lease_until + claimed_by + status='running'。
+   * 多 worker 并发时各自 SKIP 已被锁定的行，无竞争。
+   *
+   * @param workerId 当前 worker 标识。
+   * @param leaseDurationMs 租约时长（毫秒）。
+   * @returns 被领取的 run 上下文；无 queued run 时为 undefined。
+   */
+  async claimNext(workerId: string, leaseDurationMs: number): Promise<ClaimedRunRow | undefined> {
+    try {
+      return await withTransaction(this.pool, async (client) => {
+        const candidate = await client.query<RunRow & { request_payload: AgentRunCreateRequestDto | null }>(
+          `select * from runs where status='queued' order by updated_at, id for update skip locked limit 1`,
+          []
+        );
+        const row = candidate.rows[0];
+        if (!row) return undefined;
+        const leaseUntil = new Date(Date.now() + leaseDurationMs).toISOString();
+        await client.query(
+          `update runs set status='running', lease_until=$2, claimed_by=$3, started_at=coalesce(started_at,$4), updated_at=$4
+            where id=$1`,
+          [row.id, leaseUntil, workerId, new Date().toISOString()]
+        );
+        const request = row.request_payload;
+        if (!request) throw new RepositoryError("database_unavailable", "Run request_payload is missing.");
+        return { snapshot: mapSnapshot(row), request, userId: row.user_id };
+      });
+    } catch (cause) {
+      throw mapRunError(cause);
+    }
+  }
+
+  /**
+   * 续期租约：只有 claimed_by 匹配且 lease 未过期才能续期。
+   *
+   * @returns 续期成功为 true；租约已丢失为 false。
+   */
+  async renewLease(runId: string, workerId: string, leaseDurationMs: number): Promise<boolean> {
+    try {
+      const result = await this.pool.query(
+        `update runs set lease_until=now() + ($3 * interval '1 millisecond')
+          where id=$1 and claimed_by=$2 and status='running' and lease_until > now()`,
+        [runId, workerId, leaseDurationMs]
+      );
+      return (result.rowCount ?? 0) > 0;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * 释放租约：把 running 但非终态的 run 重置为 queued（worker 主动放弃或异常退出）。
+   */
+  async release(runId: string, workerId: string): Promise<void> {
+    try {
+      await this.pool.query(
+        `update runs set status='queued', lease_until=null, claimed_by=null, updated_at=now()
+          where id=$1 and claimed_by=$2 and status='running'`,
+        [runId, workerId]
+      );
+    } catch {
+      // 释放失败不向上抛——worker 退出时 lease 自然过期，recoverStale 会兜底。
     }
   }
 }
@@ -222,6 +316,12 @@ interface RunRow {
   updated_at: Date | string;
   started_at: Date | string | null;
   completed_at: Date | string | null;
+  /** worker 租约到期时间；queued 时为 null。 */
+  lease_until: Date | string | null;
+  /** 抢占该 run 的 worker 标识；queued 时为 null。 */
+  claimed_by: string | null;
+  /** create 时写入的完整请求快照，worker claim 后据此重建执行上下文。 */
+  request_payload: AgentRunCreateRequestDto | null;
 }
 
 interface RunEventRow {

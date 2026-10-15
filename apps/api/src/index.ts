@@ -4,6 +4,7 @@ import type { AttachmentStore, DataSourceRuntime, EmbeddingClient } from "@aiage
 import { createLocalArtifactStorage, createReportTool } from "@aiagent/report";
 import type { ArtifactRepository, ArtifactStorage, WorkflowRepository } from "@aiagent/report";
 import type { AgentTool } from "@aiagent/agent";
+import { randomUUID } from "node:crypto";
 import { createDefaultToolRegistry } from "@aiagent/tools";
 import type { IdentityMeDto } from "@aiagent/types";
 import type { AttachmentRepository } from "@aiagent/database";
@@ -11,9 +12,9 @@ import type { CitationRepository } from "@aiagent/rag";
 import Fastify, { type FastifyInstance } from "fastify";
 import {
   createInMemoryExecutionRegistry,
-  createInMemoryRunEventBus,
-  createMicrotaskRunScheduler
+  createInMemoryRunEventBus
 } from "./adapters/in-memory-run-runtime.js";
+import { createRunWorker } from "./application/run-worker.js";
 import { createMockModelRuntime } from "./adapters/mock-model.js";
 import {
   createRunApplicationService,
@@ -116,7 +117,6 @@ export function createApiServer(options: ApiServerOptions): FastifyInstance {
     messageStore,
     eventBus: runEventBus,
     executionRegistry: createInMemoryExecutionRegistry(),
-    scheduler: createMicrotaskRunScheduler(),
     tools: options.tools ?? createDefaultToolRegistry().list(),
     resolveModel: (modelId) => modelRegistry.resolve(modelId),
     hasModel: (modelId) => modelRegistry.has(modelId),
@@ -173,9 +173,25 @@ export function createApiServer(options: ApiServerOptions): FastifyInstance {
   registerConversationRoutes(app, { identityByRequest, conversationService });
   registerRunRoutes(app, { runService, identityByRequest });
 
+  // Run worker：把 queued run 从队列消费并执行，与 HTTP 进程解耦（见 run-worker.ts）。
+  // workerId 用进程级 UUID 标记 lease 归属；claimNext 的 SKIP LOCKED 保证多实例无竞争。
+  const runWorker = createRunWorker({
+    store: runStore,
+    execute: (runId, request, userId) => runService.execute(runId, request, userId),
+    workerId: randomUUID(),
+    pollIntervalMs: 500,
+    leaseDurationMs: 30_000,
+    renewIntervalMs: 10_000
+  });
+
   const staleThresholdMs = options.staleRunThresholdMs ?? 5 * 60_000;
   app.addHook("onReady", async () => {
     await runService.recoverStale(new Date(Date.now() - staleThresholdMs).toISOString());
+    // recoverStale 把过期 lease 的 run 重置为 queued；随后启动 worker 开始消费队列。
+    runWorker.start();
+  });
+  app.addHook("onClose", async () => {
+    await runWorker.stop();
   });
 
   registerDataSourceRoutes(app, { dataSourceRuntime, identityByRequest });

@@ -24,7 +24,7 @@ test("catch-up 完成前缓冲高 sequence live event，合并后严格连续且
   const stream = createOrderedRunEventStream({
     afterSequence: 0,
     loadAfter: async () => [],
-    write: (event) => written.push(event.sequence),
+    write: (event) => { written.push(event.sequence); return true; },
     close: () => { closed = true; }
   });
 
@@ -43,7 +43,7 @@ test("直接 live 观察到缺口时从数据库补齐后再发送高 sequence",
   const stream = createOrderedRunEventStream({
     afterSequence: 0,
     loadAfter: async (sequence) => sequence === 1 ? [status(2), status(3)] : [],
-    write: (event) => written.push(event.sequence),
+    write: (event) => { written.push(event.sequence); return true; },
     close: () => undefined
   });
 
@@ -65,7 +65,7 @@ test("agent_end / run_error / interrupted 在 replay 与 live 路径都是关闭
     const stream = createOrderedRunEventStream({
       afterSequence: 0,
       loadAfter: async () => [],
-      write: () => undefined,
+      write: () => true,
       close: () => { closeCount += 1; }
     });
     if (path === "replay") {
@@ -78,4 +78,27 @@ test("agent_end / run_error / interrupted 在 replay 与 live 路径都是关闭
     assert.equal(stream.isClosed(), true, path);
     assert.equal(closeCount, 1, path);
   }
+});
+
+test("write 返回 false 时暂停 drain，resume 后按 sequence 恢复且零丢弃", async () => {
+  const written = [];
+  let canWrite = false; // 模拟下游背压（Node 流 highWaterMark 满）
+  const stream = createOrderedRunEventStream({
+    afterSequence: 0,
+    loadAfter: async () => [],
+    write: (event) => { written.push(event.sequence); return canWrite; },
+    close: () => undefined
+  });
+
+  // replay 三条事件，第一条 write 返回 false → drain 暂停在 sequence 1 之后
+  await stream.replay([status(1), status(2), status(3)]);
+  assert.deepEqual(written, [1]); // 背压下只写了第一条
+
+  // 解除背压，resume 恢复 drain
+  canWrite = true;
+  stream.resume();
+  // schedule 是微任务，等一个宏任务
+  await new Promise(resolve => setTimeout(resolve, 10));
+
+  assert.deepEqual(written, [1, 2, 3]); // 全部按 sequence 写出，零丢弃
 });

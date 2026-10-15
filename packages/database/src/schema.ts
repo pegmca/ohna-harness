@@ -303,6 +303,11 @@ export const runs = pgTable("runs", {
   intent: text("intent"),
   workflowRunId: text("workflow_run_id"),
   error: jsonb("error"),
+  // worker 解耦（migration 0260）：lease_until 用于租约过期回收，claimed_by 标识持有者，
+  // request_payload 快照 create 请求，worker claim 后据此重建执行上下文。
+  leaseUntil: timestamp("lease_until", { withTimezone: true, mode: "string" }),
+  claimedBy: text("claimed_by"),
+  requestPayload: jsonb("request_payload"),
   lastEventSequence: bigint("last_event_sequence", { mode: "number" }).notNull().default(0),
   createdAt: timestamp("created_at", { withTimezone: true, mode: "string" }).notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" }).notNull(),

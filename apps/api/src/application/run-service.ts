@@ -44,7 +44,7 @@ import {
 } from "@aiagent/rag";
 import { redactSensitiveValue } from "@aiagent/trace";
 import { createHash, randomUUID } from "node:crypto";
-import type { RunEventBus, RunExecutionRegistry, RunScheduler, RunStore } from "./run-ports.js";
+import type { RunEventBus, RunExecutionRegistry, RunStore } from "./run-ports.js";
 import type { ModelRuntime } from "./model-registry.js";
 
 /** 基础 system prompt；附件 grounding 由阶段 5 经 transformContext 回迁。 */
@@ -85,7 +85,6 @@ export interface RunServiceDependencies {
   messageStore: MessageStore;
   eventBus: RunEventBus;
   executionRegistry: RunExecutionRegistry;
-  scheduler: RunScheduler;
   /** 按目录模型 ID 解析可执行模型 runtime（MockModel 与真实 provider 同路径）。 */
   resolveModel: (modelId: string) => ModelRuntime | undefined;
   hasModel?: (modelId: string) => boolean;
@@ -119,6 +118,16 @@ export interface RunServiceDependencies {
 
 export interface RunApplicationService {
   create(request: AgentRunCreateRequestDto, userId: string): Promise<AgentRunAcceptedDto>;
+  /**
+   * 执行一次 run（供 worker loop 调用）。从 request_payload 重建请求上下文，
+   * 逐事件落库广播并补落消息；异常被收敛为 run_error 事件，不会向上抛。
+   *
+   * @param runId Run 标识。
+   * @param request 重建的创建请求（来自 store.claimNext 的 request_payload）。
+   * @param userId 当前用户。
+   * @returns 执行完成 Promise（异常已内部消化）。
+   */
+  execute(runId: string, request: AgentRunCreateRequestDto, userId: string): Promise<void>;
   get(userId: string, runId: string): Promise<RunSnapshotDtoV2 | undefined>;
   cancel(userId: string, runId: string): Promise<RunSnapshotDtoV2 | undefined>;
   listEvents(userId: string, runId: string, afterSequence: number): Promise<RunStreamEventDtoV2[] | undefined>;
@@ -146,27 +155,11 @@ export function createRunApplicationService(dependencies: RunServiceDependencies
   const createId = dependencies.createId ?? (() => randomUUID());
   // shutdown 期间拒绝新 Run，避免关闭窗口内写入无法 drain 的任务。
   let shuttingDown = false;
-  // 同一 conversation 的 run 串行化链：并发创建的同会话 run 按 promise 链排队执行，
-  // 避免历史交错与工具结果乱序（跨 conversation 不互相阻塞）。
-  const conversationRunChains = new Map<string, Promise<void>>();
 
   async function recoverStale(before: string): Promise<number> {
     const events = await dependencies.store.recoverStale(before, now().toISOString());
     for (const event of events) dependencies.eventBus.publish(event);
     return events.length;
-  }
-
-  /**
-   * 把同一会话的 run 挂到该会话的执行链尾部，实现 per-conversation 串行。
-   *
-   * @param key 会话键（userId:conversationId）。
-   * @param task run 执行体。
-   * @returns 本次任务的完成 Promise。
-   */
-  function enqueueConversationRun(key: string, task: () => Promise<void>): Promise<void> {
-    const next = (conversationRunChains.get(key) ?? Promise.resolve()).then(task, task);
-    conversationRunChains.set(key, next.catch(() => undefined));
-    return next;
   }
 
   /**
@@ -495,7 +488,8 @@ export function createRunApplicationService(dependencies: RunServiceDependencies
         mode: request.mode,
         source: request.source,
         modelId,
-        createdAt: now().toISOString()
+        createdAt: now().toISOString(),
+        requestPayload: request
       });
       const actual = created.snapshot;
       if (!created.created) {
@@ -511,9 +505,8 @@ export function createRunApplicationService(dependencies: RunServiceDependencies
       }
       dependencies.executionRegistry.create(runId);
       await publish(userId, actual, "run_status", { status: "queued", message: "研究任务已进入队列。" });
-      dependencies.scheduler.schedule(() =>
-        enqueueConversationRun(`${userId}:${request.conversationId}`, () => execute(runId, request, userId))
-      );
+      // 不再同步执行：store.create 已落 status='queued'，run-worker 的 claimNext 会轮询抢占该 run 并异步执行。
+      // 入队与执行解耦后，HTTP 响应立即返回，崩溃也不丢 run（recoverStale 重置过期 lease 重排）。
       return {
         runId,
         requestId,
@@ -524,6 +517,7 @@ export function createRunApplicationService(dependencies: RunServiceDependencies
         snapshotUrl: `/api/runs/${runId}`
       };
     },
+    execute,
     get: (userId, runId) => dependencies.store.findById(userId, runId),
     async cancel(userId, runId) {
       const snapshot = await dependencies.store.findById(userId, runId);

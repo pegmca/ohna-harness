@@ -36,7 +36,7 @@ import type { ArtifactRepository, WorkflowRepository } from "@aiagent/report";
 import { createPostgresArtifactRepository, createPostgresWorkflowRepository } from "./report.js";
 export { createPostgresArtifactRepository, createPostgresWorkflowRepository } from "./report.js";
 import { createPostgresRunRepository, type RunRepository } from "./run-repository.js";
-export { createPostgresRunRepository, type CreateRunInputV2, type RunRepository } from "./run-repository.js";
+export { createPostgresRunRepository, type ClaimedRunRow, type CreateRunInputV2, type RunRepository } from "./run-repository.js";
 import { listPendingMigrations } from "./migrate.js";
 import { createPostgresCitationRepository } from "./citation-repository.js";
 export { createPostgresCitationRepository } from "./citation-repository.js";

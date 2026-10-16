@@ -118,7 +118,7 @@ export function runAutomationEval(dataset: EvalDataset, baseline?: EvalBaseline,
 /** @param report 当前报告。 @param dataset 数据集。 @param thresholds 阈值。 @returns 可显式保存的基线。 */
 export function createBaseline(report: AutomationReport, dataset: EvalDataset, thresholds: RegressionThresholds = DEFAULT_REGRESSION_THRESHOLDS): EvalBaseline { return { schemaVersion: "1.0.0", datasetVersion: dataset.datasetVersion, createdAt: new Date().toISOString(), config: { seed: dataset.seed, strategy: "deterministic_fixture", thresholds }, metrics: report.metrics }; }
 
-/** @param report 机器报告。 @returns 可读 Markdown。 */
+/** @param report 机器报告。 @returns 人工可读的 Markdown 报告。 */
 export function renderMarkdownReport(report: AutomationReport): string {
   const m = report.metrics;
   const lines = [`# Eval 回归报告`, ``, `- Dataset: ${report.datasetVersion}`, `- Cases: ${report.results.length}`, `- Seed / strategy: ${report.run.seed} / ${report.run.strategy}`, `- LLM judge: ${report.run.llmJudge ? "已启用" : "未使用"}`, ``, `## 指标`, ``, `| 指标 | 当前 | Baseline | 变化 |`, `|---|---:|---:|---:|`];

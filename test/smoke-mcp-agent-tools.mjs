@@ -20,7 +20,8 @@ import {
   createInMemoryExecutionRegistry,
   createInMemoryRunEventBus
 } from "../apps/api/dist/adapters/in-memory-run-runtime.js";
-import { createMockModelRuntime } from "../apps/api/dist/adapters/mock-model.js";
+// 使用与集成测试同一套测试替身 model runtime（apps/api 已移除运行时 MockModel，此处不得再 import 已删除的 mock-model）。
+import { createTestDoubleModelRuntime } from "../apps/api/dist/adapters/test-double-model.js";
 import { createRunApplicationService } from "../apps/api/dist/application/run-service.js";
 
 const userId = "user_smoke_mcp";
@@ -40,7 +41,8 @@ async function main() {
     const tools = [...createDefaultToolRegistry().list(), ...discovered.tools];
     // 手动调度器：create 之后 run 停在 queued，先落 discovery 事件再放行执行。
     let pendingTask;
-    const mockRuntime = createMockModelRuntime();
+    // 测试替身 runtime（不发起外部请求），与集成测试同源；注意本项目已无运行时 MockModel。
+    const mockRuntime = createTestDoubleModelRuntime();
     const service = createRunApplicationService({
       store: runtime.runStore,
       messageStore: runtime.messageStore,
@@ -49,7 +51,7 @@ async function main() {
       scheduler: { schedule(task) { pendingTask = task; } },
       resolveModel: () => mockRuntime,
       hasModel: () => true,
-      defaultModelId: "mock",
+      defaultModelId: "test-double",
       tools,
       dataSourceRuntime: runtime.dataSourceRuntime,
       attachmentRepository: runtime.attachmentRepository,

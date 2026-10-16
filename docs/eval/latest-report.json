@@ -3,7 +3,7 @@
   "datasetVersion": "financial-research-v1.0.0",
   "run": {
     "id": "eval-financial-research-v1.0.0-seed-20260719",
-    "startedAt": "2026-08-04T17:11:22.077Z",
+    "startedAt": "2026-10-16T02:14:40.558Z",
     "seed": 20260719,
     "strategy": "deterministic_fixture",
     "llmJudge": false
@@ -16,7 +16,7 @@
     "workflowCompletion": 0.984,
     "reportSectionCoverage": 0.968,
     "exportStatusRate": 1,
-    "averageLatencyMs": 0.226,
+    "averageLatencyMs": 0.129,
     "p95LatencyMs": 1
   },
   "results": [
@@ -34,7 +34,7 @@
         "reportSectionCoverage": 1,
         "exportStatusRate": 1
       },
-      "latencyMs": 3,
+      "latencyMs": 1,
       "traceId": "run-rag-001",
       "requestId": "req-rag-001",
       "evidence": {
@@ -55,11 +55,21 @@
         "workflow": [],
         "sections": [],
         "ok": true,
-        "latencyMs": 3,
+        "latencyMs": 1,
         "traceId": "run-rag-001",
         "requestId": "req-rag-001"
       },
-      "failures": []
+      "failures": [],
+      "failureCategory": "none",
+      "trajectory": {
+        "actual": [
+          "search_filings"
+        ],
+        "expected": [
+          "search_filings"
+        ],
+        "matched": true
+      }
     },
     {
       "caseId": "rag-002",
@@ -100,7 +110,17 @@
         "traceId": "run-rag-002",
         "requestId": "req-rag-002"
       },
-      "failures": []
+      "failures": [],
+      "failureCategory": "none",
+      "trajectory": {
+        "actual": [
+          "search_filings"
+        ],
+        "expected": [
+          "search_filings"
+        ],
+        "matched": true
+      }
     },
     {
       "caseId": "rag-003",
@@ -116,7 +136,7 @@
         "reportSectionCoverage": 1,
         "exportStatusRate": 1
       },
-      "latencyMs": 1,
+      "latencyMs": 0,
       "traceId": "run-rag-003",
       "requestId": "req-rag-003",
       "evidence": {
@@ -137,11 +157,21 @@
         "workflow": [],
         "sections": [],
         "ok": true,
-        "latencyMs": 1,
+        "latencyMs": 0,
         "traceId": "run-rag-003",
         "requestId": "req-rag-003"
       },
-      "failures": []
+      "failures": [],
+      "failureCategory": "none",
+      "trajectory": {
+        "actual": [
+          "search_filings"
+        ],
+        "expected": [
+          "search_filings"
+        ],
+        "matched": true
+      }
     },
     {
       "caseId": "rag-004",
@@ -182,7 +212,17 @@
         "traceId": "run-rag-004",
         "requestId": "req-rag-004"
       },
-      "failures": []
+      "failures": [],
+      "failureCategory": "none",
+      "trajectory": {
+        "actual": [
+          "search_filings"
+        ],
+        "expected": [
+          "search_filings"
+        ],
+        "matched": true
+      }
     },
     {
       "caseId": "rag-005",
@@ -223,7 +263,17 @@
         "traceId": "run-rag-005",
         "requestId": "req-rag-005"
       },
-      "failures": []
+      "failures": [],
+      "failureCategory": "none",
+      "trajectory": {
+        "actual": [
+          "search_filings"
+        ],
+        "expected": [
+          "search_filings"
+        ],
+        "matched": true
+      }
     },
     {
       "caseId": "rag-006",
@@ -264,7 +314,17 @@
         "traceId": "run-rag-006",
         "requestId": "req-rag-006"
       },
-      "failures": []
+      "failures": [],
+      "failureCategory": "none",
+      "trajectory": {
+        "actual": [
+          "search_filings"
+        ],
+        "expected": [
+          "search_filings"
+        ],
+        "matched": true
+      }
     },
     {
       "caseId": "rag-007",
@@ -280,7 +340,7 @@
         "reportSectionCoverage": 1,
         "exportStatusRate": 1
       },
-      "latencyMs": 1,
+      "latencyMs": 0,
       "traceId": "run-rag-007",
       "requestId": "req-rag-007",
       "evidence": {
@@ -301,11 +361,21 @@
         "workflow": [],
         "sections": [],
         "ok": true,
-        "latencyMs": 1,
+        "latencyMs": 0,
         "traceId": "run-rag-007",
         "requestId": "req-rag-007"
       },
-      "failures": []
+      "failures": [],
+      "failureCategory": "none",
+      "trajectory": {
+        "actual": [
+          "search_filings"
+        ],
+        "expected": [
+          "search_filings"
+        ],
+        "matched": true
+      }
     },
     {
       "caseId": "rag-008",
@@ -346,7 +416,17 @@
         "traceId": "run-rag-008",
         "requestId": "req-rag-008"
       },
-      "failures": []
+      "failures": [],
+      "failureCategory": "none",
+      "trajectory": {
+        "actual": [
+          "search_filings"
+        ],
+        "expected": [
+          "search_filings"
+        ],
+        "matched": true
+      }
     },
     {
       "caseId": "rag-009",
@@ -362,7 +442,7 @@
         "reportSectionCoverage": 1,
         "exportStatusRate": 1
       },
-      "latencyMs": 0,
+      "latencyMs": 1,
       "traceId": "run-rag-009",
       "requestId": "req-rag-009",
       "evidence": {
@@ -383,11 +463,21 @@
         "workflow": [],
         "sections": [],
         "ok": true,
-        "latencyMs": 0,
+        "latencyMs": 1,
         "traceId": "run-rag-009",
         "requestId": "req-rag-009"
       },
-      "failures": []
+      "failures": [],
+      "failureCategory": "none",
+      "trajectory": {
+        "actual": [
+          "search_filings"
+        ],
+        "expected": [
+          "search_filings"
+        ],
+        "matched": true
+      }
     },
     {
       "caseId": "rag-010",
@@ -428,7 +518,17 @@
         "traceId": "run-rag-010",
         "requestId": "req-rag-010"
       },
-      "failures": []
+      "failures": [],
+      "failureCategory": "none",
+      "trajectory": {
+        "actual": [
+          "search_filings"
+        ],
+        "expected": [
+          "search_filings"
+        ],
+        "matched": true
+      }
     },
     {
       "caseId": "rag-011",
@@ -469,7 +569,17 @@
         "traceId": "run-rag-011",
         "requestId": "req-rag-011"
       },
-      "failures": []
+      "failures": [],
+      "failureCategory": "none",
+      "trajectory": {
+        "actual": [
+          "search_filings"
+        ],
+        "expected": [
+          "search_filings"
+        ],
+        "matched": true
+      }
     },
     {
       "caseId": "rag-012",
@@ -510,7 +620,17 @@
         "traceId": "run-rag-012",
         "requestId": "req-rag-012"
       },
-      "failures": []
+      "failures": [],
+      "failureCategory": "none",
+      "trajectory": {
+        "actual": [
+          "search_filings"
+        ],
+        "expected": [
+          "search_filings"
+        ],
+        "matched": true
+      }
     },
     {
       "caseId": "rag-013",
@@ -551,7 +671,17 @@
         "traceId": "run-rag-013",
         "requestId": "req-rag-013"
       },
-      "failures": []
+      "failures": [],
+      "failureCategory": "none",
+      "trajectory": {
+        "actual": [
+          "search_filings"
+        ],
+        "expected": [
+          "search_filings"
+        ],
+        "matched": true
+      }
     },
     {
       "caseId": "rag-014",
@@ -592,7 +722,17 @@
         "traceId": "run-rag-014",
         "requestId": "req-rag-014"
       },
-      "failures": []
+      "failures": [],
+      "failureCategory": "none",
+      "trajectory": {
+        "actual": [
+          "search_filings"
+        ],
+        "expected": [
+          "search_filings"
+        ],
+        "matched": true
+      }
     },
     {
       "caseId": "rag-015",
@@ -633,7 +773,17 @@
         "traceId": "run-rag-015",
         "requestId": "req-rag-015"
       },
-      "failures": []
+      "failures": [],
+      "failureCategory": "none",
+      "trajectory": {
+        "actual": [
+          "search_filings"
+        ],
+        "expected": [
+          "search_filings"
+        ],
+        "matched": true
+      }
     },
     {
       "caseId": "chat-001",
@@ -649,7 +799,7 @@
         "reportSectionCoverage": 1,
         "exportStatusRate": 1
       },
-      "latencyMs": 1,
+      "latencyMs": 0,
       "traceId": "run-chat-001",
       "requestId": "req-chat-001",
       "evidence": {
@@ -659,11 +809,17 @@
         "workflow": [],
         "sections": [],
         "ok": true,
-        "latencyMs": 1,
+        "latencyMs": 0,
         "traceId": "run-chat-001",
         "requestId": "req-chat-001"
       },
-      "failures": []
+      "failures": [],
+      "failureCategory": "none",
+      "trajectory": {
+        "actual": [],
+        "expected": [],
+        "matched": true
+      }
     },
     {
       "caseId": "chat-002",
@@ -679,7 +835,7 @@
         "reportSectionCoverage": 1,
         "exportStatusRate": 1
       },
-      "latencyMs": 0,
+      "latencyMs": 1,
       "traceId": "run-chat-002",
       "requestId": "req-chat-002",
       "evidence": {
@@ -689,11 +845,17 @@
         "workflow": [],
         "sections": [],
         "ok": true,
-        "latencyMs": 0,
+        "latencyMs": 1,
         "traceId": "run-chat-002",
         "requestId": "req-chat-002"
       },
-      "failures": []
+      "failures": [],
+      "failureCategory": "none",
+      "trajectory": {
+        "actual": [],
+        "expected": [],
+        "matched": true
+      }
     },
     {
       "caseId": "chat-003",
@@ -723,7 +885,13 @@
         "traceId": "run-chat-003",
         "requestId": "req-chat-003"
       },
-      "failures": []
+      "failures": [],
+      "failureCategory": "none",
+      "trajectory": {
+        "actual": [],
+        "expected": [],
+        "matched": true
+      }
     },
     {
       "caseId": "chat-004",
@@ -753,7 +921,13 @@
         "traceId": "run-chat-004",
         "requestId": "req-chat-004"
       },
-      "failures": []
+      "failures": [],
+      "failureCategory": "none",
+      "trajectory": {
+        "actual": [],
+        "expected": [],
+        "matched": true
+      }
     },
     {
       "caseId": "chat-005",
@@ -783,7 +957,13 @@
         "traceId": "run-chat-005",
         "requestId": "req-chat-005"
       },
-      "failures": []
+      "failures": [],
+      "failureCategory": "none",
+      "trajectory": {
+        "actual": [],
+        "expected": [],
+        "matched": true
+      }
     },
     {
       "caseId": "report-001",
@@ -837,7 +1017,17 @@
         "traceId": "run-report-001",
         "requestId": "req-report-001"
       },
-      "failures": []
+      "failures": [],
+      "failureCategory": "none",
+      "trajectory": {
+        "actual": [
+          "generate_report"
+        ],
+        "expected": [
+          "generate_report"
+        ],
+        "matched": true
+      }
     },
     {
       "caseId": "report-002",
@@ -891,7 +1081,17 @@
         "traceId": "run-report-002",
         "requestId": "req-report-002"
       },
-      "failures": []
+      "failures": [],
+      "failureCategory": "none",
+      "trajectory": {
+        "actual": [
+          "generate_report"
+        ],
+        "expected": [
+          "generate_report"
+        ],
+        "matched": true
+      }
     },
     {
       "caseId": "report-003",
@@ -945,7 +1145,17 @@
         "traceId": "run-report-003",
         "requestId": "req-report-003"
       },
-      "failures": []
+      "failures": [],
+      "failureCategory": "none",
+      "trajectory": {
+        "actual": [
+          "generate_report"
+        ],
+        "expected": [
+          "generate_report"
+        ],
+        "matched": true
+      }
     },
     {
       "caseId": "report-004",
@@ -999,7 +1209,17 @@
         "traceId": "run-report-004",
         "requestId": "req-report-004"
       },
-      "failures": []
+      "failures": [],
+      "failureCategory": "none",
+      "trajectory": {
+        "actual": [
+          "generate_report"
+        ],
+        "expected": [
+          "generate_report"
+        ],
+        "matched": true
+      }
     },
     {
       "caseId": "report-005",
@@ -1062,7 +1282,17 @@
         "traceId": "run-report-005",
         "requestId": "req-report-005"
       },
-      "failures": []
+      "failures": [],
+      "failureCategory": "none",
+      "trajectory": {
+        "actual": [
+          "generate_report"
+        ],
+        "expected": [
+          "generate_report"
+        ],
+        "matched": true
+      }
     },
     {
       "caseId": "rag-016",
@@ -1103,7 +1333,17 @@
         "traceId": "run-rag-016",
         "requestId": "req-rag-016"
       },
-      "failures": []
+      "failures": [],
+      "failureCategory": "none",
+      "trajectory": {
+        "actual": [
+          "search_filings"
+        ],
+        "expected": [
+          "search_filings"
+        ],
+        "matched": true
+      }
     },
     {
       "caseId": "rag-017",
@@ -1144,7 +1384,17 @@
         "traceId": "run-rag-017",
         "requestId": "req-rag-017"
       },
-      "failures": []
+      "failures": [],
+      "failureCategory": "none",
+      "trajectory": {
+        "actual": [
+          "search_filings"
+        ],
+        "expected": [
+          "search_filings"
+        ],
+        "matched": true
+      }
     },
     {
       "caseId": "rag-018",
@@ -1185,7 +1435,17 @@
         "traceId": "run-rag-018",
         "requestId": "req-rag-018"
       },
-      "failures": []
+      "failures": [],
+      "failureCategory": "none",
+      "trajectory": {
+        "actual": [
+          "search_filings"
+        ],
+        "expected": [
+          "search_filings"
+        ],
+        "matched": true
+      }
     },
     {
       "caseId": "fail-001",
@@ -1220,7 +1480,13 @@
         "financialAccuracy=0"
       ],
       "rootCause": "财务事实的数值、单位、币种、期间或来源未同时满足。",
-      "improvement": "增加结构化事实抽取与期间/币种校验，失败时拒答。"
+      "improvement": "增加结构化事实抽取与期间/币种校验，失败时拒答。",
+      "failureCategory": "hallucination",
+      "trajectory": {
+        "actual": [],
+        "expected": [],
+        "matched": true
+      }
     },
     {
       "caseId": "fail-002",
@@ -1265,7 +1531,17 @@
         "sourceGroundedness=0"
       ],
       "rootCause": "引用文本无法在 retrieved chunk 中逐项回溯。",
-      "improvement": "强化 citation verifier，并保留 claim 到 chunk 的映射。"
+      "improvement": "强化 citation verifier，并保留 claim 到 chunk 的映射。",
+      "failureCategory": "retrieval_missing",
+      "trajectory": {
+        "actual": [
+          "search_filings"
+        ],
+        "expected": [
+          "search_filings"
+        ],
+        "matched": true
+      }
     },
     {
       "caseId": "fail-003",
@@ -1307,7 +1583,17 @@
         "reportSectionCoverage=0"
       ],
       "rootCause": "Report workflow 在预期节点前终止。",
-      "improvement": "补齐节点重试与结构化 workflow 终止原因。"
+      "improvement": "补齐节点重试与结构化 workflow 终止原因。",
+      "failureCategory": "workflow_incomplete",
+      "trajectory": {
+        "actual": [
+          "generate_report"
+        ],
+        "expected": [
+          "generate_report"
+        ],
+        "matched": true
+      }
     }
   ],
   "failures": [
@@ -1344,7 +1630,13 @@
         "financialAccuracy=0"
       ],
       "rootCause": "财务事实的数值、单位、币种、期间或来源未同时满足。",
-      "improvement": "增加结构化事实抽取与期间/币种校验，失败时拒答。"
+      "improvement": "增加结构化事实抽取与期间/币种校验，失败时拒答。",
+      "failureCategory": "hallucination",
+      "trajectory": {
+        "actual": [],
+        "expected": [],
+        "matched": true
+      }
     },
     {
       "caseId": "fail-002",
@@ -1389,7 +1681,17 @@
         "sourceGroundedness=0"
       ],
       "rootCause": "引用文本无法在 retrieved chunk 中逐项回溯。",
-      "improvement": "强化 citation verifier，并保留 claim 到 chunk 的映射。"
+      "improvement": "强化 citation verifier，并保留 claim 到 chunk 的映射。",
+      "failureCategory": "retrieval_missing",
+      "trajectory": {
+        "actual": [
+          "search_filings"
+        ],
+        "expected": [
+          "search_filings"
+        ],
+        "matched": true
+      }
     },
     {
       "caseId": "fail-003",
@@ -1431,7 +1733,17 @@
         "reportSectionCoverage=0"
       ],
       "rootCause": "Report workflow 在预期节点前终止。",
-      "improvement": "补齐节点重试与结构化 workflow 终止原因。"
+      "improvement": "补齐节点重试与结构化 workflow 终止原因。",
+      "failureCategory": "workflow_incomplete",
+      "trajectory": {
+        "actual": [
+          "generate_report"
+        ],
+        "expected": [
+          "generate_report"
+        ],
+        "matched": true
+      }
     }
   ],
   "baseline": {
@@ -1507,9 +1819,9 @@
     },
     {
       "metric": "averageLatencyMs",
-      "current": 0.226,
+      "current": 0.129,
       "baseline": 22.839,
-      "delta": -22.613
+      "delta": -22.71
     },
     {
       "metric": "p95LatencyMs",
@@ -1518,5 +1830,18 @@
       "delta": -44
     }
   ],
-  "regressionReasons": []
+  "regressionReasons": [],
+  "slo": {
+    "p95LatencyMs": {
+      "value": 1,
+      "budget": 10000,
+      "breached": false
+    },
+    "errorBudget": {
+      "budget": 0.19999999999999996,
+      "consumed": 0.09699999999999998,
+      "remaining": 0.10299999999999998,
+      "breached": false
+    }
+  }
 }

@@ -5,7 +5,7 @@ import type { ModelCatalogDto, ModelOptionDto } from "@aiagent/types";
 /**
  * 一个可执行模型的运行时：pi 形态的 Model 目录条目 + 可选注入的 streamFn 与 apiKey。
  * streamFn 缺省时 loop 使用 @aiagent/ai 的 streamSimple（真实 OpenAI 兼容链路）；
- * MockModel 通过注入 streamFn 走同一条 agentLoop 代码路径（见 docs/worktree/03）。
+ * 注入 streamFn 的模型（如测试替身）与真实 provider 走同一条 agentLoop 代码路径。
  */
 export interface ModelRuntime {
   model: Model<Api>;

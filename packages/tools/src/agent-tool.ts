@@ -24,6 +24,8 @@ export interface DefineAgentToolConfig<TSchema extends z.ZodType, TOutput> {
   execution?: Pick<ToolExecutionOptions, "timeoutMs" | "retry" | "hasSideEffects" | "idempotent" | "idempotencyKey" | "now" | "sleep">;
   /** 把结构化输出序列化为回喂模型的文本；默认 pretty JSON。 */
   formatResult?: (output: TOutput) => string;
+  /** 数据来源标记：real 或 mock；v1.2 起统一 real。 */
+  source?: "real" | "mock";
   /**
    * 业务执行体；入参已通过 zod 校验。失败直接抛异常（可带 code/retryable 标记），
    * 包装层负责转结构化错误。
@@ -54,6 +56,7 @@ export function defineAgentTool<TSchema extends z.ZodType, TOutput = unknown>(
       ? { prepareArguments: config.prepareArguments as (args: unknown) => z.infer<TSchema> }
       : {}),
     ...(config.executionMode ? { executionMode: config.executionMode } : {}),
+    ...(config.source ? { source: config.source } : {}),
     /**
      * AgentTool.execute 实现；抛出的带 code Error 由 loop 转成 isError ToolResultMessage。
      *

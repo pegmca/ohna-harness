@@ -16,7 +16,7 @@ import { createMcpFinancialToolRuntime, type McpFinancialToolRuntime } from "./r
  * transport 与工具 runtime 分离后，生产入口可使用 stdio，测试可使用 SDK client transport，
  * 后续也能增加 HTTP transport 而不改动工具业务逻辑。
  *
- * @param runtime 可注入的工具 runtime，默认使用本地 mock/RAG 实现。
+ * @param runtime 可注入的工具 runtime，默认使用本地 RAG 实现。
  * @returns 已注册三个金融研究工具的 MCP server。
  */
 export function createFinancialResearchMcpServer(
@@ -26,21 +26,21 @@ export function createFinancialResearchMcpServer(
 
   server.registerTool("search_filings", {
     title: "Search Filings",
-    description: "Search filing snippets with citations and relevance scores from the local mock RAG runtime.",
+    description: "Search filing snippets with citations and relevance scores from the local RAG runtime.",
     inputSchema: searchFilingsInputSchema,
     outputSchema: searchFilingsOutputSchema
   }, async (input) => toCallToolResult(await runtime.searchFilings(input)));
 
   server.registerTool("get_financial_metrics", {
     title: "Get Financial Metrics",
-    description: "Get selected financial metric values, periods, units, and sources from mock tool data.",
+    description: "Get selected financial metric values, periods, units, and sources from the configured data source.",
     inputSchema: financialMetricsInputSchema,
     outputSchema: financialMetricsOutputSchema
   }, async (input) => toCallToolResult(await runtime.getFinancialMetrics(input)));
 
   server.registerTool("get_market_data", {
     title: "Get Market Data",
-    description: "Get selected market summary fields from stable mock market data.",
+    description: "Get selected market summary fields from the configured data source.",
     inputSchema: marketDataInputSchema,
     outputSchema: marketDataOutputSchema
   }, async (input) => toCallToolResult(await runtime.getMarketData(input)));

@@ -6,6 +6,12 @@ import {
   discoverMcpAgentTools
 } from "../dist/index.js";
 
+// 注入离线测试替身数据源：让三个真实数据工具返回 canned 数据而非「未配置」isError。
+// MCP SDK 默认只继承少量安全环境变量，自定义变量必须显式经 client 的 env 透传给 stdio 子进程。
+const FAKE_DATA_SOURCE_URL =
+  new URL("./fixtures/fake-data-source.mjs", import.meta.url).href;
+process.env.AIAGENT_MCP_FAKE_DATA_SOURCE = FAKE_DATA_SOURCE_URL;
+
 let client;
 
 /** 收集 sink 事件的内存数组，模拟装配层把 mcp_tool_discovered 转写 run_events。 */
@@ -15,7 +21,10 @@ function createEventCollector() {
 }
 
 before(async () => {
-  client = await createMcpStdioClient({ clientName: "aiagent-mcp-client-test" });
+  client = await createMcpStdioClient({
+    clientName: "aiagent-mcp-client-test",
+    env: { AIAGENT_MCP_FAKE_DATA_SOURCE: FAKE_DATA_SOURCE_URL }
+  });
 });
 
 after(async () => {
@@ -111,8 +120,8 @@ test("combined tools include built-in tools when MCP server is unavailable", asy
   assert.equal(mcpAvailable, false);
   assert.deepEqual(mcpToolNames, []);
   const names = tools.map((tool) => tool.name);
-  assert.ok(names.includes("financial_metric_mock"));
-  assert.ok(names.includes("filing_search_mock"));
+  assert.ok(names.includes("financial_metric"));
+  assert.ok(names.includes("filing_search"));
   const discoveryEvent = events.find((event) => event.type === "mcp_tool_discovered");
   assert.ok(discoveryEvent);
   assert.equal(discoveryEvent.payload.ok, false);
@@ -128,7 +137,7 @@ test("combined tools include both built-in and MCP tools when server is availabl
   assert.ok(mcpToolNames.includes("search_filings"));
   const names = tools.map((tool) => tool.name);
   assert.ok(names.includes("search_filings"));
-  assert.ok(names.includes("financial_metric_mock"));
+  assert.ok(names.includes("financial_metric"));
 
   const discoveryEvent = events.find((event) => event.type === "mcp_tool_discovered");
   assert.ok(discoveryEvent);

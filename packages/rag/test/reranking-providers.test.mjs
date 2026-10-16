@@ -156,7 +156,7 @@ test("rerank 端点 404 → 自动走 LLM-judge 回退并正确排序", async ()
 
 test("两次调用都失败 → 安全回退为原 hybridScore 顺序，不抛异常", async () => {
   const candidates = makeCandidates();
-  const restore = stubFetch(async (url) => {
+  const restore = stubFetch(async () => {
     // 两个端点都 500。
     return new Response("boom", { status: 500 });
   });

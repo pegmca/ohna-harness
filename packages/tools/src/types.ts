@@ -20,6 +20,8 @@ export interface AgentToolResult<TDetails = unknown> {
   usage?: Usage;
   /** 提前结束提示：批次内全部结果为 true 才终止 run（对齐 pi shouldTerminateToolBatch）。 */
   terminate?: boolean;
+  /** 工具级错误标记：为 true 时结果为错误内容（如数据源未配置），交由 loop 回喂模型。 */
+  isError?: boolean;
 }
 
 /**
@@ -58,6 +60,8 @@ export interface AgentTool<TSchema extends z.ZodType = z.ZodType, TDetails = unk
   ) => Promise<AgentToolResult<TDetails>>;
   /** 默认 parallel；任一为 sequential 则整批降级为串行。 */
   executionMode?: ToolExecutionMode;
+  /** 数据来源标记：real 表示真实 adapter，mock 表示确定性假数据；v1.2 起统一为 real。 */
+  source?: "real" | "mock";
 }
 
 /** 工具执行错误码：withTimeoutAndRetry 抛出的 Error.code 取自这里。 */

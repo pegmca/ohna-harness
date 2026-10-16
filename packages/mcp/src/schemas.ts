@@ -35,7 +35,7 @@ export const filingSnippetSchema = z.object({
   citation: citationSchema
 });
 
-/** 财务指标输入只开放当前 mock tool 已稳定支持的指标枚举。 */
+/** 财务指标输入只开放工具已稳定支持的指标枚举。 */
 export const financialMetricsInputSchema = z.object({
   companyId: z.string().min(1).optional(),
   companyName: z.string().min(1).optional(),
@@ -59,7 +59,7 @@ export const mcpErrorSchema = z.object({
   details: z.record(z.string(), z.unknown()).optional()
 });
 
-/** 公告检索输出保留 RAG snippets、citations、scores 和 mock 来源标记。 */
+/** 公告检索输出保留 RAG snippets、citations、scores 与来源标记。 */
 export const searchFilingsOutputSchema = z.object({
   ok: z.boolean(),
   data: z.object({
@@ -82,13 +82,13 @@ export const financialMetricsOutputSchema = z.object({
       value: z.number(),
       period: z.string(),
       unit: z.string(),
-      source: z.literal("mock")
+      source: z.literal("real")
     }))
   }).optional(),
   error: mcpErrorSchema.optional()
 });
 
-/** 行情输出按请求字段返回可选序列/摘要，并显式标记 mock 数据源。 */
+/** 行情输出按请求字段返回可选序列/摘要，并显式标记真实数据源。 */
 export const marketDataOutputSchema = z.object({
   ok: z.boolean(),
   data: z.object({
@@ -105,7 +105,7 @@ export const marketDataOutputSchema = z.object({
       interval: z.literal("1d"), range: z.literal("3m"), source: z.literal("mock"), asOf: z.string(),
       bars: z.array(z.object({ time: z.string(), open: z.number(), high: z.number(), low: z.number(), close: z.number(), volume: z.number() }))
     }).optional(),
-    source: z.literal("mock")
+    source: z.literal("real")
   }).optional(),
   error: mcpErrorSchema.optional()
 });

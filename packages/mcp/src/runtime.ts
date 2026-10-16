@@ -4,7 +4,7 @@ import {
   createInMemoryRagDocumentRepository,
   createInMemoryVectorStoreFactory
 } from "@aiagent/rag";
-import { createDefaultToolRegistry } from "@aiagent/tools";
+import { createDefaultToolRegistry, type FinancialDataSource } from "@aiagent/tools";
 import type {
   FinancialMetricsInput,
   FinancialMetricsOutput,
@@ -42,15 +42,22 @@ export interface McpFinancialToolRuntime {
 /**
  * 创建金融研究 MCP 工具 runtime，使协议注册层只负责 MCP 消息映射。
  *
+ * runtime 通过 dataSource 注入金融数据源端口；缺省由 tools registry 使用未配置实现，
+ * 工具在真实数据源未接入时仍返回结构化 isError，不绕过 de-mock 决策。
+ * 测试入口（stdio）可注入离线测试替身以驱动行为测试返回真实数据形状。
+ *
+ * @param dataSource 可选金融数据源端口；缺省时工具处于未配置状态。
  * @returns 三个金融研究工具的结构化执行入口。
  */
-export function createMcpFinancialToolRuntime(): McpFinancialToolRuntime {
+export function createMcpFinancialToolRuntime(
+  dataSource?: FinancialDataSource
+): McpFinancialToolRuntime {
   const ragRuntime = createDataSourceRuntime({
     repository: createInMemoryRagDocumentRepository(),
     embeddingClient: createDeterministicMockEmbeddingClient(),
     vectorStoreFactory: createInMemoryVectorStoreFactory()
   });
-  const toolRegistry = createDefaultToolRegistry();
+  const toolRegistry = createDefaultToolRegistry(dataSource);
   let seedPromise: Promise<void> | undefined;
 
   /**
@@ -83,7 +90,7 @@ export function createMcpFinancialToolRuntime(): McpFinancialToolRuntime {
       try {
         const company = resolveCompany(input.companyId, input.companyName);
         if (!company) {
-          return failure("company_not_found", "No mock filing data for the requested company.", input);
+          return failure("company_not_found", "No filing data for the requested company.", input);
         }
         await ensureDemoFiling();
         const result = await ragRuntime.search(input.query, { topK: input.topK, mode: "hybrid" });
@@ -108,7 +115,7 @@ export function createMcpFinancialToolRuntime(): McpFinancialToolRuntime {
     },
 
     /**
-     * 调用 tools registry 的 mock 指标工具，并投影为 MCP 稳定数组结构。
+     * 调用 tools registry 的真实指标工具，并投影为 MCP 稳定数组结构。
      *
      * @param input 公司、指标列表和可选时间范围。
      * @returns 每个指标的 value、period、unit 和 source。
@@ -116,10 +123,10 @@ export function createMcpFinancialToolRuntime(): McpFinancialToolRuntime {
     async getFinancialMetrics(input) {
       const company = resolveCompany(input.companyId, input.companyName);
       if (!company) {
-        return failure("company_not_found", "No mock financial metrics for the requested company.", input);
+        return failure("company_not_found", "No financial metrics for the requested company.", input);
       }
       try {
-        const output = await executeRegisteredTool(toolRegistry, "financial_metric_mock", {
+        const output = await executeRegisteredTool(toolRegistry, "financial_metric", {
           ticker: company.companyId,
           metrics: input.metrics
         });
@@ -133,7 +140,7 @@ export function createMcpFinancialToolRuntime(): McpFinancialToolRuntime {
               value: metrics[metric].value,
               period: output.period as string,
               unit: metrics[metric].unit,
-              source: output.source as "mock"
+              source: output.source as "real"
             }))
           }
         };
@@ -143,14 +150,14 @@ export function createMcpFinancialToolRuntime(): McpFinancialToolRuntime {
     },
 
     /**
-     * 调用 tools registry 的 mock 行情工具，并按 fields 输出调用方所需字段。
+     * 调用 tools registry 的真实行情工具，并按 fields 输出调用方所需字段。
      *
      * @param input ticker、查询范围和字段列表。
-     * @returns 结构化行情摘要；prices/volume 是明确标记的 mock 衍生值。
+     * @returns 结构化行情摘要；prices/volume 是明确标记的衍生值。
      */
     async getMarketData(input) {
       try {
-        const output = await executeRegisteredTool(toolRegistry, "market_data_mock", { ticker: input.ticker });
+        const output = await executeRegisteredTool(toolRegistry, "market_data", { ticker: input.ticker });
         const series = output.series as import("@aiagent/types").MarketSeriesDto;
         const requested = new Set(input.fields);
         return {
@@ -165,7 +172,7 @@ export function createMcpFinancialToolRuntime(): McpFinancialToolRuntime {
             ...(requested.has("volume") ? { volume: 102400000 } : {}),
             ...(requested.has("summary") ? { summary: { lastPrice: output.lastPrice as number, changePercent: output.changePercent as number } } : {}),
             ...(requested.has("ohlcv") ? { series } : {}),
-            source: output.source as "mock"
+            source: output.source as "real"
           }
         };
       } catch (error) {
@@ -194,6 +201,13 @@ async function executeRegisteredTool(
     throw Object.assign(new Error(`Tool not found: ${name}`), { code: "tool_not_found" });
   }
   const result = await tool.execute(`mcp_${name}_${Date.now().toString(36)}`, args);
+  // 工具适配器在数据源未配置或失败时返回 isError（不抛异常），此处还原为结构化错误，
+  // 使 runtime 能把「工具级失败」透传为 MCP 结构化错误，而非当作成功结果继续投影字段。
+  if (result.isError) {
+    const details = isRecord(result.details) ? result.details : undefined;
+    const message = typeof details?.error === "string" ? details.error : `Tool ${name} returned an error.`;
+    throw Object.assign(new Error(message), { code: "execution_error", details: result.details });
+  }
   return result.details as Record<string, unknown>;
 }
 
@@ -203,7 +217,7 @@ function toErrorCode(error: unknown): string {
 }
 
 /**
- * 把公司代码或名称归一化到当前 mock 数据集的公司标识。
+ * 把公司代码或名称归一化到当前数据集的公司标识。
  *
  * @param companyId 可选公司代码。
  * @param companyName 可选公司名称。

@@ -39,7 +39,7 @@ const MODEL = {
  * @param text 最终 assistant 文本。
  */
 function createTextStreamFn(text) {
-  return (model, context, options) => {
+  return () => {
     const message = textMessage(text);
     const stream = new AssistantMessageEventStream();
     queueMicrotask(() => {
@@ -183,7 +183,7 @@ test("reflexion: composes with baseShouldStop (does not override user budget)", 
   const hooks = createReflexionHook({
     model: MODEL,
     streamFn: createTextStreamFn(JSON.stringify({ satisfactory: true, critique: "" })),
-    baseShouldStop: (ctx) => {
+    baseShouldStop: () => {
       baseCalls += 1;
       return false; // 底层说"别停"
     },
@@ -204,7 +204,7 @@ test("reflexion: composes with basePrepareNextTurn (appends critique on top of b
   const hooks = createReflexionHook({
     model: MODEL,
     streamFn: createTextStreamFn(JSON.stringify({ satisfactory: false, critique: "请补充数据来源" })),
-    basePrepareNextTurn: (ctx) => {
+    basePrepareNextTurn: () => {
       baseCalls += 1;
       return { context: baseContext };
     },

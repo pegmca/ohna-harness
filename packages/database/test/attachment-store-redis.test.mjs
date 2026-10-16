@@ -1,12 +1,8 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { createClient } from "redis";
 import { createRedisAttachmentStore } from "../dist/index.js";
-
-const packageDir = join(dirname(fileURLToPath(import.meta.url)), "..");
 
 /**
  * P2-B（§8.2 row C）：RedisAttachmentStore 的 putInline / getInline 内联槽测试。

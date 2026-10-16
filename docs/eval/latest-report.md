@@ -16,30 +16,30 @@
 | workflowCompletion | 0.984 | 0.984 | 0 |
 | reportSectionCoverage | 0.968 | 0.968 | 0 |
 | exportStatusRate | 1 | 1 | 0 |
-| averageLatencyMs | 0.226 | 22.839 | -22.613 |
+| averageLatencyMs | 0.129 | 22.839 | -22.71 |
 | p95LatencyMs | 1 | 45 | -44 |
 
 ## 逐条结果
 
 | Case | Mode | Pass | Citation | Financial | Grounded | Latency |
 |---|---|---:|---:|---:|---:|---:|
-| rag-001 | rag | yes | 1 | 1 | 1 | 3ms |
+| rag-001 | rag | yes | 1 | 1 | 1 | 1ms |
 | rag-002 | rag | yes | 1 | 1 | 1 | 0ms |
-| rag-003 | rag | yes | 1 | 1 | 1 | 1ms |
+| rag-003 | rag | yes | 1 | 1 | 1 | 0ms |
 | rag-004 | rag | yes | 1 | 1 | 1 | 0ms |
 | rag-005 | rag | yes | 1 | 1 | 1 | 0ms |
 | rag-006 | rag | yes | 1 | 1 | 1 | 0ms |
-| rag-007 | rag | yes | 1 | 1 | 1 | 1ms |
+| rag-007 | rag | yes | 1 | 1 | 1 | 0ms |
 | rag-008 | rag | yes | 1 | 1 | 1 | 0ms |
-| rag-009 | rag | yes | 1 | 1 | 1 | 0ms |
+| rag-009 | rag | yes | 1 | 1 | 1 | 1ms |
 | rag-010 | rag | yes | 1 | 1 | 1 | 0ms |
 | rag-011 | rag | yes | 1 | 1 | 1 | 0ms |
 | rag-012 | rag | yes | 1 | 1 | 1 | 0ms |
 | rag-013 | rag | yes | 1 | 1 | 1 | 0ms |
 | rag-014 | rag | yes | 1 | 1 | 1 | 0ms |
 | rag-015 | rag | yes | 1 | 1 | 1 | 0ms |
-| chat-001 | chat | yes | 1 | 1 | 1 | 1ms |
-| chat-002 | chat | yes | 1 | 1 | 1 | 0ms |
+| chat-001 | chat | yes | 1 | 1 | 1 | 0ms |
+| chat-002 | chat | yes | 1 | 1 | 1 | 1ms |
 | chat-003 | chat | yes | 1 | 1 | 1 | 0ms |
 | chat-004 | chat | yes | 1 | 1 | 1 | 0ms |
 | chat-005 | chat | yes | 1 | 1 | 1 | 0ms |
@@ -87,6 +87,11 @@
 - 根因: Report workflow 在预期节点前终止。
 - 改进: 补齐节点重试与结构化 workflow 终止原因。
 
+
+## SLO / 错误预算
+
+- P95 延迟: 1ms / 预算 10000ms → 达标
+- 错误预算: 预算 0.19999999999999996 / 已耗 0.09699999999999998 / 剩余 0.10299999999999998 → 充足
 ## 回归门禁
 
 - 通过

@@ -3,10 +3,17 @@ import { after, before, test } from "node:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 
+// 注入离线测试替身数据源：让三个真实数据工具返回 canned 数据而非「未配置」isError。
+// MCP SDK 默认只继承少量安全环境变量，自定义变量必须显式经 transport 的 env 透传给 stdio 子进程。
+const FAKE_DATA_SOURCE_URL =
+  new URL("./fixtures/fake-data-source.mjs", import.meta.url).href;
+process.env.AIAGENT_MCP_FAKE_DATA_SOURCE = FAKE_DATA_SOURCE_URL;
+
 const transport = new StdioClientTransport({
   command: process.execPath,
   args: [new URL("../dist/stdio.js", import.meta.url).pathname],
-  stderr: "pipe"
+  stderr: "pipe",
+  env: { AIAGENT_MCP_FAKE_DATA_SOURCE: FAKE_DATA_SOURCE_URL }
 });
 const client = new Client({ name: "aiagent-mcp-smoke-test", version: "0.1.0" });
 
@@ -66,7 +73,7 @@ test("get_financial_metrics returns only selected metric fields", async () => {
     assert.equal(typeof metric.value, "number");
     assert.equal(typeof metric.period, "string");
     assert.equal(typeof metric.unit, "string");
-    assert.equal(metric.source, "mock");
+    assert.equal(metric.source, "real");
   }
 });
 

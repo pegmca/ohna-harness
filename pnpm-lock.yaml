@@ -97,6 +97,28 @@ importers:
         specifier: ^5.7.2
         version: 5.9.3
 
+  apps/cli:
+    dependencies:
+      '@aiagent/agent':
+        specifier: workspace:*
+        version: link:../../packages/agent
+      '@aiagent/ai':
+        specifier: workspace:*
+        version: link:../../packages/ai
+      '@aiagent/tools':
+        specifier: workspace:*
+        version: link:../../packages/tools
+      '@aiagent/types':
+        specifier: workspace:*
+        version: link:../../packages/types
+    devDependencies:
+      tsx:
+        specifier: ^4.22.4
+        version: 4.22.4
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+
   apps/web:
     dependencies:
       '@aiagent/types':

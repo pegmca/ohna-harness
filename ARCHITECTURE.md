@@ -23,6 +23,7 @@ flowchart LR
 
 - `apps/web` depends only on browser libraries and `@aiagent/types`.
 - `apps/api` is a transport/composition adapter. It may compose runtime packages but must not implement Agent, RAG, tool, workflow, or report rules.
+- `apps/cli` is a second composition root and local harness. It shares the same `agentLoop` kernel with `apps/api` but uses the terminal as its transport layer (no HTTP/SSE/worker). It selects a real model via `createOpenAiCompatibleRuntime` and assembles `createDefaultToolRegistry` with a `FinancialDataSource`, proving the kernel can run headless.
 - `packages/ai` owns the LLM abstraction: `Message` types, `AssistantMessageEvent`, provider adapters, and `stream` / `streamSimple`. It has no project dependencies.
 - `packages/agent` owns the ReAct loop (`agentLoop` / `agentLoopContinue`), `AgentTool` contract, and tool execution; report generation is exposed to the loop as the `generate_report` tool (`packages/report`), not orchestrated by the API layer.
 - `packages/tools`, `packages/rag`, `packages/workflow`, `packages/report`, and `packages/mcp` own their bounded contexts.
@@ -45,7 +46,7 @@ The Web is feature-first: `app`, `features`, `entities`, and `shared`. A feature
 
 ## 5. Runtime View
 
-`apps/api/src/server.ts` 是唯一生产 composition root：所有 PostgreSQL adapter 在此注入，领域 package 不读取 `DATABASE_URL`。PostgreSQL 是 Identity、Conversation/Message、Run/RunEvent、RAG document/chunk/vector、Citation、Workflow 与 Artifact metadata 的唯一事实源；内存只保留 live event bus、execution registry 的 `AbortController` 和 microtask scheduler，内存 repository 只能由测试显式创建。
+`apps/api/src/server.ts` 是服务端（HTTP/SSE）的生产 composition root：所有 PostgreSQL adapter 在此注入，领域 package 不读取 `DATABASE_URL`。`apps/cli/src/index.ts` 是终端 harness 的组合根，二者共用同一 `agentLoop` 内核、仅运输层不同。PostgreSQL 是 Identity、Conversation/Message、Run/RunEvent、RAG document/chunk/vector、Citation、Workflow 与 Artifact metadata 的唯一事实源；内存只保留 live event bus、execution registry 的 `AbortController` 和 microtask scheduler，内存 repository 只能由测试显式创建。
 
 1. 启动顺序固定为：migration 状态检查（存在 pending migration 直接拒绝启动）→ Fastify ready（陈旧 Run 恢复，把超时未终态的 Run 落库为 `run_interrupted` 失败）→ listen 接流量。readiness 同时验证 provider 配置、PostgreSQL 连通性和 artifact storage 根目录。
 2. Web creates a run through the API.
@@ -63,7 +64,7 @@ The Web is feature-first: `app`, `features`, `entities`, and `shared`. A feature
 - Safety: untrusted inputs are validated, sensitive values are redacted, and tool execution follows explicit allowlists and schema validation.
 - Replaceability: provider-specific behavior stays behind ports and adapters.
 - Evolvability: dependency rules, strict types, tests, and documentation checks prevent architecture drift.
-- Demo honesty: mock data is labelled and never presented as live market data.
+- Data honesty: built-in data tools (`market_data` / `filing_search` / `financial_metric`) route through the `FinancialDataSource` port. When no real source is configured they return a structured `configuration_error` rather than fabricated values, so the UI/CLI never presents fake numbers as live market data. The runtime no longer ships a mock LLM; the only non-real model is a test-only double used by integration tests.
 
 ## 7. Decisions and Risks
 

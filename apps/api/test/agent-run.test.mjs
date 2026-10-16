@@ -44,8 +44,14 @@ test("model catalog exposes stable provider but not provider model name", async 
   const app = createApiServer(createInMemoryApiTestRuntime());
   const response = await app.inject({ method: "GET", url: "/api/models" });
   assert.equal(response.statusCode, 200);
-  assert.equal(response.json().data.models[0].provider, "mock");
-  assert.equal("model" in response.json().data.models[0], false);
+  // 离线集成测试注入的是测试替身（test-double），不再断言已移除的运行时 mock。
+  // 断言目录暴露了稳定可用且为默认的测试替身模型，且目录不向下发 provider 内部 model 名。
+  const catalog = response.json().data;
+  assert.equal(catalog.defaultModelId, "test-double");
+  assert.equal(catalog.models.length, 1);
+  assert.equal(catalog.models[0].id, "test-double");
+  assert.equal(catalog.models.some((model) => model.id === catalog.defaultModelId), true);
+  assert.equal("model" in catalog.models[0], false);
   await app.close();
 });
 

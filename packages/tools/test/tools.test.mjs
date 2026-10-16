@@ -5,31 +5,30 @@ import {
   createDefaultToolRegistry,
   defineAgentTool,
   getToolRegistrySummary,
-  isReadonlySql,
   ToolRegistry,
   withTimeoutAndRetry
 } from "../dist/index.js";
 
-test("default registry exposes the mock tools as AgentTool", async () => {
+test("default registry exposes calculator and the three real data tools as AgentTool", async () => {
   const registry = createDefaultToolRegistry();
   const summary = getToolRegistrySummary(registry);
 
-  assert.equal(summary.availableTools, 5);
+  assert.equal(summary.availableTools, 4);
   assert.deepEqual(summary.toolNames, [
     "calculator",
-    "market_data_mock",
-    "filing_search_mock",
-    "financial_metric_mock",
-    "sql_query_mock"
+    "market_data",
+    "filing_search",
+    "financial_metric"
   ]);
 
   for (const tool of registry.list()) {
-    // AgentTool 形状：name/description/label/parameters(zod)/execute。
+    // AgentTool 形状：name/description/label/parameters(zod)/execute/source。
     assert.equal(typeof tool.name, "string");
     assert.equal(typeof tool.description, "string");
     assert.equal(typeof tool.label, "string");
     assert.equal(typeof tool.parameters.safeParse, "function");
     assert.equal(typeof tool.execute, "function");
+    assert.equal(tool.source, "real");
   }
 });
 
@@ -41,22 +40,24 @@ test("calculator executes through the AgentTool contract", async () => {
   assert.deepEqual(result.details, { expression: "12.5 * 8", value: 100 });
 });
 
-test("mock tools return structured details", async () => {
+test("data tools return not-configured error when source is unconfigured", async () => {
   const registry = createDefaultToolRegistry();
 
-  const market = await registry.get("market_data_mock").execute("call_2", { ticker: "000001.SZ" });
-  assert.equal(market.details.lastPrice, 10.85);
+  const market = await registry.get("market_data").execute("call_2", { ticker: "000001.SZ" });
+  assert.equal(market.isError, true);
+  assert.match(market.content[0].text, /金融数据源未配置/);
 
-  const filing = await registry.get("filing_search_mock").execute("call_3", { ticker: "000001.SZ", query: "资产质量" });
-  assert.match(filing.details.filings[0].snippet, /资产质量/);
+  const filing = await registry.get("filing_search").execute("call_3", { ticker: "000001.SZ", query: "资产质量" });
+  assert.equal(filing.isError, true);
+  assert.match(filing.content[0].text, /金融数据源未配置/);
 
-  const metrics = await registry.get("financial_metric_mock").execute("call_4", { ticker: "000001.SZ" });
-  assert.equal(metrics.details.metrics.net_profit.value, 14932000000);
-  assert.equal(metrics.details.metrics.roe.value, 3.42);
+  const metrics = await registry.get("financial_metric").execute("call_4", { ticker: "000001.SZ" });
+  assert.equal(metrics.isError, true);
+  assert.match(metrics.content[0].text, /金融数据源未配置/);
 });
 
 test("zod validation failure throws a structured validation_error", async () => {
-  const tool = createDefaultToolRegistry().get("financial_metric_mock");
+  const tool = createDefaultToolRegistry().get("financial_metric");
   await assert.rejects(
     () => tool.execute("call_5", {}),
     (error) => error.code === "validation_error" && Array.isArray(error.details.issues)
@@ -69,29 +70,6 @@ test("execution failure throws a structured execution_error", async () => {
     () => tool.execute("call_6", { expression: "12.5 *" }),
     (error) => error.code === "execution_error"
   );
-});
-
-test("sql write operations are blocked by the readonly policy", async () => {
-  const tool = createDefaultToolRegistry().get("sql_query_mock");
-
-  assert.equal(isReadonlySql("SELECT * FROM filings"), true);
-  assert.equal(isReadonlySql("DROP TABLE filings"), false);
-
-  await assert.rejects(
-    () => tool.execute("call_7", { query: "DROP TABLE filings" }),
-    (error) => error.code === "permission_denied" && error.details.reasonCode === "SEC_SQL_READONLY_VIOLATION"
-  );
-
-  const ok = await tool.execute("call_8", { query: "SELECT ticker, roe FROM metrics" });
-  assert.equal(ok.details.rowCount, 1);
-});
-
-test("readonly SQL rejects multiple statements, comments and dangerous read primitives", () => {
-  assert.equal(isReadonlySql("SELECT ';' AS value"), true);
-  assert.equal(isReadonlySql("SELECT * FROM filings; DROP TABLE filings"), false);
-  assert.equal(isReadonlySql("SELECT * FROM filings /* harmless-looking */"), false);
-  assert.equal(isReadonlySql("WITH x AS (DELETE FROM filings RETURNING *) SELECT * FROM x"), false);
-  assert.equal(isReadonlySql("SELECT pg_read_file('/etc/passwd')"), false);
 });
 
 test("temporary tool failure retries without real waiting", async () => {

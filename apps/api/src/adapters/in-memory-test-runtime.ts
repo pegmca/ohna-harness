@@ -12,11 +12,13 @@ import {
 import type { ArtifactRepository, WorkflowRepository } from "@aiagent/report";
 import type { ConversationRepository, MessageStore } from "@aiagent/conversation";
 import type { RunStore } from "../application/run-ports.js";
+import type { ModelRuntimeRegistry } from "../application/model-registry.js";
 import { createInMemoryAttachmentRepository } from "./in-memory-attachment-repository.js";
 import { createInMemoryCitationRepository } from "./in-memory-citation-repository.js";
 import { createInMemoryConversationStores } from "./in-memory-conversation-store.js";
 import { createInMemoryReportRepositories } from "./in-memory-report-persistence.js";
 import { createInMemoryRunStore } from "./in-memory-run-runtime.js";
+import { createTestDoubleModelRegistry } from "./test-double-model.js";
 
 /** 测试用内存依赖集合；生产 composition 不得使用，只能由测试显式创建并注入。 */
 export interface InMemoryApiTestRuntime {
@@ -33,6 +35,8 @@ export interface InMemoryApiTestRuntime {
   attachmentStore: AttachmentStore;
   /** 确定性 embedding 替身；与 dataSourceRuntime 共用同一实例，保证两路向量一致可比。 */
   embeddingClient: EmbeddingClient;
+  /** 测试替身模型目录（离线集成测试用，确定性且不发起外部请求），满足 createApiServer 的 modelRegistry 必填约束。 */
+  modelRegistry: ModelRuntimeRegistry;
 }
 
 /**
@@ -54,10 +58,15 @@ export function createInMemoryApiTestRuntime(options: {
   // 单例确定性 embedding 替身：同时注入 dataSourceRuntime（持久化 RAG）与附件路由/grounding，
   // 保证附件路与内部库路在同一向量空间，测试断言可跨源比较。
   const embeddingClient = createDeterministicMockEmbeddingClient();
-  return {
-    identityService: createIdentityService(createInMemoryIdentityRepository(), {
-      fingerprintPepper: "test-only-identity-pepper"
-    }),
+    // 测试替身模型目录：离线集成测试使用，确定性且不发起外部请求，与已移除的运行时 mock 区分。
+    const modelRegistry = createTestDoubleModelRegistry();
+    return {
+        identityService: createIdentityService(createInMemoryIdentityRepository(), {
+            fingerprintPepper: "test-only-identity-pepper"
+        }),
+        // 模型目录必须由调用方显式注入：这里注入的是「测试替身」而非生产 mock，
+        // createApiServer 强制要求 modelRegistry，缺省会直接失败（禁止回退到假 LLM）。
+        modelRegistry,
     // 测试替身显式注入（非生产配置）：embedding client 已无生产默认值，
     // 这里必须注入 deterministic mock 替身，否则 ingest 直接返回 embedding_provider_disabled，
     // agent-run / attachment-upload 等依赖 RAG 索引的用例会失败。

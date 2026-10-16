@@ -8,7 +8,7 @@ export interface HealthRoutesDeps {
  * 注册健康检查与 readiness 路由。
  *
  * @param app Fastify 实例。
- * @param deps readiness 依赖探针；未注入时按 mock-runtime 处理。
+ * @param deps readiness 依赖探针；未注入时按默认就绪（api-server）处理。
  */
 export function registerHealthRoutes(app: FastifyInstance, deps: HealthRoutesDeps): void {
   /**
@@ -25,7 +25,7 @@ export function registerHealthRoutes(app: FastifyInstance, deps: HealthRoutesDep
   app.get("/ready", async (_request, reply) => {
     const state = deps.readiness
       ? await deps.readiness()
-      : { ok: true, dependency: "mock-runtime" };
+      : { ok: true, dependency: "api-server" };
     if (!state.ok) reply.code(503);
     return { ...state, service: "@aiagent/api" };
   });

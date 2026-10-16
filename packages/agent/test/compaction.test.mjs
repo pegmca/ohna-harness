@@ -101,12 +101,12 @@ test("compaction replaces the prefix with a CompactionMessage at the head", () =
 test("cut point never splits toolCalls from their ToolResultMessage", () => {
   const messages = [
     userMessage(`开头 ${"长".repeat(80)}`),
-    assistantWithToolCall("call_1", "financial_metric_mock", { ticker: "000001.SZ" }),
-    toolResult("call_1", "financial_metric_mock", `指标结果 ${"长".repeat(60)}`),
+    assistantWithToolCall("call_1", "financial_metric", { ticker: "000001.SZ" }),
+    toolResult("call_1", "financial_metric", `指标结果 ${"长".repeat(60)}`),
     assistantText(`解读 ${"长".repeat(60)}`),
     userMessage(`追问 ${"长".repeat(60)}`),
-    assistantWithToolCall("call_2", "market_data_mock", { ticker: "000001.SZ" }),
-    toolResult("call_2", "market_data_mock", `行情结果 ${"长".repeat(40)}`)
+    assistantWithToolCall("call_2", "market_data", { ticker: "000001.SZ" }),
+    toolResult("call_2", "market_data", `行情结果 ${"长".repeat(40)}`)
   ];
 
   const preparation = prepareCompaction(messages, { enabled: true, reserveTokens: 10, keepRecentTokens: 30 });

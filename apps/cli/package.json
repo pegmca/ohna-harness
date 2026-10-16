@@ -1,0 +1,25 @@
+{
+  "name": "@aiagent/cli",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "immersive": "./dist/index.js"
+  },
+  "scripts": {
+    "dev": "node --import tsx src/index.ts",
+    "build": "tsc -b",
+    "start": "node dist/index.js",
+    "typecheck": "pnpm --filter @aiagent/ai build && pnpm --filter @aiagent/agent build && pnpm --filter @aiagent/tools build && pnpm --filter @aiagent/types build && tsc -p tsconfig.json --pretty false --noEmit"
+  },
+  "dependencies": {
+    "@aiagent/agent": "workspace:*",
+    "@aiagent/ai": "workspace:*",
+    "@aiagent/tools": "workspace:*",
+    "@aiagent/types": "workspace:*"
+  },
+  "devDependencies": {
+    "tsx": "^4.22.4",
+    "typescript": "^5.7.2"
+  }
+}

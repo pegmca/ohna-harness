@@ -15,7 +15,6 @@ import {
   createInMemoryRunEventBus
 } from "./adapters/in-memory-run-runtime.js";
 import { createRunWorker } from "./application/run-worker.js";
-import { createMockModelRuntime } from "./adapters/mock-model.js";
 import {
   createRunApplicationService,
   type RunCompactionOptions
@@ -35,7 +34,6 @@ import { registerProductRoutes } from "./http/routes/product.js";
 import { registerModelRoutes } from "./http/routes/models.js";
 import { registerAttachmentRoutes } from "./http/routes/attachments.js";
 import {
-  createModelRuntimeRegistry,
   type ModelRuntimeRegistry
 } from "./application/model-registry.js";
 
@@ -99,17 +97,12 @@ export function createApiServer(options: ApiServerOptions): FastifyInstance {
   );
   const runStore = options.runStore;
   const runEventBus = createInMemoryRunEventBus();
-  const modelRegistry = options.modelRegistry ?? createModelRuntimeRegistry([{
-    option: {
-      id: "mock",
-      label: "Mock Agent",
-      provider: "mock",
-      description: "Deterministic local runtime",
-      isDefault: true,
-      capabilities: { structuredOutput: true, toolCalling: true }
-    },
-    runtime: createMockModelRuntime()
-  }], "mock");
+  // 本项目已移除内置 mock 模型：模型目录必须由调用方显式注入真实 provider，
+  // 禁止回退到假 LLM。未注入时直接失败，避免生产实例在「无可用模型」状态下静默接流量。
+  const modelRegistry = options.modelRegistry;
+  if (!modelRegistry) {
+    throw new Error("createApiServer 必须显式注入 modelRegistry；本项目已移除内置 mock 模型，禁止回退到假 LLM，调用方需提供真实 provider 目录。");
+  }
   if (!options.messageStore) throw new Error("messageStore is required.");
   const messageStore = options.messageStore;
   const runService = createRunApplicationService({

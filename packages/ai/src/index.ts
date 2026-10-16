@@ -25,3 +25,8 @@ export {
 	clampMaxTokensToContext,
 	clampReasoning,
 } from "./api/simple-options.js";
+export {
+	createOpenAiCompatibleRuntime,
+	type OpenAiCompatibleOverrides,
+	type OpenAiCompatibleRuntimeResult,
+} from "./providers/env-runtime.js";

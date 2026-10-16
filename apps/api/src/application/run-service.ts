@@ -85,7 +85,7 @@ export interface RunServiceDependencies {
   messageStore: MessageStore;
   eventBus: RunEventBus;
   executionRegistry: RunExecutionRegistry;
-  /** 按目录模型 ID 解析可执行模型 runtime（MockModel 与真实 provider 同路径）。 */
+  /** 按目录模型 ID 解析可执行模型 runtime。 */
   resolveModel: (modelId: string) => ModelRuntime | undefined;
   hasModel?: (modelId: string) => boolean;
   defaultModelId?: string;
@@ -461,7 +461,10 @@ export function createRunApplicationService(dependencies: RunServiceDependencies
   return {
     async create(request, userId) {
       if (shuttingDown) throw new RunServiceShuttingDownError();
-      const modelId = request.modelId ?? dependencies.defaultModelId ?? "mock";
+      const modelId = request.modelId ?? dependencies.defaultModelId;
+      if (!modelId) {
+        throw new RunModelNotFoundError("");
+      }
       if (dependencies.hasModel && !dependencies.hasModel(modelId)) {
         throw new RunModelNotFoundError(modelId);
       }

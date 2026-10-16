@@ -69,6 +69,11 @@ export interface CreateMcpStdioClientOptions {
   clientName?: string;
   /** client 版本，用于 MCP 协议握手。 */
   clientVersion?: string;
+  /**
+   * 透传给 stdio 子进程的环境变量，用于向 server 注入数据源等配置。
+   * MCP SDK 默认只继承少量安全环境变量，自定义变量（如离线测试替身数据源地址）必须在此显式声明。
+   */
+  env?: Record<string, string>;
 }
 
 /**
@@ -85,7 +90,7 @@ export async function createMcpStdioClient(options: CreateMcpStdioClientOptions 
   const clientName = options.clientName ?? "aiagent-mcp-client";
   const clientVersion = options.clientVersion ?? "0.1.0";
 
-  const transport = new StdioClientTransport({ command, args, stderr: "pipe" });
+  const transport = new StdioClientTransport({ command, args, stderr: "pipe", env: options.env });
   const client = new Client({ name: clientName, version: clientVersion });
 
   await client.connect(transport);

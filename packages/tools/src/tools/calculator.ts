@@ -20,6 +20,7 @@ export const calculatorTool: AgentTool<typeof calculatorInputSchema, CalculatorO
   label: "Calculator",
   parameters: calculatorInputSchema,
   outputSchema: calculatorOutputSchema,
+  source: "real",
   formatResult: (output) => `${output.expression} = ${output.value}`,
   /**
    * 执行安全的四则运算解析，避免使用 eval 执行任意代码。

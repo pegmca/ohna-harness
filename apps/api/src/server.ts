@@ -1,5 +1,5 @@
 import { agentLoop, defaultConvertToLlm, type AgentMessage } from "@aiagent/agent";
-import type { Model } from "@aiagent/ai";
+import { createOpenAiCompatibleRuntime, type Model } from "@aiagent/ai";
 import { createQqBotChannel } from "@aiagent/channels";
 import { createDatabaseRuntime, createAttachmentStoreFromEnv, createVectorStoreFromEnv } from "@aiagent/database";
 import { createLocalArtifactStorage } from "@aiagent/report";
@@ -16,12 +16,11 @@ import {
   readRerankProviderConfig,
   readJudgeProviderConfig
 } from "@aiagent/rag";
-import { createDefaultToolRegistry } from "@aiagent/tools";
+import { createDefaultToolRegistry, createFinancialDataSourceFromEnv } from "@aiagent/tools";
 import { stat } from "node:fs/promises";
 import { createApiServer } from "./index.js";
-import { createModelRuntimeRegistry, type ModelRuntime, type ModelRuntimeEntry } from "./application/model-registry.js";
+import { createModelRuntimeRegistry, type ModelRuntimeEntry } from "./application/model-registry.js";
 import { BASE_SYSTEM_PROMPT } from "./application/run-service.js";
-import { createMockModelRuntime } from "./adapters/mock-model.js";
 
 /**
  * 唯一生产 composition root：所有事实源 adapter 在此注入，领域 package 不读取 DATABASE_URL。
@@ -29,22 +28,22 @@ import { createMockModelRuntime } from "./adapters/mock-model.js";
  */
 const port = Number(process.env.PORT ?? 3001);
 const host = process.env.HOST ?? "0.0.0.0";
-const providerMode = process.env.AIAGENT_PROVIDER_MODE ?? "mock";
 // run 执行统一走 agentLoop；工具集在此装配一次，API server 与 QQ channel 共享。
-const agentTools = createDefaultToolRegistry().list();
+// 数据源走真实 FinancialDataSource 端口；未配置真实凭据时工具在调用时返回结构化错误，而非中断 run。
+const agentTools = createDefaultToolRegistry(createFinancialDataSourceFromEnv()).list();
 // 阶段 5 MCP 回迁：AIAGENT_MCP_ENABLED=true 时启动期做 stdio discovery，
 // 产出直接并入 agentLoop config.tools（白名单语义前移到装配期）。
 const mcpEnabled = process.env.AIAGENT_MCP_ENABLED === "true";
 let mcpClient: McpClient | undefined;
-const deepseekRuntime = providerMode === "real" ? createOpenAiCompatibleRuntime("deepseek", "https://api.deepseek.com/v1") : undefined;
-const openrouterRuntime = providerMode === "real" ? createOpenAiCompatibleRuntime("openrouter", "https://openrouter.ai/api/v1") : undefined;
+const deepseekRuntime = createOpenAiCompatibleRuntime("deepseek", "https://api.deepseek.com/v1");
+const openrouterRuntime = createOpenAiCompatibleRuntime("openrouter", "https://openrouter.ai/api/v1");
 // 自托管 LLM provider 的配置来源已切到 provider-config 的统一 AIAGENT_LLM_*（无 suffix）。
 // profile id 仍为 "bridge_ai"：它是 /api/models 下发并持久化到 localStorage
 // `aiagent.selected-model` 的稳定标识，改名会作废用户已保存的选中模型。
 // 统一 provider 只有 enabled=true 才形成 overrides；否则不传 overrides，让旧的
 // AIAGENT_LLM_*_BRIDGE_AI 后缀变量继续作为兼容兜底。model 为空时也必须传 undefined，
 // 避免空值或历史默认模型覆盖旧后缀配置。
-const llmProvider = providerMode === "real" ? readLlmProviderConfig() : null;
+const llmProvider = readLlmProviderConfig();
 const llmProviderOverrides = llmProvider?.enabled
   ? {
       apiKey: llmProvider.apiKey || undefined,
@@ -52,9 +51,7 @@ const llmProviderOverrides = llmProvider?.enabled
       model: llmProvider.model || undefined
     }
   : undefined;
-const providerLlmRuntime = providerMode === "real"
-  ? createOpenAiCompatibleRuntime("bridge_ai", llmProviderOverrides?.baseUrl ?? "", llmProviderOverrides)
-  : undefined;
+const providerLlmRuntime = createOpenAiCompatibleRuntime("bridge_ai", llmProviderOverrides?.baseUrl ?? "", llmProviderOverrides);
 // 只注册「apiKey 与 model 同时配置齐全」的 profile；未配置的 profile 不进入目录，也不阻断 readiness。
 // 默认模型取第一个已配置 profile（配置 DeepSeek 时优先 DeepSeek）。
 const realEntries = [
@@ -91,24 +88,20 @@ const realEntries = [
     },
     runtime: providerLlmRuntime?.runtime
   }
-].filter((entry): entry is { option: ModelRuntimeEntry["option"]; runtime: ModelRuntime } => Boolean(entry.runtime));
+].filter((entry): entry is { option: ModelRuntimeEntry["option"]; runtime: { model: Model<"openai-completions">; apiKey: string } } => Boolean(entry.runtime));
 const defaultRealModelId = realEntries[0]?.option.id ?? "deepseek";
 const defaultRealEntry = realEntries.find((entry) => entry.option.id === defaultRealModelId);
 if (defaultRealEntry) defaultRealEntry.option.isDefault = true;
-// real 模式至少要有一个 provider 配置齐全；否则退回 mock 目录（readiness 会显式报告未配置）。
-const modelRegistry = providerMode === "real" && realEntries.length > 0
-  ? createModelRuntimeRegistry(realEntries, defaultRealModelId)
-  : createModelRuntimeRegistry([{
-      option: {
-        id: "mock",
-        label: "Mock Agent",
-        provider: "mock",
-        description: "本地确定性学习运行时",
-        isDefault: true,
-        capabilities: { structuredOutput: true, toolCalling: true }
-      },
-      runtime: createMockModelRuntime()
-    }], "mock");
+// 本项目已移除 mock 模式：未在 .env 配置任何真实 provider 时，组合根直接失败，
+// 禁止回退到假 LLM。至少配置一个真实 provider 才能启动（否则下方抛错）。
+if (realEntries.length === 0) {
+  throw new Error(
+    "本项目已移除 mock 模式，必须在 .env 配置至少一个真实 LLM provider："
+    + "DeepSeek / OpenRouter 需 AIAGENT_LLM_API_KEY_<PROFILE> 与 AIAGENT_LLM_MODEL_<PROFILE>"
+    + "（<PROFILE> 为 DEEPSEEK / OPENROUTER）；自托管端点需 AIAGENT_LLM_API_KEY 与 AIAGENT_LLM_MODEL。"
+  );
+}
+const modelRegistry = createModelRuntimeRegistry(realEntries, defaultRealModelId);
 const database = createDatabaseRuntime(process.env.DATABASE_URL ?? "");
 const artifactStorageRoot = process.env.ARTIFACT_STORAGE_ROOT ?? "./var/artifacts";
 const attachmentOrphanTtlHours = Math.max(
@@ -194,16 +187,6 @@ const app = createApiServer({
   artifactStorage: createLocalArtifactStorage(artifactStorageRoot),
   runStore: database.runRepository,
   readiness: async () => {
-    if (providerMode !== "mock" && providerMode !== "real") {
-      return { ok: false, dependency: "provider-config", message: "AIAGENT_PROVIDER_MODE must be mock or real." };
-    }
-    if (providerMode === "real" && realEntries.length === 0) {
-      return {
-        ok: false,
-        dependency: "llm-provider-config",
-        message: "real 模式未配置任何可用 chat provider：请在 .env 至少设置 AIAGENT_LLM_API_KEY 与 AIAGENT_LLM_MODEL（自托管 provider），或一组 AIAGENT_LLM_API_KEY_<PROFILE> 与 AIAGENT_LLM_MODEL_<PROFILE>（deepseek / openrouter）。"
-      };
-    }
     // 读四组 RAG provider 配置，汇总启用状态（禁用非致命，但需在 readiness 显式暴露，避免静默降级）。
     const rerankProvider = readRerankProviderConfig();
     const judgeProvider = readJudgeProviderConfig();
@@ -223,50 +206,11 @@ const app = createApiServer({
     }
     return {
       ok: true,
-      dependency: providerMode === "real" ? "postgresql,artifact-storage,llm-provider-config" : "postgresql,artifact-storage,mock-runtime",
+      dependency: "postgresql,artifact-storage,llm-provider-config",
       message: `RAG providers — embedding:${embeddingProvider.enabled ? "on" : "off"} rerank:${rerankProvider.enabled ? "on" : "off"} judge:${judgeProvider.enabled ? "on" : "off"}.${providerNote}`
     };
   }
 });
-
-/**
- * 从环境变量装配 OpenAI 兼容模型 runtime（pi 形态 Model + apiKey）。
- * 缺 apiKey 或 model 时不产出 runtime，由 readiness 与 has() 在接流量前失败。
- * overrides 允许调用方显式注入（如来自 provider-config 的统一 LLM 环境变量，避免依赖旧后缀变量）。
- *
- * @param profile 模型 profile 稳定标识（deepseek/openrouter/bridge_ai）。
- * @param defaultBaseUrl 缺省 baseUrl。
- * @param overrides 可选的显式覆盖值（apiKey/baseUrl/model），提供后优先于同名环境变量。
- * @returns runtime 与配置错误消息（二者必居其一）。
- */
-function createOpenAiCompatibleRuntime(
-  profile: string,
-  defaultBaseUrl: string,
-  overrides?: { apiKey?: string; baseUrl?: string; model?: string }
-): { runtime?: ModelRuntime; error?: string } {
-  const suffix = profile.toUpperCase();
-  const rawApiKey = overrides?.apiKey !== undefined ? overrides.apiKey : process.env[`AIAGENT_LLM_API_KEY_${suffix}`];
-  // 文档占位符（replace-with-...）按未配置处理：避免把占位 key 当成真实凭据注册成默认模型，
-  // 否则会静默用无效 key 请求导致 run 全部 401 失败（见用户切换 real 模式踩坑）。
-  const apiKey = rawApiKey && !/^replace-with-/i.test(rawApiKey) ? rawApiKey : undefined;
-  const baseUrl = overrides?.baseUrl !== undefined ? overrides.baseUrl : (process.env[`AIAGENT_LLM_BASE_URL_${suffix}`] || defaultBaseUrl);
-  const modelName = overrides?.model !== undefined ? overrides.model : process.env[`AIAGENT_LLM_MODEL_${suffix}`];
-  if (!apiKey) return { error: `Missing LLM API key for ${profile} (AIAGENT_LLM_API_KEY_${suffix}).` };
-  if (!modelName) return { error: `Missing LLM model for ${profile} (AIAGENT_LLM_MODEL_${suffix}).` };
-  const model: Model<"openai-completions"> = {
-    id: modelName,
-    name: modelName,
-    api: "openai-completions",
-    provider: profile,
-    baseUrl,
-    reasoning: false,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 128_000,
-    maxTokens: 8_192
-  };
-  return { runtime: { model, apiKey } };
-}
 
 /**
  * 检查 artifact 存储根目录可写，readiness 与 PDF 下载共用同一事实源。

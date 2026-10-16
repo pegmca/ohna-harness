@@ -280,6 +280,66 @@ export interface CostSummaryEvent extends RunEventBase {
     totalTokens: number;
     /** 全部事件合计成本。 */
     totalCost: number;
+    /**
+     * 本次 run 端到端时延（毫秒）：从 run-service 拿到执行许可到 agent_end 的墙钟时间。
+     * 与成本同为观测性证据——闭合 docs/v1.2 §3 差距#7「无真实容量/SLO 证据」，供数据化叙事。
+     * 非有限/缺失时 run-service 不并入，避免污染既有事件。
+     */
+    durationMs?: number;
+    /** 本次 run 的 turn 数（assistant 消息数），用于估算单次交互的轮次成本与复杂度。 */
+    turnCount?: number;
+    /**
+     * run 终态：completed / failed / interrupted。受控推导——发过 run_error 为 failed，
+     * 取消信号置位为 interrupted，其余为 completed（防御式默认 completed）。
+     */
+    outcome?: "completed" | "failed" | "interrupted";
+    /**
+     * 本 run 结束时仍在执行中的活跃 run 数（容量快照）。取自 executionRegistry 在 agent_end 的计数，
+     * 反映「同时在线负载」，是并发/吞吐容量证据的第一手样本。
+     */
+    activeRuns?: number;
+    /**
+     * 本 run 期间观测到的活跃 run 峰值（容量证据）。run-service 在事件循环内周期采样
+     * executionRegistry 计数取峰值，比 end 时单点 activeRuns 更能暴露并发压力。
+     */
+    peakConcurrency?: number;
+    /**
+     * 多代理团队成本投影（可选）：仅当一次 run 真实使用了 team / SendMessage 子代理时才并入。
+     * 事件即真相源——run-service 在 agent_end 把各成员用量累加进此段，看板可直接读取
+     * 「多代理 15× token 必须收口」的收敛证据，无需回查 team 状态。形状由 agent 包的
+     * `projectTeamCostSummary` 对齐产出，trace 包不反向依赖 agent/ai（维持单向依赖）。
+     */
+    team?: {
+      /** 各成员成本明细。 */
+      members: Array<{ name: string; model: string; tokens: number; cost: number; budgetExceeded: boolean; /** 该成员本次运行墙钟时长（毫秒），多代理时延归因用。 */ durationMs?: number }>;
+      /** 团队成员 token 合计。 */
+      totalTokens: number;
+      /** 团队成员成本合计。 */
+      totalCost: number;
+      /**
+       * 本次团队运行观测到的在飞成员峰值（多代理并发/容量证据）。来自 controller 维护的
+       * runningMembers 在飞数峰值，反映「一次 supervisor 编排实际并发了多少子代理」。
+       */
+      peakConcurrency?: number;
+    };
+    /**
+     * 上下文预算可观测投影（可选）：仅当集成方传入 budgetMetricSink（即装配了 context-assembly）
+     * 时并入。聚合多次 transform 产出的 ContextBudgetReport：样本数、平均记忆命中率、平均检索丢弃率、
+     * 超预算份数、发生丢弃的份数。当前 app 默认未装配 context-assembly，故常规 run 省略此段——这是
+     * 有意的分层（受控钩子），非缺陷。
+     */
+    contextBudget?: {
+      /** 样本数（report 份数）。 */
+      count: number;
+      /** 平均记忆命中率。 */
+      averageMemoryHitRate: number;
+      /** 平均检索丢弃率。 */
+      averageDiscardRate: number;
+      /** 注入 token 超过预算上限的份数（健全性校验，理论应为 0）。 */
+      overBudgetCount: number;
+      /** 出现检索被丢弃（discardRate > 0）的份数。 */
+      discardedCount: number;
+    };
   };
 }
 

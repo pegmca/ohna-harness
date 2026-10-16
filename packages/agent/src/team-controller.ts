@@ -25,3 +25,12 @@ export type {
   SubagentResult,
   TeamControllerOptions,
 } from "./team/types.js";
+// 成本护栏与最小并发原语（P0）：供 presets / 测试直接引用，导入方一处取用。
+export {
+  createBudgetGuard,
+  createMemberStopHook,
+  type BudgetGuardConfig,
+  type TeamBudgetAccumulator,
+  type MemberBudgetHook,
+} from "./team/budget.js";
+export { mapWithConcurrencyLimit, Semaphore, AsyncMutex } from "./team/concurrency.js";

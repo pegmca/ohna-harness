@@ -427,3 +427,25 @@ export const artifactCitations = pgTable("artifact_citations", {
   check("artifact_citations_ordinal_check", sql`${table.ordinal} > 0`),
   check("artifact_citations_verifier_status_check", sql`${table.verifierStatus} in ('unverified','verified','rejected','manual_verified','manual_rejected')`)
 ]);
+
+// 长期情节记忆表镜像 0270_memory_episodes.sql；IVFFlat 余弦索引为生产化预备（学习原型可顺序扫描）。
+// 维度固定 halfvec(32)，与 POSTGRES_RAG_VECTOR_DIMENSIONS 对齐；owner_user_id 允许 NULL 以支持共享记忆。
+const halfvec32 = customType<{ data: number[]; driverData: string }>({
+  dataType() {
+    return "public.halfvec(32)";
+  }
+});
+
+export const memoryEpisodes = pgTable("memory_episodes", {
+  id: text("id").primaryKey(),
+  ownerUserId: uuid("owner_user_id"),
+  type: text("type").notNull(),
+  content: text("content").notNull(),
+  embedding: halfvec32("embedding").notNull(),
+  sourceTurn: integer("source_turn"),
+  metadata: jsonb("metadata"),
+  createdAt: timestamp("created_at", { withTimezone: true, mode: "string" }).notNull().defaultNow()
+}, (table) => [
+  index("memory_episodes_owner_idx").on(table.ownerUserId)
+  // 余弦最近邻索引（IVFFlat）见迁移 0270：学习原型数据量小可接受顺序扫描，索引为生产化预备。
+]);

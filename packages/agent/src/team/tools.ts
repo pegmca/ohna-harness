@@ -17,7 +17,12 @@ import type { TeamCreateParams, SubagentResult } from "./types.js";
 /** 工具所需的 controller 能力（最小依赖面，避免运行时循环依赖）。 */
 export interface TeamToolDeps {
   createMember: (params: TeamCreateParams) => unknown;
-  runMember: (name: string, content: string, signal?: AbortSignal) => Promise<SubagentResult>;
+  runMember: (
+    name: string,
+    content: string,
+    signal?: AbortSignal,
+    estimatedTokens?: number,
+  ) => Promise<SubagentResult>;
 }
 
 /** TeamCreate 参数 schema。 */
@@ -86,12 +91,13 @@ export function createSendMessageTool(deps: TeamToolDeps): AgentTool<typeof send
     parameters: sendMessageSchema,
     async execute(_toolCallId, params, signal): Promise<AgentToolResult> {
       const result = await deps.runMember(params.recipient, params.content, signal);
+      const budgetNote = result.budgetExceeded ? "（⚠被成本护栏停止，仅回传部分摘要）" : "";
       const text =
         result.status === "failed"
           ? `子代理 ${result.member} 执行失败：${result.error?.message ?? "unknown"}${
               result.summary ? `\n部分摘要：${result.summary}` : ""
             }`
-          : `子代理 ${result.member} 已完成。\n摘要：${result.summary}\n产物：${
+          : `子代理 ${result.member} 已完成${budgetNote}。\n摘要：${result.summary}\n产物：${
               result.artifacts.length ? result.artifacts.join("；") : "无"
             }`;
       return { content: [{ type: "text", text }], details: result };

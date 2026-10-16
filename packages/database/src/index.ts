@@ -53,6 +53,13 @@ export {
   DEFAULT_ATTACHMENT_TTL_SECONDS,
   type RedisAttachmentStoreOptions
 } from "./attachment-store-redis.js";
+// 跨实例事件总线传输层：组合根用它把 Run event 广播到所有 API 实例的 SSE 连接。
+// 无 REDIS_URL 时工厂返回 undefined，上层退化为进程内内存总线。
+export {
+  createRedisPubSubTransport,
+  createRunEventBusTransportFromEnv,
+  type PubSubTransport
+} from "./run-event-bus-redis.js";
 export { listPendingMigrations, runMigrations, MigrationError } from "./migrate.js";
 
 const { Pool } = pg;

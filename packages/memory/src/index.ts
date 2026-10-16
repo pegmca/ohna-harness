@@ -26,6 +26,15 @@ export { cosineSimilarity, jaccardSimilarity, tokenize } from "./similarity.js";
 // 存储实现与工厂
 export { InMemoryMemoryStore } from "./in-memory-store.js";
 export { JsonlMemoryStore, type JsonlMemoryStoreOptions } from "./jsonl-store.js";
+export {
+  PgVectorMemoryStore,
+  type PgVectorMemoryStoreOptions,
+  type QueryExecutor,
+  type Embedder,
+  type DeterministicEmbedder,
+  createDeterministicEmbedder,
+  MEMORY_VECTOR_DIMENSIONS,
+} from "./pg-vector-store.js";
 export { createMemoryStore, type CreateMemoryStoreOptions } from "./store-factory.js";
 
 // Hook 工厂

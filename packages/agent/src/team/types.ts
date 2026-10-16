@@ -9,6 +9,9 @@
 import type { Api, Message, Model } from "@aiagent/ai";
 import type { AgentTool } from "@aiagent/tools";
 import type { AgentMessage, StreamFn } from "../types.js";
+import type { BudgetGuardConfig, TeamBudgetAccumulator } from "./budget.js";
+
+export type { BudgetGuardConfig, TeamBudgetAccumulator } from "./budget.js";
 
 /**
  * 团队成员（子代理）状态。
@@ -36,6 +39,12 @@ export interface TeamMember {
   summary?: string;
   /** 子代理产出的产物引用（如工具结果摘要），供 supervisor 汇总引用。 */
   artifacts?: string[];
+  /** 本次运行累计用量（token 数 + 成本美元），由成本护栏在每轮 turn_end 累加。 */
+  usage?: { tokens: number; cost: number };
+  /** 是否被成本护栏停止（超 per-member 或团队总 ceiling / deadline）。 */
+  budgetExceeded?: boolean;
+  /** 该成员本次 subagent 运行墙钟时长（毫秒），仅当真实跑过才回填；多代理时延归因用。 */
+  durationMs?: number;
 }
 
 /**
@@ -77,6 +86,11 @@ export interface TeamState {
   members: Map<string, TeamMember>;
   inboundQueues: Map<string, TeamMessage[]>;
   events: TeamEvent[];
+  /**
+   * 本次团队运行观测到的在飞成员峰值（多代理并发/容量证据）。由 controller 在 runMember
+   * 入口 acquire 后维护 runningMembers 在飞计数峰值；缺省表示本次未实际并发（如 maxConcurrentMembers=1）。
+   */
+  peakConcurrency?: number;
 }
 
 /** TeamCreate 工具参数（由 supervisor 的 model 决定何时 spawn 与如何配置成员）。 */
@@ -118,6 +132,12 @@ export interface SubagentResult {
   artifacts: string[];
   /** 失败时的结构化错误（code + message），成功则为 undefined。 */
   error?: { code: string; message: string };
+  /** 本次运行累计用量（token 数 + 成本美元），由成本护栏累加。 */
+  usage?: { tokens: number; cost: number };
+  /** 是否被成本护栏停止（超预算 / deadline）。 */
+  budgetExceeded?: boolean;
+  /** 成员使用的模型 id（成本路由依据）；供 run-service 投影 cost_summary.team 段对齐形状。 */
+  model?: string;
 }
 
 /** createTeamController 的选项。 */
@@ -132,4 +152,15 @@ export interface TeamControllerOptions {
   streamFn?: StreamFn;
   /** 子代理使用的 convertToLlm，缺省用 defaultConvertToLlm。 */
   convertToLlm?: (messages: AgentMessage[]) => Message[] | Promise<Message[]>;
+  /**
+   * 最大并发成员数（在飞上限）。默认 1 = 现状顺序执行（学习版、易 trace）；
+   * 演示并发可设 3。runMember 入口经信号量 acquire/release 限制并发，配合
+   * `runMembers` 扇出 helper 实现 pi 风格 worker 池。
+   */
+  maxConcurrentMembers?: number;
+  /**
+   * 成本护栏配置（P0）：per-member 上限与团队总 ceiling + 墙钟 deadline。
+   * 通过 `AgentLoopConfig.shouldStopAfterTurn` 钩子注入子代理，内核零改动。
+   */
+  budget?: BudgetGuardConfig;
 }

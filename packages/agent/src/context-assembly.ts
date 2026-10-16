@@ -217,6 +217,97 @@ export function limitContextByBudget(
 	return { working, retrieved, totalTokens: used };
 }
 
+/**
+ * 由装配结果 + 裁剪结果 + 预算配置构造一份结构化预算指标。
+ * 纯函数：无 IO、无随机，可单测；分母用 max(x, 1) 保证定义为 0 时口径良好。
+ *
+ * @param assembled 裁剪前（装配后）的记忆集合，用于取 totalTokens 分母。
+ * @param limited 预算裁剪后的记忆集合，用于取 kept 块与注入 token。
+ * @param settings 预算配置，用于取档位与预算上限。
+ * @returns 一份 ContextBudgetReport（命中率/丢弃率均落在 [0,1]）。
+ */
+export function buildBudgetReport(
+	assembled: AssembledMemory,
+	limited: AssembledMemory,
+	settings: ContextBudgetSettings,
+): ContextBudgetReport {
+	const budgetTokens = computeMemoryBudgetTokens(settings);
+	const injectedTokens = limited.totalTokens;
+	const retrievedAvailable = assembled.retrieved.length;
+	const retrievedKept = limited.retrieved.length;
+	const retrievedDiscarded = retrievedAvailable - retrievedKept;
+
+	// 分母用装配后总量；无任何记忆时分子分母同为 0，max(.,1) 使结果定义良好（=0）。
+	const memoryHitRate = injectedTokens / Math.max(assembled.totalTokens, 1);
+	// 检索丢弃率：分母为可供注入的检索块数，0 块时定义良好（=0）。
+	const discardRate = retrievedDiscarded / Math.max(retrievedAvailable, 1);
+
+	return {
+		budgetTokens,
+		injectedTokens,
+		workingKept: limited.working !== null,
+		retrievedKept,
+		retrievedDiscarded,
+		retrievedAvailable,
+		memoryHitRate,
+		discardRate,
+		tier: settings.tier,
+	};
+}
+
+/** summarizeBudgetReports 的聚合结果（eval/dashboard 一行指标）。 */
+export interface BudgetSummary {
+	/** 样本数（report 份数）。 */
+	count: number;
+	/** 平均记忆命中率。 */
+	averageMemoryHitRate: number;
+	/** 平均检索丢弃率。 */
+	averageDiscardRate: number;
+	/** 注入 token 超过预算上限的份数（理论上应为 0，作为预算纪律的健全性校验）。 */
+	overBudgetCount: number;
+	/** 出现检索被丢弃（discardRate > 0）的份数。 */
+	discardedCount: number;
+}
+
+/**
+ * 把多份 ContextBudgetReport 聚合为 eval/dashboard 可用的一行指标。
+ * 纯函数：对命中率/丢弃率取均值，并统计超预算与丢弃发生次数。
+ *
+ * @param reports 多次 transform 产出的预算指标（顺序无关）。
+ * @returns 聚合结果；空数组返回全 0 的零值聚合（不抛错）。
+ */
+export function summarizeBudgetReports(reports: ContextBudgetReport[]): BudgetSummary {
+	if (reports.length === 0) {
+		return {
+			count: 0,
+			averageMemoryHitRate: 0,
+			averageDiscardRate: 0,
+			overBudgetCount: 0,
+			discardedCount: 0,
+		};
+	}
+
+	let hitSum = 0;
+	let discardSum = 0;
+	let overBudgetCount = 0;
+	let discardedCount = 0;
+	for (const r of reports) {
+		hitSum += r.memoryHitRate;
+		discardSum += r.discardRate;
+		// 注入量应恒 <= 预算上限；一旦越过说明裁剪逻辑回归，作为健全性信号计数。
+		if (r.injectedTokens > r.budgetTokens) overBudgetCount++;
+		if (r.discardRate > 0) discardedCount++;
+	}
+
+	return {
+		count: reports.length,
+		averageMemoryHitRate: hitSum / reports.length,
+		averageDiscardRate: discardSum / reports.length,
+		overBudgetCount,
+		discardedCount,
+	};
+}
+
 /** 记忆提供者回调：工作记忆（同步/异步均可返回）。 */
 export type WorkingMemoryProvider = () => string | null | Promise<string | null>;
 /** 记忆提供者回调：检索记忆（RAG / 长期记忆），可接收查询与 abort 信号。 */
@@ -227,6 +318,45 @@ export type RetrievedMemoryProvider = (
 
 /** 记忆注入方式。 */
 export type MemoryInjectionMode = "userMessage" | "systemPrompt";
+
+/**
+ * 一次上下文装配的结构化预算指标（Context 预算可观测化的数据载体）。
+ *
+ * 设计取舍：本结构只描述「装配 + 预算裁剪」的**结果**，不耦合任何记忆/运行层；
+ * 它通过 ContextAssemblerOptions.recordBudgetMetric 回调向外 emit，调用方（eval/
+ * dashboard）自行聚合，模块本身不 import memory/trace（保持既有解耦原则）。
+ *
+ * 口径说明：
+ * - memoryHitRate（记忆命中率）：injectedTokens / max(assembled.totalTokens, 1)。
+ *   以「装配后、裁剪前」的总量为分母，度量「想注入的记忆有多大比例真正进了预算」，
+ *   越接近 1 说明预算越宽松/记忆越精简。分母为 0（无任何记忆）时定义良好，返回 0。
+ * - discardRate（检索丢弃率）：retrievedDiscarded / max(retrievedAvailable, 1)。
+ *   以「可供注入的检索块」为分母，度量检索记忆被预算裁剪的比例；分母 0 时返回 0。
+ */
+export interface ContextBudgetReport {
+	/** 本次记忆区 token 上限（computeMemoryBudgetTokens 结果）。 */
+	budgetTokens: number;
+	/**
+	 * 实际注入的块 token 之和（kept 块）。
+	 * userMessage 模式下即前置到上下文的记忆消息 token 量；
+	 * systemPrompt 模式下为 buildSystemPromptWithMemory 可注入的量（transform 内未真正拼接）。
+	 */
+	injectedTokens: number;
+	/** 工作记忆是否被保留（预算允许且非空）。 */
+	workingKept: boolean;
+	/** 实际保留的检索记忆块数。 */
+	retrievedKept: number;
+	/** 因超预算被丢弃的检索记忆块数。 */
+	retrievedDiscarded: number;
+	/** 可供注入的检索记忆块总数（provider 返回且非空）。 */
+	retrievedAvailable: number;
+	/** 记忆命中率，取值 [0,1]，口径见类型注释。 */
+	memoryHitRate: number;
+	/** 检索丢弃率，取值 [0,1]，口径见类型注释。 */
+	discardRate: number;
+	/** 当前预算档位。 */
+	tier: ContextBudgetTier;
+}
 
 /** createContextAssemblyTransform 的配置（provider 回调 + 预算）。 */
 export interface ContextAssemblerOptions {
@@ -254,6 +384,12 @@ export interface ContextAssemblerOptions {
 	 *   故该模式下 transform 退化为原样返回——真正拼接请用 buildSystemPromptWithMemory。
 	 */
 	injectMode?: MemoryInjectionMode;
+	/**
+	 * 预算指标回调 sink：每次 transform 调用都会 emitting 一份 ContextBudgetReport。
+	 * 解耦暴露：指标通过回调流出，本模块不耦合运行层/memory/trace；集成方（eval/
+	 * dashboard）订阅此回调即可聚合命中率/丢弃率，无需改动装配内核。
+	 */
+	recordBudgetMetric?: (report: ContextBudgetReport) => void;
 }
 
 /**
@@ -286,7 +422,12 @@ export function defaultDeriveQuery(messages: AgentMessage[]): string | undefined
  * 因此不会在每轮 transform 中重复堆积记忆；CompactionMessage 等原消息原样保留，
  * 由 convertToLlm 转成 user 消息（见 convert.ts:33）。
  *
- * @param options 记忆提供者回调 + 预算配置。
+ * 可观测性：每次调用都会通过 options.recordBudgetMetric 回调 emit 一份
+ * ContextBudgetReport（含 budgetTokens / injectedTokens / 各 kept/discarded 计数 /
+ * memoryHitRate / discardRate / tier），与注入路径解耦，供 eval/dashboard 聚合
+ * 「记忆命中率」「检索丢弃率」等数字证据（见 docs/v1.2/01-agent-engineering-philosophy.md §4 P1）。
+ *
+ * @param options 记忆提供者回调 + 预算配置（可含 recordBudgetMetric）。
  * @returns transformContext 兼容的钩子函数。
  */
 export function createContextAssemblyTransform(
@@ -316,6 +457,11 @@ export function createContextAssemblyTransform(
 
 		const assembled = assembleMemoryBlocks({ workingMemory, retrievedMemory });
 		const limited = limitContextByBudget(assembled, settings, settings.contextWindow);
+
+		// 每次 transform 调用都产出一份结构化预算指标，供 eval/dashboard 聚合。
+		// 与注入路径解耦：无论是否真正注入、是否无记忆，均 emit 一份（命中率/丢弃率分母定义良好）。
+		const report = buildBudgetReport(assembled, limited, settings);
+		options.recordBudgetMetric?.(report);
 
 		// 预算不足或无记忆：原样返回，不污染上下文、不破坏 CompactionMessage 处理。
 		if (limited.working === null && limited.retrieved.length === 0) {

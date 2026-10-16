@@ -50,6 +50,8 @@ export {
   defaultDeriveQuery,
   createContextAssemblyTransform,
   DEFAULT_CONTEXT_BUDGET,
+  buildBudgetReport,
+  summarizeBudgetReports,
 } from "./context-assembly.js";
 export type {
   AssembleMemoryInput,
@@ -61,6 +63,8 @@ export type {
   MemoryInjectionMode,
   RetrievedMemoryProvider,
   WorkingMemoryProvider,
+  ContextBudgetReport,
+  BudgetSummary,
 } from "./context-assembly.js";
 
 // P4 Goal 模式：loop 外挂目标守卫（零改 agentLoop，依赖倒置判定器）。
@@ -98,6 +102,16 @@ export type {
 
 // P3 多智能体 Supervisor 编排：复用 agentLoop 作 subagent 原语 + TeamCreate/SendMessage 消息总线。
 export * from "./team-controller.js";
+
+// P3 多代理成本 → RunEvent(cost_summary) 投影（可观测闭环）：把 TeamState / ContextBudgetReport[]
+// 投影成完全对齐 trace 契约的 team / contextBudget 段，供 run-service 在 agent_end 直接并入 payload。
+export { projectTeamCostSummary, projectContextBudgetSummary } from "./team/run-event.js";
+export type { TeamCostMember, TeamCostSection } from "./team/run-event.js";
+
+// SLO / 容量证据聚合（docs/v1.2 §3 差距#7 收口）：成本已由 cost_summary 覆盖，本层补
+// 时延/成功率/并发三类可量化证据。纯函数聚合，run-service 在 agent_end 并入 cost_summary.payload。
+export { summarizeSlo } from "./team/slo.js";
+export type { RunSloSummary, SloAggregate } from "./team/slo.js";
 
 export interface AgentStatus {
   name: string;

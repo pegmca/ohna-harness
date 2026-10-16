@@ -49,7 +49,13 @@ const PRESETS: ReadonlyArray<{ key: "bull" | "bear" | "risk" } & Pick<TeamCreate
  * @returns 已 seed 三个成员的 TeamController。
  */
 export function createBullBearRiskTeam(options: BullBearRiskOptions): TeamController {
-  const controller = createTeamController(options);
+  // 演示默认值：最小并发 3（同进程 worker 池跑通拓扑），单成员成本上限 $0.05——
+  // 让 bull/bear/risk 评审任务带真实成本护栏数字，对应「多代理贵必须收口」的叙事。
+  const controller = createTeamController({
+    ...options,
+    maxConcurrentMembers: options.maxConcurrentMembers ?? 3,
+    budget: options.budget ?? { maxCostPerMember: 0.05, maxTokensPerMember: 200_000 },
+  });
   const { memberModels, readOnlyTools } = options;
 
   for (const preset of PRESETS) {

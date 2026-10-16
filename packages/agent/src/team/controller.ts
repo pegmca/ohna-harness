@@ -14,10 +14,12 @@
 import { streamSimple } from "@aiagent/ai";
 import { agentLoop } from "../agent-loop.js";
 import { defaultConvertToLlm } from "../convert.js";
-import type { AgentEvent, AgentMessage, AgentLoopConfig, StreamFn } from "../types.js";
+import type { AgentEvent, AgentMessage, AgentLoopConfig, ShouldStopAfterTurnContext, StreamFn } from "../types.js";
 import type { AgentTool, AgentToolResult } from "@aiagent/tools";
 import type {
+  BudgetGuardConfig,
   SubagentResult,
+  TeamBudgetAccumulator,
   TeamControllerOptions,
   TeamCreateParams,
   TeamEvent,
@@ -27,6 +29,8 @@ import type {
 } from "./types.js";
 import type { Api, Model } from "@aiagent/ai";
 import { createSendMessageTool, createTeamCreateTool } from "./tools.js";
+import { createBudgetGuard, createMemberStopHook, type MemberBudgetHook } from "./budget.js";
+import { AsyncMutex, mapWithConcurrencyLimit, Semaphore } from "./concurrency.js";
 
 /** TeamController 公开接口（orchestrator 之后会 re-export）。 */
 export interface TeamController {
@@ -38,13 +42,38 @@ export interface TeamController {
   getTeamView(): string;
   /** 是否存在某成员。 */
   hasMember(name: string): boolean;
+  /**
+   * 返回团队成本护栏的共享累加器（只读快照引用）。供可观测与单测断言团队累计
+   * `totalTokens/totalCost` 是否始终受 ceiling 约束（A-1 原子性验证用）。
+   */
+  getBudgetAccumulator(): TeamBudgetAccumulator;
   /** 直接注册一个成员（不经由工具调用，供 presets 预置用）。 */
   createMember(params: TeamCreateParams & { modelObject?: Model<Api> }): TeamMember;
   /**
    * 向指定成员派发任务并同步运行其 subagent，回收摘要。
-   * 失败返回结构化 error，不抛异常（失败隔离）。
+   * 失败返回结构化 error，不抛异常（失败隔离）。成本护栏（若配置了 budget）在此注入
+   * 子代理的 shouldStopAfterTurn 钩子；并发受 maxConcurrentMembers 信号量限制。
+   *
+   * @param name 成员名称。
+   * @param content 委派给该成员的任务。
+   * @param signal 可选取消信号。
+   * @param estimatedTokens 可选派发前预算估算 token 数；若超预算直接拒绝（不跑 subagent）。
    */
-  runMember(name: string, content: string, signal?: AbortSignal): Promise<SubagentResult>;
+  runMember(
+    name: string,
+    content: string,
+    signal?: AbortSignal,
+    estimatedTokens?: number,
+  ): Promise<SubagentResult>;
+  /**
+   * 扇出 helper：并发向多个成员派发同一任务，受 maxConcurrentMembers 限制（pi 风格 worker 池）。
+   *
+   * @param names 成员名称列表。
+   * @param content 委派给各成员的任务。
+   * @param limit 并发上限；缺省用 controller 的 maxConcurrentMembers。
+   * @returns 与 names 顺序一致的结果数组。
+   */
+  runMembers(names: string[], content: string, limit?: number): Promise<SubagentResult[]>;
 }
 
 /** 生成一个简单唯一 id（学习版，不引入额外依赖）。 */
@@ -95,6 +124,23 @@ export function createTeamController(options: TeamControllerOptions): TeamContro
 
   const streamFn: StreamFn = options.streamFn ?? (streamSimple as StreamFn);
   const convertToLlm = options.convertToLlm ?? defaultConvertToLlm;
+
+  // 成本护栏（P0）：团队聚合累加器跨成员共享，实现「团队总 ceiling」约束。
+  const budgetConfig: BudgetGuardConfig | undefined = options.budget;
+  const accumulator: TeamBudgetAccumulator = { totalTokens: 0, totalCost: 0 };
+
+  // 最小并发（P0）：信号量把同时在飞的子代理数限制在 maxConcurrentMembers（默认 1=顺序）。
+  const semaphore = new Semaphore(options.maxConcurrentMembers ?? 1);
+
+  // 并发观测（SLO 容量证据）：维护「在飞成员计数」与其峰值，供 projectTeamCostSummary 投影
+  // team.peakConcurrency。与信号量解耦计数，真实反映「一次 supervisor 编排实际并发了多少子代理」，
+  // 比 maxConcurrentMembers 上限更能暴露运行期并发压力（受控、无额外依赖）。
+  let runningMemberCount = 0;
+  let peakConcurrency = 0;
+
+  // 团队成本护栏互斥锁（A-1 修复）：把跨成员共享累加器的「读-判-写」串行化，
+  // 保证团队总 ceiling 在并发下原子生效、不被双双放行突破。
+  const budgetMutex = new AsyncMutex();
 
   /** 解析成员应使用的工具子集：按 allowedTools 名从可用池过滤（权限最小化）。 */
   function resolveTools(member: TeamMember): AgentTool[] {
@@ -154,10 +200,20 @@ export function createTeamController(options: TeamControllerOptions): TeamContro
 
   /**
    * 运行某成员的 subagent（一次独立 agentLoop），回收摘要到 team 状态。
-   * 顺序执行（学习版）；未来并发可在此套 mapWithConcurrencyLimit 风格的 worker 池
-   * （见 「与 durable runs 结合」）。
+   * 并发受信号量限制（maxConcurrentMembers）；成本护栏（若配置）通过 shouldStopAfterTurn
+   * 钩子注入，触发时干净停止并回写部分摘要。失败返回结构化 error，不抛异常（失败隔离）。
+   *
+   * @param name 成员名称。
+   * @param content 委派任务。
+   * @param signal 可选取消信号。
+   * @param estimatedTokens 可选派发前预算估算；超预算直接拒绝，不跑 subagent。
    */
-  async function runMember(name: string, content: string, signal?: AbortSignal): Promise<SubagentResult> {
+  async function runMember(
+    name: string,
+    content: string,
+    signal?: AbortSignal,
+    estimatedTokens?: number,
+  ): Promise<SubagentResult> {
     const member = state.members.get(name);
     if (!member) {
       return {
@@ -167,6 +223,31 @@ export function createTeamController(options: TeamControllerOptions): TeamContro
         artifacts: [],
         error: { code: "member_not_found", message: `成员 "${name}" 不存在` },
       };
+    }
+
+    // 成员时延埋点：从入口到收尾的墙钟时间（SLO 容量证据）。仅当真实进入 runMember 才计时，
+    // 失败早退路径（member_not_found / 预算预检拒绝）不回填——那些路径并未真正运行 subagent。
+    const memberStartMs = Date.now();
+
+    // 派发前预算估算（纯函数）：明显超预算直接拒绝，避免跑后才发现失控。
+    if (budgetConfig && estimatedTokens !== undefined) {
+      const ok = createBudgetGuard(member.model, estimatedTokens, budgetConfig, accumulator);
+      if (!ok) {
+        member.status = "failed";
+        member.budgetExceeded = true;
+        member.usage = { tokens: 0, cost: 0 };
+        recordEvent({ type: "member_failed", timestamp: Date.now(), member: name, detail: "budget_precheck" });
+        return {
+          member: name,
+          status: "failed",
+          summary: "",
+          artifacts: [],
+          error: { code: "budget_exceeded", message: "派发前预算估算超限，已拒绝运行" },
+          usage: { tokens: 0, cost: 0 },
+          budgetExceeded: true,
+          model: member.model.id,
+        };
+      }
     }
 
     enqueueMessage("supervisor", name, content);
@@ -182,9 +263,46 @@ export function createTeamController(options: TeamControllerOptions): TeamContro
       messages: [] as AgentMessage[],
       tools: resolveTools(member),
     };
-    const subConfig: AgentLoopConfig = { model: member.model, convertToLlm };
 
+    // 成本护栏句柄与用量快照在 acquire 之后才确定（deadline 起点见下），先声明占位。
+    let budgetHook: MemberBudgetHook | undefined;
+    // 捕获护栏是否被触发（shouldStopAfterTurn 返回 true），用于标记 budgetExceeded。
+    let stoppedByBudget = false;
+    // 用量快照：仅当配置了成本护栏才回写（A-4 修复：未配置预算不再渲染"0 tokens"行）。
+    let usage: { tokens: number; cost: number } | undefined;
+
+    // 最小并发：入口 acquire 限制在飞数，finally release 保证信号量归还（含异常路径）。
+    await semaphore.acquire();
+    // 在飞成员计数 +1，并刷新峰值（容量证据）；与信号量同生命周期，异常路径也经 finally 归位。
+    runningMemberCount++;
+    peakConcurrency = Math.max(peakConcurrency, runningMemberCount);
     try {
+      // 成本护栏（P0）：复用 shouldStopAfterTurn 钩子，闭包累计并跨成员共享累加器，
+      // 触发时返回 true 干净停止子代理——agent-loop 内核零改动。
+      // A-3 修复：deadline 起点 = 成功拿到许可之后，避免排队等待期被计入墙钟，
+      // 首个 turn 不会一 acquire 就被误判超时。
+      const deadlineAt = budgetConfig?.deadlineMs !== undefined ? Date.now() + budgetConfig.deadlineMs : undefined;
+      budgetHook = budgetConfig
+        ? createMemberStopHook(member.model, budgetConfig, accumulator, budgetMutex, deadlineAt)
+        : undefined;
+      const hook = budgetHook;
+      const subConfig: AgentLoopConfig = {
+        model: member.model,
+        convertToLlm,
+        // A-2 修复：不再向 subConfig 注入 deadlineMs——agent-loop 从不消费它，
+        // 真正生效的是护栏闭包内的墙钟自查（见 ）。
+        ...(hook
+          ? {
+              shouldStopAfterTurn: async (ctx: ShouldStopAfterTurnContext): Promise<boolean> => {
+                // 钩子内部已用 mutex 串行化读-判-写；此处仅捕获是否被护栏停止以标记 budgetExceeded。
+                const stop = await hook.shouldStopAfterTurn(ctx);
+                if (stop) stoppedByBudget = true;
+                return stop;
+              },
+            }
+          : {}),
+      };
+
       const stream = agentLoop([taskMessage], subContext, subConfig, signal, streamFn);
 
       // 消费事件流：捕获 agent_end.error（错误即数据，不抛），其余仅投影。
@@ -196,6 +314,9 @@ export function createTeamController(options: TeamControllerOptions): TeamContro
       }
       const messages = await stream.result();
       const { summary, artifacts } = extractSummary(messages);
+
+      // 用量回收：per-member 用量取自护栏句柄；未配置预算则留空（不渲染冗余行）。
+      usage = budgetHook ? { ...budgetHook.usage } : undefined;
 
       // 失败判定：agent_end.error（兜底收尾）或最终 assistant 的 stopReason 为 error/aborted。
       const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant");
@@ -210,22 +331,45 @@ export function createTeamController(options: TeamControllerOptions): TeamContro
         member.status = "failed";
         member.summary = summary;
         member.artifacts = artifacts;
+        member.usage = usage;
         recordEvent({ type: "member_failed", timestamp: Date.now(), member: name, detail: error.message });
-        return { member: name, status: "failed", summary, artifacts, error };
+        return { member: name, status: "failed", summary, artifacts, error, usage, model: member.model.id };
       }
 
+      // 成本护栏触发（shouldStopAfterTurn 返回 true）也会以 agent_end 干净收尾：
+      // 此时无 endError，走「done」分支，但标记 budgetExceeded 让上层可观测。
+      const budgetExceeded = budgetHook ? stoppedByBudget : false;
       member.status = "done";
       member.summary = summary;
       member.artifacts = artifacts;
+      member.usage = usage;
+      if (budgetExceeded) member.budgetExceeded = true;
       recordEvent({ type: "member_completed", timestamp: Date.now(), member: name });
-      return { member: name, status: "done", summary, artifacts };
+      return { member: name, status: "done", summary, artifacts, usage, budgetExceeded, model: member.model.id };
     } catch (caught) {
       // 兜底失败隔离：任何意外异常都收敛为结构化错误，主循环不崩溃。
       const error = { code: "subagent_failed", message: caught instanceof Error ? caught.message : String(caught) };
       member.status = "failed";
       member.summary = member.summary ?? "";
+      // 用量仅在配置了护栏时回写（A-4）；未配置则保持 undefined，不渲染冗余行。
+      member.usage = budgetHook ? { ...budgetHook.usage } : undefined;
       recordEvent({ type: "member_failed", timestamp: Date.now(), member: name, detail: error.message });
-      return { member: name, status: "failed", summary: "", artifacts: [], error };
+      return {
+        member: name,
+        status: "failed",
+        summary: "",
+        artifacts: [],
+        error,
+        usage: budgetHook ? { ...budgetHook.usage } : undefined,
+        model: member.model.id,
+      };
+    } finally {
+      semaphore.release();
+      // 在飞计数归位（异常路径也执行）；并把本次观测到的并发峰值写回 team 状态，供投影读取。
+      runningMemberCount = Math.max(0, runningMemberCount - 1);
+      state.peakConcurrency = peakConcurrency;
+      // 回填成员墙钟时延（SLO 证据）：无论成功/失败/预算停止，真实运行过的成员都有时长。
+      member.durationMs = Date.now() - memberStartMs;
     }
   }
 
@@ -235,7 +379,12 @@ export function createTeamController(options: TeamControllerOptions): TeamContro
     for (const [k, v] of state.members) members.set(k, { ...v });
     const inboundQueues = new Map<string, TeamMessage[]>();
     for (const [k, v] of state.inboundQueues) inboundQueues.set(k, v.slice());
-    return { members, inboundQueues, events: state.events.slice() };
+    // peakConcurrency 仅当确实观测到并发（>0）才带入快照，避免把「未并发」误报为容量 0。
+    const snapshot: TeamState = { members, inboundQueues, events: state.events.slice() };
+    if (state.peakConcurrency !== undefined && state.peakConcurrency > 0) {
+      snapshot.peakConcurrency = state.peakConcurrency;
+    }
+    return snapshot;
   }
 
   function hasMember(name: string): boolean {
@@ -247,14 +396,30 @@ export function createTeamController(options: TeamControllerOptions): TeamContro
     createSendMessageTool({ createMember, runMember }),
   ];
 
+  /**
+   * 扇出 helper：并发向多个成员派发同一任务，受 maxConcurrentMembers 信号量限制
+   * （pi 风格 worker 池：N 个 worker 从自增 nextIndex 取任务并发 await）。
+   *
+   * @param names 成员名称列表。
+   * @param content 委派给各成员的任务。
+   * @param limit 并发上限；缺省用 controller 的 maxConcurrentMembers。
+   * @returns 与 names 顺序一致的结果数组。
+   */
+  async function runMembers(names: string[], content: string, limit?: number): Promise<SubagentResult[]> {
+    const concurrency = limit ?? options.maxConcurrentMembers ?? 1;
+    return mapWithConcurrencyLimit(names, concurrency, (n) => runMember(n, content));
+  }
+
   return {
     tools,
     getTeamState,
     // 0 参便捷方法：对当前快照调用模块级 getTeamView(state) 渲染视图。
     getTeamView: () => getTeamView(getTeamState()),
     hasMember,
+    getBudgetAccumulator: () => accumulator,
     createMember,
     runMember,
+    runMembers,
   };
 }
 
@@ -266,10 +431,24 @@ export function createTeamController(options: TeamControllerOptions): TeamContro
  */
 export function getTeamView(state: TeamState): string {
   const lines: string[] = [`Team: ${state.members.size} members`];
+  let teamTokens = 0;
+  let teamCost = 0;
   for (const [name, member] of state.members) {
     const tools = member.allowedTools ? member.allowedTools.join(",") || "(无)" : "(全量)";
     lines.push(`- ${name} [${member.status}] ${member.role} | model=${member.model.id} tools=${tools}`);
+    // 成本可观测：仅当确有用量（tokens 或 cost 任一 > 0）才显示该行；
+    // 未配置预算或零用量的成员不再渲染"用量: 0 tokens / $0.000000"（A-4 修复）。
+    if (member.usage && (member.usage.tokens > 0 || member.usage.cost > 0)) {
+      teamTokens += member.usage.tokens;
+      teamCost += member.usage.cost;
+      const flag = member.budgetExceeded ? " ⚠预算超限" : "";
+      lines.push(`   用量: ${member.usage.tokens} tokens / $${member.usage.cost.toFixed(6)}${flag}`);
+    }
     if (member.summary) lines.push(`   摘要: ${member.summary.slice(0, 80)}`);
+  }
+  // 团队总成本行：聚合各成员用量，对应「多代理 15× token 必须收口」的演示证据。
+  if (teamTokens > 0 || teamCost > 0) {
+    lines.push(`团队总计: ${teamTokens} tokens / $${teamCost.toFixed(6)}`);
   }
   return lines.join("\n");
 }

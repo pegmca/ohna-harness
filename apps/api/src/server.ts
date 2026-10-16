@@ -1,7 +1,7 @@
 import { agentLoop, defaultConvertToLlm, type AgentMessage } from "@aiagent/agent";
 import { createOpenAiCompatibleRuntime, type Model } from "@aiagent/ai";
 import { createQqBotChannel } from "@aiagent/channels";
-import { createDatabaseRuntime, createAttachmentStoreFromEnv, createVectorStoreFromEnv } from "@aiagent/database";
+import { createDatabaseRuntime, createAttachmentStoreFromEnv, createRunEventBusTransportFromEnv, createVectorStoreFromEnv } from "@aiagent/database";
 import { createLocalArtifactStorage } from "@aiagent/report";
 import { createIdentityService } from "@aiagent/identity";
 import { discoverMcpAgentTools, createMcpStdioClient, type McpClient } from "@aiagent/mcp";
@@ -19,6 +19,7 @@ import {
 import { createDefaultToolRegistry, createFinancialDataSourceFromEnv } from "@aiagent/tools";
 import { stat } from "node:fs/promises";
 import { createApiServer } from "./index.js";
+import { createRedisRunEventBus } from "./adapters/redis-run-event-bus.js";
 import { createModelRuntimeRegistry, type ModelRuntimeEntry } from "./application/model-registry.js";
 import { BASE_SYSTEM_PROMPT } from "./application/run-service.js";
 
@@ -151,6 +152,12 @@ const embeddingProvider = readEmbeddingProviderConfig();
 const embeddingClient = createEmbeddingClientFromEnv() ?? undefined;
 // 会话级临时附件存储：REDIS_URL 存在走 Redis，否则回退内存（单进程 demo）；onClose 负责 quit。
 const attachmentStoreRuntime = createAttachmentStoreFromEnv();
+// Run event 总线：REDIS_URL 存在走 Redis pub/sub 实现跨实例 fan-out，否则退化为进程内内存总线。
+// 两条 redis 连接（pub/sub 分离）由传输层在首次命令时懒连接，onClose 统一 quit。
+const runEventBusRuntime = createRunEventBusTransportFromEnv();
+const runEventBus = runEventBusRuntime.transport
+  ? createRedisRunEventBus(runEventBusRuntime.transport)
+  : undefined;
 const app = createApiServer({
   modelRegistry,
   tools: agentTools,
@@ -186,6 +193,7 @@ const app = createApiServer({
   messageStore: database.messageStore,
   artifactStorage: createLocalArtifactStorage(artifactStorageRoot),
   runStore: database.runRepository,
+  eventBus: runEventBus,
   readiness: async () => {
     // 读四组 RAG provider 配置，汇总启用状态（禁用非致命，但需在 readiness 显式暴露，避免静默降级）。
     const rerankProvider = readRerankProviderConfig();
@@ -351,6 +359,8 @@ app.addHook("onClose", async () => {
   if (mcpClient) await mcpClient.close().catch(() => { /* 关闭失败不阻断停机。 */ });
   // 附件 store 的 close 只在 Redis 已连接时 quit，内存实现为 no-op。
   await attachmentStoreRuntime.close().catch(() => { /* 关闭失败不阻断停机。 */ });
+  // 事件总线传输层（Redis pub/sub）关闭两条连接；无 REDIS_URL 时为 no-op。
+  await runEventBusRuntime.close().catch(() => { /* 关闭失败不阻断停机。 */ });
   await database.close();
 });
 

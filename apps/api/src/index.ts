@@ -19,7 +19,7 @@ import {
   createRunApplicationService,
   type RunCompactionOptions
 } from "./application/run-service.js";
-import type { RunStore } from "./application/run-ports.js";
+import type { RunEventBus, RunStore } from "./application/run-ports.js";
 import { createConversationApplicationService } from "./application/conversation-service.js";
 import { registerAuthHook } from "./http/hooks/auth.js";
 import { registerErrorHandler } from "./http/hooks/error-handler.js";
@@ -66,6 +66,12 @@ export interface ApiServerOptions {
   conversationRepository?: ConversationRepository;
   messageStore?: MessageStore;
   runStore: RunStore;
+  /**
+   * Run event 实时总线（fan-out 边界）。缺省用进程内内存总线（单实例 demo / 测试）。
+   * 多实例部署时由组合根注入 Redis 支撑的总线（见 createRedisRunEventBus），
+   * 让落到任意实例的 SSE 连接都能收到其他实例 worker 执行的 run 事件。
+   */
+  eventBus?: RunEventBus;
   /** compaction 注入点（测试用小 contextWindow 触发压缩）。 */
   compaction?: RunCompactionOptions;
   staleRunThresholdMs?: number;
@@ -96,7 +102,8 @@ export function createApiServer(options: ApiServerOptions): FastifyInstance {
     process.env.ARTIFACT_STORAGE_ROOT ?? `${process.cwd()}/.artifacts-test`
   );
   const runStore = options.runStore;
-  const runEventBus = createInMemoryRunEventBus();
+  // 总线可注入：多实例部署传 Redis 总线，缺省退化为进程内内存总线（与附件 store 同一兜底策略）。
+  const runEventBus = options.eventBus ?? createInMemoryRunEventBus();
   // 本项目已移除内置 mock 模型：模型目录必须由调用方显式注入真实 provider，
   // 禁止回退到假 LLM。未注入时直接失败，避免生产实例在「无可用模型」状态下静默接流量。
   const modelRegistry = options.modelRegistry;

@@ -8,8 +8,8 @@
  * （阶段 5 回迁）；终态推导改为消费 agent_end / run_error；会话历史不再内存累积，
  * 每次 run 从 messages 的 listForContext 投影重建（跨进程生效）。
  */
-import { agentLoop, createCompactionTransform, defaultConvertToLlm } from "@aiagent/agent";
-import type { AgentEvent, AgentMessage, AgentTool, StreamFn } from "@aiagent/agent";
+import { agentLoop, createCompactionTransform, defaultConvertToLlm, projectContextBudgetSummary } from "@aiagent/agent";
+import type { AgentEvent, AgentMessage, AgentTool, ContextBudgetReport, StreamFn } from "@aiagent/agent";
 import type { CompactionSettings } from "@aiagent/agent";
 import type { AttachmentRepository } from "@aiagent/database";
 import type { Message } from "@aiagent/ai";
@@ -80,6 +80,29 @@ export interface RunCompactionOptions {
   summarizer?: (messages: AgentMessage[], previousSummary: string | undefined, signal?: AbortSignal) => Promise<string>;
 }
 
+/**
+ * 可选上下文装配 transform（context-assembly）的契约：仅当集成方显式装配时才提供。
+ * run-service 不自行创建它（保持「不强行接入 context-assembly」的受控边界，避免改变现有 app 行为）。
+ * 第三个参数 `recordBudgetMetric` 由 run-service 透传，供装配器回写 ContextBudgetReport；
+ * 不传（未提供 budgetMetricSink 时）则装配器不 emit 预算指标。
+ */
+export type ContextAssemblyTransform = (
+  messages: AgentMessage[],
+  signal?: AbortSignal,
+  recordBudgetMetric?: (report: unknown) => void,
+) => Promise<AgentMessage[]>;
+
+/**
+ * SendMessage 工具结果的 details 宽松形状（team 的 SubagentResult），仅用于 run-service 受控读取。
+ * 用宽松类型避免 run-service 反向依赖 agent 的 TeamState；字段缺失/类型不符时按 0 或 false 处理。
+ */
+interface SubagentResultLike {
+  member?: unknown;
+  usage?: { tokens?: unknown; cost?: unknown };
+  budgetExceeded?: unknown;
+  model?: unknown;
+}
+
 export interface RunServiceDependencies {
   store: RunStore;
   messageStore: MessageStore;
@@ -112,6 +135,19 @@ export interface RunServiceDependencies {
   /** 单 run 最大 turn 数预算。 */
   maxTurns?: number;
   compaction?: RunCompactionOptions;
+  /**
+   * 可选上下文装配 transform（context-assembly）：仅当集成方显式装配时才提供。
+   * run-service 不自行创建它（保持「不强行接入 context-assembly」的受控边界，避免改变现有 app 行为）。
+   * 提供时，run-service 在 transformContext 内用它替换 compaction 前的装配步，并把 budgetMetricSink
+   * 透传为它的 recordBudgetMetric；缺省时 run 行为与现在完全一致。
+   */
+  contextAssemblyTransform?: ContextAssemblyTransform;
+  /**
+   * 可选上下文预算指标 sink：仅当集成方装配了 context-assembly（contextAssemblyTransform）时才有意义。
+   * run-service 收集每次 transform 产出的 ContextBudgetReport 并在 agent_end 投影进 cost_summary.contextBudget。
+   * 当前 app 默认未装配，故该 sink 不被调用、数组为空、contextBudget 段省略——有意的分层，非缺陷。
+   */
+  budgetMetricSink?: (report: unknown) => void;
   now?: () => Date;
   createId?: (prefix: string) => string;
 }
@@ -202,6 +238,8 @@ export function createRunApplicationService(dependencies: RunServiceDependencies
     if (!controller) return;
     const snapshot = await dependencies.store.findById(userId, runId);
     if (!snapshot) return;
+    // 终态推导标记：catch 内发过 run_error 时置位；声明在函数作用域，便于 catch 访问（try 内 let 不可见）。
+    let emittedRunError = false;
     try {
       await publish(userId, snapshot, "run_status", { status: "running", message: "Agent 已开始分析研究任务。" });
       const runtime = dependencies.resolveModel(snapshot.modelId);
@@ -311,9 +349,14 @@ export function createRunApplicationService(dependencies: RunServiceDependencies
         settings: dependencies.compaction?.settings,
         summarizer: dependencies.compaction?.summarizer ?? defaultSummarizer
       });
+      // 上下文装配步：优先用集成方提供的 context-assembly transform（会经 recordBudgetMetric 回写预算指标）；
+      // 缺省则走既有 compactionTransform。是否装配 context-assembly 由调用方决定，run-service 不改此行为。
+      const contextAssemblyTransform = dependencies.contextAssemblyTransform;
       const transformContext = async (messages: AgentMessage[], signal?: AbortSignal): Promise<AgentMessage[]> => {
         const grounded = grounding ? await grounding(messages, signal) : messages;
-        const transformed = await compactionTransform(grounded, signal);
+        const transformed = contextAssemblyTransform
+          ? await contextAssemblyTransform(grounded, signal, recordBudgetMetric)
+          : await compactionTransform(grounded, signal);
         const head = transformed[0];
         if (head?.role === "compaction" && !seenCompactionTimestamps.has(head.timestamp)) {
           seenCompactionTimestamps.add(head.timestamp);
@@ -367,11 +410,38 @@ export function createRunApplicationService(dependencies: RunServiceDependencies
       const costByTool = new Map<string, { input: number; output: number; totalTokens: number; cost: number }>();
       let totalTokens = 0;
       let totalCost = 0;
+      // SLO / 容量证据（docs/v1.2 §3 差距#7 收口）：成本已由上方累加覆盖，这里补时延/成功率/并发。
+      // 全部防御式采集，仅当取到有限有效值才并入 cost_summary.payload（绝不干扰既有事件）。
+      const runStartedAt = now().getTime();
+      // turn 数 = 本次 run 产生的 assistant 消息数（与成本累加共用同一 message_end 分支）。
+      let assistantTurns = 0;
+      // 运行期间观测到的活跃 run 峰值：事件循环内周期采样 executionRegistry 计数；初值取起点快照。
+      let peakConcurrency = dependencies.executionRegistry.list().length;
+      // 受控团队成本收集（P3 可观测）：仅当 run 真实使用了 team/SendMessage 子代理才填充；
+      // 默认 Map 为空，不影响既有 byModel/byTool/totalTokens/totalCost 逻辑。
+      const teamMembers = new Map<string, { model: string; tokens: number; cost: number; budgetExceeded: boolean }>();
+      // 受控上下文预算收集（P3 可观测）：仅当集成方提供 budgetMetricSink 时才填充；
+      // 当前 app 默认未装配 context-assembly，故数组恒为空、contextBudget 段省略。
+      const contextBudgetReports: ContextBudgetReport[] = [];
+      // 预算指标 sink：转发给调用方并本地收集；未提供 budgetMetricSink 时为 undefined（装配器不 emit）。
+      const recordBudgetMetric = dependencies.budgetMetricSink
+        ? (report: unknown): void => {
+            // 防御式：仅收集对象型 report，过滤非预期值；成本统计为观测数据，绝不抛异常。
+            if (report && typeof report === "object" && !Array.isArray(report)) {
+              contextBudgetReports.push(report as ContextBudgetReport);
+            }
+            dependencies.budgetMetricSink?.(report);
+          }
+        : undefined;
       for await (const event of stream) {
         await publish(userId, snapshot, event.type, event);
+        // 容量采样：每次落库后刷新观测到的活跃 run 峰值（executionRegistry.list().length 为接口现有方法）。
+        const activeNow = dependencies.executionRegistry.list().length;
+        if (activeNow > peakConcurrency) peakConcurrency = activeNow;
         // 成本累加：message_end 仅 assistant 消息带 usage；tool_execution_end 可选携带 result.usage / details.usage。
         // 全部数值防御式读取（缺失/非有限 → 0），缺失 usage 的 tool 事件直接跳过，绝不抛异常。
         if (event.type === "message_end" && event.message.role === "assistant") {
+          assistantTurns++;
           const usage = event.message.usage;
           const input = Number.isFinite(usage.input) ? usage.input : 0;
           const output = Number.isFinite(usage.output) ? usage.output : 0;
@@ -388,24 +458,59 @@ export function createRunApplicationService(dependencies: RunServiceDependencies
           totalCost += cost;
         }
         if (event.type === "tool_execution_end") {
-          const result = event.result as
-            | { usage?: { input?: number; output?: number; totalTokens?: number; cost?: { total?: number } }; details?: { usage?: { input?: number; output?: number; totalTokens?: number; cost?: { total?: number } } } }
-            | undefined;
-          const usage = result?.usage ?? result?.details?.usage;
-          if (usage) {
-            const input = Number.isFinite(usage.input ?? 0) ? (usage.input ?? 0) : 0;
-            const output = Number.isFinite(usage.output ?? 0) ? (usage.output ?? 0) : 0;
-            const total = Number.isFinite(usage.totalTokens ?? 0) ? (usage.totalTokens ?? 0) : 0;
-            const cost = Number.isFinite(usage.cost?.total ?? 0) ? (usage.cost?.total ?? 0) : 0;
-            const key = event.toolName;
-            const entry = costByTool.get(key) ?? { input: 0, output: 0, totalTokens: 0, cost: 0 };
-            entry.input += input;
-            entry.output += output;
-            entry.totalTokens += total;
-            entry.cost += cost;
-            costByTool.set(key, entry);
-            totalTokens += total;
-            totalCost += cost;
+          // 受控团队成本投影（P3 可观测）：仅当工具为 SendMessage 且其 result.details 是 team 的
+          // SubagentResult（带 member/usage/budgetExceeded/model）时才并入 team 段；常规工具不受影响。
+          if (event.toolName === "SendMessage") {
+            const sendResult = event.result as { details?: SubagentResultLike } | undefined;
+            const sub = sendResult?.details;
+            const usage = sub?.usage;
+            if (
+              sub &&
+              typeof sub.member === "string" &&
+              usage &&
+              Number.isFinite(usage.tokens) &&
+              Number.isFinite(usage.cost)
+            ) {
+              // 已通过 Number.isFinite 校验，故转 number 安全；防御式读取缺失/非有限 → 0（成本统计为观测数据）。
+              const tokens = Number(usage.tokens);
+              const cost = Number(usage.cost);
+              const prev = teamMembers.get(sub.member);
+              if (prev) {
+                // 同一成员可能被多次派发：累加 tokens/cost，budgetExceeded 取或。
+                prev.tokens += tokens;
+                prev.cost += cost;
+                prev.budgetExceeded = prev.budgetExceeded || sub.budgetExceeded === true;
+              } else {
+                teamMembers.set(sub.member, {
+                  model: typeof sub.model === "string" ? sub.model : "",
+                  tokens,
+                  cost,
+                  budgetExceeded: sub.budgetExceeded === true,
+                });
+              }
+            }
+            // SendMessage 的子代理成本经 team 段单独归因，不进入 byTool（避免产生误导性的 0 行）。
+          } else {
+            // 既有 byTool 累加逻辑（原样保留，仅作用于非 team 工具）。
+            const result = event.result as
+              | { usage?: { input?: number; output?: number; totalTokens?: number; cost?: { total?: number } }; details?: { usage?: { input?: number; output?: number; totalTokens?: number; cost?: { total?: number } } } }
+              | undefined;
+            const usage = result?.usage ?? result?.details?.usage;
+            if (usage) {
+              const input = Number.isFinite(usage.input ?? 0) ? (usage.input ?? 0) : 0;
+              const output = Number.isFinite(usage.output ?? 0) ? (usage.output ?? 0) : 0;
+              const total = Number.isFinite(usage.totalTokens ?? 0) ? (usage.totalTokens ?? 0) : 0;
+              const cost = Number.isFinite(usage.cost?.total ?? 0) ? (usage.cost?.total ?? 0) : 0;
+              const key = event.toolName;
+              const entry = costByTool.get(key) ?? { input: 0, output: 0, totalTokens: 0, cost: 0 };
+              entry.input += input;
+              entry.output += output;
+              entry.totalTokens += total;
+              entry.cost += cost;
+              costByTool.set(key, entry);
+              totalTokens += total;
+              totalCost += cost;
+            }
           }
         }
         if (event.type === "message_end") {
@@ -430,12 +535,50 @@ export function createRunApplicationService(dependencies: RunServiceDependencies
           // 落在线成本汇总事件（cost_summary）：对齐 trace 的 CostSummaryEvent payload 形状。
           // 最佳努力：成本统计为观测性数据，落库失败不应让一次成功的 run 变为 failed。
           try {
-            await publish(userId, snapshot, "cost_summary", {
+            // 既有 byModel/byTool/totalTokens/totalCost 段（原样保留，作为跨边界 DTO 直接序列化）。
+            const costSummaryPayload: Record<string, unknown> = {
               byModel: Object.fromEntries(costByModel),
               byTool: Object.fromEntries(costByTool),
               totalTokens,
               totalCost,
-            });
+            };
+            // 受控团队成本段：仅当 teamMembers 真实存在（run 用了 SendMessage 子代理）才并入。
+            if (teamMembers.size > 0) {
+              const members = [...teamMembers.entries()].map(([name, m]) => ({
+                name,
+                model: m.model,
+                tokens: m.tokens,
+                cost: m.cost,
+                budgetExceeded: m.budgetExceeded,
+              }));
+              // totalTokens/totalCost 在 run-service 内自累加（与 byTool 一致口径），不依赖 agent 投影。
+              const teamTotalTokens = members.reduce((sum, m) => sum + m.tokens, 0);
+              const teamTotalCost = members.reduce((sum, m) => sum + m.cost, 0);
+              costSummaryPayload.team = { members, totalTokens: teamTotalTokens, totalCost: teamTotalCost };
+            }
+            // 受控上下文预算段：仅当 budgetMetricSink 收集到 report 才并入（当前 app 默认未装配）。
+            if (contextBudgetReports.length > 0) {
+              costSummaryPayload.contextBudget = projectContextBudgetSummary(contextBudgetReports);
+            }
+            // SLO / 容量证据段（docs/v1.2 §3 差距#7 收口）：增量、受控并入，绝不改变既有 cost_summary 形状。
+            // 仅当取到有限有效值才写字段——脏样本（缺失/NaN）跳过，避免污染既有事件或落库失败。
+            const durationMs = Number.isFinite(runStartedAt) ? now().getTime() - runStartedAt : undefined;
+            if (durationMs !== undefined && durationMs >= 0) costSummaryPayload.durationMs = durationMs;
+            // turn 数：至少 1 条 assistant 消息才视为有效统计（常规 run 必有 ≥1 条）。
+            if (assistantTurns > 0) costSummaryPayload.turnCount = assistantTurns;
+            // 终态推导：发过 run_error → failed；取消信号置位 → interrupted；其余 completed（防御式默认）。
+            const outcome: "completed" | "failed" | "interrupted" = emittedRunError
+              ? "failed"
+              : controller.signal.aborted
+                ? "interrupted"
+                : "completed";
+            costSummaryPayload.outcome = outcome;
+            // 容量快照：结束时活跃 run 数（取自 executionRegistry，接口合规用 list().length）。
+            const activeRuns = dependencies.executionRegistry.list().length;
+            if (Number.isFinite(activeRuns)) costSummaryPayload.activeRuns = activeRuns;
+            // 容量峰值：运行期间观测到的活跃 run 峰值（采样值，受控、不额外依赖）。
+            if (Number.isFinite(peakConcurrency)) costSummaryPayload.peakConcurrency = peakConcurrency;
+            await publish(userId, snapshot, "cost_summary", costSummaryPayload);
           } catch {
             // 观测性事件落库失败时忽略，不影响 run 终态。
           }
@@ -452,6 +595,8 @@ export function createRunApplicationService(dependencies: RunServiceDependencies
         }
       }
     } catch (caught) {
+      // 标记本次 run 发过 run_error，供 agent_end（若可达）推导 outcome=failed；落库失败被既有 try/catch 兜住。
+      emittedRunError = true;
       await publish(userId, snapshot, "run_error", { error: toRunError(caught, snapshot.requestId, controller.signal.aborted) });
     } finally {
       dependencies.executionRegistry.delete(runId);

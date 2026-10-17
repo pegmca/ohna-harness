@@ -14,6 +14,10 @@ import {
   createInMemoryExecutionRegistry,
   createInMemoryRunEventBus
 } from "./adapters/in-memory-run-runtime.js";
+import type { ToolResultStore } from "@aiagent/database";
+import type { BudgetConfig, BudgetTracker } from "./application/budget-tracker.js";
+import type { CircuitBreaker } from "./application/circuit-breaker.js";
+import type { RunCancelStore, RunExecutionRegistry } from "./application/run-ports.js";
 import { createRunWorker } from "./application/run-worker.js";
 import {
   createRunApplicationService,
@@ -75,6 +79,23 @@ export interface ApiServerOptions {
   /** compaction 注入点（测试用小 contextWindow 触发压缩）。 */
   compaction?: RunCompactionOptions;
   staleRunThresholdMs?: number;
+  /**
+   * 执行注册表（取消信号跨实例边界）：缺省用进程内内存注册表（单实例 demo / 测试）。
+   * 多实例部署由组合根（server.ts）注入共享取消信号 + DB 标记的跨实例实现。
+   */
+  executionRegistry?: RunExecutionRegistry;
+  /** 跨实例取消标记存储；多实例部署由组合根注入 DB 实现，缺省退化为进程内。 */
+  cancelStore?: RunCancelStore;
+  /** 写类工具结果去重存储；多实例/持久化由组合根注入 DB 实现，缺省退化为进程内。 */
+  toolResultStore?: ToolResultStore;
+  /** 写类（有副作用）工具名集合：续跑恢复时若已有结果则直接复用，避免重复副作用。 */
+  writeToolNames?: string[];
+  /** 运行预算上限配置（成本 guardrail，env 驱动）。 */
+  budget?: BudgetConfig;
+  /** 运行预算追踪器（成本 guardrail）；缺省按 budget 创建进程内实现。 */
+  budgetTracker?: BudgetTracker;
+  /** LLM provider 熔断器（运行时 SLO 熔断）；缺省从 env 创建实例级熔断器。 */
+  circuitBreaker?: CircuitBreaker;
 }
 
 declare module "fastify" {
@@ -116,7 +137,8 @@ export function createApiServer(options: ApiServerOptions): FastifyInstance {
     store: runStore,
     messageStore,
     eventBus: runEventBus,
-    executionRegistry: createInMemoryExecutionRegistry(),
+    executionRegistry: options.executionRegistry ?? createInMemoryExecutionRegistry(),
+    cancelStore: options.cancelStore,
     tools: options.tools ?? createDefaultToolRegistry().list(),
     resolveModel: (modelId) => modelRegistry.resolve(modelId),
     hasModel: (modelId) => modelRegistry.has(modelId),
@@ -129,6 +151,9 @@ export function createApiServer(options: ApiServerOptions): FastifyInstance {
     dataSourceRuntime: options.dataSourceRuntime as Parameters<typeof createRunApplicationService>[0]["dataSourceRuntime"],
     citationRepository: options.citationRepository,
     compaction: options.compaction,
+    // 透传调用方注入的 LLM provider 熔断器（运行时 SLO 熔断）；缺省由 run-service 自行创建。
+    // 透传后同一实例可被观测 / 测试端点共享，是故障演练可观测性的必要前提。
+    circuitBreaker: options.circuitBreaker,
     // report 工具按 run 装配（阶段 5 方案 A）：模型自主调用 generate_report，
     // 事件经 recordEvent 落 run_events + SSE，PDF 在工具内直接发布（无 approval 门）。
     reportToolFactory: ({ recordEvent, userId, conversationId, runId }) => createReportTool({

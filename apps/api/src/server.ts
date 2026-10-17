@@ -1,7 +1,7 @@
 import { agentLoop, defaultConvertToLlm, type AgentMessage } from "@aiagent/agent";
 import { createOpenAiCompatibleRuntime, type Model } from "@aiagent/ai";
 import { createQqBotChannel } from "@aiagent/channels";
-import { createDatabaseRuntime, createAttachmentStoreFromEnv, createRunEventBusTransportFromEnv, createVectorStoreFromEnv } from "@aiagent/database";
+import { createDatabaseRuntime, createAttachmentStoreFromEnv, createPostgresKeywordCandidateStore, createRunEventBusTransportFromEnv, createVectorStoreFromEnv } from "@aiagent/database";
 import { createLocalArtifactStorage } from "@aiagent/report";
 import { createIdentityService } from "@aiagent/identity";
 import { discoverMcpAgentTools, createMcpStdioClient, type McpClient } from "@aiagent/mcp";
@@ -20,6 +20,10 @@ import { createDefaultToolRegistry, createFinancialDataSourceFromEnv } from "@ai
 import { stat } from "node:fs/promises";
 import { createApiServer } from "./index.js";
 import { createRedisRunEventBus } from "./adapters/redis-run-event-bus.js";
+import { createSharedExecutionRegistry } from "./adapters/execution-registry-shared.js";
+import { createRedisRunCancelSignal } from "./adapters/redis-run-cancel-signal.js";
+import { createInMemoryRunCancelSignal } from "./adapters/in-memory-run-runtime.js";
+import { createCircuitBreaker } from "./application/circuit-breaker.js";
 import { createModelRuntimeRegistry, type ModelRuntimeEntry } from "./application/model-registry.js";
 import { BASE_SYSTEM_PROMPT } from "./application/run-service.js";
 
@@ -158,6 +162,16 @@ const runEventBusRuntime = createRunEventBusTransportFromEnv();
 const runEventBus = runEventBusRuntime.transport
   ? createRedisRunEventBus(runEventBusRuntime.transport)
   : undefined;
+// 执行注册表外置（P0）：取消信号跨实例。REDIS_URL 存在走 Redis pub/sub 取消信号，
+// 否则退化为进程内内存信号（单实例 demo）；取消标记持久化始终用 DB（组合根已要求 DATABASE_URL）。
+// 与 SSE 事件总线同一传输层与兜底策略，保证"取消请求落在实例 B、run 执行在实例 A"时仍能真正中断。
+const runCancelSignal = runEventBusRuntime.transport
+  ? createRedisRunCancelSignal(runEventBusRuntime.transport)
+  : createInMemoryRunCancelSignal();
+const executionRegistry = createSharedExecutionRegistry({
+  cancelSignal: runCancelSignal,
+  cancelStore: database.runCancelStore
+});
 const app = createApiServer({
   modelRegistry,
   tools: agentTools,
@@ -175,7 +189,12 @@ const app = createApiServer({
     vectorStoreFactory: createVectorStoreFromEnv(database.pool, {
       embeddingModel: embeddingProvider.embeddingModel,
       dimensions: embeddingProvider.dimensions
-    })
+    }),
+    // P3 关键词候选外置：有 DATABASE_URL 时按 owner 绑定 Postgres 共享存储实现，关键词召回跨实例一致；
+    // 无 DATABASE_URL 时 keywordStoreFactory 为 undefined，retriever() 退回内存语料路径（本地 demo）。
+    keywordStoreFactory: process.env.DATABASE_URL
+      ? (ownerUserId) => createPostgresKeywordCandidateStore(database.pool, { ownerUserId })
+      : undefined
   }),
   attachmentRepository: database.attachmentRepository,
   attachmentStore: attachmentStoreRuntime.store,
@@ -194,6 +213,23 @@ const app = createApiServer({
   artifactStorage: createLocalArtifactStorage(artifactStorageRoot),
   runStore: database.runRepository,
   eventBus: runEventBus,
+  executionRegistry,
+  cancelStore: database.runCancelStore,
+  toolResultStore: database.toolResultStore,
+  // 写类（有副作用）工具名集合：续跑恢复时若已有结果则直接复用，避免重复副作用。
+  writeToolNames: ["generate_report"],
+  // 成本 guardrail（P2）：env 驱动 run 级 / user 级 token + 成本上限；缺省不限制。
+  budget: {
+    runMaxTokens: envInt("AIAGENT_RUN_MAX_TOKENS"),
+    runMaxCostUsd: envFloat("AIAGENT_RUN_MAX_COST_USD"),
+    userMaxTokens: envInt("AIAGENT_USER_MAX_TOKENS"),
+    userMaxCostUsd: envFloat("AIAGENT_USER_MAX_COST_USD")
+  },
+  // 运行时 SLO 熔断（P2）：env 驱动连续失败阈值与冷却窗口；缺省保守默认。
+  circuitBreaker: createCircuitBreaker({
+    failureThreshold: envInt("AIAGENT_LLM_CB_FAILURES"),
+    cooldownMs: envInt("AIAGENT_LLM_CB_COOLDOWN_MS")
+  }),
   readiness: async () => {
     // 读四组 RAG provider 配置，汇总启用状态（禁用非致命，但需在 readiness 显式暴露，避免静默降级）。
     const rerankProvider = readRerankProviderConfig();
@@ -219,6 +255,32 @@ const app = createApiServer({
     };
   }
 });
+
+/**
+ * 读取可选整数 env（用于预算上限 / 熔断阈值等）。缺失 / 非法 / ≤0 时返回 undefined（表示不限制 / 用缺省）。
+ *
+ * @param name 环境变量名。
+ * @returns 正整数或 undefined。
+ */
+function envInt(name: string): number | undefined {
+  const raw = process.env[name]?.trim();
+  if (!raw) return undefined;
+  const value = Number(raw);
+  return Number.isInteger(value) && value > 0 ? value : undefined;
+}
+
+/**
+ * 读取可选浮点 env（用于美元成本上限）。
+ *
+ * @param name 环境变量名。
+ * @returns 正数或 undefined（表示不限制）。
+ */
+function envFloat(name: string): number | undefined {
+  const raw = process.env[name]?.trim();
+  if (!raw) return undefined;
+  const value = Number(raw);
+  return Number.isFinite(value) && value > 0 ? value : undefined;
+}
 
 /**
  * 检查 artifact 存储根目录可写，readiness 与 PDF 下载共用同一事实源。

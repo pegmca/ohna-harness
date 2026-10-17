@@ -38,6 +38,7 @@ import {
   type DataSourceRuntimeOptions,
   type DataSourceRuntimeResult,
   type EmbeddingClient,
+  type KeywordCandidateStore,
   type RagAnswerRuntimeResponse,
   type RagChunk,
   type RagPackageSummary,
@@ -86,6 +87,8 @@ export function createDataSourceRuntime(options: DataSourceRuntimeOptions = {}):
 class DataSourceRuntimeService implements DataSourceRuntime {
   private readonly embeddingClient?: EmbeddingClient;
   private readonly vectorStoreFactory: (ownerUserId: string | null) => VectorStore;
+  /** 外置关键词候选存储工厂（P3）；注入后关键词召回走共享存储，进程内不再持有整库 chunks。 */
+  private readonly keywordStoreFactory?: (ownerUserId: string | null) => KeywordCandidateStore;
   private readonly repository: RagDocumentRepository;
   private readonly reranker?: Reranker;
   private readonly contextEnricher?: (
@@ -108,6 +111,7 @@ class DataSourceRuntimeService implements DataSourceRuntime {
     this.repository = options.repository ?? createInMemoryRagDocumentRepository();
     this.embeddingClient = options.embeddingClient ?? undefined;
     this.vectorStoreFactory = options.vectorStoreFactory ?? createInMemoryVectorStoreFactory();
+    this.keywordStoreFactory = options.keywordStoreFactory;
     // 生产增强项为 null 时归一为 undefined，等价于"未注入"；HybridRetriever 会用自己的 HeuristicReranker 保底。
     this.reranker = options.reranker ?? undefined;
     this.contextEnricher = options.contextEnricher ?? undefined;
@@ -444,6 +448,24 @@ class DataSourceRuntimeService implements DataSourceRuntime {
     }
 
     try {
+      // P3：注入外置关键词候选存储时，关键词召回直接走共享存储，进程内不再把整库 chunks 载入内存做扫描，
+      // 与向量召回共享同一份 Postgres 事实源、跨实例一致；此时无需为关键词路径加载/嵌入 chunks。
+      // 未注入（无 DATABASE_URL / 单测）时退回既有内存语料路径，行为不变。
+      const keywordStore = this.keywordStoreFactory?.(ownerUserId);
+      if (keywordStore) {
+        return {
+          ok: true,
+          data: createHybridRetriever({
+            embeddingClient,
+            vectorStore: this.vectorStoreFactory(ownerUserId),
+            // 关键词候选已外置，内存语料置空（仅向量召回与打分需要，向量召回不消费 chunks）。
+            chunks: [],
+            keywordStore,
+            reranker: this.reranker
+          })
+        };
+      }
+
       const chunks: RagChunk[] = [];
       let cursor: string | undefined;
       do {

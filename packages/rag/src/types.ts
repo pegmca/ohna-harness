@@ -18,6 +18,8 @@ import type {
 } from "@aiagent/types";
 import type { QueryRewriter } from "./query-rewrite.js";
 import type { RagDocumentRepository, RagDocumentScope } from "./document-repository.js";
+import type { KeywordCandidateStore } from "./keyword-store.js";
+export type { KeywordCandidateStore } from "./keyword-store.js";
 
 export type RagDocument = RagDocumentDto;
 export type RagChunk = RagChunkDto;
@@ -277,6 +279,13 @@ export interface DataSourceRuntimeOptions {
   embeddingClient?: EmbeddingClient | null;
   vectorStoreFactory?: (ownerUserId: string | null) => VectorStore;
   /**
+   * 外置关键词候选存储工厂（P3）：按 owner 绑定 Postgres 共享存储实现，使关键词召回跨实例一致。
+   * 注入后 `retriever()` 不再把整库 chunks 载入进程内存做关键词扫描，而是直接从共享表读取候选；
+   * 缺省 undefined 时退回内存语料路径（单测/本地 demo 退化，无 DATABASE_URL 场景）。
+   * 与 vectorStoreFactory 同一按 owner 绑定范式，保证 private 文档仅 owner 可见。
+   */
+  keywordStoreFactory?: (ownerUserId: string | null) => KeywordCandidateStore;
+  /**
    * 真实 Reranker（cross-encoder / LLM-judge）注入点；缺省（undefined 或 null）时
    * HybridRetriever 内部回退 HeuristicReranker。通过 createRerankerFromEnv() 在生产组合中注入，
    * 该函数禁用时返回 null，组合根应视为"未注入精排"。
@@ -297,8 +306,18 @@ export interface DataSourceRuntimeOptions {
 export interface HybridRetrieverOptions {
   embeddingClient: EmbeddingClient;
   vectorStore: VectorStore;
-  chunks: readonly EmbeddedChunk[];
+  /**
+   * 内存关键词语料（仅当未注入 keywordStore 时使用）。
+   * 注入外置 keywordStore 后本字段可空：关键词候选改从共享存储读取，跨实例一致，
+   * 不再需要在进程内持有整库 chunks（P3）。
+   */
+  chunks?: readonly EmbeddedChunk[];
   reranker?: Reranker;
+  /**
+   * 外置关键词候选存储（P3）：注入后关键词召回从共享存储读取，跨实例一致。
+   * 缺省 undefined 时退回内存扫描 `chunks`（单测/本地 demo 退化路径）。
+   */
+  keywordStore?: KeywordCandidateStore;
 }
 
 export interface RagStructuredError {

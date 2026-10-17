@@ -180,6 +180,25 @@ function toAgentLoopError(caught: unknown): AgentLoopError {
 }
 
 /**
+ * 取上下文最后一条消息：若其为带 toolCall 的 assistant（即上一轮已 checkpoint 但工具结果尚未落库的窄窗口），
+ * 返回该 assistant 与其 toolCall，供续跑恢复时先重放工具调用而非重新生成 assistant。
+ *
+ * @param context 当前 agent 上下文。
+ * @returns 待重放的 assistant 与 toolCall；非此情形返回 undefined。
+ */
+function trailingAssistantToolCalls(
+  context: AgentContext
+): { assistant: AssistantMessage; toolCalls: Extract<AssistantMessage["content"][number], { type: "toolCall" }>[] } | undefined {
+  const last = context.messages[context.messages.length - 1];
+  if (!last || last.role !== "assistant") return undefined;
+  const toolCalls = (last as AssistantMessage).content.filter(
+    (block): block is Extract<AssistantMessage["content"][number], { type: "toolCall" }> => block.type === "toolCall"
+  );
+  if (toolCalls.length === 0) return undefined;
+  return { assistant: last as AssistantMessage, toolCalls };
+}
+
+/**
  * 主循环（agentLoop / agentLoopContinue 共享）。
  * 内层处理 toolCall 与 steering；内层退出后外层查 follow-up，有则继续，否则 agent_end。
  */
@@ -218,6 +237,23 @@ async function runLoop(
           newMessages.push(message);
         }
         pendingMessages = [];
+      }
+
+      // 续跑恢复：若上下文最后一条是带 toolCall 的 assistant（崩溃发生在检查点写入后、工具结果落库前的窄窗口），
+      // 先重放该轮工具调用——写类工具经去重键（工具名+参数哈希）复用已落库结果、绝不重放副作用，
+      // 读类工具重放但无副作用；重放完成后下一轮迭代再生成新的 assistant，实现"从检查点续跑、跳过已完成轮次"。
+      const resumeTurn = trailingAssistantToolCalls(currentContext);
+      if (resumeTurn) {
+        const executedBatch = resumeTurn.assistant.stopReason === "length"
+          ? await failToolCallsFromTruncatedMessage(resumeTurn.toolCalls, emit)
+          : await executeToolCalls(currentContext, resumeTurn.assistant, config, signal, emit);
+        for (const result of executedBatch.messages) {
+          currentContext.messages.push(result);
+          newMessages.push(result);
+        }
+        await emit({ type: "turn_end", message: resumeTurn.assistant, toolResults: executedBatch.messages });
+        // 重放的工具结果不计为新 turn 的 LLM 调用，直接进入下一轮 assistant 生成。
+        continue;
       }
 
       const message = await streamAssistantResponse(currentContext, config, signal, emit, streamFunction);

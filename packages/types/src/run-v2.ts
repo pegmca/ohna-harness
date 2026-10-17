@@ -78,6 +78,18 @@ export interface RunSnapshotDtoV2 {
   updatedAt: string;
   startedAt?: string;
   completedAt?: string;
+  /**
+   * 执行检查点：每轮提交后写入（turn / lastEventSequence / createdAt），
+   * 支持从最近检查点续跑而非整 Run 重排。无则为 undefined（尚未产出检查点或内存实现）。
+   */
+  lastCheckpoint?: {
+    /** 已完成轮数（每个 assistant 终态消息为一轮）。 */
+    turn: number;
+    /** 该轮结束时的事件高水位，续跑从此序号之后重建上下文。 */
+    lastEventSequence: number;
+    /** 检查点写入时间。 */
+    createdAt: string;
+  };
 }
 
 /** 创建研究 Run 的请求；显式模式与触发入口分离，避免 UI 泄漏 Agent 路由细节。 */

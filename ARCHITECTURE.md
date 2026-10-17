@@ -78,7 +78,7 @@ context-assembly（调用方显式注入 `contextAssemblyTransform` 才启用）
 
 ## 5. Runtime View
 
-`apps/api/src/server.ts` 是服务端（HTTP/SSE）的生产 composition root：所有 PostgreSQL adapter 在此注入，领域 package 不读取 `DATABASE_URL`。`apps/cli/src/index.ts` 是终端 harness 的组合根，二者共用同一 `agentLoop` 内核、仅运输层不同。PostgreSQL 是 Identity、Conversation/Message、Run/RunEvent、RAG document/chunk/vector、Citation、Workflow 与 Artifact metadata 的唯一事实源；内存只保留 live event bus、execution registry 的 `AbortController` 和 microtask scheduler，内存 repository 只能由测试显式创建。
+`apps/api/src/server.ts` 是服务端（HTTP/SSE）的生产 composition root：所有 PostgreSQL adapter 在此注入，领域 package 不读取 `DATABASE_URL`。`apps/cli/src/index.ts` 是终端 harness 的组合根，二者共用同一 `agentLoop` 内核、仅运输层不同。PostgreSQL 是 Identity、Conversation/Message、Run/RunEvent、RAG document/chunk/vector、Citation、Workflow 与 Artifact metadata 的唯一事实源；**取消信号也已外置**——`RunExecutionRegistry` 经 Redis pub/sub 跨实例广播即时中断，并以 `run_cancellations` 表持久化标记兜底 queued 竞态，因此"取消请求落在实例 B、run 执行在实例 A"也能真正中断（P0）。内存只保留 live event bus 的本地订阅者、各实例的 `AbortController` 映射与 microtask scheduler，内存 repository 只能由测试显式创建。
 
 1. 启动顺序固定为：migration 状态检查（存在 pending migration 直接拒绝启动）→ Fastify ready（陈旧 Run 恢复，把超时未终态的 Run 落库为 `run_interrupted` 失败）→ listen 接流量。readiness 同时验证 provider 配置、PostgreSQL 连通性和 artifact storage 根目录。
 2. Web creates a run through the API.
@@ -86,7 +86,7 @@ context-assembly（调用方显式注入 `contextAssemblyTransform` 才启用）
 4. The application service schedules execution; `agentLoop` consumes `AssistantMessageEvent`s from `packages/ai` and emits one canonical run event stream. RAG, report/workflow, and MCP extensions emit their own events into the same stream via the run service.
 5. `packages/trace` redacts sensitive values before persistence; `RunStore` appends each event to `run_events` in a transaction that also updates the Run snapshot and assigns a continuous sequence. Only after commit does the event bus fan out live events. 总线默认是进程内内存实现（`createInMemoryRunEventBus`）；当配置 `REDIS_URL` 时升级为 Redis pub/sub 支撑的跨实例总线（`createRedisRunEventBus` + `createRedisPubSubTransport`，发布/订阅两条独立连接、懒连接），用 `instanceId` 信封抑制 self-echo，保证每个订阅者恰好收到一次。
 6. Web projects events into assistant-message progress and an on-demand detail panel.
-7. A terminal event (`agent_end` or `run_error`) provides the final structured result. Explicit cancellation propagates through an execution registry owned `AbortSignal`.
+7. A terminal event (`agent_end` or `run_error`) provides the final structured result. Explicit cancellation is externalized (P0): `requestCancel` writes a persistent `run_cancellations` marker and broadcasts an instant signal over Redis pub/sub; each instance subscribes and aborts its local `AbortController`, so a cancel issued on instance B interrupts a run executing on instance A. **best-effort 竞态说明**：`execute` 启动时的 "回查 `cancelStore.isCancelled`"（`run-service.ts` 启动兜底）与 `cancel` 调用时的 "`markCancelled` + 广播" 之间存在极小竞态窗口——若取消恰在 `execute` 回查之后、订阅建立之前到达，本次 run 可能漏掉取消而在本实例正常执行（但后续重排/取消语义仍会收敛）。该窗口为 best-effort 兜底而非强一致保证，与 SSE 订阅早于广播的丢失窗口同源，不破坏 run 状态机终态正确性。
 8. SSE replays persisted events, subscribes to the event bus (Redis pub/sub when deployed multi-instance, else process-local), buffers live delivery during a catch-up query, then merges and drains only continuous sequences. A later live gap triggers another persisted-event query. 单连接背压由 `ordered-run-event-stream.ts` 承担（`write()` 返回 `false` 时暂停 drain，`reply.raw` 的 `'drain'` 事件触发 `resume()` 恢复，pending buffer 零丢弃）。`RunStore`, `RunEventBus`, and `RunScheduler` remain separate ports.
 9. Graceful shutdown（SIGTERM/SIGINT）：先停止接收新 Run（提交返回 503），中断在途执行并有限 drain（`SHUTDOWN_DRAIN_MS`，默认 10s），仍未终态的 Run 复用陈旧恢复路径落库为 `run_interrupted`，最后关闭 SSE 连接、QQ channel 与连接池。
 
@@ -100,7 +100,7 @@ context-assembly（调用方显式注入 `contextAssemblyTransform` 才启用）
 
 ## 7. Decisions and Risks
 
-Architecture-significant decisions live in `docs/decisions/`. Run snapshots/events, messages, citations, RAG ingestion lineage, workflows, artifact metadata, and vector indexes are persisted in PostgreSQL. Only live event subscribers, cancellation controllers, and the microtask scheduler remain process-local. A restart marks only stale non-terminal Runs as an explainable `run_interrupted` failure; automatic execution continuation remains a worker/queue follow-up. Root-level end-to-end evidence (restart, SSE reconnect, cross-user isolation, idempotency races, `pg_dump` restore, PostgreSQL outage, graceful shutdown) lives in `test/verify-runtime-integration.mjs`.
+Architecture-significant decisions live in `docs/decisions/`. Run snapshots/events, messages, citations, RAG ingestion lineage, workflows, artifact metadata, vector indexes, run cancellation markers, and write-class tool results are persisted in PostgreSQL. Cancellation is externalized (Redis pub/sub signal + `run_cancellations`/`tool_results` tables), so it is no longer a process-local concern. Only live event subscribers, each instance's local `AbortController` map, and the microtask scheduler remain process-local. A restart marks only stale non-terminal Runs as an explainable `run_interrupted` failure; automatic execution continuation remains a worker/queue follow-up. Root-level end-to-end evidence (restart, SSE reconnect, cross-user isolation, idempotency races, `pg_dump` restore, PostgreSQL outage, graceful shutdown) lives in `test/verify-runtime-integration.mjs`.
 
 ## 8. Multi-Agent Team & Cost Guardrail
 

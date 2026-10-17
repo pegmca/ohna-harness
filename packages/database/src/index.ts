@@ -24,6 +24,7 @@ export {
   DEFAULT_PRODUCTION_EMBEDDING_DIMENSIONS,
   type VectorStoreEnvOptions
 } from "./vector-store-factory.js";
+export { createPostgresKeywordCandidateStore } from "./keyword-candidate-store.js";
 export { RepositoryError, type RepositoryErrorCode } from "./repository-error.js";
 export { isPostgresUniqueViolation, postgresTimestampToIso } from "./postgres.js";
 export { createPostgresConversationRepository } from "./conversation-repository.js";
@@ -37,6 +38,10 @@ import { createPostgresArtifactRepository, createPostgresWorkflowRepository } fr
 export { createPostgresArtifactRepository, createPostgresWorkflowRepository } from "./report.js";
 import { createPostgresRunRepository, type RunRepository } from "./run-repository.js";
 export { createPostgresRunRepository, type ClaimedRunRow, type CreateRunInputV2, type RunRepository } from "./run-repository.js";
+import { createPostgresRunCancelStore, type RunCancelStore } from "./run-cancel-repository.js";
+export { createPostgresRunCancelStore, type RunCancelStore } from "./run-cancel-repository.js";
+import { createPostgresToolResultStore, type ToolResultStore, type ToolResultRecord } from "./tool-result-repository.js";
+export { createPostgresToolResultStore, type ToolResultStore, type ToolResultRecord } from "./tool-result-repository.js";
 import { listPendingMigrations } from "./migrate.js";
 import { createPostgresCitationRepository } from "./citation-repository.js";
 export { createPostgresCitationRepository } from "./citation-repository.js";
@@ -74,6 +79,10 @@ export interface DatabaseRuntime {
   workflowRepository: WorkflowRepository;
   artifactRepository: ArtifactRepository;
   runRepository: RunRepository;
+  /** Run 取消标记持久化（跨实例取消兜底层），execute 启动时回查已取消的 queued run。 */
+  runCancelStore: RunCancelStore;
+  /** 写类工具结果去重存储（at-least-once 重排的副作用安全网）。 */
+  toolResultStore: ToolResultStore;
   attachmentRepository: AttachmentRepository;
   close(): Promise<void>;
   ping(): Promise<boolean>;
@@ -105,6 +114,8 @@ export function createDatabaseRuntime(databaseUrl: string): DatabaseRuntime {
     workflowRepository: createPostgresWorkflowRepository(pool),
     artifactRepository: createPostgresArtifactRepository(pool),
     runRepository: createPostgresRunRepository(pool),
+    runCancelStore: createPostgresRunCancelStore(pool),
+    toolResultStore: createPostgresToolResultStore(pool),
     attachmentRepository: createPostgresAttachmentRepository(pool),
     async close() { await pool.end(); },
     async listPendingMigrations() { return listPendingMigrations(pool); },

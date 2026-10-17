@@ -31,6 +31,15 @@ export interface RunStore {
   /** 崩溃恢复：把非终态且早于 before 的 run 标记 interrupted 并补 run_status 事件。 */
   recoverStale(before: string, occurredAt: string): Promise<RunStreamEventDtoV2[]>;
   /**
+   * 写入执行检查点：每轮提交后记录 (turn, lastEventSequence)，支持从最近检查点续跑。
+   * 仅追加覆盖（同 run 只保留最新检查点），不影响事件溯源与状态机。
+   *
+   * @param userId 当前用户（所有权校验）。
+   * @param runId Run 标识。
+   * @param checkpoint 检查点载荷（轮数 + 事件高水位）。
+   */
+  setCheckpoint(userId: string, runId: string, checkpoint: RunSnapshotDtoV2["lastCheckpoint"]): Promise<void>;
+  /**
    * worker 抢占下一个 queued run：`FOR UPDATE SKIP LOCKED` + 设 lease_until + claimed_by + status='running'。
    * 原子事务保证同一 run 只被一个 worker claim；无 queued run 时返回 undefined。
    *
@@ -63,4 +72,41 @@ export interface RunExecutionRegistry {
   delete(runId: string): void;
   /** @returns 仍在执行中的 runId 列表，供 graceful shutdown drain 与批量中断使用。 */
   list(): string[];
+  /**
+   * 请求取消某 run（跨实例语义）：写持久化取消标记（queued 竞态兜底）并广播即时信号，
+   * 使正在任意实例上执行该 run 的 loop 通过本地 AbortController 收到中断。
+   * 替代原进程内 `get(runId)?.abort()`——后者只能中断创建控制器所在进程内的 run。
+   *
+   * @param runId 目标 run 标识。
+   * @returns 广播（可能含落库）的 Promise；单实例内存实现可同步返回。
+   */
+  requestCancel(runId: string): void | Promise<void>;
+}
+
+/**
+ * 跨实例取消信号传输层（与具体 Redis 客户端解耦，便于测试用内存替身）。
+ *
+ * 取消语义与 SSE 事件总线复用同一「发布/订阅」抽象：某实例请求取消时 `publish(runId)`，
+ * 正在执行该 run 的实例通过 `subscribe` 收到信号并中断本地 AbortController。
+ * 多实例下"取消请求落在实例 B、run 执行在实例 A"时，正是靠这一层把中断意图送达 A。
+ */
+export interface RunCancelSignal {
+  /** 订阅某 run 的取消事件；返回取消订阅函数（幂等，重复订阅同一 runId 不抛错）。 */
+  subscribe(runId: string, listener: () => void): () => void;
+  /** 广播某 run 的取消请求（可异步）。语义为 fire-and-forget：redis 抖动不影响 run 执行。 */
+  publish(runId: string): Promise<void> | void;
+}
+
+/**
+ * 取消标记持久化端口：覆盖"execute 订阅前已被取消"的 queued 竞态。
+ *
+ * 进程内 pub/sub 无法回放历史消息——若取消广播先于 worker claim 后 execute 的订阅到达，
+ * 该次取消会丢失。用一张小表持久记录取消意图，execute 启动时回查即可兜底。
+ * 与 `RunCancelSignal` 互补：signal 负责在途 run 的即时中断，store 负责 queued run 的确定性兜底。
+ */
+export interface RunCancelStore {
+  /** 记录某 run 已被请求取消（幂等：重复标记不报错）。 */
+  markCancelled(runId: string): Promise<void> | void;
+  /** @returns 该 run 是否已被请求取消。 */
+  isCancelled(runId: string): Promise<boolean> | boolean;
 }

@@ -43,8 +43,13 @@ import {
   type Retriever
 } from "@aiagent/rag";
 import { redactSensitiveValue } from "@aiagent/trace";
+import type { ToolResultStore } from "@aiagent/database";
 import { createHash, randomUUID } from "node:crypto";
-import type { RunEventBus, RunExecutionRegistry, RunStore } from "./run-ports.js";
+import { createInMemoryRunCancelStore, createInMemoryToolResultStore } from "../adapters/in-memory-run-runtime.js";
+import { createCircuitBreaker, guardStreamFn, type CircuitBreaker } from "./circuit-breaker.js";
+import { createInMemoryBudgetTracker, type BudgetConfig, type BudgetTracker } from "./budget-tracker.js";
+import type { AgentToolResult } from "@aiagent/tools";
+import type { RunCancelStore, RunEventBus, RunExecutionRegistry, RunStore } from "./run-ports.js";
 import type { ModelRuntime } from "./model-registry.js";
 
 /** 基础 system prompt；附件 grounding 由阶段 5 经 transformContext 回迁。 */
@@ -150,6 +155,30 @@ export interface RunServiceDependencies {
   budgetMetricSink?: (report: unknown) => void;
   now?: () => Date;
   createId?: (prefix: string) => string;
+  /**
+   * 跨实例取消标记存储（queued 竞态兜底）：execute 启动时回查已取消的 run，
+   * 覆盖"取消广播早于订阅"的丢失窗口。缺省退化为进程内实现（单实例）。
+   */
+  cancelStore?: RunCancelStore;
+  /**
+   * 写类工具结果去重存储（at-least-once 重排的副作用安全网）。缺省退化为进程内实现。
+   * 按 (run_id, tool_call_id) 幂等落工具结果，恢复续跑时据此跳过已完成的写类工具。
+   */
+  toolResultStore?: ToolResultStore;
+  /**
+   * 被视为"写类"（有副作用、需去重）的工具名称集合。命中的工具在续跑恢复时若已有结果则直接复用，
+   * 不再重放副作用。缺省为空（不去重任何工具）——引入写类工具时由组合根显式声明。
+   */
+  writeToolNames?: string[];
+  /**
+   * 运行预算上限配置（成本 guardrail，env 驱动）。缺省不限制；组合根从 env 注入具体上限。
+   * 仅当未显式注入 `budgetTracker` 时生效（作为其内部追踪器的上限来源）。
+   */
+  budget?: BudgetConfig;
+  /** 运行预算追踪器（成本 guardrail）；缺省按 `budget` 配置创建进程内实现。 */
+  budgetTracker?: BudgetTracker;
+  /** LLM provider 熔断器（运行时 SLO 熔断）；缺省从 env 创建实例级熔断器。 */
+  circuitBreaker?: CircuitBreaker;
 }
 
 export interface RunApplicationService {
@@ -189,6 +218,16 @@ export interface RunApplicationService {
 export function createRunApplicationService(dependencies: RunServiceDependencies): RunApplicationService {
   const now = dependencies.now ?? (() => new Date());
   const createId = dependencies.createId ?? (() => randomUUID());
+  // 跨实例取消兜底：缺省进程内实现（单实例）。多实例部署由组合根注入 DB 实现。
+  const cancelStore = dependencies.cancelStore ?? createInMemoryRunCancelStore();
+  // 写类工具结果去重：缺省进程内实现（单实例）。多实例/持久化由组合根注入 DB 实现。
+  const toolResultStore = dependencies.toolResultStore ?? createInMemoryToolResultStore();
+  // 写类工具名集合：命中的工具在续跑时若已有结果直接复用，避免重复副作用。
+  const writeToolNames = dependencies.writeToolNames ?? [];
+  // 成本 guardrail：缺省按 budget 配置创建进程内预算追踪器（run 级 + 进程内 user 级）。
+  const budgetTracker = dependencies.budgetTracker ?? createInMemoryBudgetTracker(dependencies.budget ?? {});
+  // 运行时 SLO 熔断：缺省从 env 创建实例级 LLM provider 熔断器。
+  const circuitBreaker = dependencies.circuitBreaker ?? createCircuitBreaker();
   // shutdown 期间拒绝新 Run，避免关闭窗口内写入无法 drain 的任务。
   let shuttingDown = false;
 
@@ -234,8 +273,13 @@ export function createRunApplicationService(dependencies: RunServiceDependencies
    * @returns 执行完成 Promise。
    */
   async function execute(runId: string, request: AgentRunCreateRequestDto, userId: string): Promise<void> {
-    const controller = dependencies.executionRegistry.get(runId);
-    if (!controller) return;
+    // 确保本地 AbortController 存在：run 实际执行所在实例可能与收到 create 请求的实例不同
+    // （worker claim 跨实例），因此 execute 兜底创建并订阅共享取消信号；同实例重复 create 幂等返回既有控制器。
+    let controller = dependencies.executionRegistry.get(runId);
+    if (!controller) controller = dependencies.executionRegistry.create(runId);
+    // queued 竞态兜底：若取消广播早于本实例订阅（进程内 pub/sub 不回放），回查持久化取消标记，
+    // 命中则立即中断，使已取消的 queued run 不会在 claim 后真正执行。
+    if (await cancelStore.isCancelled(runId)) controller.abort();
     const snapshot = await dependencies.store.findById(userId, runId);
     if (!snapshot) return;
     // 终态推导标记：catch 内发过 run_error 时置位；声明在函数作用域，便于 catch 访问（try 内 let 不可见）。
@@ -373,6 +417,10 @@ export function createRunApplicationService(dependencies: RunServiceDependencies
       };
 
       const maxTurns = dependencies.maxTurns ?? DEFAULT_MAX_TURNS;
+      // 成本 guardrail：预算超限标记（run 级 + user 级）。超限后本轮边界停止 run。
+      // 声明提升到 shouldStopAfterTurn 之前，便于在轮边界回调与 message_end 增量校验间共享（可读性）。
+      let budgetExceeded = false;
+      let budgetExceededReason: string | undefined;
       // report 工具按 run 装配：sink 转接 publish 落 run_events（事件名 workflow_node / pdf_export 不变）。
       const reportTool = dependencies.reportToolFactory?.({
         recordEvent: async (type, payload) => {
@@ -383,23 +431,38 @@ export function createRunApplicationService(dependencies: RunServiceDependencies
         runId
       });
       const tools = reportTool ? [...dependencies.tools, reportTool] : dependencies.tools;
+      // 写类工具去重包裹：命中的写类工具在续跑恢复时若已有 (run_id, tool_call_id) 结果，
+      // 直接复用而不重放副作用（at-least-once 重排的副作用安全网）。读类/只读工具不去重。
+      const dedupTools = tools.map((tool) => wrapWriteToolWithDedup(tool, runId, toolResultStore, writeToolNames));
       // metadata.hint 只做 system prompt 约束（不落库：messages/runs 无 metadata 列，避免动 schema）。
       const systemPrompt = request.metadata?.hint === "report"
         ? `${BASE_SYSTEM_PROMPT}\n${REPORT_HINT_SYSTEM_INSTRUCTION}`
         : BASE_SYSTEM_PROMPT;
+      // 续跑恢复：若快照已带检查点（turn>0），说明此前至少已完成若干轮并已落库，
+      // 则从最近检查点续跑——用已落库消息（listForContext 投影，含 prompt + 已完成轮次的 assistant/toolResult）
+      // 重建上下文，跳过已完成轮次，不再仅从 request_payload 重放全部轮次（docs/v1.2 §4 P1）。
+      // 完成轮数作为预算/计数基线，避免续跑把"历史轮数"重复计入 maxTurns/assistantTurns。
+      const completedTurns = snapshot.lastCheckpoint?.turn ?? 0;
+      const resume = completedTurns > 0;
+      // 续跑不追加 prompt：重建后的 history 已含 create 时落库的用户消息，避免重复落一条 user。
+      const initialPrompts: AgentMessage[] = resume ? [] : [prompt];
       const stream = agentLoop(
-        [prompt],
-        { systemPrompt, messages: history, tools },
+        initialPrompts,
+        { systemPrompt, messages: history, tools: dedupTools },
         {
           model: runtime.model,
           apiKey: runtime.apiKey,
           convertToLlm: defaultConvertToLlm,
           transformContext,
           shouldStopAfterTurn: ({ newMessages }) =>
-            newMessages.filter((message) => message.role === "assistant").length >= maxTurns
+            // 总完成轮数 = 已完成（检查点） + 本次续跑新产出的 assistant；续跑时从 completedTurns 续计，避免重复耗尽预算。
+            completedTurns + newMessages.filter((message) => message.role === "assistant").length >= maxTurns
+            // 成本 guardrail：预算超限后在本轮边界停止，避免失控 run 继续烧 token/成本。
+            || budgetExceeded
         },
         controller.signal,
-        runtime.streamFn as StreamFn | undefined
+        // 运行时 SLO 熔断：用熔断器包装 streamFn，provider 连续故障时快速失败而非反复重试放大故障。
+        circuitBreaker ? (guardStreamFn(runtime.streamFn, circuitBreaker) as unknown as StreamFn) : (runtime.streamFn as StreamFn)
       );
 
       // 顺序消费事件流：逐事件落库（先落库后广播由 publish 保证），message_end 落终态消息。
@@ -414,7 +477,9 @@ export function createRunApplicationService(dependencies: RunServiceDependencies
       // 全部防御式采集，仅当取到有限有效值才并入 cost_summary.payload（绝不干扰既有事件）。
       const runStartedAt = now().getTime();
       // turn 数 = 本次 run 产生的 assistant 消息数（与成本累加共用同一 message_end 分支）。
-      let assistantTurns = 0;
+      // 续跑时从检查点的已完成轮数续计，使 totalTurns 反映整次运行（含崩溃前已完成轮次），
+      // 检查点写入 (turn: assistantTurns) 与 maxTurns 预算都据此单调累计。
+      let assistantTurns = completedTurns;
       // 运行期间观测到的活跃 run 峰值：事件循环内周期采样 executionRegistry 计数；初值取起点快照。
       let peakConcurrency = dependencies.executionRegistry.list().length;
       // 受控团队成本收集（P3 可观测）：仅当 run 真实使用了 team/SendMessage 子代理才填充；
@@ -433,8 +498,11 @@ export function createRunApplicationService(dependencies: RunServiceDependencies
             dependencies.budgetMetricSink?.(report);
           }
         : undefined;
+      // 已落库事件高水位：用于检查点记录"从哪条事件续跑"。
+      let latestSequence = snapshot.lastEventSequence;
       for await (const event of stream) {
-        await publish(userId, snapshot, event.type, event);
+        const published = await publish(userId, snapshot, event.type, event);
+        if (published?.sequence !== undefined) latestSequence = published.sequence;
         // 容量采样：每次落库后刷新观测到的活跃 run 峰值（executionRegistry.list().length 为接口现有方法）。
         const activeNow = dependencies.executionRegistry.list().length;
         if (activeNow > peakConcurrency) peakConcurrency = activeNow;
@@ -442,6 +510,18 @@ export function createRunApplicationService(dependencies: RunServiceDependencies
         // 全部数值防御式读取（缺失/非有限 → 0），缺失 usage 的 tool 事件直接跳过，绝不抛异常。
         if (event.type === "message_end" && event.message.role === "assistant") {
           assistantTurns++;
+          // 每轮（assistant 终态消息）提交后写执行检查点：记录 (turn, 事件高水位)，
+          // 支持恢复时从最近检查点续跑而非整 Run 重排（P1 收敛 at-least-once 副作用安全）。
+          // 最佳努力：检查点仅为恢复优化，写入失败不阻断 run 终态。
+          try {
+            await dependencies.store.setCheckpoint(userId, runId, {
+              turn: assistantTurns,
+              lastEventSequence: latestSequence,
+              createdAt: now().toISOString()
+            });
+          } catch {
+            // 检查点写入失败忽略，不影响 run 本身。
+          }
           const usage = event.message.usage;
           const input = Number.isFinite(usage.input) ? usage.input : 0;
           const output = Number.isFinite(usage.output) ? usage.output : 0;
@@ -456,8 +536,34 @@ export function createRunApplicationService(dependencies: RunServiceDependencies
           costByModel.set(key, entry);
           totalTokens += total;
           totalCost += cost;
+          // 成本 guardrail：增量后立即做预算校验（run 级 + user 级）；超限则标记，本轮边界停止。
+          // budgetTracker.record 防御式：异常不应中断 run，仅当超时时置位标记。
+          try {
+            const check = budgetTracker.record(userId, runId, total, cost);
+            if (check.overBudget) {
+              budgetExceeded = true;
+              budgetExceededReason = check.reason;
+            }
+          } catch {
+            // 预算校验异常忽略，不影响 run 本身。
+          }
         }
         if (event.type === "tool_execution_end") {
+          // 写类工具结果去重由 wrapWriteToolWithDedup 以"工具名 + 参数哈希"确定性键落库（P1 修订），
+          // 此处不再以模型生成的 toolCall.id 重复记录——否则重排时该键查不到，反而重复副作用。
+          // 仅对读类/非写类工具保留原有 (run_id, tool_call_id) 记录（无害，仅作观测/续跑投影）。
+          if (!writeToolNames.includes(event.toolName)) {
+            try {
+              await toolResultStore.record({
+                runId,
+                toolCallId: event.toolCallId,
+                toolName: event.toolName,
+                result: event.result
+              });
+            } catch {
+              // 去重落库失败忽略，不影响 run 本身。
+            }
+          }
           // 受控团队成本投影（P3 可观测）：仅当工具为 SendMessage 且其 result.details 是 team 的
           // SubagentResult（带 member/usage/budgetExceeded/model）时才并入 team 段；常规工具不受影响。
           if (event.toolName === "SendMessage") {
@@ -573,6 +679,12 @@ export function createRunApplicationService(dependencies: RunServiceDependencies
                 ? "interrupted"
                 : "completed";
             costSummaryPayload.outcome = outcome;
+            // 成本 guardrail：预算超限标记（run 级 + user 级）。超限后 run 在轮边界停止，
+            // 终态仍为 completed（非取消/失败），但透出 budgetExceeded 供成本归因与告警。
+            if (budgetExceeded) {
+              costSummaryPayload.budgetExceeded = true;
+              if (budgetExceededReason) costSummaryPayload.budgetExceededReason = budgetExceededReason;
+            }
             // 容量快照：结束时活跃 run 数（取自 executionRegistry，接口合规用 list().length）。
             const activeRuns = dependencies.executionRegistry.list().length;
             if (Number.isFinite(activeRuns)) costSummaryPayload.activeRuns = activeRuns;
@@ -671,8 +783,9 @@ export function createRunApplicationService(dependencies: RunServiceDependencies
       const snapshot = await dependencies.store.findById(userId, runId);
       if (!snapshot) return undefined;
       if (snapshot.status === "queued" || snapshot.status === "running") {
-        // abort 后 loop 以 stopReason='aborted' 收尾，agent_end 落库时由 store 推导 cancelled。
-        dependencies.executionRegistry.get(runId)?.abort();
+        // 跨实例取消：写持久化标记（queued 兜底）+ 广播即时信号（在途中断）。
+        // 取代原进程内 get(runId)?.abort()——后者只能中断创建控制器所在进程内的 run。
+        await dependencies.executionRegistry.requestCancel(runId);
       }
       return dependencies.store.findById(userId, runId);
     },
@@ -683,8 +796,9 @@ export function createRunApplicationService(dependencies: RunServiceDependencies
     async shutdown({ drainMs }) {
       shuttingDown = true;
       // 先中断在途执行，执行体观察到 abort 后自行走取消收尾并退出 registry。
+      // requestCancel 跨实例广播：本实例在途 run 经本地订阅即时中断；其他实例同。
       for (const runId of dependencies.executionRegistry.list()) {
-        dependencies.executionRegistry.get(runId)?.abort();
+        await dependencies.executionRegistry.requestCancel(runId);
       }
       const deadline = Date.now() + drainMs;
       while (dependencies.executionRegistry.list().length > 0 && Date.now() < deadline) {
@@ -750,6 +864,81 @@ function toNewCitationInputs(citations: Citation[]): NewCitationInput[] {
     score: citation.confidence,
     verifierStatus: "unverified" as const
   }));
+}
+
+/**
+ * 稳定序列化：递归按 key 排序对象字段，使同一语义的参数在不同 key 插入顺序下得到一致字符串，
+ * 避免 JSON.stringify 对 key 顺序敏感导致同一工具调用的去重哈希漂移。
+ *
+ * @param value 任意可 JSON 化的值。
+ * @returns 规范化后的 JSON 字符串。
+ */
+function stableStringify(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map((item) => stableStringify(item)).join(",")}]`;
+  const obj = value as Record<string, unknown>;
+  const keys = Object.keys(obj).sort();
+  return `{${keys.map((key) => `${JSON.stringify(key)}:${stableStringify(obj[key])}`).join(",")}}`;
+}
+
+/**
+ * 派生写类工具去重键：以 (工具名 + 规范化参数哈希) 生成稳定键，替代模型生成的 toolCall.id。
+ *
+ * at-least-once 重排时模型会重新生成非可复现的 toolCall.id；若以该 id 去重，则重跑时查找必 miss、
+ * 写类工具被再次执行 → 重复副作用（违反本项目正确性红线）。而同一工具 + 同一参数在重排中必然一致，
+ * 故以确定性哈希为键，可使重跑复用已落库的 tool_results 行而非重放副作用。
+ *
+ * @param toolName 工具名。
+ * @param args 工具参数（原始对象，key 顺序未必稳定）。
+ * @returns 稳定去重键（sha256 十六进制）。
+ */
+function deriveWriteToolDedupKey(toolName: string, args: unknown): string {
+  return createHash("sha256").update(`${toolName}\0${stableStringify(args)}`).digest("hex");
+}
+
+/**
+ * 写类工具去重包裹：命中 `writeToolNames` 的工具在续跑恢复时若已有同一「工具名 + 规范化参数」的结果，
+ * 直接复用而不重放副作用，使 at-least-once 重排只补未完成的轮次、绝不重复副作用。
+ *
+ * 实现要点：
+ * - 去重键由 `deriveWriteToolDedupKey`（工具名 + 参数哈希）决定，与模型生成的 toolCall.id 无关，
+ *   因此重排时即便 toolCall.id 重新生成，依旧命中已落库结果（修正原实现以 toolCall.id 去重必 miss 的缺陷）。
+ * - 包裹后的 `execute` 在真正执行前先查去重存储；命中则原样返回已落结果（不重放副作用）。
+ * - 首次执行成功后以确定性键落库（幂等：on conflict do nothing），供后续重排复用。
+ * 缺省工具名集合为空，即不去重任何工具——引入写类工具时由组合根显式声明。
+ *
+ * @param tool 被包裹的原始工具。
+ * @param runId 当前 run 标识（去重键的一部分）。
+ * @param store 写类工具结果去重存储。
+ * @param writeToolNames 写类工具名集合。
+ * @returns 去重包裹后的工具（非写类工具原样返回）。
+ */
+export function wrapWriteToolWithDedup(
+  tool: import("@aiagent/tools").AgentTool,
+  runId: string,
+  store: ToolResultStore,
+  writeToolNames: string[]
+): import("@aiagent/tools").AgentTool {
+  if (!writeToolNames.includes(tool.name)) return tool;
+  return {
+    ...tool,
+    async execute(toolCallId, params, signal, onUpdate): Promise<AgentToolResult> {
+      // 续跑恢复：同一「工具名 + 规范化参数」已完成则复用结果，不重放副作用。
+      // 键与模型生成的 toolCall.id 无关，故 at-least-once 重排（id 重新生成）仍能命中。
+      const dedupKey = deriveWriteToolDedupKey(tool.name, params);
+      const cached = await store.get(runId, dedupKey);
+      if (cached) return cached.result as AgentToolResult;
+      const result = await tool.execute(toolCallId, params, signal, onUpdate);
+      // 以确定性键落库（幂等：on conflict do nothing），使后续重排复用而非重放副作用。
+      // 最佳努力：去重存储写入失败不阻断 run 终态（仅为恢复优化）。
+      try {
+        await store.record({ runId, toolCallId: dedupKey, toolName: tool.name, result });
+      } catch {
+        // 去重落库失败忽略，不影响 run 本身。
+      }
+      return result;
+    }
+  };
 }
 
 /**

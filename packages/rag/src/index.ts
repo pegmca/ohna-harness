@@ -53,6 +53,7 @@ export * from "./embedding.js";
 export * from "./embedding-providers.js";
 export * from "./vector-store.js";
 export * from "./retrieval.js";
+export * from "./keyword-store.js";
 export * from "./reranking-providers.js";
 export * from "./chunking.js";
 export * from "./answer.js";

@@ -1,6 +1,6 @@
 import type { AgentRunCreateRequestDto, RunEventInputDtoV2, RunSnapshotDtoV2, RunStatusDtoV2, RunStreamEventDtoV2 } from "@aiagent/types";
 import type { MessageStore } from "@aiagent/conversation";
-import type { ClaimedRun, RunEventBus, RunExecutionRegistry, RunStore } from "../application/run-ports.js";
+import type { ClaimedRun, RunCancelSignal, RunCancelStore, RunEventBus, RunExecutionRegistry, RunStore } from "../application/run-ports.js";
 
 const TERMINAL = new Set<RunStatusDtoV2>(["completed", "failed", "cancelled", "interrupted"]);
 
@@ -100,6 +100,11 @@ export function createInMemoryRunStore(options: { messageStore?: MessageStore } 
         if (event) recovered.push(event);
       }
       return recovered;
+    },
+    // 内存实现：直接覆盖快照上的检查点（同 run 只保留最新）。
+    async setCheckpoint(userId, runId, checkpoint) {
+      const run = runs.get(runId);
+      if (run && run.userId === userId) run.snapshot.lastCheckpoint = checkpoint;
     },
     // 内存实现：遍历找第一个 queued，原子 claim（单进程无并发竞争，语义对齐 PG FOR UPDATE SKIP LOCKED）。
     async claimNext(workerId, leaseDurationMs) {
@@ -204,6 +209,64 @@ export function createInMemoryExecutionRegistry(): RunExecutionRegistry {
     delete: (runId) => {
       controllers.delete(runId);
     },
-    list: () => [...controllers.keys()]
+    list: () => [...controllers.keys()],
+    // 单实例：本地 abort 即可，无需跨进程广播。
+    requestCancel(runId) {
+      controllers.get(runId)?.abort();
+    }
+  };
+}
+
+/** 创建进程内取消信号：用 EventEmitter 在单进程内按 runId 广播取消（单实例 demo / 测试）。 */
+export function createInMemoryRunCancelSignal(): RunCancelSignal {
+  const listeners = new Map<string, Set<() => void>>();
+  return {
+    subscribe(runId, listener) {
+      const set = listeners.get(runId) ?? new Set();
+      set.add(listener);
+      listeners.set(runId, set);
+      return () => {
+        set.delete(listener);
+        if (set.size === 0) listeners.delete(runId);
+      };
+    },
+    publish(runId) {
+      for (const listener of [...(listeners.get(runId) ?? [])]) listener();
+    }
+  };
+}
+
+/** 创建进程内取消标记存储：单实例下与 pub/sub 等价，仅作接口对齐（测试用）。 */
+export function createInMemoryRunCancelStore(): RunCancelStore {
+  const cancelled = new Set<string>();
+  return {
+    markCancelled(runId) {
+      cancelled.add(runId);
+    },
+    isCancelled(runId) {
+      return cancelled.has(runId);
+    }
+  };
+}
+
+/** 创建进程内写类工具结果去重存储（单实例 demo / 测试）。 */
+export function createInMemoryToolResultStore(): {
+  record(input: { runId: string; toolCallId: string; toolName: string; result: unknown }): Promise<void>;
+  get(runId: string, toolCallId: string): Promise<{ runId: string; toolCallId: string; toolName: string; result: unknown; createdAt: string } | undefined>;
+  listByRun(runId: string): Promise<{ runId: string; toolCallId: string; toolName: string; result: unknown; createdAt: string }[]>;
+} {
+  const records = new Map<string, { runId: string; toolCallId: string; toolName: string; result: unknown; createdAt: string }>();
+  return {
+    async record(input) {
+      const key = `${input.runId}\0${input.toolCallId}`;
+      if (records.has(key)) return; // 幂等：保留首次。
+      records.set(key, { ...input, createdAt: new Date().toISOString() });
+    },
+    async get(runId, toolCallId) {
+      return records.get(`${runId}\0${toolCallId}`);
+    },
+    async listByRun(runId) {
+      return [...records.values()].filter((r) => r.runId === runId);
+    }
   };
 }

@@ -21,6 +21,7 @@ import {
   type VectorStore
 } from "./types.js";
 import { matchesVectorSearchFilter, normalizeTopK } from "./vector-math.js";
+import { type KeywordCandidateStore } from "./keyword-store.js";
 
 /**
  * 创建 deterministic heuristic reranker。
@@ -55,16 +56,22 @@ class HybridRetriever implements Retriever {
   private readonly vectorStore: VectorStore;
   private readonly chunks: readonly EmbeddedChunk[];
   private readonly reranker: Reranker;
+  /**
+   * 关键词候选共享存储（P3 外置）：注入时关键词召回从共享存储读取，跨实例一致；
+   * 缺省 undefined 时退回内存扫描 `this.chunks`（单测/本地 demo 退化路径）。
+   */
+  private readonly keywordStore?: KeywordCandidateStore;
 
   /**
    * 创建混合检索器实例。
    *
-   * @param options 检索所需依赖和本地关键词语料。
+   * @param options 检索所需依赖、本地关键词语料（可空）与可选外置关键词候选存储。
    */
   public constructor(options: HybridRetrieverOptions) {
     this.embeddingClient = options.embeddingClient;
     this.vectorStore = options.vectorStore;
-    this.chunks = options.chunks;
+    this.chunks = options.chunks ?? [];
+    this.keywordStore = options.keywordStore;
     this.reranker = options.reranker ?? createHeuristicReranker();
   }
 
@@ -149,9 +156,18 @@ class HybridRetriever implements Retriever {
     }
 
     if (normalizedOptions.mode === "keyword" || normalizedOptions.mode === "hybrid") {
+      // 关键词候选来源外置（P3）：注入 keywordStore 时从共享存储读取（跨实例一致），
+      // 否则退回内存扫描 this.chunks（单测/本地 demo 退化路径，与既有行为完全一致）。
+      const keywordCorpus = this.keywordStore
+        ? await this.keywordStore.findCandidateChunks(
+            queryTerms,
+            normalizedOptions.filter,
+            normalizedOptions.candidateLimit
+          )
+        : this.chunks;
       const keywordCandidates = retrieveKeywordCandidates(
         queryTerms,
-        this.chunks,
+        keywordCorpus,
         normalizedOptions.filter,
         normalizedOptions.candidateLimit
       );

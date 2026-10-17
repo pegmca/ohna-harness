@@ -47,6 +47,14 @@ export interface RunRepository {
   /** 崩溃恢复：把 updatedAt 早于 before 的非终态 run 标记 interrupted 并补 run_status 事件。 */
   recoverStale(before: string, occurredAt: string): Promise<RunStreamEventDtoV2[]>;
   /**
+   * 写入执行检查点：每轮提交后记录 (turn, lastEventSequence)，支持从最近检查点续跑。
+   *
+   * @param userId 当前用户（所有权校验）。
+   * @param runId Run 标识。
+   * @param checkpoint 检查点载荷。
+   */
+  setCheckpoint(userId: string, runId: string, checkpoint: RunSnapshotDtoV2["lastCheckpoint"]): Promise<void>;
+  /**
    * worker 抢占下一个 queued run：`FOR UPDATE SKIP LOCKED` + 设 lease_until + claimed_by + status='running'。
    * 原子事务保证同一 run 只被一个 worker claim。
    */
@@ -119,6 +127,24 @@ class PostgresRunRepository implements RunRepository {
         [runId, userId]
       );
       return result.rows[0] ? mapSnapshot(result.rows[0]) : undefined;
+    } catch (cause) {
+      throw mapRunError(cause);
+    }
+  }
+
+  /**
+   * 写入执行检查点（仅覆盖最新）：续跑恢复时据此从最近检查点而非从零重建上下文。
+   *
+   * @param userId 当前用户（所有权校验）。
+   * @param runId Run 标识。
+   * @param checkpoint 检查点载荷。
+   */
+  async setCheckpoint(userId: string, runId: string, checkpoint: RunSnapshotDtoV2["lastCheckpoint"]): Promise<void> {
+    try {
+      await this.pool.query(
+        "update runs set last_checkpoint=$3 where id=$1 and user_id=$2",
+        [runId, userId, checkpoint ? JSON.stringify(checkpoint) : null]
+      );
     } catch (cause) {
       throw mapRunError(cause);
     }
@@ -322,6 +348,8 @@ interface RunRow {
   claimed_by: string | null;
   /** create 时写入的完整请求快照，worker claim 后据此重建执行上下文。 */
   request_payload: AgentRunCreateRequestDto | null;
+  /** 执行检查点（每轮提交后写入，支持续跑）；无检查点时为 null。 */
+  last_checkpoint: RunSnapshotDtoV2["lastCheckpoint"] | null;
 }
 
 interface RunEventRow {
@@ -379,7 +407,8 @@ function mapSnapshot(row: RunRow): RunSnapshotDtoV2 {
     createdAt: postgresTimestampToIso(row.created_at),
     updatedAt: postgresTimestampToIso(row.updated_at),
     startedAt: row.started_at ? postgresTimestampToIso(row.started_at) : undefined,
-    completedAt: row.completed_at ? postgresTimestampToIso(row.completed_at) : undefined
+    completedAt: row.completed_at ? postgresTimestampToIso(row.completed_at) : undefined,
+    lastCheckpoint: row.last_checkpoint ?? undefined
   };
 }
 

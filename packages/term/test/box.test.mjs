@@ -7,14 +7,14 @@ import { box, visibleWidth } from "../dist/index.js";
 const painted = "\x1b[38;2;232;220;203mhello\x1b[0m";
 const plain = "world!"; // 可见宽 6
 
-test("box 产出首尾边框，且边框总宽 = 内容最大可见宽 + 2", () => {
+test("box 产出首尾边框，且边框总宽 = 内容最大可见宽 + 内边距(2) + 边框(2)", () => {
   const result = box([painted, plain]);
   const top = result[0];
   const bottom = result[result.length - 1];
 
-  // 总可见宽 = max(5,6) + 2 = 8
-  assert.equal(visibleWidth(top), 8);
-  assert.equal(visibleWidth(bottom), 8);
+  // 内容区 = max(5,6) + 2（左右内边距）= 8，总可见宽 = 8 + 2 = 10
+  assert.equal(visibleWidth(top), 10);
+  assert.equal(visibleWidth(bottom), 10);
 
   // 边框字符正确
   assert.equal(top[0], "╭");
@@ -27,11 +27,46 @@ test("含 ANSI 的行不影响边框宽度计算（visibleWidth 剥离转义）"
   // 仅带 ANSI 的短文本，内容最大可见宽应来自 plain=6
   const result = box([painted, plain]);
   const top = result[0];
-  assert.equal(visibleWidth(top), 8);
+  assert.equal(visibleWidth(top), 10);
 
   // 直接验证 visibleWidth 剥离 ANSI
   assert.equal(visibleWidth(painted), 5);
   assert.equal(visibleWidth(plain), 6);
+});
+
+test("三行对齐：上边框 / 每个 body 行 / 下边框 visibleWidth 全部相等", () => {
+  // 反色光标 `\x1b[7m…\x1b[27m` 模拟 ohna-cli 输入行；含 CJK 与空行，覆盖多种宽度来源。
+  const cases = [
+    [painted, plain],
+    ["\x1b[7m> \x1b[27m", "abc"],
+    ["中文宽度2倍", "x"],
+    ["", "a", "longer line here"],
+    ["\x1b[38;2;1;2;3m\x1b[7m中\x1b[27m\x1b[0m文"],
+  ];
+
+  for (const lines of cases) {
+    const result = box(lines);
+    // body 行数量与内容行一致（上下各 1 条边框）
+    assert.equal(result.length, lines.length + 2);
+
+    const widths = result.map((l) => visibleWidth(l));
+    const expected = widths[0];
+    for (const [i, w] of widths.entries()) {
+      assert.equal(w, expected, `第 ${i} 行宽度 ${w} != 上边框宽度 ${expected}：${JSON.stringify(lines)}`);
+    }
+  }
+});
+
+test("三行对齐（显式 width + title）：ANSI 内容行同样与上下边框等宽", () => {
+  const lines = ["\x1b[7m> hel\x1b[27mlo", "short"];
+  const result = box(lines, { width: 20, title: "ohna" });
+  assert.equal(result.length, lines.length + 2);
+
+  const widths = result.map((l) => visibleWidth(l));
+  // 内容区 20，总可见宽 22；所有行必须一致
+  for (const w of widths) {
+    assert.equal(w, 22);
+  }
 });
 
 test("box 行数 = 内容行数 + 上下边框（2 行）", () => {

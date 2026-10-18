@@ -9,7 +9,8 @@
 > - `03-decomposition.md` —— 权威拆解 + 目标架构 + 设计决策（**取代 02 文档中「复用 apps/api createApiServer」的假设**）
 > - `04-development-plan.md` —— 依赖有序、文件级交付清单的分阶段开发计划
 > - `05-verify-cases.md` —— 分层验收用例（安全 P0 / ohna-cli M2 / serve L0-L1 / ohna-web / L3 / 回归）
-> - `06-cli-theme.md` —— CLI 终端样式改造（复刻 Claude Code 风格，规划中）
+> - `06-cli-theme.md` —— CLI 终端样式改造（复刻 Claude Code 风格，v2 评审修订版：门控裁决 + spinner 单写者协议 + 边框输入区降级，规划中）
+> - `07-cli-feature-parity.md` —— CLI 功能对齐 Claude Code：差距清单 + 编码建议 + 内核改动设计（K1 权限策略内核 / K2 排队与 steering 接线 / K3 子 agent 接线，批次 B1-B3，规划中）
 >
 > 历史背景文档：`01-coding-cli.md`（CLI M1 移植细节，仍有效）、`02-local-web-runtime.md`（本地 Web 早期设计，**其 §3.2「复用 createApiServer」已被用户决策取代**，其余 JSONL/目录沙箱/UI 思路沿用）。
 > 落地切片遵循 `LEARNING_AND_EVOLUTION_ROADMAP.md` §3 七步法与 Definition of Done。
@@ -28,7 +29,8 @@
 | L2 | ohna-web 本地 Web UI：复制改造 + 文件树 + 本地模式 | **已实现**（04 Phase 4；`apps/ohna-web` 复制改造：文件树 `/api/local/fs` + write/edit/bash 事件联动刷新、待确认卡片 allow/deny + 刷新后 SSE replay 恢复、本地模式标识；自动化见 `apps/ohna-web/src`（51 vitest 用例），W-1~W-9 见 `` §12） |
 | M3 | 体验对齐：slash 命令、diff 渲染、输出折叠、MCP 接入、`--web` 进程内托管 | **已实现**（04 Phase 5；`src/slash.ts`（/model /cost /compact /tools /resume）+ `src/diff.ts` 零依赖 LCS unified diff（写前预览、400 行折叠）+ `tool_execution_end` 头尾折叠 + `--mcp` 外部 server（`<untrusted_context>` 已由 mcp adapter 封装）+ `--web` 托管 `src/web-entry.ts`；自动化见 `test/verify-ohna-m3.mjs`） |
 | L3 | 长任务治理（ohna）：`/resume`、compaction、成本展示 | **已实现**（04 Phase 5；CLI `/resume` 切换 + `/cost` 累计 + serve **run 前会话级 compaction**：双基准估算 → 摘要持久化 `messageType:"compaction"` → 硬收敛（与 CLI 共用 `packages/agent` 的 `enforceContextWindow`）；自动化见 `packages/serve/test/compaction.test.mjs` 与 `test/verify-ohna-m3.mjs`） |
-| CLI 样式 | 终端样式复刻 Claude Code：ANSI 主题层、`⏺/⎿/✻` 符号、边框输入区、`--no-color` | 规划中（06-cli-theme.md，含测试锚定分析与 TTY 门控设计） |
+| CLI 样式 | 终端样式复刻 Claude Code：ANSI 主题层、`⏺/⎿/✻` 符号、单行输入区 + 顶线、`--no-color` | 方案 v2（06-cli-theme.md，2025-10 专家评审反馈已吸收：符号无条件替换 + 颜色/spinner TTY 门控、spinner 单写者协议、多行边框输入区因 readline 限制降级），待实现 |
+| CLI 功能对齐 | 权限三选项与会话记住（K1）、queued/Esc/ctrl+o/thinking 交互（K2 接线 + 渲染层）、Task 子 agent（K3）、命令与补全补表 | 规划中（07-cli-feature-parity.md，批次 B1-B3；内核现状已核实：thinking 事件 / 工具结果全文 / steering 钩子 / team 原语均已备，多为接线与策略内核化） |
 
 ## 一·一、架构决策（本轮已拍板，见 03 §7）
 
@@ -72,7 +74,7 @@
 
 ## 五、执行原则
 
-1. **内核零改动**：`packages/agent/src/agent-loop.ts` 一行不改；改动落在 `packages/coding`（安全加固）、`packages/serve`（装配）、`apps/ohna-cli`、`apps/ohna-api`、`apps/ohna-web`。
+1. **内核零改动（限定 `agent-loop.ts` 本体）**：`packages/agent/src/agent-loop.ts` 的 loop 契约与挂载点语义不变；改动落在 `packages/coding`（安全加固）、`packages/serve`（装配）、`apps/ohna-cli`、`apps/ohna-api`、`apps/ohna-web`。**07 方案的 K 项例外**：允许在 `packages` 内**新增领域模块**（`agent/src/permission/`）与**工具契约元数据**（`packages/tools` 的 `effect` 字段）——均为组合根装配范式（先例 `agent/src/team/`），loop 内核代码路径不引用它们。
 2. **产品分界清晰**：产品 A（金融 SaaS）与 ohna（编码 Agent）互不依赖，只共享 `packages/` 核心包；编码工具不进 `packages/tools`（那是金融工具域）。
 3. **窄切片 + 可验收**：每个 Phase 自带 `05-verify-cases.md` 的验收用例与结构化解错，禁止无验收的大爆炸重写。
 4. **诚实失败**：未授权路径、危险命令、超时一律结构化报错（`isError` 回喂模型），不静默放行、不伪造结果。

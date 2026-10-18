@@ -18,7 +18,8 @@ import type { AgentTool } from "@aiagent/tools";
 import type { AgentMessage } from "@aiagent/agent";
 import { compactSessionHistory } from "./session-runtime.js";
 import { createToolConfirmGate } from "./confirm.js";
-import { formatCostLine, type UsageTracker } from "./render.js";
+import { formatCostLine, setOutputSink, type UsageTracker, write } from "./render.js";
+import { setSpinnerEnabled } from "./spinner.js";
 import {
   openSession,
   persistSession,
@@ -29,6 +30,7 @@ import { createSessionStore } from "./session-store.js";
 import { inputTopBar, inputBottomBar, paint, supportsAnsi } from "./theme.js";
 import { printReplCommands, renderWelcome } from "./welcome.js";
 import { createSlashDispatcher, printUnknownCommand, type SlashHandlers } from "./slash.js";
+import { TuiApp } from "./tui-app.js";
 import {
   printStopReason,
   reachedCostBudget,
@@ -82,11 +84,23 @@ export async function runRepl(
   const pending: string[] = [];
   let finish: (() => void) | undefined;
 
-  const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout,
-    prompt: "│ > ",
-  });
+  // TTY（支持 ANSI 颜色）走整屏 TUI；否则保留旧 readline 路径（非 TTY 完全不变）。
+  const useTui = supportsAnsi();
+  let tui: TuiApp | undefined;
+  let rl: readline.Interface | undefined;
+
+  if (useTui) {
+    // 整屏 TUI：把 render 输出注入对话模型，并禁用 spinner（避免 \r\x1b[K 污染）。
+    tui = new TuiApp();
+    setOutputSink((s) => tui!.append(s));
+    setSpinnerEnabled(false);
+  } else {
+    rl = readline.createInterface({
+      input: process.stdin,
+      output: process.stdout,
+      prompt: "│ > ",
+    });
+  }
 
   /**
    * 终端尺寸变化：仅当空闲（无 run、未 EOF、未关闭）且当前输入行为空时才重绘当前输入
@@ -98,20 +112,20 @@ export async function runRepl(
   /** 重绘防重入：rl.prompt() 可能同步派发 resize，包成临界区避免递归风暴。 */
   let redrawing = false;
 
-  if (supportsAnsi()) {
+  if (supportsAnsi() && !useTui) {
     process.stdout.on("resize", () => {
       if (running || closed || inputClosed) return;
-      if (rl.line !== "") return;
+      if (rl!.line !== "") return;
       if (redrawing) return; // 防重入：避免 rl.prompt() 触发同步 resize 造成递归风暴
       const cols = process.stdout.columns || 80;
       if (cols === lastColumns) return; // 宽度未变不重绘，屏蔽持续同宽 resize 虚假事件
       redrawing = true;
       try {
         lastColumns = cols;
-        process.stdout.write("\r\x1b[1A\x1b[2K"); // 回到顶线行并清空
-        process.stdout.write(paint(inputTopBar(cols), "dim")); // 新宽度顶线
-        process.stdout.write("\r\x1b[2K"); // 清空旧 prompt 行
-        rl.prompt();
+        write("\r\x1b[1A\x1b[2K"); // 回到顶线行并清空
+        write(paint(inputTopBar(cols), "dim")); // 新宽度顶线
+        write("\r\x1b[2K"); // 清空旧 prompt 行
+        rl!.prompt();
       } finally {
         redrawing = false;
       }
@@ -125,12 +139,14 @@ export async function runRepl(
    * prompt + line 当一个逻辑行做列折算，多行 prompt 会导致行编辑错位（§3.4 降级方案）。
    */
   const promptInput = (): void => {
+    // 整屏 TUI 自行渲染输入区，无需 prompt / 顶线。
+    if (useTui) return;
     if (supportsAnsi()) {
       const cols = process.stdout.columns || 80;
-      process.stdout.write(paint(inputTopBar(cols), "dim"));
+      write(paint(inputTopBar(cols), "dim"));
       lastColumns = cols;
     }
-    rl.prompt();
+    rl!.prompt();
   };
 
   renderWelcome(
@@ -138,23 +154,48 @@ export async function runRepl(
     tools.map((tool) => tool.name),
     { mode: setup.mode, sessionId, cwd: setup.cwd, mcpServers: context?.mcpServerNames },
   );
-  promptInput();
 
-  // coding 模式把主 readline 交给确认闸门复用，避免第二个 readline 与 REPL 抢 stdin；
-  // research 模式不挂闸门，保持历史行为。
+  if (useTui) {
+    // 整屏 TUI：提交/中断交给编辑器，启动后由 Screen 接管终端。
+    tui!.onSubmit = commitLine;
+    tui!.onInterrupt = handleInterrupt;
+    tui!.start();
+  } else {
+    promptInput();
+  }
+
+  // coding 模式挂确认闸门：TTY 整屏用 tui.confirm 收集 y/n，否则复用主 readline。
   const beforeToolCall =
     setup.mode === "coding"
-      ? createToolConfirmGate({ autoApprove: setup.autoApprove, cwd: setup.cwd, readline: rl })
+      ? createToolConfirmGate(
+          useTui
+            ? { autoApprove: setup.autoApprove, cwd: setup.cwd, confirm: (q) => tui!.confirm(q) }
+            : { autoApprove: setup.autoApprove, cwd: setup.cwd, readline: rl! },
+        )
       : undefined;
 
-  /** 关闭 readline（若仍打开），标记不再接收新输入。 */
+  /** 关闭输入（readline 则关闭，TUI 仅置标志）；标记不再接收新输入。 */
   const closeInput = (): void => {
     closed = true;
     if (!inputClosed) {
       inputClosed = true;
-      rl.close();
+      rl?.close();
     }
   };
+
+  /** TUI 中断处理：有 run 则中断它，空闲则退出会话。（函数声明以便上方 onSubmit 装配时引用） */
+  function handleInterrupt(): void {
+    if (controller) {
+      controller.abort();
+      controller = null;
+      tui?.appendLine("已中断当前运行。");
+    } else {
+      stopRequested = true;
+      pending.length = 0;
+      closeInput();
+      maybeFinish();
+    }
+  }
 
   /** 所有在途工作结束后 resolve 主 Promise；EOF 与 /exit 共用。 */
   const maybeFinish = (): void => {
@@ -166,35 +207,35 @@ export async function runRepl(
     const mcp = context?.mcpToolNames;
     for (const tool of tools) {
       const source = mcp?.has(tool.name) ? "（MCP）" : "";
-      process.stdout.write(`  ${tool.name}${source}\n`);
+      write(`  ${tool.name}${source}\n`);
     }
-    process.stdout.write(`共 ${tools.length} 个工具。\n`);
+    write(`共 ${tools.length} 个工具。\n`);
   };
 
   /** /model：无参列出可用 profile 与当前；带参切换（无效 profile 报错不切换）。 */
   const handleModel = (arg: string): void => {
     if (!arg) {
       const profiles = listAvailableModelProfiles();
-      process.stdout.write(`当前模型：${currentModel.model.id}（profile: ${currentModel.model.provider}）\n`);
-      process.stdout.write(`可用 profile：${profiles.join("、") || "（无，请检查 .env 中 AIAGENT_LLM_* 配置）"}\n`);
+      write(`当前模型：${currentModel.model.id}（profile: ${currentModel.model.provider}）\n`);
+      write(`可用 profile：${profiles.join("、") || "（无，请检查 .env 中 AIAGENT_LLM_* 配置）"}\n`);
       return;
     }
     const chosen = resolveActiveModelFromEnv(arg);
     if (!chosen) {
       // 无效 profile：报错并保持当前模型不变。
-      process.stdout.write(
+      write(
         `未知或未配置的 profile："${arg}"（可用：${listAvailableModelProfiles().join("、") || "无"}），保持当前模型不变。\n`,
       );
       return;
     }
     currentModel = chosen;
-    process.stdout.write(`已切换模型：${chosen.model.id}（profile: ${chosen.model.provider}），对后续 run 生效。\n`);
+    write(`已切换模型：${chosen.model.id}（profile: ${chosen.model.provider}），对后续 run 生效。\n`);
   };
 
   /** /compact：立即对当前会话跑一次会话级压缩并打印前后 token。 */
   const handleCompact = async (): Promise<void> => {
     if (history.length === 0) {
-      process.stdout.write("当前会话没有历史消息，无需压缩。\n");
+      write("当前会话没有历史消息，无需压缩。\n");
       return;
     }
     const result = await compactSessionHistory(history, {
@@ -203,13 +244,13 @@ export async function runRepl(
       onWarn: (message) => process.stderr.write(`${message}\n`),
     });
     if (!result.compacted) {
-      process.stdout.write(
+      write(
         `未触发压缩：当前约 ${result.tokensBefore} token，未超过压缩阈值（窗口 ${currentModel.model.contextWindow}）。\n`,
       );
       return;
     }
     replaceHistory(history, result.messages);
-    process.stdout.write(
+    write(
       `已压缩：${result.tokensBefore} → ${result.tokensAfter} token / ${result.messageCountBefore} 条 → ${result.messages.length} 条\n`,
     );
     // 压缩结果立即落盘，避免下一次 run 前进程退出丢失摘要。
@@ -227,32 +268,32 @@ export async function runRepl(
     if (!arg) {
       const metas = await store.list();
       if (metas.length === 0) {
-        process.stdout.write("暂无历史会话。\n");
+        write("暂无历史会话。\n");
         return;
       }
-      process.stdout.write("最近会话：\n");
+      write("最近会话：\n");
       for (const meta of metas.slice(0, 10)) {
         const time = new Date(meta.updatedAt).toLocaleString();
-        process.stdout.write(`  ${meta.id}  ${meta.title}  ${time}  ${meta.messageCount} 条\n`);
+        write(`  ${meta.id}  ${meta.title}  ${time}  ${meta.messageCount} 条\n`);
       }
-      process.stdout.write("使用 /resume <id> 切换。\n");
+      write("使用 /resume <id> 切换。\n");
       return;
     }
     try {
       const record = await store.load(arg);
       if (!record) {
-        process.stdout.write(`未找到会话 "${arg}"，保持当前会话不变。\n`);
+        write(`未找到会话 "${arg}"，保持当前会话不变。\n`);
         return;
       }
       replaceHistory(history, record.messages);
       if (record.meta.usage) tracker.restore(record.meta.usage);
       sessionId = record.meta.id;
       sessionTitle = record.meta.title === "新会话" ? undefined : record.meta.title;
-      process.stdout.write(
+      write(
         `已切换到会话 ${sessionId}（${history.length} 条消息，标题：${record.meta.title}）。\n`,
       );
     } catch (error) {
-      process.stdout.write(
+      write(
         `恢复会话失败（${error instanceof Error ? error.message : String(error)}），保持当前会话不变。\n`,
       );
     }
@@ -264,7 +305,7 @@ export async function runRepl(
     handlers: {
       help: () => printReplCommands(),
       cost: () => {
-        process.stdout.write(formatCostLine(tracker) + "\n");
+        write(formatCostLine(tracker) + "\n");
       },
       model: (arg) => handleModel(arg),
       compact: () => handleCompact(),
@@ -278,7 +319,7 @@ export async function runRepl(
         const previousId = sessionId;
         sessionId = meta.id;
         sessionTitle = undefined;
-        process.stdout.write(`已清空上下文并开启新会话：${sessionId}（旧会话 ${previousId} 保留在磁盘）\n`);
+        write(`已清空上下文并开启新会话：${sessionId}（旧会话 ${previousId} 保留在磁盘）\n`);
       },
       exit: () => {
         // /exit 清空待处理队列并关闭输入；当前 run 结束后主 Promise 才会 resolve。
@@ -297,8 +338,8 @@ export async function runRepl(
   const processLine = async (text: string): Promise<void> => {
     running = true;
     // stdin 已 EOF 时 readline 已关闭，再 pause 会抛 ERR_USE_AFTER_CLOSE；
-    // 队列中的行仍需处理，因此只跳过与终端交互相关的调用。
-    if (!inputClosed) rl.pause();
+    // 队列中的行仍需处理，因此只跳过与终端交互相关的调用（TUI 下无 readline）。
+    if (!inputClosed && rl) rl.pause();
     try {
       // 会话内命令优先于模型调用：不消耗 token，也不进 history。
       if (await dispatch(text)) return;
@@ -340,7 +381,7 @@ export async function runRepl(
         // 用新引用替换 history，保证后续轮次能看到完整上下文。
         replaceHistory(history, result.history);
       } catch (error) {
-        process.stdout.write(`\n运行出错：${error instanceof Error ? error.message : String(error)}\n`);
+        write(`\n运行出错：${error instanceof Error ? error.message : String(error)}\n`);
       } finally {
         controller = null;
         // 每轮结束都做「会话级压缩 + 落盘」；失败只告警，不阻断会话继续。
@@ -362,39 +403,46 @@ export async function runRepl(
       if (next !== undefined) {
         void processLine(next);
       } else if (!closed) {
-        rl.resume();
+        rl?.resume();
         promptInput();
       }
       maybeFinish();
     }
   };
 
-  rl.on("line", (line) => {
-    const text = line.trim();
-    if (!text) {
-      if (!running && !closed) promptInput();
+  // 提交一行：命令即时响应，普通文本启动一轮 run；run 进行中入队，空闲 Ctrl-C 退出。
+  // 声明为函数（hoisted），以便上方 `tui!.onSubmit = commitLine` 在其定义前引用。
+  function commitLine(text: string): void {
+    const trimmed = text.trim();
+    if (!trimmed) {
+      if (!running && !closed && !useTui) promptInput();
       return;
     }
     if (closed) return;
     if (running) {
       // run 进行中：入队，等当前 run（含落盘）结束再处理。
-      pending.push(text);
+      pending.push(trimmed);
       return;
     }
-    // 提交输入：先打印输入框下边框，把当前输入行在滚动历史里闭合为完整盒子。
+    // 提交：TTY 下把用户输入回显进对话区；readline 下打印输入框下边框闭合盒子。
     if (supportsAnsi()) {
-      process.stdout.write(paint(inputBottomBar(process.stdout.columns || 80), "dim"));
+      if (useTui) tui!.appendLine(paint(`❯ ${trimmed}`, "user"));
+      else write(paint(inputBottomBar(process.stdout.columns || 80), "dim"));
     }
-    void processLine(text);
-  });
+    void processLine(trimmed);
+  }
 
-  rl.on("SIGINT", () => {
+  if (rl) {
+    rl.on("line", commitLine);
+  }
+
+  rl?.on("SIGINT", () => {
     if (controller) {
       // 有进行中的 run：中断它，会话继续；队列中的输入仍按序处理。
       // 这里不 prompt——processLine 的 finally 会在 run 收尾后统一恢复输入。
       controller.abort();
       controller = null;
-      process.stdout.write("\n已中断当前运行。\n");
+      write("\n已中断当前运行。\n");
     } else {
       // 空闲：清空队列并退出进程。
       stopRequested = true;
@@ -404,7 +452,7 @@ export async function runRepl(
     }
   });
 
-  rl.on("close", () => {
+  rl?.on("close", () => {
     inputClosed = true;
     closed = true;
     maybeFinish();
@@ -415,5 +463,12 @@ export async function runRepl(
     // readline 可能已经因 stdin EOF 而关闭（极短管道输入），补一次检查避免悬挂。
     maybeFinish();
   });
+
+  // 退出 TUI：复位输出 sink（先复位，避免后续输出进对话模型）、停 Screen 还原终端、恢复 spinner。
+  if (useTui && tui) {
+    setOutputSink(undefined);
+    tui.stop();
+    setSpinnerEnabled(true);
+  }
   printResumeHint(sessionId, setup.mode);
 }

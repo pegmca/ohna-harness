@@ -12,6 +12,8 @@
 import * as path from "node:path";
 import * as readline from "node:readline";
 import type { BeforeToolCallContext, BeforeToolCallResult } from "@aiagent/agent";
+import { resumeSpinner, suspendSpinner } from "./spinner.js";
+import { CROSS, DOT, paint } from "./theme.js";
 
 /** 需要人工确认的高风险工具：写文件、改文件、执行命令；只读工具直接放行。 */
 const CONFIRM_TOOL_NAMES: ReadonlySet<string> = new Set(["write", "edit", "bash"]);
@@ -33,6 +35,11 @@ export interface ToolConfirmGateOptions {
   cwd: string;
   /** REPL 的主 readline 实例；缺省（单次模式）时临时创建一个并在回答后关闭。 */
   readline?: readline.Interface;
+  /**
+   * TTY 整屏模式下的确认读取器：替代 readline 提问 y/n（TUI 下无 readline）。
+   * 接收已着色的提问文本，返回用户输入原文，null 表示被中断（Ctrl-C）。
+   */
+  confirm?: (question: string) => Promise<string | null>;
 }
 
 /**
@@ -49,17 +56,20 @@ export function createToolConfirmGate(options: ToolConfirmGateOptions): ConfirmH
     const summary = describeToolCall(toolName, context.args, options.cwd);
 
     if (options.autoApprove) {
-      process.stdout.write(`▸ --yes 自动放行：${summary}\n`);
+      process.stdout.write(paint(`${DOT} --yes 自动放行：${summary}`, "dim") + "\n");
       return undefined;
     }
 
     // 非交互环境（无 TTY）无法取得确认，默认拒绝而不是无限等待输入。
     if (!process.stdin.isTTY) {
-      process.stdout.write(`✖ 已拒绝 ${summary}：非交互环境未传 --yes，默认拒绝写与执行。\n`);
+      process.stdout.write(paint(`${CROSS} 已拒绝 ${summary}：非交互环境未传 --yes，默认拒绝写与执行。`, "error") + "\n");
       return { block: true, reason: `非交互环境且未传 --yes，已拒绝：${summary}` };
     }
 
-    const answer = await askConfirmation(options.readline, `? 是否允许 ${summary}？(y/N) `, signal);
+    const question = paint(`? 是否允许 ${summary}？(y/N) `, "warn");
+    const answer = options.confirm
+      ? await askConfirmationVia(options.confirm, question, signal)
+      : await askConfirmation(options.readline, question, signal);
     if (answer === null) {
       return { block: true, reason: `用户中断（Ctrl-C），已取消：${summary}` };
     }
@@ -108,6 +118,8 @@ async function askConfirmation(
   const abort = waitAbort(signal);
 
   try {
+    // 挂起 spinner（单写者协议）：question 提示挂在输入行，spinner 帧若仍在跑会覆盖它。
+    suspendSpinner();
     // question 期间输入只交给回调，不会触发主循环的 'line'，因此不会与 REPL 抢输入。
     const answer = await Promise.race([
       new Promise<string | null>((resolve) => {
@@ -123,6 +135,8 @@ async function askConfirmation(
     }
     return answer;
   } finally {
+    // 确认结束按需重启 spinner（仅当此前确实在跑，resumeSpinner 内部判断）。
+    resumeSpinner();
     abort.dispose();
     // question 会隐式 resume：恢复 run 期间的 paused 状态，避免残留输入被主循环误读。
     if (owned) {
@@ -130,6 +144,32 @@ async function askConfirmation(
     } else {
       iface.pause();
     }
+  }
+}
+
+/**
+ * 用 TUI 确认读取器问一个 y/n 问题，并与 run 的 AbortSignal 竞争：
+ * TTY 整屏模式下无 readline，由 TuiApp.confirm 在对话框下方收集单行输入。
+ *
+ * @param confirm TUI 确认读取器（接收已着色提问，返回输入原文或 null）。
+ * @param question 已着色的提示文案。
+ * @param signal run 级中断信号。
+ * @returns 用户输入原文；null 表示被中断（AbortSignal 触发或 Ctrl-C）。
+ */
+async function askConfirmationVia(
+  confirm: (question: string) => Promise<string | null>,
+  question: string,
+  signal?: AbortSignal,
+): Promise<string | null> {
+  const abort = waitAbort(signal);
+  try {
+    // 挂起 spinner（单写者协议）：确认期间不画帧。
+    suspendSpinner();
+    const answer = await Promise.race([confirm(question), abort.promise]);
+    return answer;
+  } finally {
+    resumeSpinner();
+    abort.dispose();
   }
 }
 

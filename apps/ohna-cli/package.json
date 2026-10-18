@@ -19,6 +19,7 @@
     "@aiagent/coding": "workspace:*",
     "@aiagent/mcp": "workspace:*",
     "@aiagent/serve": "workspace:*",
+    "@aiagent/term": "workspace:*",
     "@aiagent/tools": "workspace:*",
     "@aiagent/types": "workspace:*"
   },

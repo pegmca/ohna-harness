@@ -10,6 +10,7 @@
  * 工具数与 MCP 来源 / 命令 tips）；非 TTY 保持纯文本头（管道可稳定消费，不含 `\x1b`）。
  */
 import type { CliMode } from "./mode.js";
+import { write } from "./render.js";
 import { paint, SPIN, supportsAnsi } from "./theme.js";
 
 /**
@@ -64,7 +65,8 @@ export function renderWelcome(model: WelcomeModelInfo, toolNames: string[], opti
   const lines = supportsAnsi()
     ? renderTtyWelcome(model, toolNames, options, title)
     : renderPlainWelcome(model, toolNames, options, title);
-  process.stdout.write(lines.join("\n") + "\n");
+  // 经统一输出出口：TTY 整屏模式下由 sink 注入为 tui.append，进入对话模型顶部。
+  write(lines.join("\n") + "\n");
 }
 
 /**
@@ -228,5 +230,5 @@ export function printReplCommands(): void {
     "  退出后可用 ohna --resume <id> 或会话内 /resume <id> 恢复；/clear 另开新会话。",
     "",
   ];
-  process.stdout.write(lines.join("\n") + "\n");
+  write(lines.join("\n") + "\n");
 }

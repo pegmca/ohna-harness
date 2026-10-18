@@ -6,6 +6,11 @@
  * - write/edit 的 `tool_execution_start` 在确认闸门询问**之前**打印 unified diff
  *   （内核 tool-execution 的 prepare 先于 beforeToolCall，事件顺序天然满足）；
  * - `tool_execution_end` 的结果文本超阈值时只显示头尾 + 省略提示（输出折叠）。
+ *
+ * M6（CLI 主题）：
+ * - 符号无条件替换（⏺ / ⎿ / ✗）；颜色由 theme.ts 的 `paint` 门控，仅 TTY 生效；
+ * - spinner 单写者协议：正文写入前 `clearSpinner`、agent_start 启动、agent_end 停帧；
+ * - 数字骨架（累计 token / 成本 $X）与 diff 行内容**不进 ANSI**（§2 红线）。
  */
 import { readFileSync } from "node:fs";
 import * as path from "node:path";
@@ -13,6 +18,38 @@ import type { AgentEvent } from "@aiagent/agent";
 import type { Usage } from "@aiagent/ai";
 import { formatUnifiedDiff } from "./diff.js";
 import type { CliMode } from "./mode.js";
+import { clearSpinner, setVerb, startSpinner, stopSpinner } from "./spinner.js";
+import { CROSS, DOT, ELLIPSIS, HOOK, paint } from "./theme.js";
+
+/**
+ * 输出 sink：所有 render 层写入都经 {@link write} 转发，便于 TTY 整屏模式注入。
+ *
+ * 默认直写 `process.stdout`（非 TTY / 旧 readline 路径行为完全不变）；
+ * TTY 整屏模式由 repl 调用 `setOutputSink(s => tui.append(s))` 把输出接入 TuiApp
+ * 对话模型，退出前 `setOutputSink(undefined)` 复位。
+ */
+let outputSink: (s: string) => void = (s) => process.stdout.write(s);
+
+/**
+ * 设置输出 sink（注入式）。
+ *
+ * 传 `undefined` 复位为直写 `process.stdout`。TTY 整屏模式下用 `s => tui.append(s)`
+ * 把 welcome / 事件渲染等输出导入对话模型，避免直接向真实终端写而破坏整屏。
+ *
+ * @param fn 新的 sink；`undefined` 表示复位默认。
+ */
+export function setOutputSink(fn: ((s: string) => void) | undefined): void {
+  outputSink = fn ?? ((s) => process.stdout.write(s));
+}
+
+/**
+ * 统一输出出口：render 层所有写入经此函数，默认直写 stdout，可被 sink 注入接管。
+ *
+ * @param text 待输出文本。
+ */
+export function write(text: string): void {
+  outputSink(text);
+}
 
 /** 渲染选项：按运行模式调整工具调用的展示密度。 */
 export interface RenderOptions {
@@ -37,6 +74,14 @@ const DIFF_MAX_LINES = 400;
 /** diff 折叠时头部 / 尾部各保留的行数。 */
 const DIFF_HEAD_LINES = 200;
 const DIFF_TAIL_LINES = 120;
+
+/**
+ * 当前 assistant 消息是否已打 ⏺ 点（懒打点：首个 text_delta 到达才打）。
+ *
+ * 为什么用模块级状态而不是塞进 tracker：tracker 只关心 token/成本，职责单一；
+ * renderEvent 本身是同步事件处理器，事件按序到达，message_start 是新消息的天然复位点。
+ */
+let assistantDotPrinted = false;
 
 /** 会话累计用量的可持久化快照（与 session-store 的 SessionUsageTotals 同形）。 */
 export interface UsageSnapshot {
@@ -104,6 +149,9 @@ export function createUsageTracker(): UsageTracker {
 /**
  * 生成 `/cost` 的展示文案：始终有输出（无用量时明确说明，而不是空行）。
  *
+ * 注意：本行数字骨架（累计 token N / 成本 $X）必须保持纯文本，不进 ANSI（§2 红线），
+ * 否则 verify 脚本的两个数字捕获组会被转义序列打断。
+ *
  * @param tracker 会话级累计器。
  * @returns 单行中文用量文案。
  */
@@ -126,30 +174,58 @@ export function formatCostLine(tracker: UsageTracker): string {
  */
 export function renderEvent(event: AgentEvent, tracker: UsageTracker, options?: RenderOptions): void {
   switch (event.type) {
+    case "agent_start": {
+      // spinner 单写者协议：run 开始即启动「思考中」帧，首个文本增量到达时被抑制。
+      startSpinner("思考中");
+      return;
+    }
+
+    case "message_start": {
+      // 新 assistant 消息复位懒打点标志；纯 tool-call 消息（无文本）不产生悬空 ⏺ 行。
+      if (event.message.role === "assistant") assistantDotPrinted = false;
+      return;
+    }
+
     case "message_update": {
       // 仅转发文本增量；thinking / toolcall 增量不在 CLI 主输出中渲染，避免打断正文流。
       const inner = event.assistantMessageEvent;
       if (inner.type === "text_delta") {
-        process.stdout.write(inner.delta);
+        // 每个 delta 都清帧并标记一次正文写入，抑制 spinner 在流式期间重启帧（撕裂防护）。
+        clearSpinner();
+        if (!assistantDotPrinted) {
+          // 懒打点：首个 text_delta 才打 ⏺；纯 tool-call 消息不产生悬空 ⏺ 行。
+          write(paint(`${DOT} `, "accent"));
+          assistantDotPrinted = true;
+        }
+        write(paint(inner.delta, "foreground"));
       }
       return;
     }
 
     case "tool_execution_start": {
-      process.stdout.write(`▸ 调用 ${event.toolName}(${formatToolArgs(event.toolName, event.args, options)})\n`);
+      setVerb(`执行 ${event.toolName}`);
+      clearSpinner();
+      // ⏺ Tool(args)：⏺ accent、工具名 accent+bold、入参 dim（M6 主题：替换旧三角形调用标记）。
+      write(
+        `${paint(DOT, "accent")} ${paint(event.toolName, "accent", "bold")}(${paint(formatToolArgs(event.toolName, event.args, options), "dim")})\n`,
+      );
       // 写前 diff 预览：必须在确认闸门询问之前展示，用户才能据此决定 allow / deny。
+      // 红线（§2）：diff 行内容（+/- 行与 @@ 头）不进 ANSI，此处原样打印。
       const diffText = renderToolDiff(event.toolName, event.args, options);
-      if (diffText) process.stdout.write(diffText + "\n");
+      if (diffText) write(diffText + "\n");
       return;
     }
 
     case "tool_execution_end": {
       const resultText = extractResultText(event.result);
+      clearSpinner();
       if (event.isError) {
         // 错误信息是用户排障的唯一线索：保留完整前 400 字符，不参与头尾折叠。
-        process.stdout.write(`✖ ${event.toolName} 失败：${resultText.slice(0, ERROR_RESULT_MAX_CHARS)}\n`);
+        write(
+          `  ${paint(`${HOOK} ${CROSS}`, "error")} ${resultText.slice(0, ERROR_RESULT_MAX_CHARS)}\n`,
+        );
       } else {
-        process.stdout.write(`✓ ${event.toolName} 完成${resultText ? "：" + foldOutput(resultText) : ""}\n`);
+        write(`  ${paint(`${HOOK}`, "dim")} ${resultText ? foldOutput(resultText) : ""}\n`);
       }
       return;
     }
@@ -159,28 +235,38 @@ export function renderEvent(event: AgentEvent, tracker: UsageTracker, options?: 
       const message = event.message;
       if (message.role === "assistant") {
         tracker.add(message.usage);
-        process.stdout.write("\n");
+        // 收行只在「确实流式输出过正文」时补换行；纯 tool-call 消息不留悬空空行。
+        if (assistantDotPrinted) {
+          write("\n");
+          assistantDotPrinted = false;
+        }
         // provider 错误不会进入 agent_end.error（loop 把失败编码在 assistant 消息里）；
         // 这里必须显式提示，否则用户只看到空白 + 退出码 0。
         if (message.stopReason === "error") {
-          process.stdout.write(`✖ 模型调用失败：${message.errorMessage || "provider 返回未知错误"}\n`);
+          clearSpinner();
+          write(
+            paint(`${CROSS} 模型调用失败：${message.errorMessage || "provider 返回未知错误"}`, "error") + "\n",
+          );
         }
       }
       return;
     }
 
     case "agent_end": {
+      stopSpinner();
       const summary = tracker.line();
-      if (summary) process.stdout.write(`\n${summary}\n`);
+      // 数字骨架（累计 token / 成本 $X）保持纯文本（§2 红线），不套色。
+      if (summary) write(`\n${summary}\n`);
       if (event.error) {
-        process.stdout.write(`\n✖ 运行异常终止（${event.error.code}）：${event.error.message}\n`);
+        write(
+          paint(`\n${CROSS} 运行异常终止（${event.error.code}）：${event.error.message}`, "error") + "\n",
+        );
       }
       return;
     }
 
     default:
-      // agent_start / turn_start / turn_end / message_start / tool_execution_update 等
-      // 在 CLI 中无需独立展示，避免噪声。
+      // turn_start / turn_end / tool_execution_update 等在 CLI 中无需独立展示，避免噪声。
       return;
   }
 }
@@ -281,10 +367,10 @@ function extractResultText(result: unknown): string {
 }
 
 /**
- * 折叠超长的工具输出：超过阈值时只保留头尾，中间以省略标记替代。
+ * 折叠超长的工具输出：超过阈值时只保留头尾，中间以 `… +N 行` 标记替代。
  *
  * @param text 工具结果文本。
- * @returns 原文（未超阈值）或「头 + …[输出已折叠，省略 N 行] + 尾」。
+ * @returns 原文（未超阈值）或「头 + … +N 行 + 尾」。
  */
 export function foldOutput(text: string): string {
   const lines = text.split("\n");
@@ -293,7 +379,7 @@ export function foldOutput(text: string): string {
   const head = lines.slice(0, FOLD_HEAD_LINES);
   const tail = lines.length > FOLD_HEAD_LINES ? lines.slice(-FOLD_TAIL_LINES) : [];
   const omitted = lines.length - head.length - tail.length;
-  const omittedNote = omitted > 0 ? `…[输出已折叠，省略 ${omitted} 行]` : "";
+  const omittedNote = omitted > 0 ? `${ELLIPSIS} +${omitted} 行` : "";
   return [...head, omittedNote, ...tail].filter(Boolean).join("\n");
 }
 
@@ -375,7 +461,7 @@ export function renderToolDiff(toolName: string, args: unknown, options?: Render
   if (lines.length > DIFF_MAX_LINES) {
     const head = lines.slice(0, DIFF_HEAD_LINES);
     const tail = lines.slice(-DIFF_TAIL_LINES);
-    shown = [...head, `…[diff 已折叠，省略 ${lines.length - head.length - tail.length} 行]`, ...tail];
+    shown = [...head, `${ELLIPSIS} [diff 已折叠，省略 ${lines.length - head.length - tail.length} 行]`, ...tail];
   }
   return [label, ...shown].join("\n");
 }

@@ -37,6 +37,9 @@
     },
     {
       "path": "../../packages/serve"
+    },
+    {
+      "path": "../../packages/term"
     }
   ]
 }

@@ -5,8 +5,12 @@
  * 本文件只负责会话开场（欢迎头）与 /help 的静态文案。
  * M3 起命令的解析与分发移到 slash.ts（命令表 + 注入式 handler），
  * 本文件不再持有命令表，避免两处维护同一份别名列表。
+ *
+ * M6（CLI 主题）：TTY 下渲染 `✻ Welcome to ohna!` + 一次性边框面板（工作目录 / 模型 /
+ * 工具数与 MCP 来源 / 命令 tips）；非 TTY 保持纯文本头（管道可稳定消费，不含 `\x1b`）。
  */
 import type { CliMode } from "./mode.js";
+import { paint, SPIN, supportsAnsi } from "./theme.js";
 
 /**
  * 欢迎头所需的模型信息（从已解析的真实模型上取，避免本模块反向依赖 harness）。
@@ -28,22 +32,57 @@ export interface WelcomeOptions {
   sessionId?: string;
   /** 已接入的 MCP server 名（欢迎头展示来源）。 */
   mcpServers?: readonly string[];
+  /** 工作目录（TTY 边框面板展示）；缺省 process.cwd()。 */
+  cwd?: string;
 }
 
 const RULE = "─".repeat(60);
 
 /**
+ * CLI 启动 logo：以 ASCII 艺术还原 infinity-icon.svg 的「双环 ∞」形态（交叉双环）。
+ * 仅 TTY 欢迎头使用，accent 橙色着色作为品牌标记；非 TTY 不输出（保持管道纯文本）。
+ */
+export const CLI_LOGO: readonly string[] = [
+  "  ____      ____",
+  " /    \\____/    \\",
+  " \\    /    \\    /",
+  "  \\__/      \\__/",
+];
+
+/**
  * 打印会话开场欢迎头：标题 + 生效模型 / 端点 / 工具清单 + 会话 id + 多轮与命令提示。
  * 只写 stdout，不持有任何运行态。
  *
+ * TTY 门控：支持 ANSI 时输出 `✻` 标题 + 边框面板；否则保持纯文本头（§4.3）。
+ *
  * @param model 当前生效的真实模型信息。
  * @param toolNames 已装配的工具名列表。
- * @param options 模式、会话 id 与 MCP server 名。
+ * @param options 模式、会话 id、MCP server 名与工作目录。
  */
 export function renderWelcome(model: WelcomeModelInfo, toolNames: string[], options?: WelcomeOptions): void {
-  const tools = toolNames.length > 0 ? toolNames.join(" · ") : "（无）";
-  // 产品 B 已改名 ohna，标题不能再沿用金融研究的旧文案（M2 清理改名遗漏）。
   const title = options?.mode === "coding" ? "ohna · 本地编码 Agent" : "ohna";
+  const lines = supportsAnsi()
+    ? renderTtyWelcome(model, toolNames, options, title)
+    : renderPlainWelcome(model, toolNames, options, title);
+  process.stdout.write(lines.join("\n") + "\n");
+}
+
+/**
+ * 非 TTY 纯文本欢迎头：保持 M2/M3 的既有输出，管道可稳定消费。
+ *
+ * @param model 模型信息。
+ * @param toolNames 工具名列表。
+ * @param options 可选信息。
+ * @param title 标题文案。
+ * @returns 行数组。
+ */
+function renderPlainWelcome(
+  model: WelcomeModelInfo,
+  toolNames: string[],
+  options: WelcomeOptions | undefined,
+  title: string,
+): string[] {
+  const tools = toolNames.length > 0 ? toolNames.join(" · ") : "（无）";
   const lines = [
     RULE,
     "  " + title,
@@ -69,7 +108,103 @@ export function renderWelcome(model: WelcomeModelInfo, toolNames: string[], opti
     "  Ctrl-C   中断当前回答；空闲时 Ctrl-C 直接退出",
     "",
   );
-  process.stdout.write(lines.join("\n") + "\n");
+  return lines;
+}
+
+/**
+ * TTY 欢迎面板：`✻ Welcome to ohna!` + 一次性边框信息框 + 命令 tips。
+ *
+ * @param model 模型信息。
+ * @param toolNames 工具名列表。
+ * @param options 可选信息。
+ * @param title 标题文案。
+ * @returns 行数组。
+ */
+function renderTtyWelcome(
+  model: WelcomeModelInfo,
+  toolNames: string[],
+  options: WelcomeOptions | undefined,
+  title: string,
+): string[] {
+  const tools = toolNames.length > 0 ? toolNames.join(" · ") : "（无）";
+  const info: string[] = [
+    `工作目录  ${options?.cwd ?? process.cwd()}`,
+    `模型      ${model.id}（profile: ${model.provider}）`,
+    `端点      ${model.baseUrl}`,
+    `工具      ${tools}（${toolNames.length} 个）`,
+  ];
+  if (options?.sessionId) {
+    info.push(`会话      ${options.sessionId}（--resume ${options.sessionId} 可恢复）`);
+  }
+  if (options?.mcpServers && options.mcpServers.length > 0) {
+    info.push(`MCP       ${options.mcpServers.join(" · ")}`);
+  }
+
+  const lines = [
+    ...CLI_LOGO.map((line) => paint(line, "accent")),
+    "",
+    `${paint(SPIN, "accent")} ${paint("Welcome to ohna!", "foreground", "bold")}（${paint(title, "note")}）`,
+    "",
+    ...frame(info),
+    "",
+    `  ${paint("/help", "accent")}    查看会话内命令`,
+    `  ${paint("/clear", "accent")}   清空当前上下文并另开新会话（旧会话保留在磁盘）`,
+    `  ${paint("/cost", "accent")}    查看本会话累计 token 与成本`,
+    `  ${paint("/exit", "accent")}    退出（等价别名：exit、:q）`,
+    `  ${paint("Ctrl-C", "accent")}   中断当前回答；空闲时 Ctrl-C 直接退出`,
+    "",
+  ];
+  return lines;
+}
+
+/**
+ * 把信息行包进一次性边框面板（`╭─…─╮` / `│ … │` / `╰─…─╯`）。
+ *
+ * @param lines 信息行（键值文本）。
+ * @returns 带边框的行数组（边框用 dim 色）。
+ */
+function frame(lines: string[]): string[] {
+  const contentWidth = Math.max(...lines.map(displayWidth), 12);
+  const top = `╭${"─".repeat(contentWidth + 2)}╮`;
+  const bottom = `╰${"─".repeat(contentWidth + 2)}╯`;
+  const body = lines.map((line) => `│ ${padToWidth(line, contentWidth)} │`);
+  return [paint(top, "dim"), ...body.map((line) => paint(line, "dim")), paint(bottom, "dim")];
+}
+
+/**
+ * 估算一段文本的终端显示宽度：CJK / 全角字符按 2 列，其余按 1 列。
+ *
+ * 用于边框面板的列对齐；只做近似估算（组合字符、emoji ZWJ 等不计入），TTY 目检可接受。
+ *
+ * @param text 文本。
+ * @returns 终端列宽。
+ */
+function displayWidth(text: string): number {
+  let width = 0;
+  for (const ch of text) {
+    const cp = ch.codePointAt(0) ?? 0;
+    const wide =
+      (cp >= 0x1100 && cp <= 0x115f) ||
+      (cp >= 0x2e80 && cp <= 0xa4cf) ||
+      (cp >= 0xac00 && cp <= 0xd7a3) ||
+      (cp >= 0xf900 && cp <= 0xfaff) ||
+      (cp >= 0xfe30 && cp <= 0xfe4f) ||
+      (cp >= 0xff00 && cp <= 0xff60) ||
+      (cp >= 0xffe0 && cp <= 0xffe6);
+    width += wide ? 2 : 1;
+  }
+  return width;
+}
+
+/**
+ * 按终端列宽右补齐到指定宽度（空格填充），保证 CJK 内容在边框内对齐。
+ *
+ * @param text 文本。
+ * @param width 目标列宽。
+ * @returns 补齐后的文本。
+ */
+function padToWidth(text: string, width: number): string {
+  return text + " ".repeat(Math.max(width - displayWidth(text), 0));
 }
 
 /**

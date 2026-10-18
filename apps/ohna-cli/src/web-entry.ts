@@ -30,6 +30,7 @@ import { printProviderError } from "./provider-error.js";
 import { loadMcpTools } from "./mcp-config.js";
 import { createUsageTracker, renderEvent, type RenderOptions } from "./render.js";
 import { createSlashDispatcher, printUnknownCommand } from "./slash.js";
+import { CROSS, inputTopBar, inputBottomBar, paint, STOP, supportsAnsi } from "./theme.js";
 import { printReplCommands } from "./welcome.js";
 import type { CliOptions } from "./args.js";
 
@@ -167,14 +168,41 @@ export async function runWeb(options: CliOptions): Promise<void> {
   }
   process.stdout.write("\n  /help 查看命令；输入问题开始对话（浏览器可见同一会话）。\n\n");
 
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout, prompt: "你> " });
-  rl.prompt();
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout, prompt: "│ > " });
+
+  /**
+   * 打印输入区顶线（TTY 门控）后进入 readline prompt（§3.4 降级：打印式顶线 + 单行 prompt）。
+   */
+  const promptInput = (): void => {
+    if (supportsAnsi()) {
+      process.stdout.write(paint(inputTopBar(process.stdout.columns || 80), "dim"));
+    }
+    rl.prompt();
+  };
+  promptInput();
 
   let closed = false;
   let stopRequested = false;
   let running = false;
   const pending: string[] = [];
   let finish: (() => void) | undefined;
+
+  /**
+   * 终端尺寸变化：仅当空闲（无 run、未 EOF、未关闭）且当前输入行为空时才重绘当前输入
+   * 框顶线到新列宽。有未提交输入时不重绘（避免 readline 行缓冲视觉错位）；run 进行中
+   * 不重绘（避免污染流式输出）。已滚入历史的旧顶线无法回改，此为单框修正。
+   */
+  if (supportsAnsi()) {
+    process.stdout.on("resize", () => {
+      if (running || closed) return;
+      if (rl.line !== "") return;
+      const cols = process.stdout.columns || 80;
+      process.stdout.write("\r\x1b[1A\x1b[2K"); // 回到顶线行并清空
+      process.stdout.write(paint(inputTopBar(cols), "dim")); // 新宽度顶线
+      process.stdout.write("\r\x1b[2K"); // 清空旧 prompt 行
+      rl.prompt();
+    });
+  }
 
   /** 切换会话：退订旧会话、订阅新会话（/resume 与 /clear 共用）。 */
   const switchConversation = async (nextId: string, title: string): Promise<void> => {
@@ -273,6 +301,9 @@ export async function runWeb(options: CliOptions): Promise<void> {
    */
   const processLine = async (text: string): Promise<void> => {
     running = true;
+    // 对齐 repl.ts 的 run 期间 pause 语义：浏览器/终端发起的 run 期间挂起 prompt，
+    // 避免 spinner 与 readline 的输入区顶线打架（§3.3 web 模式对齐）。
+    if (!closed) rl.pause();
     try {
       if (await dispatch(text)) return;
 
@@ -304,7 +335,7 @@ export async function runWeb(options: CliOptions): Promise<void> {
         void processLine(next);
       } else if (!closed) {
         rl.resume();
-        rl.prompt();
+        promptInput();
       }
       if (closed && !running && pending.length === 0) finish?.();
     }
@@ -313,13 +344,17 @@ export async function runWeb(options: CliOptions): Promise<void> {
   rl.on("line", (line) => {
     const text = line.trim();
     if (!text) {
-      if (!running && !closed) rl.prompt();
+      if (!running && !closed) promptInput();
       return;
     }
     if (closed) return;
     if (running) {
       pending.push(text);
       return;
+    }
+    // 提交输入：先打印输入框下边框，把当前输入行在滚动历史里闭合为完整盒子。
+    if (supportsAnsi()) {
+      process.stdout.write(paint(inputBottomBar(process.stdout.columns || 80), "dim"));
     }
     void processLine(text);
   });
@@ -375,13 +410,13 @@ function renderFrame(
   if (event.type === "run_status") {
     if (activeRun && event.runId === activeRun.runId) onFinish();
     const status = (event.payload as { status?: string } | null)?.status;
-    if (status === "interrupted") process.stdout.write("\n⏹ run 已中断。\n");
-    if (status === "failed") process.stdout.write("\n✖ run 失败。\n");
+    if (status === "interrupted") process.stdout.write("\n" + paint(`${STOP} run 已中断。`, "dim") + "\n");
+    if (status === "failed") process.stdout.write("\n" + paint(`${CROSS} run 失败。`, "error") + "\n");
     return;
   }
   if (event.type === "run_error") {
     const error = (event.payload as { error?: { message?: string } } | null)?.error;
-    process.stdout.write(`\n✖ run 错误：${error?.message ?? "未知错误"}\n`);
+    process.stdout.write("\n" + paint(`${CROSS} run 错误：${error?.message ?? "未知错误"}`, "error") + "\n");
     return;
   }
   // 确认事件 / MCP discovery 事件由浏览器与日志侧消费，终端不重复渲染。

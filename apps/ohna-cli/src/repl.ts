@@ -26,6 +26,7 @@ import {
   replaceHistory,
 } from "./session-flow.js";
 import { createSessionStore } from "./session-store.js";
+import { inputTopBar, inputBottomBar, paint, supportsAnsi } from "./theme.js";
 import { printReplCommands, renderWelcome } from "./welcome.js";
 import { createSlashDispatcher, printUnknownCommand, type SlashHandlers } from "./slash.js";
 import {
@@ -84,15 +85,45 @@ export async function runRepl(
   const rl = readline.createInterface({
     input: process.stdin,
     output: process.stdout,
-    prompt: "你> ",
+    prompt: "│ > ",
   });
+
+  /**
+   * 终端尺寸变化：仅当空闲（无 run、未 EOF、未关闭）且当前输入行为空时才重绘当前输入
+   * 框顶线到新列宽。有未提交输入时不重绘（避免 readline 行缓冲视觉错位）；run 进行中
+   * 不重绘（避免污染流式输出）。已滚入历史的旧顶线无法回改，此为单框修正。
+   */
+  if (supportsAnsi()) {
+    process.stdout.on("resize", () => {
+      if (running || closed || inputClosed) return;
+      if (rl.line !== "") return;
+      const cols = process.stdout.columns || 80;
+      process.stdout.write("\r\x1b[1A\x1b[2K"); // 回到顶线行并清空
+      process.stdout.write(paint(inputTopBar(cols), "dim")); // 新宽度顶线
+      process.stdout.write("\r\x1b[2K"); // 清空旧 prompt 行
+      rl.prompt();
+    });
+  }
+
+  /**
+   * 打印输入区顶线（TTY 门控）后进入 readline prompt。
+   *
+   * 顶线是「打印式」普通内容，不是 readline 的 prompt 一部分：node:readline 会把
+   * prompt + line 当一个逻辑行做列折算，多行 prompt 会导致行编辑错位（§3.4 降级方案）。
+   */
+  const promptInput = (): void => {
+    if (supportsAnsi()) {
+      process.stdout.write(paint(inputTopBar(process.stdout.columns || 80), "dim"));
+    }
+    rl.prompt();
+  };
 
   renderWelcome(
     { id: currentModel.model.id, provider: currentModel.model.provider, baseUrl: currentModel.model.baseUrl },
     tools.map((tool) => tool.name),
-    { mode: setup.mode, sessionId, mcpServers: context?.mcpServerNames },
+    { mode: setup.mode, sessionId, cwd: setup.cwd, mcpServers: context?.mcpServerNames },
   );
-  rl.prompt();
+  promptInput();
 
   // coding 模式把主 readline 交给确认闸门复用，避免第二个 readline 与 REPL 抢 stdin；
   // research 模式不挂闸门，保持历史行为。
@@ -317,7 +348,7 @@ export async function runRepl(
         void processLine(next);
       } else if (!closed) {
         rl.resume();
-        rl.prompt();
+        promptInput();
       }
       maybeFinish();
     }
@@ -326,7 +357,7 @@ export async function runRepl(
   rl.on("line", (line) => {
     const text = line.trim();
     if (!text) {
-      if (!running && !closed) rl.prompt();
+      if (!running && !closed) promptInput();
       return;
     }
     if (closed) return;
@@ -334,6 +365,10 @@ export async function runRepl(
       // run 进行中：入队，等当前 run（含落盘）结束再处理。
       pending.push(text);
       return;
+    }
+    // 提交输入：先打印输入框下边框，把当前输入行在滚动历史里闭合为完整盒子。
+    if (supportsAnsi()) {
+      process.stdout.write(paint(inputBottomBar(process.stdout.columns || 80), "dim"));
     }
     void processLine(text);
   });

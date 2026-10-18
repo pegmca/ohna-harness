@@ -31,6 +31,7 @@
       "@aiagent/identity": ["./packages/identity/src/index.ts"],
       "@aiagent/types": ["./packages/types/src/index.ts"],
       "@aiagent/tools": ["./packages/tools/src/index.ts"],
+      "@aiagent/term": ["./packages/term/src/index.ts"],
       "@aiagent/trace": ["./packages/trace/src/index.ts"],
       "@aiagent/workflow": ["./packages/workflow/src/index.ts"]
     }

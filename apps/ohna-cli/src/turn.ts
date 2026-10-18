@@ -15,7 +15,7 @@ import {
 import type { ActiveModel } from "@aiagent/ai";
 import type { AgentTool } from "@aiagent/tools";
 import { resolveMaxTurns, type CliMode } from "./mode.js";
-import { renderEvent, type UsageTracker } from "./render.js";
+import { renderEvent, write, type UsageTracker } from "./render.js";
 import {
   filterFailedAssistants,
   resolveCompactionSettings,
@@ -148,7 +148,8 @@ export function reachedCostBudget(tracker: UsageTracker, maxCost: number | undef
  * @param reason 停止原因。
  */
 export function printStopReason(reason: RunStopReason): void {
-  process.stdout.write(`\n⏹ 已停止：${RUN_STOP_REASON_TEXT[reason]}\n`);
+  // 走 write()：整屏模式下停止原因会进对话模型，直写 stdout 会被下一帧清屏抹掉。
+  write(`\n⏹ 已停止：${RUN_STOP_REASON_TEXT[reason]}\n`);
 }
 
 /**

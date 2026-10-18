@@ -7,7 +7,12 @@
  * 因此本模块不与 repl / harness / serve 形成任何运行时依赖。
  *
  * 命令不消耗 token、不进 history：REPL 循环必须在构造用户消息之前先走命令分发。
+ *
+ * 输出边界：本模块只经 render 的 `write()` 出口写终端，不直写 stdout——TTY 整屏模式下
+ * 输出由 sink 接管进入对话模型，直写会在下一次整屏重绘时被清屏抹掉。
  */
+
+import { write } from "./render.js";
 
 /** 可识别的斜杠命令。 */
 export type SlashCommandName =
@@ -108,5 +113,7 @@ export function createSlashDispatcher(options: SlashDispatcherOptions): SlashDis
  * @param text 用户原始输入。
  */
 export function printUnknownCommand(text: string): void {
-  process.stdout.write(`未知命令：${text}（输入 /help 查看可用命令）\n`);
+  // 经 render 的统一输出出口：TTY 整屏模式下会被 sink 注入进对话模型，
+  // 直写 process.stdout 则会被下一帧 clearScreen 抹掉（用户完全看不到）。
+  write(`未知命令：${text}（输入 /help 查看可用命令）\n`);
 }

@@ -11,6 +11,7 @@ import type { AgentMessage } from "@aiagent/agent";
 import * as path from "node:path";
 import type { CliMode } from "./mode.js";
 import type { UsageSnapshot, UsageTracker } from "./render.js";
+import { write } from "./render.js";
 import {
   compactSessionHistory,
   filterFailedAssistants,
@@ -133,7 +134,8 @@ export async function persistSession(
   });
   if (compaction.compacted) {
     const hard = compaction.truncatedMessages + compaction.droppedMessages;
-    process.stdout.write(
+    // 走 write()：整屏模式下压缩提示会被 sink 收进对话模型，直写 stdout 会被下一帧清屏抹掉。
+    write(
       `↺ 会话上下文已压缩：约 ${compaction.tokensBefore} → ${compaction.tokensAfter} token / ` +
         `${compaction.messageCountBefore} 条 → ${compaction.messages.length} 条` +
         (hard > 0 ? `（硬收敛：截断 ${compaction.truncatedMessages} 条 / 丢弃 ${compaction.droppedMessages} 条）` : "") +

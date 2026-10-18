@@ -12,6 +12,7 @@
 import * as path from "node:path";
 import * as readline from "node:readline";
 import type { BeforeToolCallContext, BeforeToolCallResult } from "@aiagent/agent";
+import { write } from "./render.js";
 import { resumeSpinner, suspendSpinner } from "./spinner.js";
 import { CROSS, DOT, paint } from "./theme.js";
 
@@ -56,7 +57,8 @@ export function createToolConfirmGate(options: ToolConfirmGateOptions): ConfirmH
     const summary = describeToolCall(toolName, context.args, options.cwd);
 
     if (options.autoApprove) {
-      process.stdout.write(paint(`${DOT} --yes 自动放行：${summary}`, "dim") + "\n");
+      // 走 write()：整屏模式下放行提示会进对话模型，直写 stdout 会被下一帧清屏抹掉。
+      write(paint(`${DOT} --yes 自动放行：${summary}`, "dim") + "\n");
       return undefined;
     }
 

@@ -113,7 +113,13 @@ export class TuiApp {
   buildFrame(width: number, height: number): string[] {
     const innerWidth = Math.max(1, width - 2);
     // 输入区：上边框 / 输入行 / 下边框（inputBoxHeight = 3）。
-    const inputLines = box([this.editor.render(innerWidth)], { title: "ohna", width: innerWidth });
+    // 宽度预算：box 的内容区是 innerWidth，其两侧内边距各占 1 列、边框各占 1 列，
+    // 因此留给 editor 的列数是 innerWidth - 2——否则 box 会把盒子顶到「屏宽 + 2」，
+    // 末 2 列（` │` / `╯`）被终端折行走样。
+    const inputLines = box([this.editor.render(innerWidth - 2)], {
+      title: "ohna",
+      width: innerWidth,
+    });
     const inputBoxHeight = inputLines.length;
     const dialogueHeight = Math.max(0, height - inputBoxHeight);
 

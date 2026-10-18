@@ -46,7 +46,7 @@
 | 运行中排队 + `» queued` 回显 | 排队可见，run 间隙注入继续跑 | 队列完全静默（repl.ts:333-336），run 结束后才串行处理 | 核心 | **K2** | B1 |
 | Esc 中断当前 run | Esc 即中断 | 仅 Ctrl-C（repl.ts:341-355）；中断语义本身已有（AbortController） | 核心 | 无（raw-mode keypress） | B1 |
 | 双击 Esc 回退 / 编辑历史消息 | rewind 菜单 | 无 | 核心 | K4（远期） | 远期 |
-| Shift+Tab 模式切换 | default / acceptEdits / plan 循环 | 无；只有 `--mode research/coding` + `--yes` 全放行（args.ts） | 核心 | **K1**（模式=策略预设） | B2 |
+| Shift+Tab 模式切换 | default / acceptEdits / plan 循环 | 无；只有 `--yes` 全放行（args.ts） | 核心 | **K1**（模式=策略预设） | B2 |
 | `/` 命令补全菜单 | 即输即显 | 无 completer（repl.ts:84-88），回车后才解析 | 核心 | 无（readline completer） | B3 |
 | `@` 文件引用补全 | 内联补全 + 读入上下文 | 无 | 核心 | 无（`UserMessage.content` 数组已支持多块） | B3 |
 | `!` bash 直通 / `#` 快速记忆 | 有 | 无（repl.ts:326-339 仅 line 事件） | 重要 | 无 | B3 |

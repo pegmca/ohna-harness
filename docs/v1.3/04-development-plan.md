@@ -39,7 +39,7 @@ Phase 0  安全加固（P0，前置，阻塞一切「接管本地目录」承诺
 
 ## Phase R · 机械改名（前置，行为零变化）
 
-**目标**：落实 03 D7 的产品命名，让后续交付清单直接引用新路径。**（D9：开发验证阶段，无需兼容原代码——bin 改名不留别名、`--mode` 面可随 Phase 1/5 重构。）**
+**目标**：落实 03 D7 的产品命名，让后续交付清单直接引用新路径。**（D9：开发验证阶段，无需兼容原代码——bin 改名不留别名，CLI 参数面可随 Phase 1/5 重构。）**
 
 **交付清单（文件级，全部机械替换）**：
 1. `git mv apps/api apps/finance-api`、`git mv apps/web apps/finance-web`、`git mv apps/cli apps/ohna-cli`。

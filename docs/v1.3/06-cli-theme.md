@@ -65,7 +65,7 @@ verify 脚本跑在管道（非 TTY）模式，TTY 门控后颜色自动降级�
 v1 的 3.2「符号仅 TTY 生效」与 4.7「同步更新测试断言」相互矛盾（测试跑非 TTY）。v2 裁决：
 
 - **符号（`⏺ ⎿ ⏹ …`）无条件替换**：管道模式也用新符号，全部测试断言统一指向新符号集合；
-- **颜色 / spinner / 输入区顶线**仅 TTY 生效：`stdout.isTTY && !NO_COLOR && TERM !== "dumb" && !--no-color`；
+- **颜色 / spinner / 整屏 TUI（含输入区边框）**仅 TTY 生效：`stdout.isTTY && !NO_COLOR && TERM !== "dumb" && !--no-color`；
 - 红线收窄为：数字骨架与 diff 行内容不进 ANSI（§2）。
 
 ### 3.3 spinner：单写者协议（v2 重设计）
@@ -82,18 +82,25 @@ v1 的 3.2「符号仅 TTY 生效」与 4.7「同步更新测试断言」相互�
 - 挂接点收敛在**事件流**（agent_start 启动、tool_execution_start 换动词、message_update 抑制、
   agent_end 停帧），repl.ts / web-entry.ts 共用同一份，不做两处循环各自挂。
 
-### 3.4 边框输入区降级（v2，评审 P0-1）
+### 3.4 整屏 TUI 输入区（v3，取代 v2 的 readline 降级方案）
 
-node:readline 的 `_refreshLine` 把 `prompt + line` 当**一个逻辑行**做列折算与光标定位，prompt
-含 `\n` 会导致方向键 / Ctrl+A / 退格跨列 / 历史翻阅全部错位——**多行 `setPrompt` 不可用**。
-Claude Code 是 ink 全屏自绘，不走 readline prompt，本方案继续用 readline，因此降级：
+v2 曾因「readline 无法在光标活动行下方作画」而降级为「打印式顶线 + 单行 `│ > ` prompt 」，
+放弃底部边框，并把 resize 重印列为可选增强。实测该方案在真实终端**不可用**：顶线打印后就固化
+在滚动历史里，resize 时无法安全重绘，曾引发无限重绘风暴（屏幕上刷出成千上万行 `╭─ ohna ─╮`）。
+因此 v3 改为**整屏 TUI**，对齐 pi-tui 的成熟模型：
 
-- 顶线 `╭─ ohna ─╮`（宽度取当时终端列数）作为**普通内容**在每次 `rl.prompt()` 前 write 一次
-  （触点 repl.ts:95/320/329、web-entry.ts:171/307/316）；
-- prompt 保持**单行** `│ > `；
-- 底部边框放弃（readline 无法在光标活动行下方作画）；完整 ink 式 TUI（边框随输入增长、底部
-  模式行）另立项评估，不在本方案范围；
-- SIGWINCH：降级方案下静态顶线与实时列宽的错位可接受，resize 重印列为可选增强，不阻塞交付。
+- TTY 下由 `packages/term` 接管：`RawTerminal`（raw mode + bracketed paste + resize 监听）+
+  `Screen`（**节流 + 幂等全量重绘**：`requestRender` 去抖、`doRender` 先 `clearScreen()` 再写整帧）；
+- 输入区是 `box([editor.render(width - 2)], { title: "ohna" })`——上下边框与左右竖线宽度严格对齐
+  （`box` 的显式 `width` 是硬约束，超长内容按可见列截断），不再是「顶线 + 单行 prompt」的拼装；
+- 底部边框由整屏渲染天然提供，不再是「放弃项」；
+- **resize 由 Screen 幂等重绘处理**：连续 / 高频 resize 只触发一次节流重绘，画的是同一帧，
+  永不可能风暴——`TuiApp` 里没有任何 resize 代码；
+- 光标由编辑器用 reverse video（`\x1b[7m`）呈现，硬件光标在整屏下隐藏，`stop()` 时归还
+  （关 bracketed paste、恢复光标、还原 raw mode）；
+- 对话输出经 `render.ts` 的 `write()` + `setOutputSink()` 注入对话内容模型；**任何绕过 `write()`
+  的直写会被下一帧 `clearScreen()` 抹掉**（这是 v3 踩到的真实 bug：未知命令提示等在 TTY 下不可见）；
+- **非 TTY 保持原滚动输出**：默认 sink 就是 `process.stdout.write`，管道输出不含 `\x1b`、不走整屏。
 
 ### 3.5 ⏺ 懒打点（v2）
 
@@ -125,8 +132,8 @@ ESM import 链（index→harness→turn→render→theme）会在 `parseArgs` **
 3. `apps/ohna-cli/src/welcome.ts`：`✻ Welcome to ohna!` + 一次性边框面板（工作目录 / 模型 /
    工具数与 MCP 来源 / 命令 tips），TTY 门控；非 TTY 保持现纯文本头。
 4. `apps/ohna-cli/src/spinner.ts`（新，TTY only）：§3.3 单写者协议 + 动词文案 + confirm 挂起联动。
-5. `apps/ohna-cli/src/repl.ts` / `web-entry.ts`：单行 prompt `│ > ` + 打印式顶线（§3.4）；
-   **web-entry `processLine` 补 `rl.pause()`**；`confirm.ts` y/n 提示套色（非 TTY block 语义不变）。
+5. `apps/ohna-cli/src/repl.ts` / `web-entry.ts`：TTY 下改走整屏 TUI（§3.4，`packages/term` 的
+   `Screen` + `TuiApp`），输入区为 `box` 包起来的完整边框；非 TTY 保留原 readline 路径。
 6. 符号触点补全（v1 遗漏，评审 P2-1）：`confirm.ts:52`（`▸ --yes 自动放行`）、`confirm.ts:58`
    （`✖ 已拒绝`）、`web-entry.ts:378-384`（`⏹ run 已中断。` / `✖ run 失败。`）全部换新符号。
 7. `apps/ohna-cli/src/args.ts` / `index.ts`：新增 `--no-color` + `theme.configure()` 接线；help 更新。
@@ -145,7 +152,8 @@ ESM import 链（index→harness→turn→render→theme）会在 `parseArgs` **
 | 风险 | 对策 |
 |---|---|
 | spinner 与流式 delta / confirm question 竞争 stdout | §3.3 单写者协议（写入前 stop&clear、question 挂起 suspend、finally 停帧）；web-entry 先补 pause 对齐 |
-| 多行 prompt 与 readline 重绘错位 | §3.4 已降级为打印顶线 + 单行 prompt，风险消除 |
+| 多行 prompt 与 readline 重绘错位 | §3.4 改为整屏 TUI（`Screen` 幂等重绘），不再依赖 readline 重绘，风险消除 |
+| resize 重绘风暴 | §3.4 整屏 TUI：`requestRender` 节流 + `doRender` 幂等清屏重画，连续 resize 只画同一帧 |
 | ANSI 码破坏测试捕获组 | 红线收窄为两个捕获组 + diff 行内容；「非 TTY 无 `\x1b`」断言兜底 |
 | theme 模块级状态导致测试间泄漏 | 惰性求值 + resetForTest；每个注入用例 afterEach 复位 |
 | 旧符号触点漏改导致新旧混排 | §4.6 显式清单（confirm.ts / web-entry.ts 三处）+ 全仓 grep `▸\|✓\|✖` 验收步骤 |
@@ -161,8 +169,9 @@ pnpm typecheck && pnpm architecture:check && pnpm build && pnpm test && pnpm lin
 
 - **自动化**：以上全绿；`render.test` 含「非 TTY 输出无 ANSI」断言；verify 脚本符号与折叠断言已同步；
   全仓 grep 无残留旧符号（`▸ 调用` / `✓ … 完成` / `✖ … 失败` 形态）。
-- **人工（TTY）**：真终端（非管道）跑 `--mode coding` REPL，逐项目检：
-  - 欢迎头 `✻` + 边框面板；输入区顶线 + `│ > `；**行编辑（方向键 / Ctrl+A / 历史翻阅）无错位残影**；
+- **人工（TTY）**：真终端（非管道）跑 REPL（ohna 恒为编码助手），逐项目检：
+  - 欢迎头 `✻` + 边框面板；输入区是完整边框（上下边框与左右竖线对齐）+ 反色光标；
+  - **拖动窗口改变列宽：输入框随新宽度重绘且无刷屏（resize 不风暴）**（这是 v2 降级方案踩过的坑）；
   - 助手 `⏺` + 流式正文（懒打点，纯工具轮无悬空 `⏺`）；工具 `⏺ Tool(args)` + `⎿` dim 结果 + 折叠提示；
   - diff 预览红绿；`✻` spinner 动词文案与耗时；run 中触发 y/n 确认时 spinner 挂起、提示不被帧覆盖；
   - `--web` 模式：浏览器发起 run 期间终端 prompt 不与 spinner 打架；

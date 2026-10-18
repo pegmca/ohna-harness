@@ -9,7 +9,7 @@
 > - `03-decomposition.md` —— 权威拆解 + 目标架构 + 设计决策（**取代 02 文档中「复用 apps/api createApiServer」的假设**）
 > - `04-development-plan.md` —— 依赖有序、文件级交付清单的分阶段开发计划
 > - `05-verify-cases.md` —— 分层验收用例（安全 P0 / ohna-cli M2 / serve L0-L1 / ohna-web / L3 / 回归）
-> - `06-cli-theme.md` —— CLI 终端样式改造（复刻 Claude Code 风格，v2 评审修订版：门控裁决 + spinner 单写者协议 + 边框输入区降级，规划中）
+> - `06-cli-theme.md` —— CLI 终端样式改造（复刻 Claude Code 风格，已落地：门控裁决 + spinner 单写者协议 + **整屏 TUI 输入区**（v3，取代原「打印式顶线」降级方案，根治 resize 重绘风暴））
 > - `07-cli-feature-parity.md` —— CLI 功能对齐 Claude Code：差距清单 + 编码建议 + 内核改动设计（K1 权限策略内核 / K2 排队与 steering 接线 / K3 子 agent 接线，批次 B1-B3，规划中）
 >
 > 历史背景文档：`01-coding-cli.md`（CLI M1 移植细节，仍有效）、`02-local-web-runtime.md`（本地 Web 早期设计，**其 §3.2「复用 createApiServer」已被用户决策取代**，其余 JSONL/目录沙箱/UI 思路沿用）。
@@ -29,7 +29,7 @@
 | L2 | ohna-web 本地 Web UI：复制改造 + 文件树 + 本地模式 | **已实现**（04 Phase 4；`apps/ohna-web` 复制改造：文件树 `/api/local/fs` + write/edit/bash 事件联动刷新、待确认卡片 allow/deny + 刷新后 SSE replay 恢复、本地模式标识；自动化见 `apps/ohna-web/src`（51 vitest 用例），W-1~W-9 见 `` §12） |
 | M3 | 体验对齐：slash 命令、diff 渲染、输出折叠、MCP 接入、`--web` 进程内托管 | **已实现**（04 Phase 5；`src/slash.ts`（/model /cost /compact /tools /resume）+ `src/diff.ts` 零依赖 LCS unified diff（写前预览、400 行折叠）+ `tool_execution_end` 头尾折叠 + `--mcp` 外部 server（`<untrusted_context>` 已由 mcp adapter 封装）+ `--web` 托管 `src/web-entry.ts`；自动化见 `test/verify-ohna-m3.mjs`） |
 | L3 | 长任务治理（ohna）：`/resume`、compaction、成本展示 | **已实现**（04 Phase 5；CLI `/resume` 切换 + `/cost` 累计 + serve **run 前会话级 compaction**：双基准估算 → 摘要持久化 `messageType:"compaction"` → 硬收敛（与 CLI 共用 `packages/agent` 的 `enforceContextWindow`）；自动化见 `packages/serve/test/compaction.test.mjs` 与 `test/verify-ohna-m3.mjs`） |
-| CLI 样式 | 终端样式复刻 Claude Code：ANSI 主题层、`⏺/⎿/✻` 符号、单行输入区 + 顶线、`--no-color` | 方案 v2（06-cli-theme.md，2025-10 专家评审反馈已吸收：符号无条件替换 + 颜色/spinner TTY 门控、spinner 单写者协议、多行边框输入区因 readline 限制降级），待实现 |
+| CLI 样式 | 终端样式复刻 Claude Code：ANSI 主题层（Amberwood 暖栗×橙）、`⏺/⎿/✻` 符号、整屏 TUI 输入区、`--no-color` | **已实现**（06-cli-theme.md v3：符号无条件替换 + 颜色/spinner TTY 门控、spinner 单写者协议；输入区由 v2 的「打印式顶线 + 单行 prompt」改为 `packages/term` 整屏 TUI——resize 节流幂等重绘、彻底消除重绘风暴，`box` 显式宽度为硬约束保证边框对齐；非 TTY 保留原滚动输出） |
 | CLI 功能对齐 | 权限三选项与会话记住（K1）、queued/Esc/ctrl+o/thinking 交互（K2 接线 + 渲染层）、Task 子 agent（K3）、命令与补全补表 | 规划中（07-cli-feature-parity.md，批次 B1-B3；内核现状已核实：thinking 事件 / 工具结果全文 / steering 钩子 / team 原语均已备，多为接线与策略内核化） |
 
 ## 一·一、架构决策（本轮已拍板，见 03 §7）
@@ -40,13 +40,13 @@
 4. **ohna-web 复制改造**：从 `apps/finance-web`（原 apps/web）复制后剥离身份门/金融块，本次不抽前端组件库。
 5. **产品命名（D7）**：金融线 `finance-api`/`finance-web`；编码 Agent 命名 **ohna**：`ohna-cli`/`ohna-api`/`ohna-web`（未来 `ohna-tui`），bin `immersive`→`ohna`。
 6. **Web 托管主路径（D8）**：ohna-web 依托 CLI 启动（`ohna --web`，终端与浏览器同一会话）；装配下沉 `packages/serve`，`ohna-api` 仅作独立/headless 薄入口。
-7. **无向后兼容约束（D9）**：开发验证阶段，改名/参数面/模式默认值均可直接重构，无需兼容原 `immersive` / `--mode research` 等旧行为。
+7. **无向后兼容约束（D9）**：开发验证阶段，改名/参数面均可直接重构，无需兼容原 `immersive` 等旧行为。
 
 ## 二、问题陈述（当前状态）
 
 **立项时（M0 前）**：`apps/ohna-cli`（原 apps/cli）只能做金融问答——工具注册表只有 `calculator / market_data / filing_search / financial_metric`（`packages/tools/src/default-registry.ts:16`），无文件读写与命令执行能力。
 
-**当前**：`ohna --mode coding`（原 apps/cli）已具备编码闭环（`packages/coding` 7 工具 + 编码提示词与项目上下文注入）、M2 长任务治理（会话持久化、`--resume`、compaction 与窗口硬收敛、预算/时限、模型元数据与成本）、本地 Web 形态（`packages/serve` 装配 + `apps/ohna-api` + `apps/ohna-web`，L0/L1/L2 已实现）与 M3 体验（slash 命令、diff 渲染、输出折叠、`--mcp` 接入、`--web` 进程内托管）。剩余缺口按优先级：
+**当前**：`ohna`（原 apps/cli）已具备编码闭环（`packages/coding` 7 工具 + Claude Code 风格的中文系统提示词与项目上下文注入）、M2 长任务治理（会话持久化、`--resume`、compaction 与窗口硬收敛、预算/时限、模型元数据与成本）、本地 Web 形态（`packages/serve` 装配 + `apps/ohna-api` + `apps/ohna-web`，L0/L1/L2 已实现）与 M3 体验（slash 命令、diff 渲染、输出折叠、`--mcp` 接入、`--web` 进程内托管）。剩余缺口按优先级：
 
 1. **能力边界**：compaction 仍是 chars/4 启发式估算；摘要调用会计入会话成本；deadline 只在 turn 边界检查。
 

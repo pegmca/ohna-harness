@@ -56,7 +56,7 @@
 
 - `apps/finance-web`：产品 A 的 Vite + React + TypeScript Web 应用入口，负责承载 Immersive 产品界面，只通过 HTTP API 调用 Agent。
 - `apps/finance-api`：产品 A 的 Fastify HTTP adapter，负责请求校验、异步 Run 生命周期、SSE 事件投影和结构化响应。
-- `apps/ohna-cli`：产品 B 的终端编码 Agent（bin `ohna`），`--mode research` 走金融工具、`--mode coding` 走编码工具集。M2 已支持会话持久化与 `--resume <id>`、上下文压缩、`--max-turns` / `--deadline-ms` / `--max-cost` 预算治理与 `/cost`；单轮模式同样落盘，可用 `ohna --mode coding --resume <id>` 接续。M3 支持 slash 命令（`/model /cost /compact /tools /resume`）、写前 unified diff、输出折叠、`--mcp <config.json>` 接入外部 MCP 工具（输出经 `<untrusted_context>` 封装），以及 `ohna --web [dir]` 进程内托管（终端与浏览器共享同一会话，`--web-port` / `--no-open` 可选）。
+- `apps/ohna-cli`：产品 B 的终端编码 Agent（bin `ohna`），恒为个人编码助手（金融研究能力归属产品 A），工具固定走编码工具集（`packages/coding`，作用域限定在当前工作目录）。M2 已支持会话持久化与 `--resume <id>`、上下文压缩、`--max-turns` / `--deadline-ms` / `--max-cost` 预算治理与 `/cost`；单轮模式同样落盘，可用 `ohna --resume <id>` 接续。M3 支持 slash 命令（`/model /cost /compact /tools /resume`）、写前 unified diff、输出折叠、`--mcp <config.json>` 接入外部 MCP 工具（输出经 `<untrusted_context>` 封装），以及 `ohna --web [dir]` 进程内托管（终端与浏览器共享同一会话，`--web-port` / `--no-open` 可选）。
 - `apps/ohna-api`：产品 B 的本地服务薄入口（bin `ohna-api`），只绑 `127.0.0.1`，复用 `packages/serve` 装配；支持 `[dir]` / `--port` / `--data-dir` / `--auto-approve` / `--no-open`，SIGINT/SIGTERM 会中断在途 run 并落 `interrupted`。
 - `apps/ohna-web`：产品 B 的本地 Web UI（Phase 4）：浏览器里对话、待确认 allow/deny、只读文件树；`pnpm --filter @aiagent/ohna-web build` 后由 `ohna-api` 直接托管（`pnpm --filter @aiagent/ohna-api start -- <dir>`），开发模式用 `pnpm --filter @aiagent/ohna-web dev`（代理 `/api` → 127.0.0.1:4173）。
 - `packages/coding`：编码工具集（read / write / edit / bash / grep / find / ls）与路径、命令策略。

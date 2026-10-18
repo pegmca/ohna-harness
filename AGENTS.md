@@ -33,6 +33,7 @@ Before implementing a task, read the relevant roadmap stage, architecture/design
 - `packages/tools`: 金融工具注册表与执行边界。
 - `packages/trace`: Minimal run-event type contract and cross-boundary value redaction.
 - `packages/serve`: ohna 服务端装配包（`createOhnaServer`）：JSONL stores（sessions / conversations / runs）+ run-v2 HTTP/SSE + 异步确认闸门（`confirm-gate.ts` / `routes/confirmations.ts`）+ 只读 `routes/fs.ts`（复用 `@aiagent/coding` 路径策略）+ 静态 fallback + 进程内句柄（`createConversation` / `listConversations` / `createRun` / `subscribeRun` / `subscribeConversation` / `cancelRun` / `listenWithRetry`）；`run 前会话级 compaction`（L3-3，摘要持久化为 `messageType:"compaction"`）在 `RunManager.createRun` 内生效；`ohna-api` 与 `ohna-cli --web` 共用。
+- `packages/term`: ohna CLI 的整屏 TUI 渲染基础包（零外部依赖）：`RawTerminal`（raw mode / bracketed paste / resize 监听 / 光标与清屏原语）+ `Screen`（节流 + 幂等全量整屏重绘：先 `clearScreen()` 再写当前帧，resize 只触发一次节流重绘，因此永不出现重绘风暴）+ `box` 边框组件与 `visibleWidth` 显示宽工具。颜色只提供 ANSI 原语，语义调色板由 `apps/ohna-cli/src/theme.ts` 负责（包边界：term 不内置业务色板、不反向依赖 app）。
 - `docs/LEARNING_AND_EVOLUTION_ROADMAP.md`: Ongoing learning stages, engineering outcomes, and acceptance evidence.
 
 Keep package boundaries explicit. Do not move runtime behavior into an app when it belongs in a package. `apps/ohna-api` / `apps/ohna-cli` / `apps/ohna-web` must not depend on `apps/finance-api` / `apps/finance-web`, nor on each other.

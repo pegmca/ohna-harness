@@ -80,13 +80,13 @@ packages/coding/
     project-context.ts    # 读 AGENTS.md / DESIGN.md / package.json scripts / git branch+dirty
 ```
 
-- **为什么不进 `packages/tools`**：那是金融工具域（AGENTS.md 要求包边界清晰），编码工具独立成包，`apps/ohna-cli` 组合根按 `--mode` 选择注册表。
+- **为什么不进 `packages/tools`**：那是金融工具域（AGENTS.md 要求包边界清晰），编码工具独立成包，`apps/ohna-cli` 组合根固定装配它。
 - 单文件 >500 行时按内聚拆分（项目纪律），例如 `edit.ts` 若超限可拆出匹配/替换策略。
 - 每个移植文件头部注明「ported from pi (MIT)」，归因与改动点写进 ``。
 
 ## 4. M1：编码工具闭环（能真实改代码、跑测试、自己修）
 
-> 状态：**已实现**（`packages/coding` + `--mode coding`）。
+> 状态：**已实现**（`packages/coding`；编码工具集是 ohna 唯一的工具注册表）。
 
 ### 4.1 交付清单
 
@@ -97,25 +97,25 @@ packages/coding/
    - 输出上限：单一来源为 `packages/coding/src/support/truncate.ts` 的 `DEFAULT_MAX_BYTES`（50KB）/ `DEFAULT_MAX_LINES`（2000 行），工具层不写字面量；bash 超时默认 60s 可配。
 3. `packages/coding/src/context/project-context.ts`：组装项目上下文（AGENTS.md、DESIGN.md、package.json scripts、`git status --short`）。
 4. `apps/ohna-cli`：
-   - `package.json` 加 `@aiagent/coding` 依赖；`src/index.ts` 增加 `--mode <research|coding>`（默认 `research`，保持现有行为向后兼容）、`--yes`（跳过写/执行确认）。
-   - `src/harness.ts`：按 mode 选注册表与系统提示词；coding 模式注入项目上下文；挂 `beforeToolCall` 做权限拦截 + 交互确认。
-   - `MAX_TURNS`：coding 模式提高到 24（`harness.ts:26`），并加 `deadlineMs`。
-   - `src/render.ts`：coding 模式下工具调用一行展示 `命令` / `路径`，结果与错误保持现有 `✓/✖` 风格。
+   - `package.json` 加 `@aiagent/coding` 依赖；`src/index.ts` 提供 `--yes`（跳过写/执行确认）。
+   - `src/harness.ts`：固定装配编码工具注册表与 ohna 系统提示词；注入项目上下文；挂 `beforeToolCall` 做权限拦截 + 交互确认。
+   - `MAX_TURNS`：固定为 24（`src/mode.ts` 的 `MAX_TURNS`），并加 `deadlineMs`。
+   - `src/render.ts`：工具调用一行展示 `命令` / `路径`，结果与错误保持现有 `✓/✖` 风格。
 
 ### 4.2 验收（人工可复现）
 
 ```bash
 # 1) 只读探索
-pnpm --filter @aiagent/ohna-cli dev -- --mode coding "列出 apps/ohna-cli/src 下的文件并说明各自职责"
+pnpm --filter @aiagent/ohna-cli dev -- "列出 apps/ohna-cli/src 下的文件并说明各自职责"
 # 期望：调用 ls/grep/read，不产生任何写操作
 
 # 2) 真实改码 + 自跑验证（核心验收）
-pnpm --filter @aiagent/ohna-cli dev -- --mode coding "在 test/ 下新增一个 ts 文件，导出 add(a,b)，然后跑 pnpm --filter @aiagent/ohna-cli typecheck 直到通过"
+pnpm --filter @aiagent/ohna-cli dev -- "在 test/ 下新增一个 ts 文件，导出 add(a,b)，然后跑 pnpm --filter @aiagent/ohna-cli typecheck 直到通过"
 # 期望：write → bash(pnpm typecheck) → 必要时 edit 自愈 → 结束
 
 # 3) 权限护栏
-pnpm --filter @aiagent/ohna-cli dev -- --mode coding "读取 /etc/passwd"        # 期望：路径越界被拒
-pnpm --filter @aiagent/ohna-cli dev -- --mode coding "执行 rm -rf /"            # 期望：命令 denylist 拒绝
+pnpm --filter @aiagent/ohna-cli dev -- "读取 /etc/passwd"        # 期望：路径越界被拒
+pnpm --filter @aiagent/ohna-cli dev -- "执行 rm -rf /"            # 期望：命令 denylist 拒绝
 ```
 
 ### 4.3 风险与对策
@@ -177,4 +177,4 @@ pnpm lint
 - ``（新建）：技术重点、实现流、取舍、验证、学习检查点。
 - `docs/LEARNING_AND_EVOLUTION_ROADMAP.md`：新增阶段产出与验收证据。
 - `ARCHITECTURE.md`：packages/apps 列表补 `packages/coding` 与依赖方向。
-- `apps/ohna-cli/src/index.ts` 的 `--help` 文案与 README（若新增 `--mode` 等参数）。
+- `apps/ohna-cli/src/args.ts` 的 `--help` 文案与 README（CLI 参数面变动时同步）。

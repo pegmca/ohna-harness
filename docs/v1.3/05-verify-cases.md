@@ -71,7 +71,7 @@
 
 | ID | 用例 | 步骤 | 期望 |
 |---|---|---|---|
-| C-M2-1 | 会话持久化 | coding 模式多轮 → `/exit` → `ohna --mode coding --resume <id>` | 历史上下文恢复，能接续修改 |
+| C-M2-1 | 会话持久化 | 多轮 → `/exit` → `ohna --resume <id>` | 历史上下文恢复，能接续修改 |
 | C-M2-2 | 成本累计 | 多轮后 `/cost` | 累计 input/output/cost 非零（前提：env 配 cost） |
 | C-M2-3 | compaction 生效 | 读一个 60KB 文件（read ToolResult 很大）+ 多轮，观察日志 | 触发压缩，`tokensAfter <= contextWindow - reserve` 且 `< tokensBefore`，JSONL 首条为 `role:"compaction"` |
 | C-M2-4 | deadline 截止 | `--deadline-ms 10000` 跑长任务 | 到期干净停止，不失控 |
@@ -156,7 +156,7 @@
 | R-1 | finance-api 构建 | `pnpm --filter @aiagent/finance-api build` | 通过 |
 | R-2 | finance-web 构建 | `pnpm --filter @aiagent/finance-web build` | 通过 |
 | R-3 | 依赖方向 | `pnpm architecture:check` | 通过（ohna-api/ohna-cli 不反向依赖 finance-api/finance-web） |
-| R-4 | 模式面可重构 | ohna-cli 的 `--mode` 面可随开发调整（无需兼容 research 默认） | 不影响 finance-api/finance-web 构建与测试 |
+| R-4 | 参数面可重构 | ohna-cli 的参数面可随开发调整（ohna 恒为个人编码助手，无模式默认值需要兼容） | 不影响 finance-api/finance-web 构建与测试 |
 | R-5 | 改名零回归 | Phase R 后 `pnpm build && pnpm typecheck && pnpm test` | 全绿；`pnpm dev` 金融路径照常启动 |
 
 ---
@@ -165,7 +165,7 @@
 
 > 每个阶段完成后，跑对应的端到端场景并保留证据（贴到 `LEARNING_AND_EVOLUTION_ROADMAP.md`）。
 
-1. **编码闭环**：`pnpm --filter @aiagent/ohna-cli dev -- --mode coding "在 test/ 下新增 ts 文件导出 add(a,b)，然后跑 pnpm --filter @aiagent/ohna-cli typecheck 直到通过"` → write → bash(typecheck) → 必要时 edit 自愈 → 结束，全程无人干预（配合 `--yes` 或逐次确认）。
+1. **编码闭环**：`pnpm --filter @aiagent/ohna-cli dev -- "在 test/ 下新增 ts 文件导出 add(a,b)，然后跑 pnpm --filter @aiagent/ohna-cli typecheck 直到通过"` → write → bash(typecheck) → 必要时 edit 自愈 → 结束，全程无人干预（配合 `--yes` 或逐次确认）。
 2. **本地守护**：`node apps/ohna-api/dist/index.js <dir>` → 浏览器自动打开 → 对话让 Agent 改一个变量 → 待确认卡片允许 → 文件树可见变更。
 3. **CLI 进程内托管**（Phase 5）：`ohna --web <dir>` → 浏览器打开 → 终端与浏览器看同一会话。
 4. **安全护栏**：S-P5（软链绕过）、S-C3/S-C4b/S-C7/S-C8（命令绕过）全绿——这是「接管本地目录」承诺成立的前提。

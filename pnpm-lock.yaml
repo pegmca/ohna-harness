@@ -42,7 +42,7 @@ importers:
         specifier: ^8.65.0
         version: 8.65.0(eslint@9.39.5(jiti@2.7.0))(typescript@5.9.3)
 
-  apps/api:
+  apps/finance-api:
     dependencies:
       '@aiagent/agent':
         specifier: workspace:*
@@ -97,32 +97,7 @@ importers:
         specifier: ^5.7.2
         version: 5.9.3
 
-  apps/cli:
-    dependencies:
-      '@aiagent/agent':
-        specifier: workspace:*
-        version: link:../../packages/agent
-      '@aiagent/ai':
-        specifier: workspace:*
-        version: link:../../packages/ai
-      '@aiagent/coding':
-        specifier: workspace:*
-        version: link:../../packages/coding
-      '@aiagent/tools':
-        specifier: workspace:*
-        version: link:../../packages/tools
-      '@aiagent/types':
-        specifier: workspace:*
-        version: link:../../packages/types
-    devDependencies:
-      tsx:
-        specifier: ^4.22.4
-        version: 4.22.4
-      typescript:
-        specifier: ^5.7.2
-        version: 5.9.3
-
-  apps/web:
+  apps/finance-web:
     dependencies:
       '@aiagent/types':
         specifier: workspace:^
@@ -164,6 +139,114 @@ importers:
       '@playwright/test':
         specifier: ^1.61.1
         version: 1.61.1
+      '@testing-library/jest-dom':
+        specifier: ^7.0.0
+        version: 7.0.0(@testing-library/dom@10.4.1)
+      '@testing-library/react':
+        specifier: ^16.3.2
+        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@types/react':
+        specifier: ^19.0.2
+        version: 19.2.17
+      '@types/react-dom':
+        specifier: ^19.0.2
+        version: 19.2.3(@types/react@19.2.17)
+      '@vitejs/plugin-react':
+        specifier: ^4.3.4
+        version: 4.7.0(vite@6.4.3(@types/node@22.20.0)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.22.4))
+      jsdom:
+        specifier: ^29.1.1
+        version: 29.1.1
+      react-grep:
+        specifier: ^0.3.3
+        version: 0.3.3
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+      vite:
+        specifier: ^6.0.7
+        version: 6.4.3(@types/node@22.20.0)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.22.4)
+      vitest:
+        specifier: ^4.1.10
+        version: 4.1.10(@types/node@22.20.0)(jsdom@29.1.1)(vite@6.4.3(@types/node@22.20.0)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.22.4))
+
+  apps/ohna-api:
+    dependencies:
+      '@aiagent/ai':
+        specifier: workspace:*
+        version: link:../../packages/ai
+      '@aiagent/coding':
+        specifier: workspace:*
+        version: link:../../packages/coding
+      '@aiagent/serve':
+        specifier: workspace:*
+        version: link:../../packages/serve
+    devDependencies:
+      tsx:
+        specifier: ^4.22.4
+        version: 4.22.4
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+
+  apps/ohna-cli:
+    dependencies:
+      '@aiagent/agent':
+        specifier: workspace:*
+        version: link:../../packages/agent
+      '@aiagent/ai':
+        specifier: workspace:*
+        version: link:../../packages/ai
+      '@aiagent/coding':
+        specifier: workspace:*
+        version: link:../../packages/coding
+      '@aiagent/mcp':
+        specifier: workspace:*
+        version: link:../../packages/mcp
+      '@aiagent/serve':
+        specifier: workspace:*
+        version: link:../../packages/serve
+      '@aiagent/tools':
+        specifier: workspace:*
+        version: link:../../packages/tools
+      '@aiagent/types':
+        specifier: workspace:*
+        version: link:../../packages/types
+    devDependencies:
+      tsx:
+        specifier: ^4.22.4
+        version: 4.22.4
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+
+  apps/ohna-web:
+    dependencies:
+      '@aiagent/types':
+        specifier: workspace:^
+        version: link:../../packages/types
+      '@radix-ui/react-popover':
+        specifier: ^1.1.23
+        version: 1.1.23(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@tailwindcss/vite':
+        specifier: ^4.3.1
+        version: 4.3.1(vite@6.4.3(@types/node@22.20.0)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.22.4))
+      lucide-react:
+        specifier: ^1.21.0
+        version: 1.21.0(react@19.2.7)
+      react:
+        specifier: ^19.0.0
+        version: 19.2.7
+      react-dom:
+        specifier: ^19.0.0
+        version: 19.2.7(react@19.2.7)
+      react-router-dom:
+        specifier: ^7.18.1
+        version: 7.18.1(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      tailwindcss:
+        specifier: ^4.3.1
+        version: 4.3.1
+    devDependencies:
       '@testing-library/jest-dom':
         specifier: ^7.0.0
         version: 7.0.0(@testing-library/dom@10.4.1)
@@ -371,6 +454,30 @@ importers:
         version: 4.4.3
 
   packages/security: {}
+
+  packages/serve:
+    dependencies:
+      '@aiagent/agent':
+        specifier: workspace:*
+        version: link:../agent
+      '@aiagent/ai':
+        specifier: workspace:*
+        version: link:../ai
+      '@aiagent/coding':
+        specifier: workspace:*
+        version: link:../coding
+      '@aiagent/tools':
+        specifier: workspace:*
+        version: link:../tools
+      '@aiagent/trace':
+        specifier: workspace:*
+        version: link:../trace
+      '@aiagent/types':
+        specifier: workspace:*
+        version: link:../types
+      fastify:
+        specifier: ^5.6.2
+        version: 5.8.5
 
   packages/tools:
     dependencies:
@@ -3229,10 +3336,6 @@ packages:
   picocolors@1.1.1:
     resolution: {integrity: sha512-xceH2snhtb5M9liqDsmEw56le376mTZkEX/jEb/RxNFyegNul7eNslCXP9FDj/Lcu0X8KEyMceP2ntpaHrDEVA==}
 
-  picomatch@4.0.4:
-    resolution: {integrity: sha512-QP88BAKvMam/3NxH6vj2o21R6MjxZUAd6nlwAS/pnGvN9IVLocLHxGYIzFhg6fUQ+5th6P4dv4eW9jX3DSIj7A==}
-    engines: {node: '>=12'}
-
   picomatch@4.0.5:
     resolution: {integrity: sha512-RvwwcruNjI1ncT5xRakeyS9Lf8lcItv34KD+aif+VH9kduAyfYBipGh12274xtenIPZ119/R9BdTBa8gAwSh0A==}
     engines: {node: '>=12'}
@@ -5995,10 +6098,6 @@ snapshots:
     dependencies:
       reusify: 1.1.0
 
-  fdir@6.5.0(picomatch@4.0.4):
-    optionalDependencies:
-      picomatch: 4.0.4
-
   fdir@6.5.0(picomatch@4.0.5):
     optionalDependencies:
       picomatch: 4.0.5
@@ -6651,8 +6750,6 @@ snapshots:
 
   picocolors@1.1.1: {}
 
-  picomatch@4.0.4: {}
-
   picomatch@4.0.5: {}
 
   pino-abstract-transport@3.0.0:
@@ -7288,8 +7385,8 @@ snapshots:
   vite@6.4.3(@types/node@22.20.0)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.22.4):
     dependencies:
       esbuild: 0.25.12
-      fdir: 6.5.0(picomatch@4.0.4)
-      picomatch: 4.0.4
+      fdir: 6.5.0(picomatch@4.0.5)
+      picomatch: 4.0.5
       postcss: 8.5.15
       rollup: 4.62.2
       tinyglobby: 0.2.17

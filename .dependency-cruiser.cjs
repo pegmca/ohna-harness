@@ -12,7 +12,14 @@ module.exports = {
       name: "web-only-uses-shared-contracts",
       severity: "error",
       comment: "Web 只能通过 HTTP DTO 使用 runtime 能力。",
-      from: { path: "^apps/web/" },
+      from: { path: "^apps/finance-web/" },
+      to: { path: "^packages/(?!types/)" }
+    },
+    {
+      name: "ohna-web-only-uses-shared-contracts",
+      severity: "error",
+      comment: "ohna-web 同样只能通过 HTTP DTO（@aiagent/types）消费本地 runtime 能力。",
+      from: { path: "^apps/ohna-web/" },
       to: { path: "^packages/(?!types/)" }
     },
     {
@@ -23,13 +30,37 @@ module.exports = {
       to: { path: "^apps/" }
     },
     {
+      name: "ohna-apps-do-not-import-finance-apps",
+      severity: "error",
+      comment: "ohna 产品线（编码 Agent）不得依赖金融 SaaS 应用层。",
+      from: { path: "^apps/ohna-" },
+      to: { path: "^apps/finance-" }
+    },
+    {
+      name: "finance-apps-do-not-import-ohna-apps",
+      severity: "error",
+      comment: "金融 SaaS 产品线不得依赖 ohna 应用层。",
+      from: { path: "^apps/finance-" },
+      to: { path: "^apps/ohna-" }
+    },
+    {
+      name: "ohna-cli-and-api-independent",
+      severity: "error",
+      comment: "ohna-cli 与 ohna-api 是同一装配的两个入口，彼此不得互依。",
+      from: { path: "^apps/ohna-(cli|api)/" },
+      to: {
+        path: "^apps/ohna-(cli|api)/",
+        pathNot: "^apps/ohna-$1/"
+      }
+    },
+    {
       name: "web-feature-public-entrypoints-only",
       severity: "error",
       comment: "跨 feature 只能使用其 index.ts 公共入口，避免读取内部 ui/model/api。",
-      from: { path: "^apps/web/src/features/([^/]+)/" },
+      from: { path: "^apps/finance-web/src/features/([^/]+)/" },
       to: {
-        path: "^apps/web/src/features/([^/]+)/(?!index\\.ts$)",
-        pathNot: "^apps/web/src/features/$1/"
+        path: "^apps/finance-web/src/features/([^/]+)/(?!index\\.ts$)",
+        pathNot: "^apps/finance-web/src/features/$1/"
       }
     }
   ],

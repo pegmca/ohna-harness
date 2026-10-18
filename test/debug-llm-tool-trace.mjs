@@ -62,7 +62,7 @@ async function main() {
 }
 
 /**
- * 从环境变量装配 OpenAI 兼容模型 runtime（与 apps/api server.ts 同款约定）。
+ * 从环境变量装配 OpenAI 兼容模型 runtime（与 apps/finance-api server.ts 同款约定）。
  *
  * @param profile 模型 profile 标识。
  * @returns pi 形态 Model 与 apiKey。

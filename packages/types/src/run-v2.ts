@@ -32,6 +32,8 @@ export type RunEventTypeDto =
   | "workflow_node"
   | "pdf_export"
   | "mcp_tool_discovered"
+  /** 编码 Agent 本地扩展：写/执行前等待用户在 Web 端允许或拒绝（payload 见 confirm-gate）。 */
+  | "confirmation_requested"
   | "run_status"
   | "run_error"
   | "cost_summary";

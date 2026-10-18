@@ -65,4 +65,8 @@ export function createReadOnlyToolRegistry(cwd: string, options?: CodingToolRegi
   return [createReadTool(cwd, options), createGrepTool(cwd, options), createFindTool(cwd, options), createLsTool(cwd, options)];
 }
 
+// 路径沙箱语义与工具实现共用同一套纯函数：serve 的只读 fs 端点必须与 Agent 工具
+// 对「越界 / 敏感路径」给出完全一致的判断，避免出现「工具拒绝但接口可读」的绕过面。
+export { assertPathWithinRoot, isDeniedPath, type PathPolicyVerdict } from "./policy/path-policy.js";
 export { loadProjectContext } from "./context/project-context.js";
+export { buildCodingSystemPrompt, type BuildCodingSystemPromptOptions } from "./prompt.js";

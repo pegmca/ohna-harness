@@ -9,7 +9,7 @@
 ## Change Rules
 
 - Work on one bounded context or Web feature at a time.
-- Keep runtime rules out of `apps/web` and Fastify handlers.
+- Keep runtime rules out of `apps/finance-web` and Fastify handlers.
 - Validate every external input and return structured boundary errors.
 - Do not introduce `any`, `@ts-ignore`, deep cross-package imports, hidden fallbacks, or unlabelled demo data.
 - Do not expose system prompts, secrets, raw provider errors, or untrusted full documents through run details.

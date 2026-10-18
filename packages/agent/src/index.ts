@@ -19,6 +19,17 @@ export {
   type CompactionSettings,
   type CompactionTransformOptions,
 } from "./compaction.js";
+// 会话级压缩的「硬收敛」与窗口化阈值：CLI（run 后落盘压缩）与 serve（run 前压缩）
+// 共用同一实现，避免两侧语义漂移；从本包导出而非放在 compaction.ts，是为了把
+// 「内核压缩原语」与「调用方收敛策略」分层。
+export {
+  enforceContextWindow,
+  estimateSequenceTokens,
+  resolveCompactionSettings,
+  TRUNCATION_MARKER,
+  type EnforceContextWindowOptions,
+  type EnforceContextWindowResult,
+} from "./compaction-enforce.js";
 export type {
   AfterToolCallContext,
   AfterToolCallResult,

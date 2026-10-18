@@ -120,7 +120,7 @@
   - `redactTokenTrace<TValue>`（`:404`）：对外语义入口，当前复用同一 `sanitizeValue` 核心（JSDoc 已如实说明两者等价），未来可在此独立增强（如对全部字符串强制跑 PII 模式）。
 
 **B1 事故复盘（务必理解）**
-- reviewer 初版把 `isSensitiveKey` 扩展到 `content`/`input`/`output`/`messages` 等键后，**全局 `redactSensitiveValue`（apps/api run-service 落 `run_events` 时对每个 payload 调用）会把**：
+- reviewer 初版把 `isSensitiveKey` 扩展到 `content`/`input`/`output`/`messages` 等键后，**全局 `redactSensitiveValue`（apps/finance-api run-service 落 `run_events` 时对每个 payload 调用）会把**：
   - `message.content`（字符串）→ 被抹成 `"[redacted]"`（可接受，是 PII 文本）；
   - `usage.input`/`usage.output`（**数字**，token 计数）→ 被整值替换成字符串 `"[redacted]"`，**类型被污染**；
   - `agent_end.messages`（**数组**）→ 被整值替换成 `"[redacted]"`，**落库数据整块丢失**。
@@ -220,7 +220,7 @@
   - `AutomationReport` 新增可选 `slo?`（`:75`）；`checkAutomationRegression` 追加 P95 绝对阈值规则（与既有 `maxP95LatencyIncreaseMs` baseline 比较共存）；`renderMarkdownReport` 在回归门禁前加 `## SLO / 错误预算` 段（`:130`）。
 - `packages/types/src/run-v2.ts`：`RunEventTypeDto` 加 `"cost_summary"`（线格式/DTO 归属正确）。
 - `packages/trace/src/index.ts`：`RunEventType` 加 `"cost_summary"` + 新增 `CostSummaryEvent`（payload 含 `byModel`/`byTool`/`totalTokens`/`totalCost`）并加入 `RunEvent` 联合（otel 映射 `default` 分支返回 `null`，不映射成 span）。
-- `apps/api/src/application/run-service.ts`：`execute` 事件循环前声明 `costByModel`/`costByTool`/`totalTokens`/`totalCost` 累加器；循环内紧跟 `publish` 后累加 `message_end`（仅 assistant 带 usage）与 `tool_execution_end`（用量可选、防御式）；`agent_end` 分支内 `publish("cost_summary", …)` 落在线汇总（try/catch 最佳努力，不把成功 run 变 failed）。
+- `apps/finance-api/src/application/run-service.ts`：`execute` 事件循环前声明 `costByModel`/`costByTool`/`totalTokens`/`totalCost` 累加器；循环内紧跟 `publish` 后累加 `message_end`（仅 assistant 带 usage）与 `tool_execution_end`（用量可选、防御式）；`agent_end` 分支内 `publish("cost_summary", …)` 落在线汇总（try/catch 最佳努力，不把成功 run 变 failed）。
 - `packages/database/src/schema.ts`（`run_events_event_type_check`）+ 迁移 `0230_cost_summary_event_type.sql`：扩展白名单（幂等 `DROP CONSTRAINT IF EXISTS` + `ADD CONSTRAINT` + 中文 `COMMENT ON COLUMN`），使 `cost_summary` 可持久化。
 
 **pi 对应物**：pi 与 OpenTelemetry 的 cost/usage 都按 `gen_ai.token.count.*` + `cost.total` 做跨维度归因；本处把"离线 eval 聚合（eval 包纯函数）"与"在线 run 落库（run-service 能力事件）"分离，cost 信号既能在评测报告里看、也能在真实 run 的 `run_events` 里回放。
@@ -235,7 +235,7 @@
 - 为什么 `cost_summary` 事件只落 model/tool 维度、provider 仅作 eval 纯函数维度？在线事件应最小且跨 provider 稳定；provider 维度在离线评测里按需聚合即可，不必污染线格式。这体现了"线格式只收必要字段"的 DTO 纪律。
 - 为什么错误预算用 `1-successRate` 而非新增一个独立阈值？成功率阈值本就是"允许的最低成功率"，其补集天然是"允许的最大失败率=错误预算"，复用同一阈值避免双口径漂移（SLO/错误预算的经典定义）。
 
-**P3 演示**：`cost-attribution.test.mjs` 验证 model/tool 聚合、缺失用量防御、`computeSloSummary` 的 p95/errorBudget breached 与达标、以及 `checkAutomationRegression` 新 P95 规则；run-service 改动由 `pnpm --filter @aiagent/api typecheck` 守护。
+**P3 演示**：`cost-attribution.test.mjs` 验证 model/tool 聚合、缺失用量防御、`computeSloSummary` 的 p95/errorBudget breached 与达标、以及 `checkAutomationRegression` 新 P95 规则；run-service 改动由 `pnpm --filter @aiagent/finance-api typecheck` 守护。
 
 ---
 
@@ -249,7 +249,7 @@
 
 ## 12. P4 online eval + 真实 benchmark 适配器 + 人工校准（Task 2 扩展，已落地）
 
-> P4 是学习级进阶，**全部落在 `packages/eval`**——离线即可，未改 `apps/api` 与数据库。它把"评测闭环"从离线 fixture 扩展到三个方向：线上影子评测、外部 benchmark 接管、人工标注回流校准。
+> P4 是学习级进阶，**全部落在 `packages/eval`**——离线即可，未改 `apps/finance-api` 与数据库。它把"评测闭环"从离线 fixture 扩展到三个方向：线上影子评测、外部 benchmark 接管、人工标注回流校准。
 
 **读什么**
 - `packages/eval/src/online-eval.ts`

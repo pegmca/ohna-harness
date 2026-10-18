@@ -2,15 +2,15 @@
  * 手工冒烟（阶段 5 report/workflow 回迁）：内存 adapter 起 API server + MockModel，
  * 走「用户显式要研报 → 模型自主调用 generate_report 工具 → 六节点 workflow → 真实 PDF」全链路。
  *
- * 运行方式：先 pnpm --filter @aiagent/api build（依赖包已构建），再 node test/smoke-report-tool.mjs。
+ * 运行方式：先 pnpm --filter @aiagent/finance-api build（依赖包已构建），再 node test/smoke-report-tool.mjs。
  * 与 smoke-rag-grounding.mjs 的差异：本脚本不需要 PostgreSQL，全部事实源为内存 adapter。
  */
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createApiServer } from "../apps/api/dist/index.js";
-import { createInMemoryApiTestRuntime } from "../apps/api/dist/adapters/in-memory-test-runtime.js";
+import { createApiServer } from "../apps/finance-api/dist/index.js";
+import { createInMemoryApiTestRuntime } from "../apps/finance-api/dist/adapters/in-memory-test-runtime.js";
 import { createLocalArtifactStorage } from "../packages/report/dist/index.js";
 
 const DEMO_DOCUMENT = {

@@ -11,7 +11,7 @@
 
 ### 现状
 
-- grounding 在 API 层、loop 之外完成：`apps/api/src/application/run-service.ts:333` 的 `retrieveAttachmentGrounding` 用 `DataSourceRuntime.search`（`packages/rag/src/data-source-runtime.ts`）按附件 documentIds 检索 topK=5，把结果拼成纯文本 context + citations。
+- grounding 在 API 层、loop 之外完成：`apps/finance-api/src/application/run-service.ts:333` 的 `retrieveAttachmentGrounding` 用 `DataSourceRuntime.search`（`packages/rag/src/data-source-runtime.ts`）按附件 documentIds 检索 topK=5，把结果拼成纯文本 context + citations。
 - 检索结果通过 `AgentRequest.groundingContext / groundingCitations` 传入 loop（`packages/agent/src/agent-loop.ts:160`），loop 的 chat 路径把它内联拼接进用户消息（`packages/agent/src/agent-loop.ts:375-426`，`<evidence>` 标签包裹）。
 - 安全封装已存在但未用于 attachment grounding 主路径：`packages/agent/src/security.ts:29` 的 `assessPromptInjection`（四信号正则评估）与 `security.ts:48` 的 `assembleUntrustedContext`（`<untrusted_context>` 封装 + block 占位符 + security trace 事件）。
 - RAG 包公共入口：`packages/rag/src/index.ts`（re-export `retrieval.ts` / `answer.ts` / `data-source-runtime.ts` 等）。
@@ -74,7 +74,7 @@ export function createGroundingTransformContext(
 
 ### 现状
 
-- 触发在 API 层：`apps/api/src/application/run-service.ts:377` 的 `maybeRunReport` 在 agent 响应后检查 `response.reportPlan?.status === "ready"`，成立则同步跑 `runReportWorkflow`（`packages/report/src/run-report-workflow.ts`）。report 意图由请求字段 `mode === "report"` + `reportTriggerSource`（button/toggle）传入（`run-service.ts:185-188`），loop 内的 `runReportSkillPath`（`packages/agent/src/agent-loop.ts:179`）只产出 plan。
+- 触发在 API 层：`apps/finance-api/src/application/run-service.ts:377` 的 `maybeRunReport` 在 agent 响应后检查 `response.reportPlan?.status === "ready"`，成立则同步跑 `runReportWorkflow`（`packages/report/src/run-report-workflow.ts`）。report 意图由请求字段 `mode === "report"` + `reportTriggerSource`（button/toggle）传入（`run-service.ts:185-188`），loop 内的 `runReportSkillPath`（`packages/agent/src/agent-loop.ts:179`）只产出 plan。
 - workflow 节点链：collector → analyzer → risk_checker → citation_verifier → writer → pdf_exporter（见 `packages/report/src/nodes/`），节点事件以 `"workflow_node"` / `"pdf_export"` trace 事件上报。
 - workflow 状态类型：`packages/report/src/workflow-types.ts:26` 的 `ReportWorkflowState`；结果 DTO 走 `sink.saveWorkflow / saveArtifact`（`run-service.ts:404-406`）。
 - pdf_exporter 目前会生成 workflow 级 approvalRequest（`run-service.ts:394-403` 还专门为它补 inputDigest）——approval 体系删除后此逻辑整体移除。

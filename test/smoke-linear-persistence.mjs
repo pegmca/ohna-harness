@@ -1,6 +1,6 @@
 /**
  * 阶段 3 手工冒烟脚本（一次性，不参与 CI）：新会话 → 发起 run → 查消息列表与 SSE 重放 → 确认恢复完整。
- * 前置：pnpm db:up && pnpm db:migrate，且 pnpm --filter @aiagent/api dev 已在运行（mock provider）。
+ * 前置：pnpm db:up && pnpm db:migrate，且 pnpm --filter @aiagent/finance-api dev 已在运行（mock provider）。
  *
  * 用法：node test/smoke-linear-persistence.mjs [baseUrl]
  */

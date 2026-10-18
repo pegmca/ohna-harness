@@ -185,12 +185,16 @@ SSE 帧为 `event: run_event` + `RunStreamEventDtoV2{eventId,runId,requestId,con
 
 ```
 ~/.ohna/
-  sessions/index.jsonl              # { id, title, createdAt, lastActiveAt, workspaceRoot }
+  sessions/index.jsonl              # { id, title, createdAt, updatedAt, workspaceRoot }
   conversations/<convId>.jsonl      # append-only Message（复用 @aiagent/ai Message 形状）
   runs/<runId>.jsonl                # append-only RunEvent（复用 @aiagent/trace 契约）
 ```
 
 接口形状（供开发对齐，`RunEvent` 从 `@aiagent/trace` import type）：
+
+> **实现采用**：runs 端口以 run-v2 `RunStreamEventDtoV2` 落盘，终态写入方法实际为
+> `markStatus(runId, RunStatusDtoV2)`（不是 `markEnded`）；会话元数据的时间戳字段为
+> `updatedAt`（不是 `lastActiveAt`）。下方为对齐后的形状。
 
 ```ts
 interface LocalSessionStore {
@@ -202,7 +206,7 @@ interface LocalSessionStore {
 interface LocalRunStore {
   appendEvent(runId: string, event: RunEvent): Promise<void>;
   listEvents(runId: string): Promise<RunEvent[]>;   // 启动重放 / SSE catch-up
-  markEnded(runId: string, status: "completed" | "interrupted" | "error"): Promise<void>;
+  markStatus(runId: string, status: "completed" | "failed" | "cancelled" | "interrupted"): Promise<void>;
 }
 interface LocalMessageStore {
   append(conversationId: string, message: Message): Promise<void>;
@@ -213,6 +217,7 @@ interface LocalMessageStore {
 - 单用户单机 → 无并发/事务/租约/幂等语义（与 `apps/finance-api` 的 `RunStore` 完全不同，是**有意简化**，不是缺陷）。
 - 启动时从 `sessions/index.jsonl` + 各 `*.jsonl` 重建内存读模型（列表/恢复/成本汇总）。
 - **delta 体积治理**：SSE 实时推 `message_update` 增量，但 JSONL **只持久化关键事件**（`message_end` / `tool_execution_*` / `turn_end` / `agent_end` / `run_status` / `confirmation_requested` 等），`message_update` 不落盘——断线重连后由已落盘事件 + `GET /api/conversations/:id/messages` 恢复终态，避免逐 delta 全量落盘导致 JSONL 无界膨胀。sequence 由内存计数器对**所有**帧（含瞬态）单调分配，保证 `Last-Event-ID` 语义正确。
+- **JSONL 脱敏语义**：只对字符串做模式级脱敏（Bearer / API key / 邮箱 / 手机号 / 身份证 / 银行卡），**不按敏感键名整值替换、不截断长文本**；replay 必须以 JSONL 正文可用为前提，完整正文仍以会话消息文件为准。
 - 明确升级触发条件：仅当「全文检索历史 run / 本地 RAG 向量需持久化 / 会话量数千级重建变慢」时再引入 `better-sqlite3` 读模型（写仍 JSONL）。**本次不做**。
 
 ### 6.3 异步确认闸门（`packages/serve/src/confirm-gate.ts`）
@@ -231,7 +236,7 @@ interface AsyncConfirmGate {
 - `--yes`（ohna-api 的 `--auto-approve`）时 `hook` 直接放行，不产生待确认。
 - run 取消/中断时须清理 `pending`，避免挂起泄漏；确认等待超时自动 deny。
 - **契约归宿（评审 Gate 2）**：`confirmation_requested` 不在现有 `RunEventTypeDto`（`packages/types/src/run-v2.ts:20-37`）。Phase 3 在 `RunEventTypeDto` 增加 `"confirmation_requested"`（编码 Agent 本地扩展；App A 不消费，枚举扩展无害），payload 定为 `{ toolCallId, toolName, args, summary }`。
-- **落盘/重放语义**：该事件照常追加进 runs JSONL（页面刷新后 SSE 重放可恢复待确认卡片）；「已决」不需要新事件——pending 态由「有 `confirmation_requested` 而无后续同 `toolCallId` 的 `tool_execution_start/end`」推导：allow 后自然接 `tool_execution_start`，deny 后接 `isError` 的 `tool_execution_end`。
+- **落盘/重放语义**：该事件照常追加进 runs JSONL（页面刷新后 SSE 重放可恢复待确认卡片）；「已决」不需要新事件——pending 态由「有 `confirmation_requested` 且**无后续同 `toolCallId` 的 `tool_execution_end`**」推导。注意内核形状：`agentLoop` 在 `beforeToolCall` **之前**就发出 `tool_execution_start`（`tool-execution.ts` prepare 先于确认钩子），因此 allow 后不会再出现同 id 的 `tool_execution_start`，收敛信号只能是 `tool_execution_end`——allow 后为 `isError:false`，deny/超时后为 `isError:true`（block 回喂）。
 
 ### 6.4 `apps/ohna-web` —— 复制改造清单
 

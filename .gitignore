@@ -10,9 +10,10 @@ apps/*/dist/
 packages/*/dist/
 packages/*/src/**/*.d.ts
 packages/*/src/**/*.js
-apps/api/var/
+apps/finance-api/var/
 packages/*/node_modules/.tmp/
 apps/*/node_modules/.tmp/
 output/
-apps/web/test-results/
-apps/web/playwright-report/
+apps/finance-web/test-results/
+apps/finance-web/playwright-report/
+packages/*/src/**/*.d.ts.map

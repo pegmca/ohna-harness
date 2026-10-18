@@ -10,15 +10,15 @@
  *      并报告测得的跳闸 / 恢复时刻（trip → half-open → closed）。
  *
  * 依赖（由脚本自动拉起的验证服务器提供，离线即可运行，无需 Postgres/Redis）：
- *   - apps/api/dist/verify-server.js（通过 `pnpm --filter @aiagent/api build` 或 `pnpm build` 生成）。
+ *   - apps/finance-api/dist/verify-server.js（通过 `pnpm --filter @aiagent/finance-api build` 或 `pnpm build` 生成）。
  *   - 测试替身模型（test-double）确定性、不发起外部请求；消息不含 ticker/报告/数字关键词时直接回答，
  *     因而吞吐 / 并发测量不依赖任何真实 LLM。
  *
  * 运行方式：
- *   1. （可选）pnpm build                       # 生成 apps/api/dist/verify-server.js
+ *   1. （可选）pnpm build                       # 生成 apps/finance-api/dist/verify-server.js
  *   2. node test/verify-capacity-baseline.mjs   # 自动 spawn 验证服务器并测量
  *
- * 说明：脚本优先用 apps/api/dist/verify-server.js；若整仓 tsc -b 因无关工作树类型错误未能产出 dist，
+ * 说明：脚本优先用 apps/finance-api/dist/verify-server.js；若整仓 tsc -b 因无关工作树类型错误未能产出 dist，
  * 则自动回退到 node_modules/.bin/tsx 直接运行源码（依赖各 package 的预构建 dist）。两种方式都离线可跑，
  * 无需 Postgres/Redis。验证服务器仅启用内存事实源（createInMemoryApiTestRuntime）。
  *
@@ -50,8 +50,8 @@ const CB_FAILURES = Number(process.env.AIAGENT_VERIFY_CB_FAILURES ?? 2);
 const CB_COOLDOWN_MS = Number(process.env.AIAGENT_VERIFY_CB_COOLDOWN_MS ?? 3000);
 // 验证服务器入口：优先用预编译 dist；若整仓 tsc -b 因无关的工作树类型错误中断，
 // 则回退到 tsx 直接运行源码（依赖各 package 的预构建 dist），保证脚本离线可跑。
-const API_DIST = path.join(repoRoot, "apps/api/dist/verify-server.js");
-const API_SRC = path.join(repoRoot, "apps/api/src/verify-server.ts");
+const API_DIST = path.join(repoRoot, "apps/finance-api/dist/verify-server.js");
+const API_SRC = path.join(repoRoot, "apps/finance-api/src/verify-server.ts");
 const TSX_BIN = path.join(repoRoot, "node_modules/.bin/tsx");
 const ARTIFACT_ROOT = path.join(repoRoot, "test", ".artifacts-capacity-verify");
 const TERMINAL = new Set(["completed", "failed", "cancelled", "interrupted"]);

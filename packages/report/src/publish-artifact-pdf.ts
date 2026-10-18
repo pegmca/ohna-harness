@@ -17,7 +17,7 @@ export type PdfPublishResult =
   | { ok: false; phase: PdfPublishFailurePhase; failureStatePersisted: boolean };
 
 /**
- * 以补偿式 saga 发布 PDF（pi 化阶段 5 从 apps/api 下沉到 report 包，
+ * 以补偿式 saga 发布 PDF（pi 化阶段 5 从 apps/finance-api 下沉到 report 包，
  * 供 generate_report 工具与 HTTP 路由共用同一条发布路径）。
  *
  * 文件原子发布成功但 metadata 提交失败时，必须删除本次随机 key；已有 `pdf_ready`

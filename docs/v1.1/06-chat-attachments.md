@@ -294,9 +294,9 @@ interface AttachmentStore {
 | 2 | 结构收敛：拆 `parsers/` + `parse-document.ts`(Facade) + `registry.ts` + `block-collector.ts`；删桶 A 死代码；桶 B 抽共享骨架 | `packages/parsing/src/*` |
 | 3 | types DTO 改名与文件迁移 | `packages/types/src/filings.ts` → `documents.ts`、`rag.ts` |
 | 4 | rag 消费点改名 | `chunking.ts` / `data-source-runtime.ts` / `contextual-retrieval.ts` / `testing.ts` / `types.ts` |
-| 5 | 附件改道，不再 `dataSourceRuntime.ingest` | `apps/api/src/http/routes/attachments.ts:104` |
+| 5 | 附件改道，不再 `dataSourceRuntime.ingest` | `apps/finance-api/src/http/routes/attachments.ts:104` |
 | 6 | 新增 `AttachmentStore`（Redis + 内存实现） | 新模块（建议 `packages/rag` 或新 `packages/attachment`） |
-| 7 | 上传请求新增 `convId` | `apps/api` schema + `@aiagent/types` DTO |
+| 7 | 上传请求新增 `convId` | `apps/finance-api` schema + `@aiagent/types` DTO |
 | 8 | 多路召回编排 | `packages/rag`（`DataSourceRuntime` 或 orchestrator） |
 | 9 | 新增依赖：Redis 服务 + 官方 `redis` 客户端 | 基础设施 / `package.json` |
 | 10 | 文档与 notes 同步 | 本文件 + `README.md` + `notes/` + `docs/worktree/06` + `docs/v1.1/02-rag-production-reading.md` |
@@ -373,7 +373,7 @@ export interface AttachmentStore {
 | `src/schema.ts` | 同步 `chatAttachmentUploads`（+`conversationId`，`documentId` 去掉 references） |
 | `test/foundation.test.mjs` | 迁移清单补 `0240_attachment_ephemeral.sql` |
 
-**C. `apps/api` 改动**
+**C. `apps/finance-api` 改动**
 
 | 文件 | 内容 |
 |---|---|
@@ -384,14 +384,14 @@ export interface AttachmentStore {
 | `src/application/run-service.ts` | 按 `request.conversationId` 构造 attachment retriever 传入 grounding |
 | `src/adapters/in-memory-test-runtime.ts` / `in-memory-attachment-repository.ts` | 同步新接口（注入内存 `AttachmentStore`） |
 
-**D. `apps/web` 改动**
+**D. `apps/finance-web` 改动**
 
 | 文件 | 内容 |
 |---|---|
 | `features/workbench/use-composer-state.ts` / `Workbench.tsx` | 首次选择附件时先创建会话，上传带 `conversationId` |
 
 **P1 验收**
-- `pnpm typecheck` + `@aiagent/rag` / `@aiagent/database` / `@aiagent/api` 测试全绿。
+- `pnpm typecheck` + `@aiagent/rag` / `@aiagent/database` / `@aiagent/finance-api` 测试全绿。
 - 上传 md/txt → 会话内提问命中附件（grounding 注入 `<untrusted_context>`）；主库**无**新增 `documents` / `document_versions` / `chunks` 行。
 - `REDIS_URL` 设置时走 Redis；未设置回退内存。
 - `AttachmentStore` 契约有单测（upsert 覆盖、convId 隔离、topK 上限、维度错误）。
@@ -478,7 +478,7 @@ export interface GroundingHookOptions {
 |---|---|
 | `src/attachment-store-redis.ts` | 实现 `putInline` / `getInline`：key `attach:conv:{convId}:doc:{docId}:inline`（JSON string：`{ text, source, fileName }`）；`putInline` 同时 `sAdd(docsKey, documentId)` + `expire`（同 TTL）；`collectKeys` 增补 inline key，使 `touch` / `drop` 一并覆盖；`getInline` 缺失返回 `null`，Redis 故障返回结构化 `attachment_store_failed`（与既有风格一致） |
 
-**D. `apps/api` 改动**
+**D. `apps/finance-api` 改动**
 
 | 文件 | 内容 |
 |---|---|
@@ -488,10 +488,10 @@ export interface GroundingHookOptions {
 | `src/adapters/in-memory-test-runtime.ts` | 已提供 `dataSourceRuntime`（内存 repository + 共享 embedding 替身），确认无需改；如 run-service 新依赖需要显式传参则同步 |
 | `.env.example` / `docker-compose.yml` | 增 `AIAGENT_ATTACHMENT_INLINE_MAX_CHARS`（默认与常量一致） |
 
-**E. `apps/web` 改动**：无。`ChatAttachmentDto.status` 语义不变（`"indexed"` = ready），内联/索引对客户端透明。
+**E. `apps/finance-web` 改动**：无。`ChatAttachmentDto.status` 语义不变（`"indexed"` = ready），内联/索引对客户端透明。
 
 **P2 验收**
-- `pnpm typecheck` + `@aiagent/rag` / `@aiagent/database` / `@aiagent/api` 测试全绿。
+- `pnpm typecheck` + `@aiagent/rag` / `@aiagent/database` / `@aiagent/finance-api` 测试全绿。
 - 会话内上传**小文件**（≤阈值）→ 提问命中附件原文（内联注入；Redis 无该 doc 的 chunk key，只有 inline key）；上传**大文件**（>阈值）→ 命中附件向量路。
 - 内部库有文档时，同一提问合并返回附件 + 内部库候选，`<untrusted_context>` 标注来源（附件 / 内部知识库）；`retrieval` trace 的 `scoreSummary` 带 `sourceKind`。
 - 多路编排有单测（合并去重、leg 优先级、rerank 生效、单 leg 失败降级、`sourceKind` 标注）；`AttachmentStore` 内联槽有单测（put/get、convId 隔离、Redis TTL，env 门禁）。

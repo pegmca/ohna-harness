@@ -1,7 +1,7 @@
 # 05 · 工程化、部署、安全与多租户
 
 > 维度：Engineering / Deployment / Security / Multi-tenant
-> 现状：`apps/api` Fastify + `run_events` SSE 持久 replay + token 级流式 + 背压；**P1 已完成** worker 解耦（PG 队列表索引 `runs_queue_idx` + `lease_until`/`claimed_by`/`request_payload` + worker loop `claimNext`/`renewLease`/`recoverStale`）；PG + pgvector halfvec(2048)（22 表，migration 幂等）；`packages/security` 注入评估 / SQL 只读 / PII 脱敏；Docker Compose 一键 demo（mock/real 可切换）。
+> 现状：`apps/finance-api` Fastify + `run_events` SSE 持久 replay + token 级流式 + 背压；**P1 已完成** worker 解耦（PG 队列表索引 `runs_queue_idx` + `lease_until`/`claimed_by`/`request_payload` + worker loop `claimNext`/`renewLease`/`recoverStale`）；PG + pgvector halfvec(2048)（22 表，migration 幂等）；`packages/security` 注入评估 / SQL 只读 / PII 脱敏；Docker Compose 一键 demo（mock/real 可切换）。
 > 缺口：SSE 跨实例 fan-out 仍单实例（eventBus 内存，无 Redis pub/sub）、无多租户/tenant_id/RBAC/vault/run 级审计、OWASP 缺 SSRF/供应链/数据外泄护栏、无成本 guardrail/运行时 SLO 熔断、MCP 仅 stdio 无远程鉴权。
 
 ## 1. 行业现状速览（2025–2026）

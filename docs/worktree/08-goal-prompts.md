@@ -67,7 +67,7 @@ beforeToolCall / afterToolCall / prepareNextTurn / shouldStopAfterTurn）。工�
   迁自 executor.ts:145-240），权限门与 approval-repository 删除；
 - compaction：transformContext 内实现，定义 CompactionMessage 类型与纯函数
   compact(messages, summary)（落库形态属阶段 3）；
-- apps/api：run 执行切到新 loop，消息内存累积不落新表，保证 pnpm dev 可用。
+- apps/finance-api：run 执行切到新 loop，消息内存累积不落新表，保证 pnpm dev 可用。
 不建任何新数据库表（属阶段 3）；不做前端改动（属阶段 4）。
 
 完成标准：
@@ -99,7 +99,7 @@ docs/worktree/01-target-architecture.md（依赖规则：database 不依赖 agen
   conversations / messages（线性，content jsonb，compaction 为特殊 message 类型）/ runs /
   run_events（append-only，SSE 重放源），所有字段带中文 COMMENT ON COLUMN；旧表本阶段
   不 drop（阶段 6 统一删）；message-repository / run-repository 重写；
-- apps/api：run-service.ts、ordered-run-event-stream.ts 重写（AssistantMessageEvent →
+- apps/finance-api：run-service.ts、ordered-run-event-stream.ts 重写（AssistantMessageEvent →
   run_events 落库 + SSE fan-out，断线重放以 run_events.sequence 为准）；conversations /
   runs 路由切新 schema；删除 http/routes/approvals.ts 与
   adapters/in-memory-approval-repository.ts（packages/database 侧的 approval repository
@@ -108,10 +108,10 @@ docs/worktree/01-target-architecture.md（依赖规则：database 不依赖 agen
 
 完成标准：
 1. 全新数据库 pnpm db:up && pnpm db:migrate 从零建表成功，migration-lint 通过；
-2. 集成测试（apps/api/test）：发起 run 后 messages 表出现 user/assistant/toolResult
+2. 集成测试（apps/finance-api/test）：发起 run 后 messages 表出现 user/assistant/toolResult
    线性序列，run_events 与 SSE 实际输出逐条一致；kill 后按最后序号续传不丢不重；
 3. compaction 跨进程生效：触发压缩后重启服务，继续对话上下文从压缩消息重建；
-4. pnpm --filter @aiagent/database test && pnpm --filter @aiagent/api test 通过；
+4. pnpm --filter @aiagent/database test && pnpm --filter @aiagent/finance-api test 通过；
 5. pnpm typecheck && pnpm lint && pnpm architecture:check 全绿；
 6. pnpm dev 手工走查：新会话 → 多轮工具调用 → 刷新页面 → 消息与 run 状态完整恢复。
 
@@ -124,34 +124,34 @@ docs/worktree/01-target-architecture.md（依赖规则：database 不依赖 agen
 ## 阶段 4：前端适配
 
 ```text
-实施 docs/worktree/07-migration-plan.md 的阶段 4：apps/web 渲染新 Message content 块与
+实施 docs/worktree/07-migration-plan.md 的阶段 4：apps/finance-web 渲染新 Message content 块与
 SSE 协议，删除审批 UI。
 
 设计依据：DESIGN.md（根目录设计系统）、docs/IMMERSIVE_PRODUCT_DESIGN.md、
-docs/worktree/01-target-architecture.md（依赖规则：apps/web 不得直接依赖
-packages/ai、packages/agent、packages/database，只消费 apps/api 的事件流 DTO）。
+docs/worktree/01-target-architecture.md（依赖规则：apps/finance-web 不得直接依赖
+packages/ai、packages/agent、packages/database，只消费 apps/finance-api 的事件流 DTO）。
 布局口径：左会话列表、居中时间线、底部 composer；run 状态/工具调用/trace 为
 assistant 消息派生的可展开内容，不做常驻右栏；thinking 块默认折叠可展开。
 
 改动范围：
-- apps/web/src/features/workbench/：chat.tsx、run-process.tsx、run-details.tsx 重写
+- apps/finance-web/src/features/workbench/：chat.tsx、run-process.tsx、run-details.tsx 重写
   消息渲染（text / thinking / toolCall / toolResult 分类型渲染，tool call 默认折叠、
   可展开查看参数与结果）；
 - SSE 客户端切到 AssistantMessageEvent 协议，断线重连按序号续传；
 - 删除审批相关 UI 与状态（approval 分支、审批按钮、审批轮询）；
-- apps/web/e2e 与 apps/web/test 同步更新。
+- apps/finance-web/e2e 与 apps/finance-web/test 同步更新。
 不改后端接口（协议已在阶段 3 稳定）；视觉遵循 DESIGN.md 的 system.css 与 tokens，
 不另造视觉风格。
 
 完成标准：
-1. pnpm --filter @aiagent/web build && pnpm --filter @aiagent/web test（vitest）通过；
+1. pnpm --filter @aiagent/finance-web build && pnpm --filter @aiagent/finance-web test（vitest）通过；
 2. pnpm test:e2e（Playwright）通过，覆盖：流式回复渲染、tool call 展开/折叠、
    刷新后历史完整、多轮含附件提问；
-3. grep 确认 apps/web/src 中 approval 零残留（e2e 删除用例的反向断言除外）；
+3. grep 确认 apps/finance-web/src 中 approval 零残留（e2e 删除用例的反向断言除外）；
 4. pnpm typecheck && pnpm lint 全绿；pnpm dev 对照 DESIGN.md 人工走查通过。
 
 阻塞规则：若后端事件协议缺字段导致 UI 无法实现，停下来报告并列出缺失字段，
-不擅自改 apps/api。
+不擅自改 apps/finance-api。
 ```
 
 ---
@@ -173,7 +173,7 @@ docs/worktree/04-extensibility.md（hook 用法）。security.ts 已按 06 决�
 packages/security，grounding 的 <untrusted_context> 封装语义不变（永远生成 data-only
 user 消息，block 只留占位符）。
 
-改动范围：packages/rag、packages/database/src/rag-*.ts、apps/api/src/http/routes/rag.ts
+改动范围：packages/rag、packages/database/src/rag-*.ts、apps/finance-api/src/http/routes/rag.ts
 与 attachments.ts。检索/附件上下文经 transformContext 或 prepareNextTurn 注入；
 retrieval 事件名不变，改写 run_events。不改 report/MCP/eval（后续子任务）。
 
@@ -197,7 +197,7 @@ docs/worktree/04-extensibility.md（research-report skill）。PDF 生成链路�
 不变；workflow_node / pdf_export 事件名不变，改写 run_events；前端 report 按钮改为
 user message metadata 带 hint: "report"，由 system prompt 约束模型必须调用 generate_report。
 
-改动范围：packages/report、packages/workflow、apps/api/src/application/artifact-service.ts
+改动范围：packages/report、packages/workflow、apps/finance-api/src/application/artifact-service.ts
 与 run-service.ts（删除 maybeRunReport 及 plan ready 分支）。不动 RAG/MCP/eval。
 
 完成标准：
@@ -221,7 +221,7 @@ schema 校验（schemas.ts 原样复用），schema → JSON Schema 走 03 的 c
 mcp_tool_discovered 事件改写 run_events；discovery 产出直接可并入 agentLoop
 config.tools 的 AgentTool 数组；MCP 工具输出经 packages/security 二次封装。
 
-改动范围：仅 packages/mcp 及其 apps/api 装配点。不动 RAG/report/eval。
+改动范围：仅 packages/mcp 及其 apps/finance-api 装配点。不动 RAG/report/eval。
 
 完成标准：
 1. packages/mcp 测试通过；

@@ -99,9 +99,17 @@ export function createLsTool(cwd: string, options?: LsToolOptions): AgentTool<ty
      * 列目录：解析路径 → 沙箱校验 → 存在性与目录校验 → 过滤/排序 → 截断。
      *
      * @param params 已通过 zod 校验的入参。
+     * @param signal run 级取消信号，在进入和逐条 stat 前检查，保证取消可见。
      * @returns 目录清单文本与截断信息。
      */
-    async execute(params) {
+    async execute(params, signal) {
+      const throwIfAborted = (): void => {
+        if (signal?.aborted) {
+          throw Object.assign(new Error("Operation aborted"), { code: "cancelled" });
+        }
+      };
+
+      throwIfAborted();
       const dirPath = resolveToCwd(params.path || ".", cwd);
       assertListable(dirPath, cwd);
 
@@ -120,6 +128,7 @@ export function createLsTool(cwd: string, options?: LsToolOptions): AgentTool<ty
         });
       }
 
+      throwIfAborted();
       const entries = await fsReaddir(dirPath);
       const showHidden = params.showHidden ?? false;
       const visible = showHidden ? entries : entries.filter((entry) => !entry.startsWith("."));
@@ -130,6 +139,7 @@ export function createLsTool(cwd: string, options?: LsToolOptions): AgentTool<ty
       let entryLimitReached: number | undefined;
 
       for (const entry of visible) {
+        throwIfAborted();
         if (results.length >= effectiveLimit) {
           entryLimitReached = effectiveLimit;
           break;

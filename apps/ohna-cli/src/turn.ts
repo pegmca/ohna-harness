@@ -1,0 +1,234 @@
+/**
+ * 单轮 run 的执行层：装配 AgentLoopConfig、消费事件、维护多轮 history。
+ *
+ * 从 harness 拆出的原因：REPL 拆到 repl.ts 后，harness 只保留组合根（模型/工具/会话装配），
+ * 而 `runTurn` 与 REPL 都需要同一份实现。放在独立模块可避免 harness ↔ repl 的运行时循环依赖
+ * （架构门禁 no-circular 会直接拒绝）。
+ */
+import {
+  agentLoop,
+  createCompactionTransform,
+  defaultConvertToLlm,
+  type AgentLoopConfig,
+  type AgentMessage,
+} from "@aiagent/agent";
+import type { ActiveModel } from "@aiagent/ai";
+import type { AgentTool } from "@aiagent/tools";
+import { resolveMaxTurns, type CliMode } from "./mode.js";
+import { renderEvent, type UsageTracker } from "./render.js";
+import {
+  filterFailedAssistants,
+  resolveCompactionSettings,
+  RUN_STOP_REASON_TEXT,
+  withSummaryFallback,
+  type RunStopReason,
+  type RunStopState,
+  type SessionSummarizer,
+} from "./session-runtime.js";
+import type { ConfirmHook } from "./confirm.js";
+
+/**
+ * 一轮 run 的模式配置：由 runCli 按 --mode / 预算参数解析一次，贯穿单次模式与 REPL 所有轮次。
+ * 模式只影响「工具注册表 / 系统提示词 / 回合预算 / 是否挂确认闸门」，不改变 loop 内核契约。
+ */
+export interface RunSetup {
+  mode: CliMode;
+  systemPrompt: string;
+  /** --yes：跳过写/执行的交互确认。 */
+  autoApprove: boolean;
+  /** 工作区根目录（coding 模式的路径与命令作用域）。 */
+  cwd: string;
+  /** --max-turns 覆盖；缺省按模式取 resolveMaxTurns。 */
+  maxTurns?: number;
+  /** --deadline-ms：单次 run 的墙钟上限（从 run 开始计时）。 */
+  deadlineMs?: number;
+  /** --max-cost：会话累计成本上限（美元）。 */
+  maxCost?: number;
+  /** 摘要器：运行期 compaction 与会话级 compaction 共用。 */
+  summarizer: SessionSummarizer;
+  /** --resume <id>：启动时恢复该会话（单次模式同样生效）。 */
+  resumeId?: string;
+  /** MCP 发现的工具名（渲染层据此标注来源）。 */
+  mcpToolNames?: ReadonlySet<string>;
+}
+
+/** 单轮 run 的返回状态。 */
+export interface RunTurnResult {
+  /** 合并本轮增量后的 history（已过滤 error/aborted assistant）。 */
+  history: AgentMessage[];
+  /** 本轮是否发生 provider 错误（单次模式据此设置非零退出码）。 */
+  failed: boolean;
+}
+
+/**
+ * 构造本轮 run 的 AgentLoopConfig。
+ *
+ * 治理语义（内核零改动，全部由钩子实现）：
+ * - `deadlineMs`：从 createConfig 调用时刻起算，`shouldStopAfterTurn` 每轮查时钟；
+ * - `maxTurns`：按 --max-turns 或模式默认值计数；
+ * - `maxCost`：run 前检查 + 每轮结束后检查会话累计 cost（单轮内可能超出）；
+ * - 停止原因只在「本轮仍有 toolCall / toolResult」时记录——模型给出最终文本属于自然结束，
+ *   此时即便恰好达到 max-turns 也不应打印「已停止」；
+ * - `transformContext`：运行期按上下文窗口自动压缩（会话级压缩在 run 结束后另行执行）。
+ *
+ * @param model 已解析的真实模型。
+ * @param apiKey 真实 provider 凭据。
+ * @param setup 本轮的模式与预算配置。
+ * @param tracker 会话级用量累计器（max-cost 读取其快照）。
+ * @param stopState 停止原因槽（供 runTurn 打印可读提示）。
+ * @param beforeToolCall 可选的权限闸门钩子。
+ * @returns 可直接传给 agentLoop 的配置。
+ */
+export function createConfig(
+  model: ActiveModel["model"],
+  apiKey: string,
+  setup: RunSetup,
+  tracker: UsageTracker,
+  stopState: RunStopState,
+  beforeToolCall?: ConfirmHook,
+): AgentLoopConfig {
+  const maxTurns = setup.maxTurns ?? resolveMaxTurns(setup.mode);
+  const deadlineAt = setup.deadlineMs !== undefined ? Date.now() + setup.deadlineMs : undefined;
+  let turns = 0;
+
+  return {
+    model,
+    apiKey,
+    convertToLlm: defaultConvertToLlm,
+    beforeToolCall,
+    deadlineMs: setup.deadlineMs,
+    // 运行期压缩：摘要失败时用确定性兜底，保证正在进行的 run 不被摘要异常打断。
+    transformContext: createCompactionTransform({
+      model,
+      settings: resolveCompactionSettings(model.contextWindow),
+      summarizer: withSummaryFallback(setup.summarizer, (message) => process.stderr.write(`${message}\n`)),
+    }),
+    shouldStopAfterTurn: ({ message, toolResults }) => {
+      turns += 1;
+      // 只有本轮还会继续调用工具时，预算/时限停止才是有意义的「中断」；
+      // 文本回合代表任务自然收尾，不能误报「已停止」。
+      const hasToolCall = message.content.some((block) => block.type === "toolCall");
+      if (!hasToolCall && toolResults.length === 0) return false;
+
+      // 顺序：时间 → 成本 → 回合数。三者同时命中时优先报告更「硬」的外部约束。
+      if (deadlineAt !== undefined && Date.now() >= deadlineAt) {
+        stopState.reason = "deadline";
+        return true;
+      }
+      if (setup.maxCost !== undefined && tracker.snapshot().cost >= setup.maxCost) {
+        stopState.reason = "max_cost";
+        return true;
+      }
+      if (turns >= maxTurns) {
+        stopState.reason = "max_turns";
+        return true;
+      }
+      return false;
+    },
+  };
+}
+
+/**
+ * 判断会话累计成本是否已到达预算，并打印统一停止提示。
+ *
+ * run 前与每轮结束后共用：`--max-cost 0` 表示零预算，启动即停、不调用模型。
+ *
+ * @param tracker 会话级用量累计器。
+ * @param maxCost 成本上限（美元）；undefined 表示不限制。
+ * @returns true 表示已达上限，调用方必须跳过模型调用。
+ */
+export function reachedCostBudget(tracker: UsageTracker, maxCost: number | undefined): boolean {
+  if (maxCost === undefined) return false;
+  return tracker.snapshot().cost >= maxCost;
+}
+
+/**
+ * 打印预算/时限停止原因（自然结束时不会调用）。
+ *
+ * @param reason 停止原因。
+ */
+export function printStopReason(reason: RunStopReason): void {
+  process.stdout.write(`\n⏹ 已停止：${RUN_STOP_REASON_TEXT[reason]}\n`);
+}
+
+/**
+ * 执行一轮对话：构造用户消息、调用 agentLoop、逐事件渲染，并把增量并入多轮 history。
+ *
+ * history 采用「追加增量」策略——agentLoop 返回的 agent_end.messages 仅含本轮新增消息
+ * （它内部用 [...history, ...prompts] 的副本，不回写外部数组），因此这里把增量并入 history，
+ * 既保留往轮上下文，又避免重复。
+ *
+ * @param history 之前所有轮次的消息（会被本轮增量扩展后返回）。
+ * @param userText 本轮用户输入。
+ * @param active 已解析的真实模型与凭据。
+ * @param tools 已装配的工具列表。
+ * @param signal run 级 AbortSignal，用于 Ctrl-C 中断当前 run。
+ * @param setup 本轮的模式配置（系统提示词 / 预算 / 渲染模式）。
+ * @param tracker 会话级用量累计器（跨 run 复用，agent_end 打印累计值）。
+ * @param beforeToolCall 可选的权限闸门钩子（coding 模式传入）。
+ * @returns 更新后的 history 与本轮是否失败。
+ */
+export async function runTurn(
+  history: AgentMessage[],
+  userText: string,
+  active: ActiveModel,
+  tools: AgentTool<any>[],
+  signal: AbortSignal,
+  setup: RunSetup,
+  tracker: UsageTracker,
+  beforeToolCall?: ConfirmHook,
+): Promise<RunTurnResult> {
+  const userMessage: AgentMessage = {
+    role: "user",
+    content: userText,
+    timestamp: Date.now(),
+  };
+
+  const stopState: RunStopState = {};
+  const config = createConfig(active.model, active.apiKey, setup, tracker, stopState, beforeToolCall);
+  let failed = false;
+
+  // streamFn 省略：agentLoop 默认走 @aiagent/ai 的 streamSimple，直接对接真实 provider。
+  const stream = agentLoop(
+    [userMessage],
+    { systemPrompt: setup.systemPrompt, messages: history, tools },
+    config,
+    signal,
+  );
+
+  for await (const event of stream) {
+    if (
+      event.type === "message_end" &&
+      event.message.role === "assistant" &&
+      event.message.stopReason === "error"
+    ) {
+      failed = true;
+    }
+    if (event.type === "agent_end" && event.error) {
+      // 钩子 / transformContext 抛错时 loop 会补发带 error 的 agent_end：这也是一次失败的 run，
+      // 单次模式必须非零退出（REPL 由 renderEvent 打印后继续，不中断会话）。
+      failed = true;
+    }
+    renderEvent(event, tracker, {
+      mode: setup.mode,
+      workspaceRoot: setup.cwd,
+      ...(setup.mcpToolNames ? { mcpToolNames: setup.mcpToolNames } : {}),
+    });
+    // 成功时 agent_end.messages 为本轮增量（仅 prompts + 本轮新增助手/工具消息）；
+    // 错误兜底分支里 agent_end.messages 是 context.messages.slice()（含完整历史+本轮 prompt），
+    // 直接并入会把整段历史重复追加。用对象引用去重，只并入 history 尚未持有的新消息，
+    // 既保持成功路径不变，又保证错误路径不丢消息、不重复历史。
+    if (event.type === "agent_end") {
+      const incremental = event.error
+        ? event.messages.filter((message) => !history.includes(message))
+        : event.messages;
+      // error/aborted assistant 不进入内存 history：下一轮不能把无效回复再发给模型。
+      history = [...history, ...filterFailedAssistants(incremental)];
+    }
+  }
+
+  // 预算/时限停止是「正常收尾」，单独打印原因，避免用户误以为任务失败。
+  if (stopState.reason) printStopReason(stopState.reason);
+
+  return { history, failed };
+}

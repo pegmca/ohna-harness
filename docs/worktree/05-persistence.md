@@ -18,7 +18,7 @@
 Repository 层（`packages/database/src/`）：
 
 - `conversation-repository.ts`（522 行）：`createPostgresConversationRepositories`，消息 `append` / `appendUserMessageIdempotently` / `list`（游标分页）/ `find`。
-- `run-repository.ts`（426 行）：实现 `apps/api/src/application/run-ports.ts` 的 `RunStore` 端口（`create` / `append` / `listEvents` / `recoverStale`）。
+- `run-repository.ts`（426 行）：实现 `apps/finance-api/src/application/run-ports.ts` 的 `RunStore` 端口（`create` / `append` / `listEvents` / `recoverStale`）。
 - `trace-repository.ts`（192 行）：`createPostgresTraceStore`，`initialize` / `append` / `finalize`。
 - `approval-repository.ts` + `approval-decision.ts`（删除对象）。
 - `schema.ts`（463 行）：drizzle 风格的 TS 表镜像，与 SQL migration 双写维护。
@@ -248,10 +248,10 @@ export interface RunStore {
 
 ### SSE fan-out 改造点
 
-沿用现有 `RunEventBus` 端口（`apps/api/src/application/run-ports.ts` L21–24：`publish` / `subscribe`）与「先落库后广播」的顺序不变，改造集中在三处：
+沿用现有 `RunEventBus` 端口（`apps/finance-api/src/application/run-ports.ts` L21–24：`publish` / `subscribe`）与「先落库后广播」的顺序不变，改造集中在三处：
 
 1. **事件载荷换型**：`AgentRunStreamEventDto` 的 `type` 从 `run_status|trace_event|run_result|run_error` 换成新 `run_events.event_type` 枚举；`trace_event` 包装层删除，loop 事件直接作为顶层事件发布。`packages/trace` 的 trace 事件体系随之收敛（详见 06 文档），数据库层不再维护 `traces`/`trace_events` 表。
-2. **重放源不变**：`apps/api/src/http/routes/runs.ts` 的 SSE handler 继续走 `listEvents(afterSequence)` → `subscribe(runId)` 两段式（补发 + 实时），`Last-Event-ID` 仍映射 `run_events.sequence`。因 `sequence` 语义与唯一约束未变，断线续传逻辑零改动。
+2. **重放源不变**：`apps/finance-api/src/http/routes/runs.ts` 的 SSE handler 继续走 `listEvents(afterSequence)` → `subscribe(runId)` 两段式（补发 + 实时），`Last-Event-ID` 仍映射 `run_events.sequence`。因 `sequence` 语义与唯一约束未变，断线续传逻辑零改动。
 3. **run 终态推导**：`run-service.ts` 目前消费 `run_result/run_error` 推进状态机；改为消费 `agent_end`（正常终态）与 `run_error`（异常终态），`run_status` 仅保留 queued→running 与 interrupted 恢复两类服务端事件。
 
 ### 迁移策略
@@ -277,11 +277,11 @@ export interface RunStore {
 | `tool_approvals` 表 DDL | `packages/database/migrations/0040_approval.sql`（整文件随旧 migration 目录废弃） |
 | Approval repository | `packages/database/src/approval-repository.ts`、`packages/database/src/approval-decision.ts` |
 | Approval 表 TS 镜像 | `packages/database/src/schema.ts` 中 `toolApprovals` 定义（约 L339–L365） |
-| 内存审批适配器 | `apps/api/src/adapters/in-memory-approval-repository.ts` |
-| 审批 HTTP 路由 | `apps/api/src/http/routes/approvals.ts`（及 `apps/api/src/server.ts`、`apps/api/src/index.ts` 中的挂载与装配） |
+| 内存审批适配器 | `apps/finance-api/src/adapters/in-memory-approval-repository.ts` |
+| 审批 HTTP 路由 | `apps/finance-api/src/http/routes/approvals.ts`（及 `apps/finance-api/src/server.ts`、`apps/finance-api/src/index.ts` 中的挂载与装配） |
 | executor 权限门与审批端口 | `packages/tools/src/executor.ts`（permission 检查段）、`packages/tools/src/approval-repository.ts`、`packages/tools/src/types.ts` 中 permission/approval 类型、`packages/tools/src/tools/sql-query-mock.ts` 的审批模拟 |
 | 审批相关 trace 事件 | `packages/trace/src/index.ts` 中 approval/permission 事件类型 |
-| 前端审批 UI | `apps/web/src/features/workbench/` 下 `run-process.tsx`、`live-run-projection.ts`、`run-details.tsx`、`chat.tsx`、`Workbench.tsx`、`types.ts`、`format.ts` 中的审批卡片/投影分支 |
+| 前端审批 UI | `apps/finance-web/src/features/workbench/` 下 `run-process.tsx`、`live-run-projection.ts`、`run-details.tsx`、`chat.tsx`、`Workbench.tsx`、`types.ts`、`format.ts` 中的审批卡片/投影分支 |
 | 测试 | `packages/database/test/approval-repository.test.mjs` |
 | `traces` / `trace_events` 表 | `packages/database/migrations/0030_trace.sql` 随旧目录废弃；`packages/database/src/trace-repository.ts` 删除（由 run_events 承担，见 06） |
 | `messages.status` 列与 `role='system'/'tool'` 枚举 | 新 messages 表不再包含 |

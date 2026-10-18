@@ -12,12 +12,16 @@
 │   ├── BUSINESS_DIRECTION_FINANCIAL_RESEARCH_AGENT.md
 │   └── IMMERSIVE_PRODUCT_DESIGN.md
 ├── apps/
-│   ├── web/
-│   │   └── src/
-│   └── api/
+│   ├── finance-api/        # 产品 A · 金融 SaaS server
+│   ├── finance-web/        # 产品 A · 金融 SaaS web
+│   ├── ohna-cli/           # 产品 B · ohna 终端 Agent
+│   ├── ohna-api/           # 产品 B · 本地服务薄入口（L0）
+│   └── ohna-web/           # 产品 B · 本地 Web UI（Phase 4：文件树 + 待确认卡片 + 本地模式）
 ├── packages/
 │   ├── ai/
 │   ├── agent/
+│   ├── coding/
+│   ├── serve/              # ohna 服务端装配（JSONL + HTTP/SSE）
 │   ├── identity/
 │   ├── database/
 │   ├── channels/
@@ -50,8 +54,13 @@
 
 本仓库已经初始化为 pnpm workspace monorepo：
 
-- `apps/web`：Vite + React + TypeScript Web 应用入口，负责承载 Immersive 产品界面，只通过 HTTP API 调用 Agent。
-- `apps/api`：Fastify HTTP adapter，负责请求校验、异步 Run 生命周期、SSE 事件投影和结构化响应。
+- `apps/finance-web`：产品 A 的 Vite + React + TypeScript Web 应用入口，负责承载 Immersive 产品界面，只通过 HTTP API 调用 Agent。
+- `apps/finance-api`：产品 A 的 Fastify HTTP adapter，负责请求校验、异步 Run 生命周期、SSE 事件投影和结构化响应。
+- `apps/ohna-cli`：产品 B 的终端编码 Agent（bin `ohna`），`--mode research` 走金融工具、`--mode coding` 走编码工具集。M2 已支持会话持久化与 `--resume <id>`、上下文压缩、`--max-turns` / `--deadline-ms` / `--max-cost` 预算治理与 `/cost`；单轮模式同样落盘，可用 `ohna --mode coding --resume <id>` 接续。M3 支持 slash 命令（`/model /cost /compact /tools /resume`）、写前 unified diff、输出折叠、`--mcp <config.json>` 接入外部 MCP 工具（输出经 `<untrusted_context>` 封装），以及 `ohna --web [dir]` 进程内托管（终端与浏览器共享同一会话，`--web-port` / `--no-open` 可选）。
+- `apps/ohna-api`：产品 B 的本地服务薄入口（bin `ohna-api`），只绑 `127.0.0.1`，复用 `packages/serve` 装配；支持 `[dir]` / `--port` / `--data-dir` / `--auto-approve` / `--no-open`，SIGINT/SIGTERM 会中断在途 run 并落 `interrupted`。
+- `apps/ohna-web`：产品 B 的本地 Web UI（Phase 4）：浏览器里对话、待确认 allow/deny、只读文件树；`pnpm --filter @aiagent/ohna-web build` 后由 `ohna-api` 直接托管（`pnpm --filter @aiagent/ohna-api start -- <dir>`），开发模式用 `pnpm --filter @aiagent/ohna-web dev`（代理 `/api` → 127.0.0.1:4173）。
+- `packages/coding`：编码工具集（read / write / edit / bash / grep / find / ls）与路径、命令策略。
+- `packages/serve`：ohna 服务端装配包（`createOhnaServer`）：JSONL stores（sessions / conversations / runs）+ run-v2 HTTP/SSE + 异步确认闸门（`confirm-gate.ts` / `POST /api/runs/:runId/confirmations/:toolCallId`）+ 只读 `GET /api/local/fs`（复用 `@aiagent/coding` 沙箱语义）+ 静态 fallback，供 `ohna-cli --web` 与 `ohna-api` 共用。
 - `packages/ai`：统一 LLM 抽象边界，对齐 pi-ai：`Message` 类型族、`AssistantMessageEvent`、provider 适配与 `stream` / `streamSimple`。
 - `packages/agent`：ReAct Agent 循环边界，提供 `agentLoop` / `agentLoopContinue`、`AgentTool` 契约与工具执行；不再有独立的意图路由器或 LLM Client。
 - `packages/identity`：浏览器指纹、稳定 `userId`、session 与 QQ 绑定规则的领域边界。
@@ -69,12 +78,34 @@
 - `packages/security`：prompt-injection 评估与不可信上下文封装边界。
 - `packages/trace`：最小运行事件类型契约与跨边界值脱敏工具。
 
-`packages/*` 作为独立 workspace package 构建和类型检查。`apps/web` 保持前端应用边界，不直接依赖 `agent`、`tools`、`trace` 这些核心运行时包；当前通过 `apps/api` 接入 Agent。
+`packages/*` 作为独立 workspace package 构建和类型检查。`apps/finance-web` 保持前端应用边界，不直接依赖 `agent`、`tools`、`trace` 这些核心运行时包；当前通过 `apps/finance-api` 接入 Agent。
 
 设计文档拆分为两层：根目录 `DESIGN.md` 是 Kimi 风格、支持明暗主题的 Workbench 视觉系统，定义 design token、组件视觉语言和 AI 前端生成约束；`system.css` 是唯一 token / utility 参考实现；`docs/IMMERSIVE_PRODUCT_DESIGN.md` 承载金融研究 Agent 的产品体验、信息架构和页面模块。代码边界和 AI Coding 约束分别见 `ARCHITECTURE.md` 与 `docs/AI_CODING.md`。
 
 PostgreSQL 的本地连接、身份、Conversation/Message、Run/RunEvent、migration 规则、备份恢复
 和 pgvector 持久化规划见 [``]()。
+
+### ohna L0 快速启动（本地服务）
+
+```bash
+pnpm --filter @aiagent/ohna-api build
+pnpm --filter @aiagent/ohna-api start -- <dir> --port 4173 --no-open
+```
+
+`start` 脚本用 `node --env-file-if-exists=../../.env` 加载仓库根 `.env`，所以需先配置一个可用
+provider（`AIAGENT_LLM_API_KEY_*` + `AIAGENT_LLM_MODEL_*`，如 DeepSeek / OpenRouter / Bridge AI）；
+未配置时启动会直接退出并列出所需变量名。服务只绑 `127.0.0.1`，端口占用时自动 +1，
+数据默认落 `~/.ohna/`（`--data-dir` 可改）。
+
+```bash
+# 健康检查：返回 { mode: "local", workspaceRoot, model, pid, dataDir }
+curl http://127.0.0.1:4173/api/health
+
+# 发一条消息（省略 conversationId 时自动建会话），随后订阅返回的 eventsUrl
+curl -X POST http://127.0.0.1:4173/api/runs \
+  -H "content-type: application/json" \
+  -d '{"message":"这个仓库是做什么的？"}'
+```
 
 ## Immersive Playground
 
@@ -204,7 +235,7 @@ docker compose down
 - `stream` / `streamSimple`：统一 LLM 流式入口；当前实现 OpenAI-compatible `/chat/completions` adapter（含 tool_call 增量拼接、usage/finish 处理、429 指数退避）。
 - `createAssistantMessageEventStream()`：用于测试的同步事件流构造器。
 
-环境变量（`apps/api` 的 real 模式读取）：
+环境变量（`apps/finance-api` 的 real 模式读取）：
 
 ```dotenv
 AIAGENT_PROVIDER_MODE=real
@@ -290,7 +321,7 @@ pnpm --filter @aiagent/mcp test
 pnpm --filter @aiagent/mcp test
 ```
 
-API server 侧通过环境变量开启启动期 discovery（`apps/api/src/server.ts`）：
+API server 侧通过环境变量开启启动期 discovery（`apps/finance-api/src/server.ts`）：
 
 ```bash
 AIAGENT_MCP_ENABLED=true pnpm dev  # 可选 AIAGENT_MCP_COMMAND / AIAGENT_MCP_ARGS 指定外部 server
@@ -359,9 +390,9 @@ typecheck、test、build 与依赖架构检查；数据库集成测试不会连�
 Week 2-013 已把 RAG ingestion、chunk、retrieval 和 citation answer 接入 HTTP API 与 Web 页面，形成最小可演示的 Data Sources 工作区：
 
 - `packages/rag` 的 `createDataSourceRuntime()` 组合 `@aiagent/parsing` ingestion、heading-aware chunking、embedding、可注入 VectorStore、hybrid retriever 和 grounded answer policy；生产 composition 使用 PostgreSQL document repository 与 pgvector store，测试/eval 显式使用内存 adapter。
-- `apps/api` 新增 `POST /api/data-sources/ingest`、`GET /api/data-sources/documents`、`GET /api/data-sources/chunks`、`POST /api/rag/search`、`POST /api/rag/answer`。Route handler 只做 zod 校验、调用 RAG runtime、DTO 映射和 `ApiResult` 结构化响应。
+- `apps/finance-api` 新增 `POST /api/data-sources/ingest`、`GET /api/data-sources/documents`、`GET /api/data-sources/chunks`、`POST /api/rag/search`、`POST /api/rag/answer`。Route handler 只做 zod 校验、调用 RAG runtime、DTO 映射和 `ApiResult` 结构化响应。
 - `packages/types` 新增 Data Sources/RAG API DTO，并扩展 `CitationDto`：每条 citation 包含 `chunkId`、`documentId`、`source`、`heading`、`chunkIndex`、`quote` 和 `confidence`，可以从 answer 追溯到原始文档、来源、章节和 chunk 顺序。
-- `apps/web` 左侧工作区导航新增 Data Sources 页面。页面通过 HTTP API 展示粘贴/上传文本、document list、chunk list、retrieval results、answer 和 citations；前端不直接依赖 RAG runtime。
+- `apps/finance-web` 左侧工作区导航新增 Data Sources 页面。页面通过 HTTP API 展示粘贴/上传文本、document list、chunk list、retrieval results、answer 和 citations；前端不直接依赖 RAG runtime。
 - unknown answer policy：answer synthesis 只使用召回结果中命中有信息量术语的 chunks。证据不足时仍返回 `ok: true`，但 answer 明确说明当前资料不足，不编造结论。
 
 当前 runtime 限制：
@@ -483,13 +514,13 @@ pnpm --filter @aiagent/report test
 
 ## 技术栈约束
 
-前端固定采用 Vite + React + TypeScript + Tailwind CSS + shadcn/ui + Radix UI，图标统一使用 lucide-react。基础 UI 组件放在 `apps/web/src/components/ui`，业务组件组合基础组件实现，避免同时引入 Ant Design、MUI、Chakra 等第二套组件体系。
+前端固定采用 Vite + React + TypeScript + Tailwind CSS + shadcn/ui + Radix UI，图标统一使用 lucide-react。基础 UI 组件放在 `apps/finance-web/src/components/ui`，业务组件组合基础组件实现，避免同时引入 Ant Design、MUI、Chakra 等第二套组件体系。
 
-后端在需要 HTTP 服务时使用 `apps/api` + Fastify。Fastify route handler 只作为 HTTP adapter：完成请求校验、调用 `packages/agent` / `packages/tools` / `packages/trace`、返回结构化响应。Agent 编排、工具执行、trace 构造等运行时逻辑不得放进 `apps/api` 或 `apps/web`。
+后端在需要 HTTP 服务时使用 `apps/finance-api` + Fastify。Fastify route handler 只作为 HTTP adapter：完成请求校验、调用 `packages/agent` / `packages/tools` / `packages/trace`、返回结构化响应。Agent 编排、工具执行、trace 构造等运行时逻辑不得放进 `apps/finance-api` 或 `apps/finance-web`。
 
 `sql_query_mock` 的 permission gate 在工具执行前完成：写 SQL 或 schema 变更关键词直接返回 `permission_denied`，不再有人工确认门。Web 的 `Run details` 不再渲染任何审批入口。
 
-前后端共享的请求、响应、DTO、错误码和稳定枚举统一放在 `packages/types`，由 `apps/web`、`apps/api` 和 runtime packages 通过 `@aiagent/types` 引用。不要在前端或 API route 中重复声明协议类型；包内也不要放 UI-only props、数据库私有模型或只属于单个 runtime package 的内部状态。
+前后端共享的请求、响应、DTO、错误码和稳定枚举统一放在 `packages/types`，由 `apps/finance-web`、`apps/finance-api` 和 runtime packages 通过 `@aiagent/types` 引用。不要在前端或 API route 中重复声明协议类型；包内也不要放 UI-only props、数据库私有模型或只属于单个 runtime package 的内部状态。
 
 ## 安装和启动
 
@@ -506,7 +537,7 @@ pnpm build
 pnpm test
 pnpm --filter @aiagent/agent test
 pnpm --filter @aiagent/tools test
-pnpm --filter @aiagent/api test
+pnpm --filter @aiagent/finance-api test
 pnpm --filter @aiagent/parsing test
 pnpm --filter @aiagent/rag test
 pnpm --filter @aiagent/eval test
@@ -536,7 +567,7 @@ pnpm eval:update-baseline
 
 机器报告、Markdown 逐条结果和 baseline diff 位于 `docs/eval/`。确定性检查适合 CI 和教学，但不能识别所有语义等价表达；真实模型或人工校准应作为后续补充，不能替代这些硬约束。
 
-根目录脚本会通过 workspace 执行各应用和 package 的对应命令。`pnpm dev` 会同时启动 `apps/api` 和 `apps/web`；web 的 Vite dev server 会把 `/api` 代理到 `http://localhost:3001`。如果 `5173` 被占用，Vite 会自动选择下一个可用端口。
+根目录脚本会通过 workspace 执行各应用和 package 的对应命令。`pnpm dev` 会同时启动 `apps/finance-api` 和 `apps/finance-web`；web 的 Vite dev server 会把 `/api` 代理到 `http://localhost:3001`。如果 `5173` 被占用，Vite 会自动选择下一个可用端口。
 
 ## 学习路线
 
@@ -547,7 +578,7 @@ pnpm eval:update-baseline
 
 当前路线默认主要使用 AI Coding 完成代码实现。训练重点是从真实架构债务、产品摩擦和 eval 失败中选择问题，用官方资料补足原理，再通过窄范围端到端改造、测试、trace 和指标证明优化有效。
 
-最终交付物是当前仓库内的一个完整 monorepo 产品，而不是按学习阶段拆成多个项目。Web 产品放在 `apps/web`，Agent/RAG/Tool/Workflow/Report/Eval/Trace 等能力沉淀到 `packages/*`。每周的页面会渐进累积：Immersive、Data Sources、Report Workflow、Citation Checker、Eval Report，最后在 Week 4 统一包装。
+最终交付物是当前仓库内的一个完整 monorepo 产品，而不是按学习阶段拆成多个项目。Web 产品放在 `apps/finance-web`，Agent/RAG/Tool/Workflow/Report/Eval/Trace 等能力沉淀到 `packages/*`。每周的页面会渐进累积：Immersive、Data Sources、Report Workflow、Citation Checker、Eval Report，最后在 Week 4 统一包装。
 
 Immersive 的主路径是金融研究 Chatbot：用户围绕公告、财报、行情和行业资料进行多轮问答。高级路径是 Report Mode：用户可以通过开关、按钮或自然语言请求触发 report skill，系统从普通对话升级到显式 Workflow，完成资料收集、分析、引用校验和 PDF 研报导出。
 

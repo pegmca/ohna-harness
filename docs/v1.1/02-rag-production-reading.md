@@ -40,7 +40,7 @@
    │  Parsing            (P4)  parsing: PDF/表格解析（parsers/pdf.ts）  │
    │  Eval/Judge         (P5)  eval: LLM-as-judge + RAGAS 指标        │
    └─────────────────────────────────────────────────────────────────┘
-                        组合根：apps/api/src/server.ts（env 驱动装配）
+                        组合根：apps/finance-api/src/server.ts（env 驱动装配）
 ```
 
 **一句话**：`rag` 包的 `EmbeddingClient` / `VectorStore` / `Reranker` / `Retriever` 接口在 foundation 阶段就已稳定（`types.ts`），本次 P1–P5 是"**接口已就绪、只换实现**"——真实 OpenAI 兼容客户端、pgvector、cross-encoder rerank、contextual retrieval、agentic rewrite 全部通过依赖倒置 + env 工厂注入。
@@ -170,7 +170,7 @@ v1.1 起配置侧拆为 **LLM / Embedding / Rerank / Judge 四个独立 provider
     **构造期未注入 `embeddingClient` 时直接返回 `embedding_provider_disabled` 结构化错误**（`:134-144`，绝不生成 mock 向量）。
   - `createRetriever`（`:427`）把 `reranker` 透传给 `createHybridRetriever`（`:459`）；同样要求 `embeddingClient` 已注入。
   - `search`（`:336`）/ `answer`（`:371`）在 retrieve 前调用 `queryRewriter`（`:344` / `:379`）改写 query。
-- `apps/api/src/server.ts`（唯一生产组合根）
+- `apps/finance-api/src/server.ts`（唯一生产组合根）
   - `readLlmProviderConfig()`（`server.ts:47`）→ 模型目录 profile（id 沿用 `bridge_ai`，配置来源已切到统一 `AIAGENT_LLM_*`）；
     `readEmbeddingProviderConfig()` / `readRerankProviderConfig()` / `readJudgeProviderConfig()`（readiness 内）→ 三组 RAG provider 的启用状态。
   - `createDataSourceRuntime({ embeddingClient: createEmbeddingClientFromEnv() ?? undefined, reranker: createRerankerFromEnv() ?? undefined, contextEnricher: createContextEnricherFromEnv() ?? undefined, queryRewriter: createQueryRewriterFromEnv() ?? undefined, vectorStoreFactory: createVectorStoreFromEnv(...) })`（`:160-174`）：**四件套 + 向量库全部 env 驱动工厂注入**，`null` 归一为"未注入"；向量库的 `embeddingModel` / `dimensions` 直接来自同一份 Embedding provider 配置，不再硬编码 mock 模型或 1536。
@@ -190,8 +190,8 @@ v1.1 起配置侧拆为 **LLM / Embedding / Rerank / Judge 四个独立 provider
 3. `pnpm --filter @aiagent/eval test`：看 62 个用例（含 `judgeFaithfulness`/`judgeContextRecall` 的容错、
    "judge provider 未启用时 `createLlmJudge()` 返回 `null`"，以及与历史基线的回归门禁）。
 4. `pnpm --filter @aiagent/database test`：5 个通过、22 个 skip（需 live Postgres）；重点看迁移编号检查。本地起 Postgres：`pnpm db:up && pnpm db:migrate`，再跑可观察 pgvector 路径。
-5. `pnpm --filter @aiagent/api test`：28 个用例、25 通过 / 0 失败 / 3 skip（skip 为需 live Postgres 的续传与 compaction 用例）。
-   测试装配器 `apps/api/src/adapters/in-memory-test-runtime.ts:54` **显式注入** `createDeterministicMockEmbeddingClient()`
+5. `pnpm --filter @aiagent/finance-api test`：28 个用例、25 通过 / 0 失败 / 3 skip（skip 为需 live Postgres 的续传与 compaction 用例）。
+   测试装配器 `apps/finance-api/src/adapters/in-memory-test-runtime.ts:54` **显式注入** `createDeterministicMockEmbeddingClient()`
    ——这是"测试替身显式注入"的样板，生产组合根走 `server.ts` 的真实 provider。
 6. `pnpm --filter @aiagent/report test`：13 个用例全通过。注意 `runReportWorkflow` / `createReportTool` 的
    `dataSourceRuntime` 已是**必填**（`packages/report/src/workflow-types.ts:28` / `:49`），report 包内不再自建 runtime。

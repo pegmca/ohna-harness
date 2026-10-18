@@ -3,6 +3,7 @@ export * from "./identity.js";
 export * from "./api.js";
 export * from "./conversation.js";
 export * from "./run-v2.js";
+export * from "./local-fs.js";
 export * from "./market.js";
 export * from "./report.js";
 export * from "./workflow.js";

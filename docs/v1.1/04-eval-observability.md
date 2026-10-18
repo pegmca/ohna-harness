@@ -51,7 +51,7 @@
 
 ### P4 online eval + 真实 benchmark + 人工校准（进阶）— ✅ 已落地
 - **目标**：采样线上 run 影子评测；接 GAIA/TAU-bench 适配器；人工标注回流校准 judge。
-- **落地**（全部在 `packages/eval`，离线学习级，未改 apps/api 与数据库）：
+- **落地**（全部在 `packages/eval`，离线学习级，未改 apps/finance-api 与数据库）：
   - 在线影子评测：`online-eval.ts` 的 `createShadowEvaluator({ judge })` + `sampleAndEvaluate`，只读取线上采样 `{answer, query, contexts}` 离线跑 judge，**绝不写回生产/改 run 状态**。
     v1.1 起 **options.judge 为必填依赖**（不再内部回退确定性 mock 基线）：真实场景传 `createLoopLlmJudge()`（judge provider 启用时返回实例，否则 `null` 需先判空），
     要可复现就显式传 `packages/eval/src/testing.ts` 的 `createDeterministicMockLoopLlmJudge()`。

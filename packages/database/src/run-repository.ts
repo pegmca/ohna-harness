@@ -23,7 +23,7 @@ export interface CreateRunInputV2 {
   requestPayload: AgentRunCreateRequestDto;
 }
 
-/** worker claim 后获得的 run 上下文（对齐 apps/api 的 ClaimedRun 端口）。 */
+/** worker claim 后获得的 run 上下文（对齐 apps/finance-api 的 ClaimedRun 端口）。 */
 export interface ClaimedRunRow {
   snapshot: RunSnapshotDtoV2;
   request: AgentRunCreateRequestDto;

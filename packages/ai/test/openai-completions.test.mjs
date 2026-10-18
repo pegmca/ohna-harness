@@ -470,3 +470,31 @@ test("choice.usage 回退：chunk.usage 缺失时从 choice.usage 取（Moonshot
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }
   });
 });
+
+test("usage.cost：按 model.cost（$/百万 token）在 done 前换算", async () => {
+  const pricedModel = { ...model, cost: { input: 0.5, output: 2, cacheRead: 0, cacheWrite: 0 } };
+  const fetchImpl = async () =>
+    sseResponse([
+      {
+        id: "chatcmpl-cost",
+        model: "test-model",
+        choices: [{ delta: { content: "ok" }, finish_reason: "stop" }],
+        usage: {
+          prompt_tokens: 1_000_000,
+          completion_tokens: 500_000,
+          prompt_tokens_details: { cached_tokens: 0 }
+        }
+      }
+    ]);
+
+  const events = await collect(stream(pricedModel, context, { apiKey: "k", fetch: fetchImpl }));
+  const done = events.at(-1);
+  assert.equal(done.type, "done");
+  assert.deepEqual(done.message.usage.cost, {
+    input: 0.5,
+    output: 1,
+    cacheRead: 0,
+    cacheWrite: 0,
+    total: 1.5
+  });
+});

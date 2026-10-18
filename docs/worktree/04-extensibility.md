@@ -15,7 +15,7 @@
 - **工具执行横切逻辑**：`packages/tools/src/executor.ts` 的 `executeTool` 内含 zod 入参/出参校验、超时/重试、以及 approval 权限门（`packages/tools/src/approval-repository.ts`）——权限门按已确认决策整体删除，校验与超时/重试保留。
 - **意图分支硬编码**：`packages/agent/src/agent-loop.ts` 的 `runAgent` 把 chat / explain / report_skill 三种意图的执行骨架写死在循环里，加一类能力（如"估值建模"）需要改 intent router + agent loop 两处。
 - **Skills 未被产品使用**：仓库根的 `.agents/skills/`（当前仅 `worktree-pr-workflow/SKILL.md`）是给编码 agent（如本 CLI）读的工程约定，服务端代码（`packages/*`、`apps/*`）没有任何 SKILL.md 加载逻辑。
-- **无 slash command**：`apps/web/src/features/workbench/` 的 composer（`chat.tsx`、`composer-controls.tsx`）是纯文本输入，无 `/` 命令解析；compact、切换模型等操作也没有命令化入口。
+- **无 slash command**：`apps/finance-web/src/features/workbench/` 的 composer（`chat.tsx`、`composer-controls.tsx`）是纯文本输入，无 `/` 命令解析；compact、切换模型等操作也没有命令化入口。
 - **MCP 是唯一"外部能力"入口**：`packages/mcp/src/tool-adapter.ts` 把 MCP server 工具适配进 `ToolRegistry`，说明项目已有"外部来源工具并入注册表"的先例，但没有统一的生命周期/事件模型。
 
 ## pi 参照
@@ -68,7 +68,7 @@ pi 的能力扩展是**三种互补机制**：extension（代码级）、skill�
 
 extension 从「磁盘上的 TS 文件」变成「monorepo 内的 TS 模块，在服务端 bootstrap 时显式注册」。`ExtensionFactory` / `ExtensionAPI` / 事件命名全部对齐 pi，但：
 
-- 删除 jiti / `virtualModules` / `alias` / 磁盘发现（`discoverAndLoadExtensions`），改为 `extensionRegistry.register(factory)`，在 `apps/api` 启动时装配。
+- 删除 jiti / `virtualModules` / `alias` / 磁盘发现（`discoverAndLoadExtensions`），改为 `extensionRegistry.register(factory)`，在 `apps/finance-api` 启动时装配。
 - 删除 UI 相关 API：`registerShortcut`、`registerFlag`、`registerMessageRenderer`、`registerEntryRenderer`、`ExtensionUIContext` 全部不引入。Web 前端的工具/消息展示由 03 文档的 run 事件流驱动，extension 只产生事件，不拥有渲染。
 - 删除 CLI/会话树相关能力：`newSession` / `fork` / `navigateTree` / `switchSession` / `reload`（本项目会话是线性消息，无树）；`project_trust`、`user_bash`、`input` 事件不引入（无终端场景）。
 - 保留并裁剪的 hook 事件清单（命名与 pi 一致）：

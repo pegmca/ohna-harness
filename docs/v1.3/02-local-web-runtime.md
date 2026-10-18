@@ -6,17 +6,17 @@
 
 ## 0. 目标与定位（一句话）
 
-> 让同一个 `agentLoop` 内核，除了在终端（`apps/cli`）和云端 SaaS（`apps/api`）跑之外，还能**在本机作为一个守护进程跑**：拥有（own）一个本地工作目录、绑定 `127.0.0.1` 启动 Web 服务、自动打开浏览器，用户在网页里对话，Agent 直接改本地文件、跑本地命令。
+> 让同一个 `agentLoop` 内核，除了在终端（`apps/ohna-cli`）和云端 SaaS（`apps/finance-api`）跑之外，还能**在本机作为一个守护进程跑**：拥有（own）一个本地工作目录、绑定 `127.0.0.1` 启动 Web 服务、自动打开浏览器，用户在网页里对话，Agent 直接改本地文件、跑本地命令。
 
-产品动机：当前 `apps/web` 更像一个 SaaS 金融助手；而「本地优先」的 Agent（CodeBuddy CLI / Claude Code / Codex）都是用户侧有一个常驻程序，既能在终端用，也能在它拉起的本地网页里用。我们要让项目具备后一种形态，**且不与现有 SaaS 路径冲突**。
+产品动机：当前 `apps/finance-web` 更像一个 SaaS 金融助手；而「本地优先」的 Agent（CodeBuddy CLI / Claude Code / Codex）都是用户侧有一个常驻程序，既能在终端用，也能在它拉起的本地网页里用。我们要让项目具备后一种形态，**且不与现有 SaaS 路径冲突**。
 
 ## 1. 为什么现在就能做（复用基线，不重写内核）
 
 | 已具备能力 | 位置 | 对本地运行时的意义 |
 |---|---|---|
 | 纯函数 `agentLoop` 三端共用、运输层可替换 | `packages/agent` | CLI / API 已证明「换组合根不动内核」 |
-| `createApiServer(options)` 是**端口注入式** | `apps/api/src/index.ts:113` | `tools`/`runStore`/`conversationRepository`/`messageStore`/`eventBus`/`requireIdentity` 全是参数；可整份复用 transport 契约 |
-| Web 客户端只依赖 `@aiagent/types` DTO | `apps/web/src/shared/api/*` | 后端换 JSONL 存储、换工具注册表，Web **零改动** |
+| `createApiServer(options)` 是**端口注入式** | `apps/finance-api/src/index.ts:113` | `tools`/`runStore`/`conversationRepository`/`messageStore`/`eventBus`/`requireIdentity` 全是参数；可整份复用 transport 契约 |
+| Web 客户端只依赖 `@aiagent/types` DTO | `apps/finance-web/src/shared/api/*` | 后端换 JSONL 存储、换工具注册表，Web **零改动** |
 | `packages/coding` 提供文件/命令工具 + 沙箱 | `01-coding-cli.md` M1（规划/进行中） | 「接管本地目录」的能力底座，本地运行时只负责把 `workspaceRoot` 注入它 |
 | `JsonlMemoryStore` 先例 + `RunEvent` 天生 append-only | `packages/memory`、`packages/trace` | 本地存储选 JSONL 水到渠成（见 §5） |
 | 无 `DATABASE_URL` 时 RAG 向量库自动退内存 | `createVectorStoreFromEnv` | 本地运行时无需 Postgres 也能跑 RAG 检索 |
@@ -28,7 +28,7 @@
 ```
 ┌─ 用户本机 ──────────────────────────────────────────┐
 │  aiagent-local 守护进程 (Node, 仅 127.0.0.1:PORT)     │
-│   ├─ 静态托管 apps/web/dist  ──► 浏览器自动打开        │
+│   ├─ 静态托管 apps/finance-web/dist  ──► 浏览器自动打开        │
 │   ├─ HTTP/SSE API (复用 createApiServer 契约, 无鉴权)  │
 │   ├─ agentLoop 内核 (不变)                            │
 │   ├─ 工具注册表 = packages/coding (fs/bash/grep...)   │
@@ -44,15 +44,15 @@
 
 ## 3. 新增组合根 `apps/local`
 
-### 3.1 为什么不是改 `apps/api`
-`apps/api/src/server.ts` 是**生产**组合根：PostgreSQL + Redis + 多租户 + 鉴权 + QQ channel。`apps/local` 是**单机、单用户、零基础设施**的第三个组合根，与 SaaS 路径**并存**——共享内核与 `createApiServer` transport，仅装配不同。这是「运输层/组合根可替换」的硬证据，不破坏现有云端部署。
+### 3.1 为什么不是改 `apps/finance-api`
+`apps/finance-api/src/server.ts` 是**生产**组合根：PostgreSQL + Redis + 多租户 + 鉴权 + QQ channel。`apps/local` 是**单机、单用户、零基础设施**的第三个组合根，与 SaaS 路径**并存**——共享内核与 `createApiServer` transport，仅装配不同。这是「运输层/组合根可替换」的硬证据，不破坏现有云端部署。
 
 ### 3.2 `apps/local/src/index.ts` 职责（只做进程生命周期 + 装配）
 直接复用 `createApiServer`，注入本地端口：
 
 ```ts
 const app = createApiServer({
-  modelRegistry,                       // 复用本地配置的 LLM profile（同 apps/api 的读取逻辑）
+  modelRegistry,                       // 复用本地配置的 LLM profile（同 apps/finance-api 的读取逻辑）
   tools: createCodingToolRegistry({ workspaceRoot }),  // 来自 packages/coding，注入沙箱根
   identityService: createLocalIdentityService(),       // 固定本地主体 "local-user"，无登录
   requireIdentity: false,              // 单用户本机，跳过鉴权
@@ -69,7 +69,7 @@ const app = createApiServer({
 - **绑定**：`host = 127.0.0.1`（仅本机），`port` 可配，启动探测占用端口自动 +1。
 - **打开浏览器**：启动后 `open(http://127.0.0.1:PORT)`；macOS/Linux/Windows 各用对应命令。
 - **工作目录**：`aiagent-local [dir]` 的 `dir`（缺省 `cwd`）即 `workspaceRoot`，传给 coding 注册表。
-- **静态托管**：注册一个 Fastify 静态插件 serve `apps/web/dist` + SPA fallback（`*` → index.html）。dev 模式下可改为反向代理 Vite dev server，避免每次改 UI 重 build。
+- **静态托管**：注册一个 Fastify 静态插件 serve `apps/finance-web/dist` + SPA fallback（`*` → index.html）。dev 模式下可改为反向代理 Vite dev server，避免每次改 UI 重 build。
 
 ### 3.3 本地身份（最小）
 `createLocalIdentityService()` 返回一个始终返回固定 `local-user` 的桩实现，满足 `createApiServer` 的 `identityService` 端口形态；不签发 cookie、不做指纹。未来若需多本地会话隔离，再扩展。
@@ -100,7 +100,7 @@ const app = createApiServer({
   sessions/index.jsonl          # 轻量元数据：id / 标题 / 创建时间 / 最后活跃（用于列表/恢复）
   tool_results/<id>.jsonl       # 可选，复用 toolResultStore 端口（写类工具结果持久化）
 ```
-- 每个文件都是**纯追加**；事件顺序由 `run_events` 既有的连续序号保证（与 `apps/api` 的 `RunStore` 语义对齐，只是存储介质换成文件）。
+- 每个文件都是**纯追加**；事件顺序由 `run_events` 既有的连续序号保证（与 `apps/finance-api` 的 `RunStore` 语义对齐，只是存储介质换成文件）。
 - 启动时从 `sessions/index.jsonl` + 各 `*.jsonl` 重建内存读模型（列表、续跑、成本汇总）；单用户单机，重建成本可忽略。
 
 ### 5.2 何时才需要 SQLite（明确升级触发条件，避免提前过度设计）
@@ -120,13 +120,13 @@ JSONL 的弱点是「跨全部历史做即席查询 / 全文检索」是 O(n) �
 
 ## 7. 与 SaaS 路径共存
 
-| 维度 | `apps/api`（云端 SaaS） | `apps/local`（本机） |
+| 维度 | `apps/finance-api`（云端 SaaS） | `apps/local`（本机） |
 |---|---|---|
 | 存储 | PostgreSQL + Redis | JSONL + 内存 |
 | 鉴权 | 多租户、cookie、指纹 | 无（`local-user` 固定） |
 | 工具注册表 | 金融 `createDefaultToolRegistry` | `packages/coding` fs/命令工具 |
 | 绑定 | `0.0.0.0` | `127.0.0.1` |
-| Web | 部署的 `apps/web` | 本地守护进程自带 serve `dist` |
+| Web | 部署的 `apps/finance-web` | 本地守护进程自带 serve `dist` |
 | 内核 | 同一个 `agentLoop` | 同一个 `agentLoop` |
 
 两路共享 `createApiServer` 契约与 `@aiagent/types` DTO，差异**只在组合根装配**。这是正确的演进，不是分叉。
@@ -148,7 +148,7 @@ L0 甚至不依赖 `packages/coding`——先验证「终端之外用浏览器�
 - **端口冲突 / 多实例**：启动时探测端口占用自动 +1；可写 pid 锁文件避免同目录双开。
 - **浏览器安全面**：仅绑定 `127.0.0.1`；若用户显式 `--host 0.0.0.0` 想从同网其他设备访问，需在启动日志明确提示「已暴露到局域网」风险。
 - **数据诚实**：本地用 coding 工具替换金融工具，不存在「伪造行情数据」问题（原 `DATA HONESTY` 约束针对 SaaS 金融路径，本地路径天然不涉及）。
-- **依赖方向**：`apps/local` 不得反向依赖 `apps/api` 的领域逻辑；只依赖 `createApiServer`（运输层）、各包端口与 `packages/coding`。需通过 `pnpm architecture:check`。
+- **依赖方向**：`apps/local` 不得反向依赖 `apps/finance-api` 的领域逻辑；只依赖 `createApiServer`（运输层）、各包端口与 `packages/coding`。需通过 `pnpm architecture:check`。
 
 ## 10. 文档同步清单（实现时一并处理）
 
@@ -161,6 +161,6 @@ L0 甚至不依赖 `packages/coding`——先验证「终端之外用浏览器�
 
 ## 11. 与 `01-coding-cli.md` 的分工（避免重复造轮子）
 
-- `01-coding-cli.md` M1：负责**能力**（fs/命令工具 + 沙箱 + 项目上下文），归属 `packages/coding` 与 `apps/cli`。
-- 本文：负责**形态**（本地守护进程 + Web 服务 + JSONL 存储 + 目录沙箱装配 + Web 本地模式），归属 `apps/local` 与 `apps/web` 的小幅扩展。
+- `01-coding-cli.md` M1：负责**能力**（fs/命令工具 + 沙箱 + 项目上下文），归属 `packages/coding` 与 `apps/ohna-cli`。
+- 本文：负责**形态**（本地守护进程 + Web 服务 + JSONL 存储 + 目录沙箱装配 + Web 本地模式），归属 `apps/local` 与 `apps/finance-web` 的小幅扩展。
 - 二者通过 `createCodingToolRegistry({ workspaceRoot })` 这一端口衔接：CLI 把 `cwd` 当根，本地运行时把 `--dir` 当根，工具与策略完全复用。

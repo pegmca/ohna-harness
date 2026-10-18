@@ -202,10 +202,10 @@ PDF 不是直接让 LLM 生成。LLM 负责生成结构化内容，程序负责�
 
 ## 8. Web 产品页面
 
-推荐放在当前 monorepo 的 `apps/web`：
+推荐放在当前 monorepo 的 `apps/finance-web`：
 
 ```text
-apps/web/
+apps/finance-web/
 ├── app/
 │   ├── page.tsx
 │   ├── immersive/

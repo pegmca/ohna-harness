@@ -10,7 +10,7 @@
 - `packages/agent/src/llm-client.ts`：`createLlmClient()`（第 24 行），组装 `llm/` 子模块。
 - `packages/agent/src/llm/` 子模块：`config.ts`（超时/默认 baseUrl/Kimi 常量）、`transport.ts`（`requestChatCompletion`，手写 fetch + AbortSignal 超时）、`parsing.ts`（`parseChatResponse` / `parseSseStream` / `parseJsonObject`，手写 SSE 解析）、`mapping.ts`（`mapMessage` 把 `LlmMessage` 映射为 OpenAI 形状）、`tracing.ts`（`traceModelCall` 埋点包装）、`env.ts`（按 profile 从环境变量构造 client）、`utils.ts`。
 - `packages/agent/src/reliability.ts`：`chatWithReliability()`（第 25 行），在 `LlmClient` 之上做多模型 fallback + 指数退避重试，与单 provider 内的重试职责混在一起。
-- `apps/api/src/application/model-registry.ts`：`createModelRuntimeRegistry()`（第 25 行），把 `ModelOptionDto` 与创建好的 `LlmClient` 绑定成 `Map`，向 HTTP 层提供 `catalog()` / `resolve(modelId)`。
+- `apps/finance-api/src/application/model-registry.ts`：`createModelRuntimeRegistry()`（第 25 行），把 `ModelOptionDto` 与创建好的 `LlmClient` 绑定成 `Map`，向 HTTP 层提供 `catalog()` / `resolve(modelId)`。
 
 现状的核心缺陷：只支持 OpenAI-compatible 一种协议；消息无内容块结构，thinking 无法表达与回传；流式协议太薄（无 text/thinking/toolcall 的 start/end 边界，UI 无法渲染思考过程）；重试、fallback、超时分散在 client、reliability、transport 三处；`LlmClient` 接口放在 `types` 包导致 UI 直接耦合 LLM 形状。
 
@@ -186,9 +186,9 @@ export interface Model<TApi extends Api> {
 | 现状 | 去向 |
 | --- | --- |
 | `packages/types/src/llm.ts`（`LlmClient` 及全部请求/响应类型） | 删除，由 `packages/ai` 的 `Message`/`Context`/`stream` 取代；types 包不再含 LLM 形状 |
-| `packages/agent/src/llm-client.ts` + `llm/`（config/transport/parsing/mapping/tracing/env/utils） | 删除。tracing 职责由 agent 层消费 `AssistantMessageEvent` 后写 trace 事件取代；env/profile 解析收敛到 apps/api 组装处 |
+| `packages/agent/src/llm-client.ts` + `llm/`（config/transport/parsing/mapping/tracing/env/utils） | 删除。tracing 职责由 agent 层消费 `AssistantMessageEvent` 后写 trace 事件取代；env/profile 解析收敛到 apps/finance-api 组装处 |
 | `packages/agent/src/reliability.ts` | 删除。provider 内重试由 `retryProviderRequest` 承担；多模型 fallback 若保留，重写为 agent 层逻辑 |
-| `apps/api/src/application/model-registry.ts` | 迁移重写：`ModelRuntimeRegistry` 改为持有 `Model<Api>` 目录 + apiKey 解析（`resolve(modelId): Model \| undefined`），catalog DTO 从 `Model` 派生；client 创建概念消失（stream 是无状态函数，apiKey 走 `StreamOptions.apiKey`） |
+| `apps/finance-api/src/application/model-registry.ts` | 迁移重写：`ModelRuntimeRegistry` 改为持有 `Model<Api>` 目录 + apiKey 解析（`resolve(modelId): Model \| undefined`），catalog DTO 从 `Model` 派生；client 创建概念消失（stream 是无状态函数，apiKey 走 `StreamOptions.apiKey`） |
 
 ## 取舍论证
 
@@ -204,5 +204,5 @@ export interface Model<TApi extends Api> {
 - `packages/agent/src/llm-client.ts`（227 行）整文件。
 - `packages/agent/src/llm/` 整目录：`config.ts`、`transport.ts`、`parsing.ts`、`mapping.ts`、`tracing.ts`、`env.ts`、`utils.ts`、`index.ts`。
 - `packages/agent/src/reliability.ts`（86 行）整文件（多模型 fallback 若保留则在 agent 层重写，见 03 文档）。
-- `apps/api/src/application/model-registry.ts`：现有实现推翻重写（保留「目录 + resolve」职责，数据模型换成 `Model<Api>`）。
-- 引用方同步清理：`apps/api/src/http/routes/models.ts`、`apps/api/src/server.ts` 中对 `LlmClient` 的依赖；`packages/agent/src/index.ts` 的旧导出。
+- `apps/finance-api/src/application/model-registry.ts`：现有实现推翻重写（保留「目录 + resolve」职责，数据模型换成 `Model<Api>`）。
+- 引用方同步清理：`apps/finance-api/src/http/routes/models.ts`、`apps/finance-api/src/server.ts` 中对 `LlmClient` 的依赖；`packages/agent/src/index.ts` 的旧导出。

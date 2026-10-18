@@ -17,7 +17,7 @@
 - `packages/conversation` + `packages/database`：会话领域类型（`Conversation`、`Message`（role: user/assistant/system/tool）、`CursorPage`）与 Postgres 持久化（drizzle，`packages/database/migrations/`，含 `conversation-repository.ts`、`run-repository.ts`、`trace-repository.ts`、`approval-repository.ts`、`approval-decision.ts`、`rag-vector-store.ts`、`rag-documents.ts` 等）。
 - 保留域：`packages/rag`（grounding/引用）、`packages/report` + `packages/workflow`（报告工作流含 PDF，`report/pdf.ts`）、`packages/mcp`（MCP 客户端/工具适配，`tool-adapter.ts`）、`packages/eval`（评测 runner）、`packages/parsing`（文档解析）。
 - 其他：`packages/identity`（用户/QQ 绑定，含 HMAC challenge）、`packages/channels`（渠道适配占位，仅 `index.ts`）。
-- `apps/api`：HTTP 服务（`application/run-service.ts`、`application/conversation-service.ts`、`adapters/in-memory-*-repository.ts`），`apps/web` 为前端。
+- `apps/finance-api`：HTTP 服务（`application/run-service.ts`、`application/conversation-service.ts`、`adapters/in-memory-*-repository.ts`），`apps/finance-web` 为前端。
 
 现状的核心问题：LLM 调用与 agent 循环无分层（`LlmClient` 泄漏在 types 包里被 UI/API 直接依赖）、一次性 `runAgent` 无事件流模型、trace 与会话/run 生命周期割裂、approval 体系横切 tools/database/api/web 四层。
 
@@ -45,7 +45,7 @@ pi 的分层是三个包：
 
 ```
 ┌─────────────────────────────────────────────────┐
-│ L4 产品层   apps/web · apps/api · packages/channels │
+│ L4 产品层   apps/finance-web · apps/finance-api · packages/channels │
 │   HTTP/WS/UI/渠道适配，消费事件流，不做 agent 决策      │
 ├─────────────────────────────────────────────────┤
 │ L3 会话与运行层  packages/conversation + packages/database│
@@ -81,7 +81,7 @@ pi 的分层是三个包：
 | `packages/eval` | **保留** | runner 改消费 `agentLoop` 事件流而不是 `runAgent` 返回值 |
 | `packages/parsing` | **保留** | 仅作为工具数据源，接口不变 |
 | `packages/types` | **收缩后逐步消亡** | LLM 类型移入 `packages/ai`，agent 类型移入 `packages/agent`，trace 类型移入 `packages/trace`；仅保留纯跨域 DTO（identity、documents）。过渡期允许存在，改造完成后评估删除 |
-| `packages/identity` | **原样保留** | 与 agent 改造正交；仍由 apps/api 依赖，不进入 agent 层 |
+| `packages/identity` | **原样保留** | 与 agent 改造正交；仍由 apps/finance-api 依赖，不进入 agent 层 |
 | `packages/channels` | **原样保留** | 渠道适配属 L4，消费 conversation 服务 |
 
 ### 新包 `packages/ai` 目录结构草案
@@ -138,10 +138,10 @@ packages/ai/
 
 1. **`packages/ai` 不得依赖任何本项目包**（包括 types/trace/tools）。它是可独立发布的 LLM 层。
 2. **`packages/agent` 不得依赖 `packages/database` / `packages/conversation` / `apps/*`**。持久化通过 `AgentLoopConfig` 钩子与事件订阅在 L3 接线（对齐 pi：agent 包不 import 存储，存储在 harness/产品层）。
-3. **`apps/web` 不得直接依赖 `packages/ai`、`packages/agent`、`packages/database`**。前端只消费 `apps/api` 的事件流 DTO（trace/事件类型可经 `@aiagent/types` 或 api 包 re-export）。
+3. **`apps/finance-web` 不得直接依赖 `packages/ai`、`packages/agent`、`packages/database`**。前端只消费 `apps/finance-api` 的事件流 DTO（trace/事件类型可经 `@aiagent/types` 或 api 包 re-export）。
 4. **L0 包（rag/report/workflow/mcp/parsing/eval）不得依赖 `packages/agent`**。依赖方向只能是 agent 挂载它们；它们需要的 LLM 能力直接依赖 `packages/ai`。
 5. **`packages/database` 不得依赖 `packages/agent` / `packages/ai`**。消息表 schema 与 pi 类型同构但独立定义（存储模型不随 LLM 层类型变动），映射层在 conversation 包。
-6. **`packages/identity` 只被 `apps/api` / `packages/channels` 依赖**，agent/ai 层不感知用户身份。
+6. **`packages/identity` 只被 `apps/finance-api` / `packages/channels` 依赖**，agent/ai 层不感知用户身份。
 7. **禁止环**：`conversation ↔ database` 单向为 `conversation`（领域类型+服务接口）不依赖 `database`（实现），`database` 依赖 `conversation` 的类型——与现状一致。
 8. 以上规则纳入 `.dependency-cruiser.cjs` 静态约束，CI 强制。
 
@@ -176,7 +176,7 @@ export function agentLoop(prompts: AgentMessage[], context: AgentContext, config
 
 ## 取舍论证
 
-- **为什么新建 `packages/ai` 而不是在 `packages/agent/llm/` 原地改造**：pi 的核心架构收益来自「LLM 层零 agent 感知」，`stream()` 可被 eval、report 工作流节点直接复用而不拖入 agent 循环。原地改造无法切断 types 包对 `LlmClient` 的泄漏（当前 `apps/api` 经 types 包直接构造 LLM 请求）。
+- **为什么新建 `packages/ai` 而不是在 `packages/agent/llm/` 原地改造**：pi 的核心架构收益来自「LLM 层零 agent 感知」，`stream()` 可被 eval、report 工作流节点直接复用而不拖入 agent 循环。原地改造无法切断 types 包对 `LlmClient` 的泄漏（当前 `apps/finance-api` 经 types 包直接构造 LLM 请求）。
 - **为什么 `packages/tools` 并入 agent 而不是保留独立包**：pi 中 `AgentTool` 类型定义在 agent 包内，工具与 loop 的 `beforeToolCall`/`afterToolCall` 钩子强耦合；独立 tools 包要么反向依赖 agent（违反规则 4），要么复制类型。保留 zod schema 意味着 `AgentTool` 泛型参数与 pi 不同（typebox→zod），这是与 pi 唯一的刻意偏离，换取不重写现有 5 个工具 + mcp 适配器的 schema 及 zod 校验错误消息体系。
 - **为什么 trace 收窄为事件流持久化而非沿用 TraceRecorder**：现有 `TraceEvent` 20+ 种事件与「一次请求一条 trace」模型无法表达多 turn loop 与 compaction。pi 的 `AgentEvent`（`agent/src/types.ts:422`）天然覆盖 turn/message/toolExecution 生命周期；rag/report/workflow 领域事件作为扩展联合成员追加，持久化走 run 事件表（05 文档）。`packages/trace` 包去留建议：**并入 `packages/database`（事件表 + writer）+ `packages/agent`（事件类型 re-export）后删除独立包**，减少一个边界；若团队希望前端直接 import 事件类型而不经 api，则保留包仅放类型。
 - **为什么 types 包收缩而非直接删除**：identity/documents 等纯 DTO 仍有跨包共享价值；但 LLM/agent/trace 类型必须随层归位，否则 types 包会成为绕过依赖规则的公共垃圾桶。改造完成后再评估是否整体删除。
@@ -190,7 +190,7 @@ export function agentLoop(prompts: AgentMessage[], context: AgentContext, config
 - `packages/tools/src/approval-repository.ts`
 - `packages/database/src/approval-repository.ts`、`packages/database/src/approval-decision.ts` 及对应 migrations 中的审批表
 - `packages/trace/src/index.ts` 中 `TraceApprovalEvent`（第 90 行）及 `TraceEventType` 相关成员
-- `apps/api/src/adapters/in-memory-approval-repository.ts`、审批相关 HTTP 路由（`apps/api/src/http/routes` 下）与前端审批 UI
+- `apps/finance-api/src/adapters/in-memory-approval-repository.ts`、审批相关 HTTP 路由（`apps/finance-api/src/http/routes` 下）与前端审批 UI
 - `packages/tools/src/executor.ts` 中的权限门逻辑（`executeTool` 本身并入 agent 后重写）
 - `packages/agent/src/llm/` 整个目录（transport/parsing/mapping/tracing/env/config）与 `llm-client.ts`，由 `packages/ai` 取代
 - `packages/agent/src/intent-router.ts` 的意图路由概念（报告触发改造见 06 文档；`report-planner.ts` 中纯计划生成部分保留）

@@ -2,7 +2,7 @@
 export interface ModelOptionDto {
   id: string;
   label: string;
-  provider: "deepseek" | "openrouter" | "mock";
+  provider: "deepseek" | "openrouter" | "bridge_ai" | "mock";
   description: string;
   isDefault: boolean;
   capabilities: {

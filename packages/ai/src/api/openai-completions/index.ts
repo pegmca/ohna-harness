@@ -18,6 +18,7 @@ import type {
 } from "../../types.js";
 import type { AssistantMessage } from "../../types.js";
 import { combineAbortSignals } from "../../utils/abort-signals.js";
+import { calculateUsageCost } from "../../utils/cost.js";
 import { AssistantMessageEventStream } from "../../utils/event-stream.js";
 import { retryProviderRequest } from "../../utils/retry.js";
 import { buildBaseOptions, clampReasoning } from "../simple-options.js";
@@ -310,6 +311,10 @@ export const stream: StreamFunction<"openai-completions", OpenAICompletionsOptio
 			});
 			await consumeResponse(response, cleanup, model, options, eventStream, output);
 
+			// 成本不是协议字段：把 token 用量按模型目录费率（env 可配）换算成金额，
+			// 保证 done 事件携带的 usage.cost 可被 CLI 的会话级 /cost 直接累计。
+			output.usage.cost = calculateUsageCost(output.usage, model.cost);
+
 			// consumeResponse 正常返回即保证 stopReason 已收敛为三种成功终态。
 			const reason = output.stopReason as Extract<StopReason, "stop" | "length" | "toolUse">;
 			eventStream.push({ type: "done", reason, message: output });
@@ -318,6 +323,8 @@ export const stream: StreamFunction<"openai-completions", OpenAICompletionsOptio
 			stripStreamingScratch(output);
 			output.stopReason = options?.signal?.aborted ? "aborted" : "error";
 			output.errorMessage = formatErrorMessage(error);
+			// 中断/报错前可能已经收到 usage：同样按费率换算，避免 /cost 少记这部分成本。
+			output.usage.cost = calculateUsageCost(output.usage, model.cost);
 			eventStream.push({ type: "error", reason: output.stopReason, error: output });
 			eventStream.end();
 		}

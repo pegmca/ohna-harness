@@ -67,13 +67,13 @@ Immersive 是面向股票研究、公告分析、财务指标查询和研报生�
 禁止新增第二套 UI 体系：
 
 - 不引入 Ant Design、MUI、Chakra、Mantine 等完整组件库。
-- 不把运行时 Agent、Tool、Trace 逻辑移动到 `apps/web`。
+- 不把运行时 Agent、Tool、Trace 逻辑移动到 `apps/finance-web`。
 - 不在业务组件中重复实现共享 API DTO。
 
 基础组件放在：
 
 ```text
-apps/web/src/components/ui
+apps/finance-web/src/components/ui
 ```
 
 业务页面可以组合基础组件，但不要把所有样式都堆在单个页面文件里。常用控件应沉淀为 `Button`、`Badge`、`Panel`、`Tabs`、`Textarea`、`Timeline`、`MetricCard`、`JsonBlock` 等小组件。
@@ -218,7 +218,7 @@ Assistant 消息按“用户可读过程 → 回答正文 → 回答操作”组
 后续让 Codex 开发 Immersive UI 时，可以使用：
 
 ```text
-请先阅读 README.md、DESIGN.md、docs/IMMERSIVE_PRODUCT_DESIGN.md、docs/LEARNING_AND_EVOLUTION_ROADMAP.md 的相关阶段和 apps/web 当前代码。
+请先阅读 README.md、DESIGN.md、docs/IMMERSIVE_PRODUCT_DESIGN.md、docs/LEARNING_AND_EVOLUTION_ROADMAP.md 的相关阶段和 apps/finance-web 当前代码。
 
 目标：实现/改进一个专业金融研究 Agent Chat 页面，不要做营销 landing page，也不要保留独立右侧调试栏。
 
@@ -272,7 +272,7 @@ PAGE STRUCTURE:
    Collapse the conversation sidebar into a drawer. Keep run details as expandable sections inside assistant messages.
 ```
 
-Stitch / v0 结果只能作为视觉参考。落地到本仓库时，Codex 必须使用本地 `apps/web/src/components/ui` 基础组件、共享 DTO 和真实 API 数据重写。
+Stitch / v0 结果只能作为视觉参考。落地到本仓库时，Codex 必须使用本地 `apps/finance-web/src/components/ui` 基础组件、共享 DTO 和真实 API 数据重写。
 
 ## 文档维护规则
 

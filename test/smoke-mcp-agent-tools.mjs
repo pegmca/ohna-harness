@@ -8,21 +8,21 @@
  * 2. tool_execution_start/end 事件来自真实 MCP 工具调用且未出错；
  * 3. 回喂模型的工具输出经 <untrusted_context> 二次封装（MockModel 会在最终答复中原样引用）。
  *
- * 运行方式：先 pnpm --filter @aiagent/api build（依赖包已构建），再 node test/smoke-mcp-agent-tools.mjs。
+ * 运行方式：先 pnpm --filter @aiagent/finance-api build（依赖包已构建），再 node test/smoke-mcp-agent-tools.mjs。
  * 与 smoke-report-tool.mjs 的差异：本脚本直接装配 run application service（手动调度器），
  * 以便在 run 仍处 queued 时演示 discovery 事件落库；不需要 PostgreSQL。
  */
 import assert from "node:assert/strict";
 import { createMcpStdioClient, discoverMcpAgentTools } from "../packages/mcp/dist/index.js";
 import { createDefaultToolRegistry } from "../packages/tools/dist/index.js";
-import { createInMemoryApiTestRuntime } from "../apps/api/dist/adapters/in-memory-test-runtime.js";
+import { createInMemoryApiTestRuntime } from "../apps/finance-api/dist/adapters/in-memory-test-runtime.js";
 import {
   createInMemoryExecutionRegistry,
   createInMemoryRunEventBus
-} from "../apps/api/dist/adapters/in-memory-run-runtime.js";
-// 使用与集成测试同一套测试替身 model runtime（apps/api 已移除运行时 MockModel，此处不得再 import 已删除的 mock-model）。
-import { createTestDoubleModelRuntime } from "../apps/api/dist/adapters/test-double-model.js";
-import { createRunApplicationService } from "../apps/api/dist/application/run-service.js";
+} from "../apps/finance-api/dist/adapters/in-memory-run-runtime.js";
+// 使用与集成测试同一套测试替身 model runtime（apps/finance-api 已移除运行时 MockModel，此处不得再 import 已删除的 mock-model）。
+import { createTestDoubleModelRuntime } from "../apps/finance-api/dist/adapters/test-double-model.js";
+import { createRunApplicationService } from "../apps/finance-api/dist/application/run-service.js";
 
 const userId = "user_smoke_mcp";
 

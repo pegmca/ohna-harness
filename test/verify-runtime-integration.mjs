@@ -37,7 +37,7 @@ const DB_NAME = "aiagent_verify";
 const DB_RESTORE = "aiagent_verify_restore";
 const DATABASE_URL = `postgresql://aiagent:aiagent-local@127.0.0.1:${PG_PORT}/${DB_NAME}`;
 const ARTIFACT_ROOT = path.join(repoRoot, "test", ".artifacts-runtime-verify");
-const API_ENTRY = path.join(repoRoot, "apps/api/dist/server.js");
+const API_ENTRY = path.join(repoRoot, "apps/finance-api/dist/server.js");
 const MIGRATE_ENTRY = path.join(repoRoot, "packages/database/dist/migrate.js");
 const TERMINAL = new Set(["completed", "failed", "cancelled", "interrupted"]);
 

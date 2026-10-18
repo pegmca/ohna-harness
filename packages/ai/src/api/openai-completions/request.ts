@@ -389,7 +389,8 @@ function applyOpenaiThinkingParams(
 }
 
 /**
- * 归一化流式 usage：cached_tokens 计为 cacheRead 并从 input 中扣除，cost 全 0（目录费率后续启用）。
+ * 归一化流式 usage：cached_tokens 计为 cacheRead 并从 input 中扣除。
+ * 此处只产出 token 数，cost 由 stream 收尾时按 model.cost 统一换算（见 utils/cost.ts）。
  * @param rawUsage chunk 中的 usage 字段。
  * @returns 归一化 Usage。
  */

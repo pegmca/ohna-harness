@@ -74,7 +74,7 @@
 - 四组变量**互不共享**：包括 model 在内，缺某一组只禁用对应能力，不影响其它 provider。
 - 变量名集中在 `packages/rag/src/provider-config.ts` 的 `PROVIDER_ENV`，避免各处硬编码产生命名漂移。
 - `enabled` 判定统一要求 `baseUrl`、`apiKey` 与本 provider 的 `model` 同时非空；Embedding/Rerank 不继承 chat model，
-  避免把 chat 模型名误发到 `/embeddings` 或 `/rerank`。组合根 `apps/api/src/server.ts` 的 readiness
+  避免把 chat 模型名误发到 `/embeddings` 或 `/rerank`。组合根 `apps/finance-api/src/server.ts` 的 readiness
   会显式报告 `embedding/rerank/judge` 的 on/off，避免"配了却没生效"的静默降级。
 
 > **接口已就绪、只换实现的高性价比点：P1、P2、P3。**

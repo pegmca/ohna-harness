@@ -6,7 +6,7 @@
 
 - `pnpm typecheck`、`pnpm lint`、`pnpm architecture:check` 全绿才允许进入下一阶段。
 - 每个阶段一个可独立评审的 PR，回滚点即该 PR 的 merge commit。
-- 验证命令以仓库根 `package.json` 现有脚本为准：`pnpm typecheck`（`pnpm -r typecheck`）、`pnpm build`（`pnpm -r build`）、`pnpm test`（`pnpm -r --if-present test`，各包为 `node --test`，`apps/web` 为 vitest）、`pnpm dev`（并行起 `@aiagent/api` + `@aiagent/web`）、`pnpm db:migrate`、`pnpm eval`、`pnpm test:e2e`、`pnpm smoke:compose`。
+- 验证命令以仓库根 `package.json` 现有脚本为准：`pnpm typecheck`（`pnpm -r typecheck`）、`pnpm build`（`pnpm -r build`）、`pnpm test`（`pnpm -r --if-present test`，各包为 `node --test`，`apps/finance-web` 为 vitest）、`pnpm dev`（并行起 `@aiagent/finance-api` + `@aiagent/finance-web`）、`pnpm db:migrate`、`pnpm eval`、`pnpm test:e2e`、`pnpm smoke:compose`。
 
 ---
 
@@ -54,7 +54,7 @@ pnpm typecheck
   - `packages/tools` 工具接口改为 pi `AgentTool` 形状（参数 schema 仍用 zod，执行层保留现有超时/重试/deadline，语义来源是 `packages/tools/src/executor.ts`（145–240 行），迁移到新执行包装；`reliability.ts` 是多模型 fallback，属 02 篇 LLM 层删除范围）。
 - **删除** `packages/agent/src/llm-client.ts`、`packages/agent/src/llm/` 整目录、`packages/agent/src/intent-router.ts`（旧意图路由路径；其能力由 loop + system prompt 承接，迁移说明写入 PR 描述）。
 - compaction：`transformContext` 内实现，产出特殊 `CompactionMessage` 类型（落库形态在阶段 3 定义，本阶段只定义消息类型与纯函数 `compact(messages, summary)`）。
-- 调用方暂以内存 harness 适配：`apps/api` 的 run 执行切到新 loop，但消息仍在内存累积（不落新表），保证 `pnpm dev` 可用。
+- 调用方暂以内存 harness 适配：`apps/finance-api` 的 run 执行切到新 loop，但消息仍在内存累积（不落新表），保证 `pnpm dev` 可用。
 
 **验收标准**：
 
@@ -83,7 +83,7 @@ pnpm test && pnpm typecheck && pnpm smoke:compose
 - `packages/database`：
   - 新 migration（编号接续 `migrations/0100_message_attachments.sql`，如 `0110_linear_messages.sql`）：`conversations`（新）、`messages`（线性，`role` + `content` jsonb + `tool_calls`/`tool_call_id` 列，`compaction` 以特殊 message 类型落表）、`runs`、`run_events`（SSE fan-out 源，有序）。旧表（`packages/database/migrations/0000–0100` 对应表）**不在本 migration 删除**，阶段 6 统一 drop；新 schema 所有字段按 AGENTS.md 要求带 `COMMENT ON COLUMN` 中文注释。
   - 新 repository：`message-repository.ts`、`run-repository.ts` 重写（旧文件同阶段删除替换），每方法映射一类 `Message` 的读写；不用 pi 的 entry 树结构。
-- `apps/api`：
+- `apps/finance-api`：
   - `src/application/run-service.ts`、`ordered-run-event-stream.ts` 重写：`AssistantMessageEvent` → `run_events` 落库 + SSE fan-out（断线重放以 `run_events` 序号为准）。
   - `src/http/routes/conversations.ts`、`runs.ts` 切新 schema；消息列表接口直接返回线性 `Message[]`（content 块原样透传）。
   - 删除 `src/http/routes/approvals.ts` 及 `src/adapters/in-memory-approval-repository.ts`（approval HTTP API 本阶段下线；`packages/database/src/approval-repository.ts`、`approval-decision.ts` 留到阶段 6 随表一起删，中间不再被路由引用）。
@@ -91,7 +91,7 @@ pnpm test && pnpm typecheck && pnpm smoke:compose
 **验收标准**：
 
 - 全新数据库执行 `pnpm db:migrate` 从零建表成功；`packages/database` 的 migration-lint 通过。
-- 集成测试（`apps/api/test`）：发起 run → 断言 `messages` 表出现 `user/assistant/toolResult` 线性序列、`run_events` 与 SSE 实际输出逐条一致；kill 后重放（按最后序号续传）不丢不重。
+- 集成测试（`apps/finance-api/test`）：发起 run → 断言 `messages` 表出现 `user/assistant/toolResult` 线性序列、`run_events` 与 SSE 实际输出逐条一致；kill 后重放（按最后序号续传）不丢不重。
 - compaction 跨进程生效：触发压缩后重启服务，继续对话时上下文从压缩消息重建。
 
 **验证命令**：
@@ -99,7 +99,7 @@ pnpm test && pnpm typecheck && pnpm smoke:compose
 ```bash
 pnpm db:up && pnpm db:migrate
 pnpm --filter @aiagent/database test
-pnpm --filter @aiagent/api test
+pnpm --filter @aiagent/finance-api test
 pnpm dev  # 手工：新会话 → 多轮工具调用 → 刷新页面 → 消息与 run 状态完整恢复
 ```
 
@@ -109,25 +109,25 @@ pnpm dev  # 手工：新会话 → 多轮工具调用 → 刷新页面 → 消�
 
 ## 阶段 4：前端适配
 
-**目标**：`apps/web` 渲染新 `Message` content 块与 SSE 协议，删除审批 UI。视觉与交互遵循 `DESIGN.md`（根目录）与 `docs/IMMERSIVE_PRODUCT_DESIGN.md`：左会话列表、居中时间线、底部 composer；run 状态/工具调用/trace 为 assistant 消息派生的可展开内容，不做常驻右栏。
+**目标**：`apps/finance-web` 渲染新 `Message` content 块与 SSE 协议，删除审批 UI。视觉与交互遵循 `DESIGN.md`（根目录）与 `docs/IMMERSIVE_PRODUCT_DESIGN.md`：左会话列表、居中时间线、底部 composer；run 状态/工具调用/trace 为 assistant 消息派生的可展开内容，不做常驻右栏。
 
 **改动范围（包级）**：
 
-- `apps/web/src/features/workbench/`：`chat.tsx`、`run-process.tsx`、`run-details.tsx` 重写消息渲染 —— content 块分类型渲染（text / thinking / toolCall / toolResult），tool call 默认折叠、可展开查看参数与结果。
+- `apps/finance-web/src/features/workbench/`：`chat.tsx`、`run-process.tsx`、`run-details.tsx` 重写消息渲染 —— content 块分类型渲染（text / thinking / toolCall / toolResult），tool call 默认折叠、可展开查看参数与结果。
 - SSE 客户端切到 `AssistantMessageEvent` 协议（替代旧 run-events 形状），断线重连按序号续传。
 - **删除**审批相关 UI 与状态（上述文件中 approval 分支、审批按钮、审批轮询）。
-- `apps/web/e2e` 与 `apps/web/test` 同步更新。
+- `apps/finance-web/e2e` 与 `apps/finance-web/test` 同步更新。
 
 **验收标准**：
 
-- `pnpm --filter @aiagent/web test`（vitest）与 `pnpm test:e2e`（Playwright）通过；e2e 覆盖：流式回复渲染、tool call 展开/折叠、刷新后历史完整、多轮含附件提问。
+- `pnpm --filter @aiagent/finance-web test`（vitest）与 `pnpm test:e2e`（Playwright）通过；e2e 覆盖：流式回复渲染、tool call 展开/折叠、刷新后历史完整、多轮含附件提问。
 - 全仓 grep 无残留：`approval` 在前端 src 中零命中（除 e2e 删除用例的反向断言）。
 
 **验证命令**：
 
 ```bash
-pnpm --filter @aiagent/web build
-pnpm --filter @aiagent/web test
+pnpm --filter @aiagent/finance-web build
+pnpm --filter @aiagent/finance-web test
 pnpm test:e2e
 pnpm dev  # 对照 DESIGN.md / docs/IMMERSIVE_PRODUCT_DESIGN.md 人工走查
 ```
@@ -142,8 +142,8 @@ pnpm dev  # 对照 DESIGN.md / docs/IMMERSIVE_PRODUCT_DESIGN.md 人工走查
 
 **改动范围与子验收**：
 
-1. **RAG 附件 grounding**（`packages/rag` + `packages/database/src/rag-*.ts` + `apps/api/src/http/routes/rag.ts`、`attachments.ts`）：附件与检索结果以 grounding 上下文注入（`transformContext` 或 `prepareNextTurn` 挂载）。子验收：`packages/rag` 现有测试不回归；手工冒烟「带附件提问 → 引用落库 → 回答含 citation」。
-2. **report / workflow（含 PDF）**（`packages/report`、`packages/workflow`、`apps/api/src/application/artifact-service.ts`）：report 各节点改为消费新 `Message` 流与 run 上下文；PDF 生成链路不变。子验收：`packages/report` 测试通过；手工跑一次完整研报 run，产物与引用持久化正确。
+1. **RAG 附件 grounding**（`packages/rag` + `packages/database/src/rag-*.ts` + `apps/finance-api/src/http/routes/rag.ts`、`attachments.ts`）：附件与检索结果以 grounding 上下文注入（`transformContext` 或 `prepareNextTurn` 挂载）。子验收：`packages/rag` 现有测试不回归；手工冒烟「带附件提问 → 引用落库 → 回答含 citation」。
+2. **report / workflow（含 PDF）**（`packages/report`、`packages/workflow`、`apps/finance-api/src/application/artifact-service.ts`）：report 各节点改为消费新 `Message` 流与 run 上下文；PDF 生成链路不变。子验收：`packages/report` 测试通过；手工跑一次完整研报 run，产物与引用持久化正确。
 3. **MCP 工具接入**（`packages/mcp`）：`tool-adapter.ts` 输出改为 pi `AgentTool` 形状。子验收：`packages/mcp` 测试通过；接一个真实 stdio MCP server 手工调用一轮。
 4. **eval**（`packages/eval`，`datasets/eval-financial-v1.json`）：runner 切新 loop 与新持久化读取。子验收：`pnpm eval` 跑通，指标与改造前基线对比无显著回退（回退阈值沿用 `packages/eval` 现有口径；如需更新基线用 `pnpm eval:update-baseline` 并在 PR 说明原因）。
 

@@ -1,0 +1,112 @@
+/**
+ * 本地 Run 路由：创建（202）、快照、取消（DELETE）。
+ *
+ * 线协议严格复用 `@aiagent/types` 的 run-v2 DTO，保证从 finance-web 复制的
+ * `run-stream-client.ts` 可以零改动消费。
+ */
+import { randomUUID } from "node:crypto";
+import type {
+  AgentRunAcceptedDto,
+  ApiResult,
+  RunSnapshotDtoV2
+} from "@aiagent/types";
+import type { FastifyInstance } from "fastify";
+import { createRequestId, failure } from "../errors.js";
+import { deriveTitle, isValidStoreId } from "../store/index.js";
+import type { RouteDeps } from "./types.js";
+
+/** 从请求体读取对象。 */
+function asRecord(body: unknown): Record<string, unknown> | null {
+  return typeof body === "object" && body !== null && !Array.isArray(body)
+    ? (body as Record<string, unknown>)
+    : null;
+}
+
+/**
+ * 注册 Run 路由。
+ *
+ * @param app Fastify 实例。
+ * @param deps 装配上下文。
+ */
+export function registerRunRoutes(app: FastifyInstance, deps: RouteDeps): void {
+  /**
+   * 创建异步 run；message 非空校验、conversation 不存在时自动建会话。
+   * attachments / modelId 在 L0 接受但忽略（单模型 + 只读工具）。
+   */
+  app.post("/api/runs", async (request, reply): Promise<ApiResult<AgentRunAcceptedDto>> => {
+    const requestId = createRequestId();
+    if (deps.isShuttingDown()) {
+      return failure(reply, requestId, 503, "internal_error", "服务正在关闭，暂时无法接收新的 Run。");
+    }
+    const body = asRecord(request.body);
+    const rawMessage = body?.message;
+    if (typeof rawMessage !== "string" || rawMessage.trim() === "") {
+      return failure(reply, requestId, 400, "validation_failed", "请输入有效的消息内容。");
+    }
+    const message = rawMessage.trim();
+
+    const rawConversationId = body?.conversationId;
+    if (rawConversationId !== undefined && typeof rawConversationId !== "string") {
+      return failure(reply, requestId, 400, "validation_failed", "conversationId 格式不正确。");
+    }
+    const requestedConversationId =
+      typeof rawConversationId === "string" && rawConversationId.trim() !== ""
+        ? rawConversationId.trim()
+        : undefined;
+    if (requestedConversationId && !isValidStoreId(requestedConversationId)) {
+      return failure(reply, requestId, 400, "validation_failed", "conversationId 格式不正确。");
+    }
+
+    // 会话不存在则自动建：标题取 message 前 40 字。已存在时保留原标题。
+    const conversationId = requestedConversationId ?? randomUUID();
+    const existing = await deps.sessionStore.get(conversationId);
+    const session =
+      existing ??
+      (await deps.sessionStore.create({
+        id: conversationId,
+        title: deriveTitle(message),
+        workspaceRoot: deps.workspaceRoot
+      }));
+    await deps.messageStore.ensureConversation(session.id, session.title);
+
+    const mode = body?.mode === "report" ? "report" : "auto";
+    const source = body?.source === "report_button" ? "report_button" : "composer";
+
+    const created = await deps.runManager.createRun({
+      requestId,
+      conversationId: session.id,
+      message,
+      mode,
+      source
+    });
+
+    reply.code(202);
+    return { ok: true, requestId, data: created.accepted };
+  });
+
+  /** 返回快照：内存活跃 run 优先，否则从 runs JSONL 重建。 */
+  app.get<{ Params: { runId: string } }>(
+    "/api/runs/:runId",
+    async (request, reply): Promise<ApiResult<RunSnapshotDtoV2>> => {
+      const requestId = createRequestId();
+      const snapshot = await deps.runManager.getSnapshot(request.params.runId);
+      if (!snapshot) {
+        return failure(reply, requestId, 404, "not_found", "Run 不存在。");
+      }
+      return { ok: true, requestId, data: snapshot };
+    }
+  );
+
+  /** 取消 run：abort + 等待收尾 + 落 interrupted；已终态直接返回。 */
+  app.delete<{ Params: { runId: string } }>(
+    "/api/runs/:runId",
+    async (request, reply): Promise<ApiResult<RunSnapshotDtoV2>> => {
+      const requestId = createRequestId();
+      const snapshot = await deps.runManager.cancel(request.params.runId);
+      if (!snapshot) {
+        return failure(reply, requestId, 404, "not_found", "Run 不存在。");
+      }
+      return { ok: true, requestId, data: snapshot };
+    }
+  );
+}

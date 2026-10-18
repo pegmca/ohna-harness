@@ -1,8 +1,9 @@
 # 01 · CLI 编码 Agent 实施方案（M1 / M2 / M3）
 
-> 本文是 `docs/v1.3/README.md` 的落地细节：把 `apps/cli` 从金融问答 REPL 改造成编码 Agent CLI。
+> 本文是 `docs/v1.3/README.md` 的落地细节：把 `apps/ohna-cli` 从金融问答 REPL 改造成编码 Agent CLI。
 > 移植来源：`https://github.com/badlogic/pi-mono` 的 `packages/coding-agent/src/core/tools/*`（pi，MIT）。
-> 状态：M0（会话外壳）**已实现**；M1–M3 **规划中，按序推进**。
+> 状态：M0（会话外壳）**已实现**；M1（编码工具闭环）**已实现**；M2（长任务治理）**已实现**；
+> M3（体验对齐）**规划中，按序推进**。
 
 ## 1. 基线：已具备 vs 已缺
 
@@ -16,7 +17,7 @@
 | MCP stdio client + `discoverMcpAgentTools` | `packages/mcp/src/tool-adapter.ts` | **未接入** |
 | 子代理 team controller | `packages/agent/src/team/controller.ts` | 未用 |
 | Prompt injection 评估 / `<untrusted_context>` 封装 | `packages/security/src/security.ts` | CLI 未用 |
-| 会话开场 + 多轮 + `/help` `/clear` `/exit` | `apps/cli/src/welcome.ts`、`harness.ts` | **M0 已实现** |
+| 会话开场 + 多轮 + `/help` `/clear` `/exit` | `apps/ohna-cli/src/welcome.ts`、`harness.ts` | **M0 已实现** |
 
 ### 1.2 缺口清单（编号沿用会诊结论，M1–M3 逐项消化）
 
@@ -24,14 +25,14 @@
 |---|---|---|---|
 | 1 | 无文件/命令工具 | `packages/tools/src/default-registry.ts:16` 只有 4 个金融工具 | M1 |
 | 2 | 无权限与沙箱 | `packages/agent/src/types.ts:161` 明确「不接任何审批逻辑（approval 体系已删除）」 | M1 |
-| 3 | 系统提示词写死金融场景 | `apps/cli/src/harness.ts:29` | M1 |
+| 3 | 系统提示词写死金融场景 | `apps/ohna-cli/src/harness.ts:29` | M1 |
 | 4 | 会话不落盘，退出即丢 | `harness.ts` 的 `runRepl` 仅内存 `history` | M2 |
-| 5 | compaction 未挂、`MAX_TURNS=8` 太小 | `apps/cli/src/harness.ts:26`；`createConfig` 未传 `transformContext` | M2 |
+| 5 | compaction 未挂、`MAX_TURNS=8` 太小 | `apps/ohna-cli/src/harness.ts:26`；`createConfig` 未传 `transformContext` | M2 |
 | 6 | 模型元数据写死 | `packages/ai/src/providers/env-runtime.ts:62-72`（`reasoning:false`、`contextWindow 128000`、`maxTokens 8192`） | M2 |
 | 7 | anthropic provider 是 disabled 桩 | `packages/ai/src/providers/anthropic.ts:8` | M3 |
-| 8 | REPL 无 slash 命令体系、无 diff 渲染、输出不折叠 | `apps/cli/src/render.ts` | M3 |
+| 8 | REPL 无 slash 命令体系、无 diff 渲染、输出不折叠 | `apps/ohna-cli/src/render.ts` | M3 |
 | 9 | 无「改完自己跑验证」闭环 | 依赖 1 + 项目脚本知识 | M1/M3 |
-| 10 | 无 MCP / 子代理分工 | `apps/cli/package.json` 未声明 `@aiagent/mcp`（与 `docs/v1.2/04-cli-harness.md` 描述不符，属文档漂移） | M3 |
+| 10 | 无 MCP / 子代理分工 | `apps/ohna-cli/package.json` 未声明 `@aiagent/mcp`（与 `docs/v1.2/04-cli-harness.md` 描述不符，属文档漂移） | M3 |
 
 ## 2. 移植映射表（pi → aiagent）
 
@@ -59,7 +60,7 @@ pi 工具位于 `packages/coding-agent/src/core/tools/`，共约 4100 行。核�
 | execute 签名 | `(toolCallId, params, signal, onUpdate, ctx)` | `(toolCallId, params, signal, onUpdate)` | 删掉第 5 个 `ExtensionContext` |
 | 中间层 | `ToolDefinition` + `wrapToolDefinition` | 无 extension 体系 | **不引入**；工具直接是 `AgentTool` |
 | 结果 | `{ content, details }` | `{ content, details, isError? }` | 失败走 `isError: true` + 文本 content，不向上抛裸异常 |
-| 渲染 | 工具自带 TUI renderer | 由 `apps/cli/src/render.ts` 统一渲染 | 工具只回文本与 details |
+| 渲染 | 工具自带 TUI renderer | 由 `apps/ohna-cli/src/render.ts` 统一渲染 | 工具只回文本与 details |
 
 结论：**移植成本主要在「剥 TUI + 换 schema」，算法逻辑基本可原样保留**。
 
@@ -79,11 +80,13 @@ packages/coding/
     project-context.ts    # 读 AGENTS.md / DESIGN.md / package.json scripts / git branch+dirty
 ```
 
-- **为什么不进 `packages/tools`**：那是金融工具域（AGENTS.md 要求包边界清晰），编码工具独立成包，`apps/cli` 组合根按 `--mode` 选择注册表。
+- **为什么不进 `packages/tools`**：那是金融工具域（AGENTS.md 要求包边界清晰），编码工具独立成包，`apps/ohna-cli` 组合根按 `--mode` 选择注册表。
 - 单文件 >500 行时按内聚拆分（项目纪律），例如 `edit.ts` 若超限可拆出匹配/替换策略。
 - 每个移植文件头部注明「ported from pi (MIT)」，归因与改动点写进 ``。
 
 ## 4. M1：编码工具闭环（能真实改代码、跑测试、自己修）
+
+> 状态：**已实现**（`packages/coding` + `--mode coding`）。
 
 ### 4.1 交付清单
 
@@ -93,7 +96,7 @@ packages/coding/
    - 命令：`rm -rf /`、`sudo`、`curl|sh`、`git push --force`、`mkfs`、写 `/etc` 等 → 结构化拒绝。
    - 输出上限：单一来源为 `packages/coding/src/support/truncate.ts` 的 `DEFAULT_MAX_BYTES`（50KB）/ `DEFAULT_MAX_LINES`（2000 行），工具层不写字面量；bash 超时默认 60s 可配。
 3. `packages/coding/src/context/project-context.ts`：组装项目上下文（AGENTS.md、DESIGN.md、package.json scripts、`git status --short`）。
-4. `apps/cli`：
+4. `apps/ohna-cli`：
    - `package.json` 加 `@aiagent/coding` 依赖；`src/index.ts` 增加 `--mode <research|coding>`（默认 `research`，保持现有行为向后兼容）、`--yes`（跳过写/执行确认）。
    - `src/harness.ts`：按 mode 选注册表与系统提示词；coding 模式注入项目上下文；挂 `beforeToolCall` 做权限拦截 + 交互确认。
    - `MAX_TURNS`：coding 模式提高到 24（`harness.ts:26`），并加 `deadlineMs`。
@@ -103,16 +106,16 @@ packages/coding/
 
 ```bash
 # 1) 只读探索
-pnpm --filter @aiagent/cli dev -- --mode coding "列出 apps/cli/src 下的文件并说明各自职责"
+pnpm --filter @aiagent/ohna-cli dev -- --mode coding "列出 apps/ohna-cli/src 下的文件并说明各自职责"
 # 期望：调用 ls/grep/read，不产生任何写操作
 
 # 2) 真实改码 + 自跑验证（核心验收）
-pnpm --filter @aiagent/cli dev -- --mode coding "在 test/ 下新增一个 ts 文件，导出 add(a,b)，然后跑 pnpm --filter @aiagent/cli typecheck 直到通过"
+pnpm --filter @aiagent/ohna-cli dev -- --mode coding "在 test/ 下新增一个 ts 文件，导出 add(a,b)，然后跑 pnpm --filter @aiagent/ohna-cli typecheck 直到通过"
 # 期望：write → bash(pnpm typecheck) → 必要时 edit 自愈 → 结束
 
 # 3) 权限护栏
-pnpm --filter @aiagent/cli dev -- --mode coding "读取 /etc/passwd"        # 期望：路径越界被拒
-pnpm --filter @aiagent/cli dev -- --mode coding "执行 rm -rf /"            # 期望：命令 denylist 拒绝
+pnpm --filter @aiagent/ohna-cli dev -- --mode coding "读取 /etc/passwd"        # 期望：路径越界被拒
+pnpm --filter @aiagent/ohna-cli dev -- --mode coding "执行 rm -rf /"            # 期望：命令 denylist 拒绝
 ```
 
 ### 4.3 风险与对策
@@ -123,8 +126,11 @@ pnpm --filter @aiagent/cli dev -- --mode coding "执行 rm -rf /"            # �
 
 ## 5. M2：长任务治理（连续干长活不丢上下文）
 
-1. **会话持久化**：CLI 不依赖 Postgres，落 JSON 到 `~/.immersive/sessions/<session-id>.json`（复用 `packages/conversation` 的 `MessageStore` 形状，`packages/conversation/src/index.ts:112`）；
-   启动时 `--resume <id>` 或 REPL 内 `/resume <id>` 恢复；`/clear` 保留落盘另开新会话。
+> 状态：**已实现**（`apps/ohna-cli`；内核 `agent-loop.ts` 零改动）。
+
+1. **会话持久化**：CLI 不依赖 Postgres，落 JSONL 到 `~/.ohna/sessions/<session-id>.jsonl`
+   （首行 session 元数据，之后每行一条 `AgentMessage`，含 `CompactionMessage`）；
+   启动时 `--resume <id>` 恢复（单次模式与 REPL 均支持）；`/clear` 保留旧文件另开新会话。
 2. **compaction 挂载**：`createCompactionTransform` 挂到 `AgentLoopConfig.transformContext`，超水位自动压缩并保留摘要消息。
 3. **预算可配**：`--max-turns`、`--deadline-ms`、`--max-cost`；`shouldStopAfterTurn` 内检查到期；`createUsageTracker` 从单轮升级为会话级累计并在 `/cost` 展示。
 4. **模型元数据可配**：`env-runtime.ts:62-72` 支持 `AIAGENT_LLM_CONTEXT_WINDOW_<P>`、`AIAGENT_LLM_MAX_TOKENS_<P>`、`AIAGENT_LLM_REASONING_<P>`，缺省沿用现值（不破坏现有 profile）。
@@ -133,11 +139,13 @@ pnpm --filter @aiagent/cli dev -- --mode coding "执行 rm -rf /"            # �
 
 ## 6. M3：体验对齐成熟 CLI
 
-1. **slash 命令体系**：`/help` `/clear` `/exit` 已有（M0），补 `/model`（切换 profile）、`/cost`、`/compact`（手动压缩）、`/tools`（列出当前注册表）。
+> 状态：**规划中**。
+
+1. **slash 命令体系**：`/help` `/clear` `/cost` `/exit` 已有（M0/M2），补 `/model`（切换 profile）、`/compact`（手动压缩）、`/tools`（列出当前注册表）。
 2. **写前 diff 渲染**：写/编辑先在终端打印 unified diff，确认后再落盘（复用 `edit-diff` 的 diff 计算）。
 3. **输出折叠**：bash / 工具输出超阈值只显示头尾 + 省略提示，details 供展开。
 4. **`@文件` 引用与路径补全**：readline Tab 补全 + `@path` 注入文件内容，减少模型往返。
-5. **MCP 接入**：`apps/cli` 补 `@aiagent/mcp` 依赖（顺带修正 `docs/v1.2/04-cli-harness.md` 的 deps 描述漂移），`--mcp <config>` 用 `discoverMcpAgentTools` 并入注册表，外部工具输出经 `<untrusted_context>` 封装。
+5. **MCP 接入**：`apps/ohna-cli` 补 `@aiagent/mcp` 依赖（顺带修正 `docs/v1.2/04-cli-harness.md` 的 deps 描述漂移），`--mcp <config>` 用 `discoverMcpAgentTools` 并入注册表，外部工具输出经 `<untrusted_context>` 封装。
 6. **子代理（可选）**：用 `team-controller.ts` 做 explore / implement / review 分工，先只做只读 explore 子代理。
 7. **anthropic provider（可选）**：`packages/ai/src/providers/anthropic.ts:8` 目前是 disabled 桩；需要直连 Claude 时再实现，短期可走 OpenRouter 兼容层。
 
@@ -146,7 +154,7 @@ pnpm --filter @aiagent/cli dev -- --mode coding "执行 rm -rf /"            # �
 ## 7. 验证矩阵（每个 M 都要跑）
 
 ```bash
-pnpm --filter @aiagent/cli build   # 或 pnpm build
+pnpm --filter @aiagent/ohna-cli build   # 或 pnpm build
 pnpm typecheck
 pnpm architecture:check            # 新增 packages/coding 必须通过依赖方向检查
 pnpm lint
@@ -169,4 +177,4 @@ pnpm lint
 - ``（新建）：技术重点、实现流、取舍、验证、学习检查点。
 - `docs/LEARNING_AND_EVOLUTION_ROADMAP.md`：新增阶段产出与验收证据。
 - `ARCHITECTURE.md`：packages/apps 列表补 `packages/coding` 与依赖方向。
-- `apps/cli/src/index.ts` 的 `--help` 文案与 README（若新增 `--mode` 等参数）。
+- `apps/ohna-cli/src/index.ts` 的 `--help` 文案与 README（若新增 `--mode` 等参数）。

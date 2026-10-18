@@ -6,8 +6,8 @@ RUN corepack enable && corepack prepare pnpm@9.15.4 --activate
 WORKDIR /workspace
 
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json ./
-COPY apps/api/package.json apps/api/package.json
-COPY apps/web/package.json apps/web/package.json
+COPY apps/finance-api/package.json apps/finance-api/package.json
+COPY apps/finance-web/package.json apps/finance-web/package.json
 COPY packages/agent/package.json packages/agent/package.json
 COPY packages/channels/package.json packages/channels/package.json
 COPY packages/database/package.json packages/database/package.json
@@ -33,13 +33,13 @@ ENV NODE_ENV=production
 WORKDIR /app
 COPY --from=build --chown=node:node /workspace/package.json /workspace/pnpm-workspace.yaml ./
 COPY --from=build --chown=node:node /workspace/node_modules ./node_modules
-COPY --from=build --chown=node:node /workspace/apps/api ./apps/api
+COPY --from=build --chown=node:node /workspace/apps/finance-api ./apps/finance-api
 COPY --from=build --chown=node:node /workspace/packages ./packages
 USER node
 EXPOSE 3001
-CMD ["node", "apps/api/dist/server.js"]
+CMD ["node", "apps/finance-api/dist/server.js"]
 
 FROM nginxinc/nginx-unprivileged:1.27.4-alpine AS web
 COPY deploy/nginx.conf /etc/nginx/conf.d/default.conf
-COPY --from=build /workspace/apps/web/dist /usr/share/nginx/html
+COPY --from=build /workspace/apps/finance-web/dist /usr/share/nginx/html
 EXPOSE 8080

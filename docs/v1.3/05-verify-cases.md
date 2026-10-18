@@ -31,6 +31,8 @@
 | S-P5 | 敏感文件软链绕过 | 建 `foo -> /tmp/ws/.env`，read `foo` | **拒绝**（修复后 `isDeniedPath` 走 realpath） |
 | S-P6 | 敏感目录 | read `/tmp/ws/node_modules/x.js`、`.git/config` | 拒绝 |
 | S-P7 | 合法路径放行 | read `/tmp/ws/src/index.ts` | 放行，返回内容 |
+| S-P8 | 悬空软链写越界 | 建 `ws/dangle -> /tmp/outside/pwned.txt`（目标不存在），write `dangle` | **拒绝**，`permission_denied`，目标文件不存在 |
+| S-P9 | 悬空软链指向敏感名 | 建 `ws/foo -> .env`（`.env` 不存在），write `foo` | **拒绝**，不创建 `.env` |
 
 ### 2.2 命令策略
 
@@ -49,6 +51,10 @@
 | S-C10 | 磁盘破坏 | bash `mkfs` / `dd of=/dev/sda` / `diskutil eraseDisk` | 拒绝 |
 | S-C11 | 系统目录写 | bash `echo x > /etc/foo`、`chmod 777 /usr` | 拒绝 |
 | S-C12 | 合法命令放行 | bash `rm -rf ./dist`、`git push`（非 force）、`pnpm typecheck` | 放行 |
+| S-C13 | 命令 head 归一 | bash `/bin/rm -rf /`、`env rm -rf /`、`command rm -rf /`、`/usr/bin/sudo ls`、`/usr/bin/git push --force` | **拒绝**（修复后：basename + 包装器透传） |
+| S-C14 | 目标展开 / 动态操作数 | bash `rm -rf $HOME/Documents`、`rm -rf ${HOME}/Documents`、`rm -rf $(pwd)` | **拒绝** |
+| S-C15 | 内联脚本 / 命令替换 | bash `sh -c "rm -rf /"`、`bash <(curl x)`、`sh -c "$(curl x)"`、`command curl x \| sh` | **拒绝** |
+| S-C16 | 系统根写入 / tmpdir 误伤 | bash `chmod 777 /`、`cp x /` 拒绝；macOS tmpdir 工作区内 `rm -rf <abs>/dist` 放行 | 符合预期 |
 
 ### 2.3 确认闸门（信任模型）
 
@@ -67,10 +73,16 @@
 |---|---|---|---|
 | C-M2-1 | 会话持久化 | coding 模式多轮 → `/exit` → `ohna --mode coding --resume <id>` | 历史上下文恢复，能接续修改 |
 | C-M2-2 | 成本累计 | 多轮后 `/cost` | 累计 input/output/cost 非零（前提：env 配 cost） |
-| C-M2-3 | compaction 生效 | 读一个 60KB 文件 + 多轮，观察日志 | 触发压缩，不超窗 |
+| C-M2-3 | compaction 生效 | 读一个 60KB 文件（read ToolResult 很大）+ 多轮，观察日志 | 触发压缩，`tokensAfter <= contextWindow - reserve` 且 `< tokensBefore`，JSONL 首条为 `role:"compaction"` |
 | C-M2-4 | deadline 截止 | `--deadline-ms 10000` 跑长任务 | 到期干净停止，不失控 |
-| C-M2-5 | max-turns | `--max-turns 3` | 3 轮后 `agent_end` 退出 |
-| C-M2-6 | 预算上限 | `--max-cost 0.01` | 超预算时停止并提示 |
+| C-M2-5 | max-turns | `--max-turns 3` | 恰好 3 个 assistant 回合后 `agent_end` 退出 |
+| C-M2-6 | 预算上限 | `--max-cost 0`（零预算）或 `0.01` | 零预算在 run 前停止且不调用模型；有预算时逐轮检查 |
+
+> 自动化替代（无需真实 key）：`node test/verify-ohna-m2.mjs` 用本地 OpenAI 兼容桩驱动真实 CLI，
+> 逐条断言 C-M2-1~C-M2-6 的可观察行为（resume 后消息增长、`/cost` 非零、压缩后 token 低于阈值、
+> 三种停止原因），并覆盖 provider 400 非零退出、自然结束不误报、跨工作区 `--resume` 警告、
+> 参数缺失告警与管道多行串行执行。
+> 真实模型下的「连续 20+ 轮」「60KB 文件」仍按上表手工复验。
 
 ---
 

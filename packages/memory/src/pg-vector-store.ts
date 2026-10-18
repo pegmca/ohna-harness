@@ -4,7 +4,7 @@
  * 设计原则（对照 AGENTS.md 包边界）：
  * - 本文件**不 import `@aiagent/database` / `@aiagent/rag` / `pg`** 等运行时依赖，避免
  *   `@aiagent/memory` 反向依赖数据库包；真正的数据源（pg.Pool）以「注入的 `QueryExecutor`
- *   接口」传入，composition root（apps/api）负责把真实 pool 适配成该接口。
+ *   接口」传入，composition root（apps/finance-api）负责把真实 pool 适配成该接口。
  * - 维度固定 32，与 `@aiagent/database` 的 `POSTGRES_RAG_VECTOR_DIMENSIONS` 常量对齐；
  *   这里只复用「数字 32」这一约定，不引用该包（无依赖）。
  * - 向量检索用确定性本地 embedder（hashing trick），零依赖、纯函数；它是 RAG 侧

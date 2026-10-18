@@ -37,7 +37,7 @@ export default tseslint.config(
     }
   },
   {
-    files: ["apps/web/src/**/*.{ts,tsx}"],
+    files: ["apps/finance-web/src/**/*.{ts,tsx}"],
     rules: {
       ...jsxA11y.flatConfigs.recommended.rules
     }

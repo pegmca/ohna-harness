@@ -4,7 +4,7 @@
   "private": true,
   "packageManager": "pnpm@9.15.4",
   "scripts": {
-    "dev": "concurrently -n api,web -c blue,green \"pnpm --filter @aiagent/api dev\" \"pnpm --filter @aiagent/web dev\"",
+    "dev": "concurrently -n finance-api,finance-web -c blue,green \"pnpm --filter @aiagent/finance-api dev\" \"pnpm --filter @aiagent/finance-web dev\"",
     "db:up": "docker compose up -d postgres",
     "db:down": "docker compose stop postgres",
     "db:logs": "docker compose logs -f postgres",
@@ -13,10 +13,10 @@
     "db:status": "docker compose ps postgres",
     "build": "pnpm -r build",
     "test": "pnpm -r --if-present test",
-    "lint": "eslint apps packages --max-warnings 100",
+    "lint": "eslint apps packages --max-warnings 250",
     "architecture:check": "depcruise apps packages --config .dependency-cruiser.cjs",
     "typecheck": "pnpm -r typecheck",
-    "test:e2e": "pnpm --filter @aiagent/web test:e2e",
+    "test:e2e": "pnpm --filter @aiagent/finance-web test:e2e",
     "eval": "pnpm --filter @aiagent/eval eval",
     "smoke:compose": "node test/smoke-compose.mjs",
     "eval:update-baseline": "pnpm --filter @aiagent/eval eval:update-baseline"

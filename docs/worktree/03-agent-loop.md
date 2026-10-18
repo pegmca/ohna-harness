@@ -344,7 +344,7 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
     检查取代。
 - `packages/agent/src/intent-router.ts` 整文件（355 行）及 `types.ts` 中
   `AgentRouter` / `AgentRoute` / `AgentIntent` / `AgentToolSelection` 等路由类型；
-  调用方（`apps/api` 中传 `enableModelRouter` / `preferMcpTools` 的组装代码）同步删除。
+  调用方（`apps/finance-api` 中传 `enableModelRouter` / `preferMcpTools` 的组装代码）同步删除。
 - `packages/agent/src/reliability.ts` 的 `chatWithReliability()`：多模型 fallback 与重试
   职责移交 `packages/ai` 的 `retryProviderRequest` 与 run 层模型选择（见 02 文档）。
 - `packages/tools/src/executor.ts` 中 `allowedTools` 权限门与

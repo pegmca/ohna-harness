@@ -68,13 +68,13 @@ pi-mono 的内核是经典 ReAct（Reasoning + Acting）循环
 
 ```text
 ┌─────────────────────────────────────────────────────────┐
-│ apps/web                                                 │
+│ apps/finance-web                                                 │
 │   Agent Chat UI：会话列表 / 时间线 / composer /           │
 │   run 过程展开（assistant 消息派生，无右侧常驻栏）          │
 └───────────────────────▲─────────────────────────────────┘
                         │ HTTP + SSE
 ┌───────────────────────┴─────────────────────────────────┐
-│ apps/api（应用层）                                        │
+│ apps/finance-api（应用层）                                        │
 │   会话/run API、SSE 推送、鉴权、用例编排、DTO 映射          │
 │   组装 composition root：注入 repository、streamFn、工具集 │
 └───────────▲──────────────────────────▲──────────────────┘
@@ -107,7 +107,7 @@ pi-mono 的内核是经典 ReAct（Reasoning + Acting）循环
 ```
 
 依赖方向严格向下：`packages/ai` 不依赖任何本项目包；`packages/agent` 只依赖
-`packages/ai` 和类型包；能力包被 `apps/api` 组装，不被内核反向依赖。
+`packages/ai` 和类型包；能力包被 `apps/finance-api` 组装，不被内核反向依赖。
 
 ## 文档阅读顺序
 

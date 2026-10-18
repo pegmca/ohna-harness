@@ -3,7 +3,6 @@ import { test } from "node:test";
 import { AssistantMessageEventStream } from "@aiagent/ai";
 import {
   createTeamController,
-  getTeamView,
 } from "../dist/team-controller.js";
 import {
   projectTeamCostSummary,

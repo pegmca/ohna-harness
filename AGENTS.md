@@ -15,14 +15,27 @@ Before implementing a task, read the relevant roadmap stage, architecture/design
 
 ## Repository Structure
 
-- `apps/web`: Vite + React + TypeScript web app for the Immersive product UI.
+两条产品线只共享 `packages/` 核心包，应用层互不依赖：
+
+**产品 A · 金融 SaaS（保持不动，独立演进）**
+- `apps/finance-api`: Fastify 生产 server（PostgreSQL + Redis + 多租户 + QQ channel + 金融工具）。
+- `apps/finance-web`: Vite + React + TypeScript 金融 SaaS Web UI。
+
+**产品 B · ohna（编码 Agent）**
+- `apps/ohna-cli`: 终端 Agent（`ohna` bin），M1 编码工具闭环 + M2 长任务治理 + M3 体验对齐（slash 命令 `src/slash.ts`、零依赖 unified diff `src/diff.ts`、输出折叠、`--mcp` 接线 `src/mcp-config.ts`）+ `--web` 进程内托管（`src/web-entry.ts`：同一进程 `createOhnaServer`，终端与浏览器共享同一会话）已实现。
+- `apps/ohna-api`: L0 本地服务薄入口（`ohna-api` bin）：`[dir]` / `--port` / `--data-dir` / `--auto-approve` / `--no-open`，只做进程生命周期。
+- `apps/ohna-web`: 本地 Web UI（Phase 4 已实现）：会话/时间线/composer + 待确认卡片（从 run 事件推导，SSE 重放恢复）+ 文件树面板（`/api/local/fs` 只读，write/edit/bash 事件联动刷新）；只依赖 `@aiagent/types`。
+
+**共享核心**
 - `packages/ai`: Unified LLM abstraction (`Message` types, `AssistantMessageEvent`, provider adapters, `stream` / `streamSimple`).
-- `packages/agent`: ReAct loop boundary (`agentLoop` / `agentLoopContinue`), `AgentTool` contract, and tool execution.
-- `packages/tools`: Built-in mock tool registry and execution boundary.
+- `packages/agent`: ReAct loop boundary (`agentLoop` / `agentLoopContinue`), `AgentTool` contract, and tool execution；含会话级压缩的共享硬收敛 `compaction-enforce.ts`（CLI 与 serve 两侧复用）。
+- `packages/coding`: 编码工具集（read/write/edit/bash/grep/find/ls）与路径、命令策略。
+- `packages/tools`: 金融工具注册表与执行边界。
 - `packages/trace`: Minimal run-event type contract and cross-boundary value redaction.
+- `packages/serve`: ohna 服务端装配包（`createOhnaServer`）：JSONL stores（sessions / conversations / runs）+ run-v2 HTTP/SSE + 异步确认闸门（`confirm-gate.ts` / `routes/confirmations.ts`）+ 只读 `routes/fs.ts`（复用 `@aiagent/coding` 路径策略）+ 静态 fallback + 进程内句柄（`createConversation` / `listConversations` / `createRun` / `subscribeRun` / `subscribeConversation` / `cancelRun` / `listenWithRetry`）；`run 前会话级 compaction`（L3-3，摘要持久化为 `messageType:"compaction"`）在 `RunManager.createRun` 内生效；`ohna-api` 与 `ohna-cli --web` 共用。
 - `docs/LEARNING_AND_EVOLUTION_ROADMAP.md`: Ongoing learning stages, engineering outcomes, and acceptance evidence.
 
-Keep package boundaries explicit. Do not move runtime behavior into `apps/web` when it belongs in a package.
+Keep package boundaries explicit. Do not move runtime behavior into an app when it belongs in a package. `apps/ohna-api` / `apps/ohna-cli` / `apps/ohna-web` must not depend on `apps/finance-api` / `apps/finance-web`, nor on each other.
 
 ## Type Organization Rules
 
@@ -55,7 +68,7 @@ Keep package boundaries explicit. Do not move runtime behavior into `apps/web` w
 
 Read `DESIGN.md` in the project root before changing UI.
 
-1. Use the design system stylesheet declared by `DESIGN.md` (`system.css`). This project uses Vite + React, so import it exactly once from the app's global CSS (`apps/web/src/styles.css`).
+1. Use the design system stylesheet declared by `DESIGN.md` (`system.css`). This project uses Vite + React, so import it exactly once from the app's global CSS (`apps/finance-web/src/styles.css`).
 2. Use the tokens, utilities, component anatomy, spacing, typography, and states described in `DESIGN.md`; do not invent a separate visual style.
 3. For Immersive UI work, also read `docs/IMMERSIVE_PRODUCT_DESIGN.md` and the relevant stage in `docs/LEARNING_AND_EVOLUTION_ROADMAP.md`.
 4. The current product direction is Agent Chat: left conversation list, centered conversation timeline, bottom composer. `Run State`, tool calls, and trace details should be assistant-message-derived expandable content, not a permanent right sidebar.

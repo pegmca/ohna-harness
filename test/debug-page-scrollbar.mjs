@@ -1,8 +1,8 @@
 // 调试脚本：定位导致页面最外层出现滚动条的溢出元素。
-// 用法：先启动 `pnpm --filter @aiagent/web dev`，再运行 `node test/debug-page-scrollbar.mjs [url]`
-// 从 apps/web 解析 playwright（pnpm 不向根目录提升该依赖）。
+// 用法：先启动 `pnpm --filter @aiagent/finance-web dev`，再运行 `node test/debug-page-scrollbar.mjs [url]`
+// 从 apps/finance-web 解析 playwright（pnpm 不向根目录提升该依赖）。
 import { createRequire } from "node:module";
-const require = createRequire(new URL("../apps/web/package.json", import.meta.url));
+const require = createRequire(new URL("../apps/finance-web/package.json", import.meta.url));
 const { chromium } = require("@playwright/test");
 
 const url = process.argv[2] ?? "http://localhost:5199/";

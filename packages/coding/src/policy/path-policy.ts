@@ -6,7 +6,7 @@
  * 策略与工具实现分离：工具只负责能力，是否放行由组合根（CLI / API）决定。
  */
 import { basename, extname, resolve, sep } from "node:path";
-import { canonicalizePath, normalizePath } from "../support/paths.js";
+import { canonicalizePath, normalizePath, resolveFinalSymlinkTarget } from "../support/paths.js";
 
 /** 命中敏感规则时的判定结果。 */
 export type PathPolicyVerdict = { ok: true } | { ok: false; reason: string };
@@ -61,7 +61,14 @@ export function assertPathWithinRoot(absolutePath: string, root: string): PathPo
     return { ok: false, reason: "Workspace root is not configured" };
   }
 
-  const targetPath = canonicalizePath(toAbsolute(absolutePath));
+  // 先解析末级软链（含悬空目标）：write 会顺着软链创建目标文件，
+  // canonicalizePath 对不存在的目标只回溯祖先，必须在这里补上最后一跳。
+  const finalLink = resolveFinalSymlinkTarget(toAbsolute(absolutePath));
+  if (finalLink.path === null) {
+    return { ok: false, reason: "Path contains a symlink loop or exceeds the maximum symlink depth" };
+  }
+
+  const targetPath = canonicalizePath(finalLink.path);
   const rootPath = canonicalizePath(toAbsolute(root));
 
   if (targetPath === rootPath) {
@@ -82,6 +89,7 @@ export function assertPathWithinRoot(absolutePath: string, root: string): PathPo
 /**
  * 判断路径是否为敏感路径（密钥、环境文件、版本库元数据、依赖目录）。
  * 即便路径已经在允许的根目录内也应拒绝，避免 Agent 无意读取或覆盖密钥、污染依赖目录。
+ * 判定前先 realpath：软链指向敏感文件时，basename 必须变成目标名才能命中（P0-4）。
  *
  * @param absolutePath 待检查的路径。
  * @returns 命中拒绝清单时为 true。
@@ -91,7 +99,15 @@ export function isDeniedPath(absolutePath: string): boolean {
     return true;
   }
 
-  const targetPath = toAbsolute(absolutePath);
+  // 必须与 assertPathWithinRoot 一样走 realpath：否则 `foo -> .env` 这类软链会以 basename
+  // `foo` 通过敏感名判断，实际读取的却是被拒文件。canonicalizePath 同步解析，不改变本函数同步语义。
+  // 末级软链额外单独解析：`foo -> .env`（.env 尚不存在）时 canonicalizePath 会退回 `foo`，
+  // 只有 readlink 能拿到真实目标名。
+  const finalLink = resolveFinalSymlinkTarget(toAbsolute(absolutePath));
+  if (finalLink.path === null) {
+    return true;
+  }
+  const targetPath = canonicalizePath(finalLink.path);
   const segments = targetPath.split(sep).filter((segment) => segment.length > 0);
   if (segments.length === 0) {
     return true;

@@ -150,16 +150,19 @@ function toPosix(value: string): string {
 }
 
 /**
- * 递归查找匹配 glob 的条目；目录带 / 后缀，结果相对搜索根并按字典序排序。
+ * 递归查找匹配 glob 的条目；目录带 / 后缀，结果相对搜索根。
+ *
+ * 这里刻意**全量收集**而不在遍历中截断：遍历顺序由 readdir 决定，边遍历边截断会让
+ * 返回的 N 条随文件系统顺序漂移，模型看到的结果不可复现。排序与截断交给调用方，
+ * 保证「字典序前 N 条」的语义稳定（代价是命中极多时多占一点内存）。
  *
  * @param root 搜索根绝对路径。
  * @param matcher glob 对应的正则。
  * @param matchPath 是否按相对路径匹配（pattern 含 / 时）而非只比文件名。
  * @param wanted 需要的条目类型。
  * @param maxDepth 最大递归深度。
- * @param limit 结果上限。
  * @param signal 取消信号。
- * @returns 命中的相对路径列表与是否触顶。
+ * @returns 命中的相对路径列表（未排序）。
  */
 async function findEntries(
   root: string,
@@ -167,20 +170,14 @@ async function findEntries(
   matchPath: boolean,
   wanted: "file" | "directory" | "all",
   maxDepth: number,
-  limit: number,
   signal?: AbortSignal,
-): Promise<{ entries: string[]; limitReached: boolean }> {
+): Promise<string[]> {
   const entries: string[] = [];
   const stack: Array<{ dir: string; depth: number }> = [{ dir: root, depth: 0 }];
-  let limitReached = false;
 
   while (stack.length > 0) {
     if (signal?.aborted) {
       throw Object.assign(new Error("Operation aborted"), { code: "cancelled" });
-    }
-    if (entries.length >= limit) {
-      limitReached = true;
-      break;
     }
 
     const current = stack.pop();
@@ -199,10 +196,6 @@ async function findEntries(
           continue;
         }
         if (wanted !== "file" && matcher.test(matchPath ? relativePath : item.name)) {
-          if (entries.length >= limit) {
-            limitReached = true;
-            break;
-          }
           entries.push(relativePath + "/");
         }
         stack.push({ dir: fullPath, depth: current.depth + 1 });
@@ -213,15 +206,11 @@ async function findEntries(
       if (wanted === "directory") continue;
       if (!matcher.test(matchPath ? relativePath : item.name)) continue;
 
-      if (entries.length >= limit) {
-        limitReached = true;
-        break;
-      }
       entries.push(relativePath);
     }
   }
 
-  return { entries: entries.slice(0, limit).sort(), limitReached };
+  return entries;
 }
 
 /**
@@ -285,28 +274,32 @@ export function createFindTool(cwd: string, options?: FindToolOptions): AgentToo
       }
 
       const effectiveLimit = params.limit ?? DEFAULT_LIMIT;
-      const found = await findEntries(
+      const allEntries = await findEntries(
         searchPath,
         matcher,
         params.pattern.includes("/"),
         params.type ?? "file",
         params.maxDepth ?? DEFAULT_MAX_DEPTH,
-        effectiveLimit,
         signal,
       );
 
-      if (found.entries.length === 0) {
+      // 先全局排序再截断，保证 limit 截断的是「字典序前 N 条」而不是遍历时恰好先遇到的那些。
+      const sortedEntries = allEntries.sort();
+      const entries = sortedEntries.slice(0, effectiveLimit);
+      const limitReached = sortedEntries.length > effectiveLimit;
+
+      if (entries.length === 0) {
         return { path: searchPath, output: "No files found matching pattern", resultCount: 0 };
       }
 
-      const truncation = truncateHead(found.entries.join("\n"), {
+      const truncation = truncateHead(entries.join("\n"), {
         maxLines: Number.MAX_SAFE_INTEGER,
         maxBytes,
       });
       let output = truncation.content;
       const notices: string[] = [];
 
-      if (found.limitReached) {
+      if (limitReached) {
         notices.push(effectiveLimit + " results limit reached. Use limit=" + effectiveLimit * 2 + " for more");
       }
       if (truncation.truncated) {
@@ -319,8 +312,8 @@ export function createFindTool(cwd: string, options?: FindToolOptions): AgentToo
       return {
         path: searchPath,
         output,
-        resultCount: found.entries.length,
-        ...(found.limitReached ? { resultLimitReached: effectiveLimit } : {}),
+        resultCount: entries.length,
+        ...(limitReached ? { resultLimitReached: effectiveLimit } : {}),
         ...(truncation.truncated ? { truncation } : {}),
       };
     },

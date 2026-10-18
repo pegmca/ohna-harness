@@ -5,7 +5,7 @@
  * 去掉了依赖子进程的云同步标记等无关能力，保持零外部依赖（仅 node 标准库），
  * 作为 path-utils.ts 的下游基础模块。
  */
-import { realpathSync } from "node:fs";
+import { lstatSync, readlinkSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve as nodeResolvePath, sep } from "node:path";
 
@@ -48,6 +48,67 @@ export function canonicalizePath(path: string): string {
     }
     return join(canonicalizePath(parent), basename(resolvedPath));
   }
+}
+
+/** 末级软链解析结果。 */
+export interface FinalSymlinkResolution {
+  /** 解析后的真实路径；软链循环或超过深度上限时为 null（调用方必须拒绝）。 */
+  path: string | null;
+  /** 末级是否为软链。 */
+  isSymlink: boolean;
+}
+
+/**
+ * 解析路径**末级**的软链目标，包含「目标尚不存在」的悬空软链。
+ *
+ * 为什么不能只靠 canonicalizePath：它对不存在的路径会回退为「最近已存在祖先 + basename」，
+ * 因此 `ws/dangle -> /tmp/outside/pwned.txt`（目标不存在）会被当成 `ws/dangle` 本身，
+ * 越界与敏感名判断都被绕过，write 实际却会顺着软链创建外部文件。
+ *
+ * 这里用 lstat + readlink 只看末级；相对链接目标按链接所在目录解析，并跟随多级软链。
+ * 循环或超过深度上限时返回 `path: null`，由策略层明确拒绝，而不是回退成原路径。
+ *
+ * @param input 待解析的绝对或相对路径。
+ * @param maxDepth 最多跟随的软链层数，默认 32。
+ * @returns 末级解析结果。
+ */
+export function resolveFinalSymlinkTarget(input: string, maxDepth = 32): FinalSymlinkResolution {
+  let current = nodeResolvePath(input);
+  let isSymlink = false;
+  const visited = new Set<string>();
+
+  for (let depth = 0; depth < maxDepth; depth++) {
+    visited.add(current);
+
+    let stats;
+    try {
+      stats = lstatSync(current);
+    } catch {
+      // 路径不存在：可能是普通新文件，也可能是悬空软链的最终目标（已解析到目标路径）。
+      return { path: current, isSymlink };
+    }
+
+    if (!stats.isSymbolicLink()) {
+      return { path: current, isSymlink };
+    }
+
+    isSymlink = true;
+    let target: string;
+    try {
+      target = readlinkSync(current);
+    } catch {
+      return { path: current, isSymlink };
+    }
+
+    const next = isAbsolute(target) ? nodeResolvePath(target) : nodeResolvePath(dirname(current), target);
+    // 循环软链（a -> b -> a）：无法得到稳定目标，交给调用方拒绝。
+    if (visited.has(next)) {
+      return { path: null, isSymlink };
+    }
+    current = next;
+  }
+
+  return { path: null, isSymlink };
 }
 
 /**

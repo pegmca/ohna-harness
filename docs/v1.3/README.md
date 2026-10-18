@@ -9,6 +9,7 @@
 > - `03-decomposition.md` —— 权威拆解 + 目标架构 + 设计决策（**取代 02 文档中「复用 apps/api createApiServer」的假设**）
 > - `04-development-plan.md` —— 依赖有序、文件级交付清单的分阶段开发计划
 > - `05-verify-cases.md` —— 分层验收用例（安全 P0 / ohna-cli M2 / serve L0-L1 / ohna-web / L3 / 回归）
+> - `06-cli-theme.md` —— CLI 终端样式改造（复刻 Claude Code 风格，规划中）
 >
 > 历史背景文档：`01-coding-cli.md`（CLI M1 移植细节，仍有效）、`02-local-web-runtime.md`（本地 Web 早期设计，**其 §3.2「复用 createApiServer」已被用户决策取代**，其余 JSONL/目录沙箱/UI 思路沿用）。
 > 落地切片遵循 `LEARNING_AND_EVOLUTION_ROADMAP.md` §3 七步法与 Definition of Done。
@@ -17,16 +18,17 @@
 
 | 阶段 | 内容 | 状态 |
 |---|---|---|
-| R | 机械改名：finance-* / ohna-* + bin `immersive`→`ohna` | 规划中（04 Phase R，前置） |
+| R | 机械改名：finance-* / ohna-* + bin `immersive`→`ohna` | **已实现**（04 Phase R，行为零变化） |
 | M0 | 会话外壳：欢迎头、多轮上下文、`/help` `/clear` `/exit`、EOF 关闭修复 | **已实现**（`apps/ohna-cli/src/welcome.ts`、`src/harness.ts`，原 apps/cli） |
 | M1 | 编码工具闭环：read / write / edit / bash / grep / find / ls + 权限策略 + 项目上下文注入 | **已实现（待人工端到端验收）** |
-| P0 | 安全加固：bash 不受 workspaceRoot 约束、command-policy 绕过、敏感文件软链绕过 | **规划中（本轮最高优先，见 03 §4.2 / 04 Phase 0）** |
-| M2 | 长任务治理：会话持久化 `/resume`、compaction 挂载、预算与模型元数据 | 规划中（04 Phase 1） |
-| L0 | serve 装配 + ohna-api 薄入口：JSONL + SSE 流式 + 自动开浏览器 | 规划中（04 Phase 2） |
-| L1 | 接管本地目录：coding 全工具 + workspaceRoot 沙箱 + 异步确认 | 规划中（04 Phase 3） |
-| L2 | ohna-web 本地 Web UI：复制改造 + 文件树 + 本地模式 | 规划中（04 Phase 4） |
-| M3 | 体验对齐：slash 命令、diff 渲染、输出折叠、MCP 接入、子代理 | 规划中（04 Phase 5） |
-| L3 | 长任务治理（ohna）：`/resume`、compaction、成本展示 | 规划中（04 Phase 5） |
+| P0 | 安全加固：命令 head 归一、工作区边界、命令替换 / 内联脚本、悬空软链、`/private` 误伤、包装器与 fetch 组合 | **已实现**（04 Phase 0 多轮修复；最终状态 = **denylist 加固 + 确认闸门，非强 jail**；覆盖 `env -S`、转义引号、`nice/timeout/setsid/stdbuf`、fetch 管道 / 同路径落盘 / `-o` 受保护根、无空格重定向、`--force*`、`-tDIR`、子 shell 带参解释器，S-P1~S-P9 / S-C1~S-C16 全绿） |
+| M2 | 长任务治理：会话持久化与 `--resume`、compaction、预算与模型元数据 | **已实现**（04 Phase 1；`~/.ohna/sessions/*.jsonl` + 会话级 compaction 与硬收敛 + `--max-turns` / `--deadline-ms` / `--max-cost` / `/cost`；本地桩端到端见 `test/verify-ohna-m2.mjs`） |
+| L0 | serve 装配 + ohna-api 薄入口：JSONL + SSE 流式 + 自动开浏览器 | **已实现**（04 Phase 2；`packages/serve` + `apps/ohna-api`，L0 只读工具；自动化见 `packages/serve/test`） |
+| L1 | 接管本地目录：coding 全工具 + workspaceRoot 沙箱 + 异步确认 | **已实现**（04 Phase 3；`packages/serve` 默认 `createCodingToolRegistry`，`AsyncConfirmGate` + `POST /confirmations` + 只读 `/api/local/fs`；自动化见 `packages/serve/test/l1.test.mjs`） |
+| L2 | ohna-web 本地 Web UI：复制改造 + 文件树 + 本地模式 | **已实现**（04 Phase 4；`apps/ohna-web` 复制改造：文件树 `/api/local/fs` + write/edit/bash 事件联动刷新、待确认卡片 allow/deny + 刷新后 SSE replay 恢复、本地模式标识；自动化见 `apps/ohna-web/src`（51 vitest 用例），W-1~W-9 见 `` §12） |
+| M3 | 体验对齐：slash 命令、diff 渲染、输出折叠、MCP 接入、`--web` 进程内托管 | **已实现**（04 Phase 5；`src/slash.ts`（/model /cost /compact /tools /resume）+ `src/diff.ts` 零依赖 LCS unified diff（写前预览、400 行折叠）+ `tool_execution_end` 头尾折叠 + `--mcp` 外部 server（`<untrusted_context>` 已由 mcp adapter 封装）+ `--web` 托管 `src/web-entry.ts`；自动化见 `test/verify-ohna-m3.mjs`） |
+| L3 | 长任务治理（ohna）：`/resume`、compaction、成本展示 | **已实现**（04 Phase 5；CLI `/resume` 切换 + `/cost` 累计 + serve **run 前会话级 compaction**：双基准估算 → 摘要持久化 `messageType:"compaction"` → 硬收敛（与 CLI 共用 `packages/agent` 的 `enforceContextWindow`）；自动化见 `packages/serve/test/compaction.test.mjs` 与 `test/verify-ohna-m3.mjs`） |
+| CLI 样式 | 终端样式复刻 Claude Code：ANSI 主题层、`⏺/⎿/✻` 符号、边框输入区、`--no-color` | 规划中（06-cli-theme.md，含测试锚定分析与 TTY 门控设计） |
 
 ## 一·一、架构决策（本轮已拍板，见 03 §7）
 
@@ -38,16 +40,13 @@
 6. **Web 托管主路径（D8）**：ohna-web 依托 CLI 启动（`ohna --web`，终端与浏览器同一会话）；装配下沉 `packages/serve`，`ohna-api` 仅作独立/headless 薄入口。
 7. **无向后兼容约束（D9）**：开发验证阶段，改名/参数面/模式默认值均可直接重构，无需兼容原 `immersive` / `--mode research` 等旧行为。
 
-## 二、问题陈述（v1.3 立项时 vs 当前）
+## 二、问题陈述（当前状态）
 
 **立项时（M0 前）**：`apps/ohna-cli`（原 apps/cli）只能做金融问答——工具注册表只有 `calculator / market_data / filing_search / financial_metric`（`packages/tools/src/default-registry.ts:16`），无文件读写与命令执行能力。
 
-**当前（M1 已合入）**：`ohna --mode coding`（原 apps/cli）已具备编码闭环（`packages/coding` 7 工具 + 编码提示词与项目上下文注入）。剩余缺口按优先级：
+**当前**：`ohna --mode coding`（原 apps/cli）已具备编码闭环（`packages/coding` 7 工具 + 编码提示词与项目上下文注入）、M2 长任务治理（会话持久化、`--resume`、compaction 与窗口硬收敛、预算/时限、模型元数据与成本）、本地 Web 形态（`packages/serve` 装配 + `apps/ohna-api` + `apps/ohna-web`，L0/L1/L2 已实现）与 M3 体验（slash 命令、diff 渲染、输出折叠、`--mcp` 接入、`--web` 进程内托管）。剩余缺口按优先级：
 
-1. **P0 安全**：bash 不受 workspaceRoot 约束、command-policy 多处绕过、敏感文件软链绕过（`03` §4.2）。
-2. **长任务治理缺失**：会话不落盘、compaction 未挂、deadline 未传、模型元数据写死（cost 全 0）。
-3. **本地形态缺失**：无 `packages/serve` 装配与 `apps/ohna-web`，浏览器里用不了。
-4. **体验差距**：无 slash 命令体系、无 diff 渲染、输出不折叠、无 MCP/子代理接线。
+1. **能力边界**：compaction 仍是 chars/4 启发式估算；摘要调用会计入会话成本；deadline 只在 turn 边界检查。
 
 内核（ReAct 双循环、6 挂载点、abort、工具超时重试、compaction 原语）已就绪，上述缺口全部落在装配层与运输层——这正是「组合根可替换、内核零改动」架构命题的验证场。
 

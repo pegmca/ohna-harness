@@ -28,6 +28,9 @@
     },
     {
       "path": "../../packages/agent"
+    },
+    {
+      "path": "../../packages/coding"
     }
   ]
 }

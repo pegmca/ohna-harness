@@ -18,16 +18,25 @@ import {
   createFinancialDataSourceFromEnv,
   type AgentTool,
 } from "@aiagent/tools";
+import { createCodingToolRegistry } from "@aiagent/coding";
+import { createToolConfirmGate, type ConfirmHook } from "./confirm.js";
+import { resolveMaxTurns, resolveSystemPrompt, type CliMode } from "./mode.js";
 import { createUsageTracker, renderEvent } from "./render.js";
+import { matchReplCommand, printReplCommands, renderWelcome } from "./welcome.js";
 import * as readline from "node:readline";
 
-/** 单轮最多回合数预算：超过则 shouldStopAfterTurn 返回 true，避免模型无限调用工具。 */
-const MAX_TURNS = 8;
-
-/** 系统提示词：定义金融研究助手的行为边界，不含任何占位或演示性文本。 */
-const SYSTEM_PROMPT =
-  "你是沉浸式金融研究助手，基于真实大模型回答上市公司财务、行情与公告相关问题。" +
-  "需要数据时调用工具获取；若数据工具未配置，应如实说明无法取得实时数据，不要编造数字。";
+/**
+ * 一轮 run 的模式配置：由 runCli 按 --mode 解析一次，贯穿单次模式与 REPL 所有轮次。
+ * 模式只影响「工具注册表 / 系统提示词 / 回合预算 / 是否挂确认闸门」，不改变 loop 内核契约。
+ */
+interface RunSetup {
+  mode: CliMode;
+  systemPrompt: string;
+  /** --yes：跳过写/执行的交互确认。 */
+  autoApprove: boolean;
+  /** 工作区根目录（coding 模式的路径与命令作用域）。 */
+  cwd: string;
+}
 
 /**
  * 候选 provider profile 与其缺省 baseUrl。
@@ -98,21 +107,31 @@ export function printProviderError(modelFlag?: string): void {
 
 /**
  * 构造本轮 run 的 AgentLoopConfig。convertToLlm 用默认实现（三元组透传 + 压缩摘要转 user）；
- * shouldStopAfterTurn 用闭包计数器实现 MAX_TURNS 预算，避免单轮对话无限展开。
+ * shouldStopAfterTurn 用闭包计数器实现按模式的回合预算，避免单轮对话无限展开；
+ * beforeToolCall 仅在 coding 模式挂载（写/执行确认闸门），research 模式保持历史行为。
  *
  * @param model 已解析的真实模型。
  * @param apiKey 真实 provider 凭据。
+ * @param setup 本轮的模式配置。
+ * @param beforeToolCall 可选的权限闸门钩子。
  * @returns 可直接传给 agentLoop 的配置。
  */
-function createConfig(model: Model<"openai-completions">, apiKey: string): AgentLoopConfig {
+function createConfig(
+  model: Model<"openai-completions">,
+  apiKey: string,
+  setup: RunSetup,
+  beforeToolCall?: ConfirmHook,
+): AgentLoopConfig {
+  const maxTurns = resolveMaxTurns(setup.mode);
   let turns = 0;
   return {
     model,
     apiKey,
     convertToLlm: defaultConvertToLlm,
+    beforeToolCall,
     shouldStopAfterTurn: () => {
       turns += 1;
-      return turns >= MAX_TURNS;
+      return turns >= maxTurns;
     },
   };
 }
@@ -128,6 +147,8 @@ function createConfig(model: Model<"openai-completions">, apiKey: string): Agent
  * @param active 已解析的真实模型与凭据。
  * @param tools 已装配的工具列表。
  * @param signal run 级 AbortSignal，用于 Ctrl-C 中断当前 run。
+ * @param setup 本轮的模式配置（系统提示词 / 回合预算 / 渲染模式）。
+ * @param beforeToolCall 可选的权限闸门钩子（coding 模式传入）。
  * @returns 更新后的多轮 history。
  */
 async function runTurn(
@@ -136,6 +157,8 @@ async function runTurn(
   active: ActiveModel,
   tools: AgentTool<any>[],
   signal: AbortSignal,
+  setup: RunSetup,
+  beforeToolCall?: ConfirmHook,
 ): Promise<AgentMessage[]> {
   const userMessage: AgentMessage = {
     role: "user",
@@ -143,19 +166,19 @@ async function runTurn(
     timestamp: Date.now(),
   };
 
-  const config = createConfig(active.model, active.apiKey);
+  const config = createConfig(active.model, active.apiKey, setup, beforeToolCall);
   const tracker = createUsageTracker();
 
   // streamFn 省略：agentLoop 默认走 @aiagent/ai 的 streamSimple，直接对接真实 provider。
   const stream = agentLoop(
     [userMessage],
-    { systemPrompt: SYSTEM_PROMPT, messages: history, tools },
+    { systemPrompt: setup.systemPrompt, messages: history, tools },
     config,
     signal,
   );
 
   for await (const event of stream) {
-    renderEvent(event, tracker);
+    renderEvent(event, tracker, { mode: setup.mode });
     // 成功时 agent_end.messages 为本轮增量（仅 prompts + 本轮新增助手/工具消息）；
     // 错误兜底分支里 agent_end.messages 是 context.messages.slice()（含完整历史+本轮 prompt），
     // 直接并入会把整段历史重复追加。用对象引用去重，只并入 history 尚未持有的新消息，
@@ -177,11 +200,13 @@ async function runTurn(
  * @param prompt 用户问题。
  * @param active 已解析的真实模型与凭据。
  * @param tools 已装配的工具列表。
+ * @param setup 本轮的模式配置。
  */
 async function runSingleTurn(
   prompt: string,
   active: ActiveModel,
   tools: AgentTool<any>[],
+  setup: RunSetup,
 ): Promise<void> {
   const controller = new AbortController();
   // 单次模式无 readline，需显式把进程 SIGINT 接到 AbortController（与 REPL 对齐），
@@ -189,7 +214,12 @@ async function runSingleTurn(
   const onSigint = () => controller.abort();
   process.once("SIGINT", onSigint);
   try {
-    await runTurn([], prompt, active, tools, controller.signal);
+    // 单次模式没有主 readline，确认闸门会临时创建一个（交互确认仍可用）。
+    const beforeToolCall =
+      setup.mode === "coding"
+        ? createToolConfirmGate({ autoApprove: setup.autoApprove, cwd: setup.cwd })
+        : undefined;
+    await runTurn([], prompt, active, tools, controller.signal, setup, beforeToolCall);
   } finally {
     process.removeListener("SIGINT", onSigint);
   }
@@ -201,10 +231,13 @@ async function runSingleTurn(
  *
  * @param active 已解析的真实模型与凭据。
  * @param tools 已装配的工具列表。
+ * @param setup 会话级模式配置（跨轮复用同一份提示词与预算）。
  */
-async function runRepl(active: ActiveModel, tools: AgentTool<any>[]): Promise<void> {
+async function runRepl(active: ActiveModel, tools: AgentTool<any>[], setup: RunSetup): Promise<void> {
   const history: AgentMessage[] = [];
   let controller: AbortController | null = null;
+  /** readline 是否已关闭（Ctrl-D / EOF / /exit）；关闭后不得再 resume 或 prompt。 */
+  let closed = false;
 
   const rl = readline.createInterface({
     input: process.stdin,
@@ -212,10 +245,18 @@ async function runRepl(active: ActiveModel, tools: AgentTool<any>[]): Promise<vo
     prompt: "你> ",
   });
 
-  process.stdout.write(
-    "沉浸式金融研究 CLI（真实模型）。输入问题开始对话；Ctrl-C 中断当前运行，再次 Ctrl-C 退出。\n",
+  renderWelcome(
+    { id: active.model.id, provider: active.model.provider, baseUrl: active.model.baseUrl },
+    tools.map((tool) => tool.name),
   );
   rl.prompt();
+
+  // coding 模式把主 readline 交给确认闸门复用，避免第二个 readline 与 REPL 抢 stdin；
+  // research 模式不挂闸门，保持历史行为。
+  const beforeToolCall =
+    setup.mode === "coding"
+      ? createToolConfirmGate({ autoApprove: setup.autoApprove, cwd: setup.cwd, readline: rl })
+      : undefined;
 
   rl.on("line", async (line) => {
     const text = line.trim();
@@ -224,11 +265,29 @@ async function runRepl(active: ActiveModel, tools: AgentTool<any>[]): Promise<vo
       return;
     }
 
+    // 会话内命令优先于模型调用：/help /clear /exit 不消耗 token，也不进 history。
+    const command = matchReplCommand(text);
+    if (command === "help") {
+      printReplCommands();
+      rl.prompt();
+      return;
+    }
+    if (command === "clear") {
+      history.length = 0;
+      process.stdout.write("已清空本会话上下文。\n");
+      rl.prompt();
+      return;
+    }
+    if (command === "exit") {
+      rl.close();
+      return;
+    }
+
     // 每个用户输入开一个新 run，AbortController 贯穿整条 agentLoop 调用链（含工具执行）。
     controller = new AbortController();
     rl.pause();
     try {
-      const updated = await runTurn(history, text, active, tools, controller.signal);
+      const updated = await runTurn(history, text, active, tools, controller.signal, setup, beforeToolCall);
       // 用新引用替换 history，保证后续轮次能看到完整上下文。
       history.length = 0;
       history.push(...updated);
@@ -236,8 +295,12 @@ async function runRepl(active: ActiveModel, tools: AgentTool<any>[]): Promise<vo
       process.stdout.write(`\n运行出错：${error instanceof Error ? error.message : String(error)}\n`);
     } finally {
       controller = null;
-      rl.resume();
-      rl.prompt();
+      // run 期间 stdin 可能已 EOF（管道输入）或用户已 /exit，此时 readline 已关闭，
+      // 再 resume/prompt 会抛 ERR_USE_AFTER_CLOSE，必须按 closed 短路。
+      if (!closed) {
+        rl.resume();
+        rl.prompt();
+      }
     }
   });
 
@@ -254,7 +317,12 @@ async function runRepl(active: ActiveModel, tools: AgentTool<any>[]): Promise<vo
     }
   });
 
-  await new Promise<void>((resolve) => rl.on("close", resolve));
+  await new Promise<void>((resolve) =>
+    rl.on("close", () => {
+      closed = true;
+      resolve();
+    }),
+  );
 }
 
 /** CLI 入口参数（已由 index.ts 完成解析）。 */
@@ -262,6 +330,10 @@ export interface CliOptions {
   model?: string;
   prompt?: string;
   help: boolean;
+  /** 运行模式：research 为默认（金融研究），coding 为编码助手。 */
+  mode: CliMode;
+  /** true 表示 --yes：跳过写文件与执行命令的交互确认。 */
+  yes: boolean;
 }
 
 /**
@@ -280,11 +352,23 @@ export async function runCli(options: CliOptions): Promise<void> {
     return;
   }
 
-  const tools = createDefaultToolRegistry(createFinancialDataSourceFromEnv()).list();
+  const cwd = process.cwd();
+  // 组合根按模式选注册表：coding 用编码工具集（作用域限定在 cwd），research 沿用金融工具集。
+  const tools =
+    options.mode === "coding"
+      ? createCodingToolRegistry(cwd)
+      : createDefaultToolRegistry(createFinancialDataSourceFromEnv()).list();
+
+  const setup: RunSetup = {
+    mode: options.mode,
+    systemPrompt: await resolveSystemPrompt(options.mode, cwd),
+    autoApprove: options.yes,
+    cwd,
+  };
 
   if (options.prompt !== undefined) {
-    await runSingleTurn(options.prompt, active, tools);
+    await runSingleTurn(options.prompt, active, tools, setup);
   } else {
-    await runRepl(active, tools);
+    await runRepl(active, tools, setup);
   }
 }

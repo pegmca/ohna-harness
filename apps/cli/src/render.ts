@@ -2,8 +2,16 @@
  * 终端渲染层：把 agent loop 产出的 AgentEvent 转成可读的命令行输出。
  * 该模块只负责「事件 → stdout」，不持有任何运行态；多轮状态（history / abort）由 harness 维护。
  */
+import * as path from "node:path";
 import type { AgentEvent } from "@aiagent/agent";
 import type { Usage } from "@aiagent/ai";
+import type { CliMode } from "./mode.js";
+
+/** 渲染选项：按运行模式调整工具调用的展示密度。 */
+export interface RenderOptions {
+  /** 运行模式；coding 模式下工具入参按「路径 / 命令」一行展示，避免整段 JSON 刷屏。 */
+  mode?: CliMode;
+}
 
 /** 单轮 run 的 token / 成本累计器：逐条吸收 assistant 消息的 usage。 */
 export interface UsageTracker {
@@ -45,8 +53,9 @@ export function createUsageTracker(): UsageTracker {
  *
  * @param event 来自 agentLoop 的事件。
  * @param tracker 当前 run 的用量累计器（message_end 时吸收 usage，agent_end 时输出小结）。
+ * @param options 渲染选项（模式）。
  */
-export function renderEvent(event: AgentEvent, tracker: UsageTracker): void {
+export function renderEvent(event: AgentEvent, tracker: UsageTracker, options?: RenderOptions): void {
   switch (event.type) {
     case "message_update": {
       // 仅转发文本增量；thinking / toolcall 增量不在 CLI 主输出中渲染，避免打断正文流。
@@ -58,7 +67,7 @@ export function renderEvent(event: AgentEvent, tracker: UsageTracker): void {
     }
 
     case "tool_execution_start": {
-      process.stdout.write(`▸ 调用 ${event.toolName}(${shortJson(event.args)})\n`);
+      process.stdout.write(`▸ 调用 ${event.toolName}(${formatToolArgs(event.toolName, event.args, options)})\n`);
       return;
     }
 
@@ -107,10 +116,59 @@ function shortJson(value: unknown): string {
   try {
     const text = JSON.stringify(value);
     if (!text) return "{}";
-    return text.length > 200 ? `${text.slice(0, 200)}…` : text;
+    return truncateText(text, 200);
   } catch {
     return String(value);
   }
+}
+
+/**
+ * 把路径渲染成相对当前工作目录的形式（越界则保留绝对形式，越界本身会被工具层拒绝）。
+ *
+ * @param target 绝对路径或相对路径。
+ * @returns 便于阅读的路径文本。
+ */
+function toRelative(target: string): string {
+  const cwd = process.cwd();
+  const absolute = path.isAbsolute(target) ? target : path.resolve(cwd, target);
+  const relative = path.relative(cwd, absolute);
+  const shown = relative && !relative.startsWith("..") ? relative : absolute;
+  return truncateText(shown, 160);
+}
+
+/**
+ * 单行文本截断，超长用省略号收尾。
+ *
+ * @param text 原始文本。
+ * @param max 最大长度。
+ * @returns 截断后的文本。
+ */
+function truncateText(text: string, max: number): string {
+  return text.length > max ? `${text.slice(0, max)}…` : text;
+}
+
+/**
+ * 工具入参的一行展示：coding 模式下写/读/编辑显示相对路径、bash 显示命令、grep/find 显示模式，
+ * 其余情况（research 模式或结构意外）回退到紧凑 JSON，保持既有输出风格。
+ *
+ * @param toolName 工具名。
+ * @param args 工具入参。
+ * @param options 渲染选项。
+ * @returns 一行入参文本。
+ */
+function formatToolArgs(toolName: string, args: unknown, options?: RenderOptions): string {
+  if (options?.mode !== "coding" || typeof args !== "object" || args === null) return shortJson(args);
+
+  const record = args as Record<string, unknown>;
+  if (typeof record.command === "string") return truncateText(record.command.replace(/\s+/g, " "), 160);
+
+  const relativePath = typeof record.path === "string" ? toRelative(record.path) : undefined;
+  if (toolName === "grep" || toolName === "find") {
+    const pattern = typeof record.pattern === "string" ? record.pattern : "";
+    return relativePath ? `${pattern} 于 ${relativePath}` : pattern;
+  }
+  if (relativePath) return relativePath;
+  return shortJson(args);
 }
 
 /**

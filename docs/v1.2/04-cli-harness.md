@@ -45,7 +45,7 @@ v1.2 `01`/`03` 已论证：mock 全链路（假 LLM + 假数据）会掩盖内�
 - 删除 `apps/api/src/adapters/mock-model.ts`。
 
 ### 2.4 `apps/cli`（新增）— 真实模型 CLI harness
-- `package.json`：`@aiagent/cli`、`bin: immersive`、`type: module`；deps `@aiagent/agent` `@aiagent/ai` `@aiagent/tools` `@aiagent/types` `@aiagent/mcp`；scripts `dev`(`node --import tsx src/index.ts`) / `build`(`tsc -b`) / `start` / `typecheck`。
+- `package.json`：`@aiagent/cli`、`bin: immersive`、`type: module`；deps `@aiagent/agent` `@aiagent/ai` `@aiagent/tools` `@aiagent/types` `@aiagent/mcp`；scripts `dev` / `start` 均带 `--env-file-if-exists=../../.env`（`.env` 是 CLI 真实 provider 凭据的唯一来源，绕过脚本直跑 node 会因无 key 而结构化报错退出） / `build`(`tsc -b`) / `typecheck`。
 - `tsconfig.json`：`composite`，`references` 指向 `packages/agent` `packages/ai` `packages/tools` `packages/types` `packages/mcp`，`include: ["src"]`，`outDir: dist`。
 - `src/index.ts`：shebang；参数解析（`--model` 选 profile、`--prompt`/位置参数单次提问、`--help`）；readline REPL（多轮 history）；`SIGINT` 中断（运行中 abort，空闲退出）。**无 `--mode`，因为只有真实模型**；无真实 provider 配置则清晰报错退出。
 - `src/harness.ts`：从 env 构造真实模型运行时（`createOpenAiCompatibleRuntime` + `createModelRuntimeRegistry` 或简化选择）；装配 `createDefaultToolRegistry(realClient)`；构建 `AgentLoopConfig`（`model`/`apiKey`/`convertToLlm: defaultConvertToLlm`/`shouldStopAfterTurn` 本地 `MAX_TURNS=8`）；**调用同一 `agentLoop`**；用 `agent_end.messages` 维护多轮 history。
@@ -68,7 +68,7 @@ v1.2 `01`/`03` 已论证：mock 全链路（假 LLM + 假数据）会掩盖内�
 - `pnpm --filter @aiagent/ai build && pnpm --filter @aiagent/tools build && pnpm --filter @aiagent/cli typecheck`
 - `pnpm --filter @aiagent/cli build`、`pnpm --filter @aiagent/api typecheck`（确认去 mock 未破坏 API）
 - `pnpm --filter @aiagent/eval eval`（确认 eval 确定性不受影响）
-- 手动：`node --import tsx apps/cli/src/index.ts "净利润最高的银行"` —— 未配真实 key 时清晰报错；配 key 后真实模型 + 工具（未配数据源则工具结构化报错）跑通
+- 手动：`pnpm --filter @aiagent/cli dev "净利润最高的银行"` —— 未配真实 key 时清晰报错；配 key 后真实模型 + 工具（未配数据源则工具结构化报错）跑通
 - `pnpm architecture:check`、`pnpm lint`
 
 ## 6. 关键文件

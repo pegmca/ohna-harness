@@ -7,14 +7,15 @@
     "immersive": "./dist/index.js"
   },
   "scripts": {
-    "dev": "node --import tsx src/index.ts",
+    "dev": "node --env-file-if-exists=../../.env --import tsx src/index.ts",
     "build": "tsc -b",
-    "start": "node dist/index.js",
-    "typecheck": "pnpm --filter @aiagent/ai build && pnpm --filter @aiagent/agent build && pnpm --filter @aiagent/tools build && pnpm --filter @aiagent/types build && tsc -p tsconfig.json --pretty false --noEmit"
+    "start": "node --env-file-if-exists=../../.env dist/index.js",
+    "typecheck": "pnpm --filter @aiagent/ai build && pnpm --filter @aiagent/agent build && pnpm --filter @aiagent/tools build && pnpm --filter @aiagent/coding build && pnpm --filter @aiagent/types build && tsc -p tsconfig.json --pretty false --noEmit"
   },
   "dependencies": {
     "@aiagent/agent": "workspace:*",
     "@aiagent/ai": "workspace:*",
+    "@aiagent/coding": "workspace:*",
     "@aiagent/tools": "workspace:*",
     "@aiagent/types": "workspace:*"
   },

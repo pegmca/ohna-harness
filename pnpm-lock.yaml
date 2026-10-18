@@ -105,6 +105,9 @@ importers:
       '@aiagent/ai':
         specifier: workspace:*
         version: link:../../packages/ai
+      '@aiagent/coding':
+        specifier: workspace:*
+        version: link:../../packages/coding
       '@aiagent/tools':
         specifier: workspace:*
         version: link:../../packages/tools
@@ -214,6 +217,15 @@ importers:
       '@tencent-connect/qqbot-nodejs':
         specifier: 1.0.4
         version: 1.0.4
+
+  packages/coding:
+    dependencies:
+      '@aiagent/tools':
+        specifier: workspace:*
+        version: link:../tools
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
 
   packages/conversation:
     dependencies:

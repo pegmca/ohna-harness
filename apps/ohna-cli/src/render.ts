@@ -313,7 +313,7 @@ function truncateText(text: string, max: number): string {
  * 工具入参的一行展示：bash 显示命令、读写编辑显示相对路径、grep/find 显示模式，
  * 结构意外时回退到紧凑 JSON，避免整段参数刷屏。
  *
- * ohna 恒为编码助手，因此这里的「路径 / 命令」摘要无条件生效，不再按模式开关。
+ * ohna 恒为编码助手，因此这里的「路径 / 命令」摘要无条件生效。
  *
  * @param toolName 工具名。
  * @param args 工具入参。

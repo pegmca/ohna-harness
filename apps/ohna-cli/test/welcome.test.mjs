@@ -37,7 +37,7 @@ test("renderWelcome：非 TTY 输出纯文本头，不含 ANSI 与 ✻", () => {
   assert.equal(out.includes("\x1b"), false, "非 TTY 不应含 ANSI 转义");
   assert.doesNotMatch(out, /✻/, "非 TTY 不应含 ✻");
   assert.doesNotMatch(out, /╭/, "非 TTY 不应含边框");
-  assert.match(out, /  ohna\n/, "应含统一标题 ohna（不再按模式分叉）");
+  assert.match(out, /  ohna\n/, "应含统一标题 ohna");
   assert.match(out, /deepseek-chat/, "应含模型 id");
   assert.match(out, /read · write · bash/, "应含工具清单");
 });

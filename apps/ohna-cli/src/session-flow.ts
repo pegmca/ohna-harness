@@ -169,7 +169,7 @@ export function replaceHistory(target: AgentMessage[], next: AgentMessage[]): vo
 /**
  * 打印会话 id 与恢复命令。
  *
- * ohna 已移除运行模式，恢复命令只需带上会话 id。
+ * 恢复命令只需带上会话 id。
  *
  * @param sessionId 会话 id。
  */

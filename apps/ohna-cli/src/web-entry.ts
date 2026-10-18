@@ -170,12 +170,19 @@ export async function runWeb(options: CliOptions): Promise<void> {
 
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout, prompt: "│ > " });
 
+  /** 上次绘制顶线时的列宽：用于屏蔽「同宽 resize 虚假事件」与自触发风暴。 */
+  let lastColumns = process.stdout.columns || 80;
+  /** 重绘防重入：rl.prompt() 可能同步派发 resize，包成临界区避免递归风暴。 */
+  let redrawing = false;
+
   /**
    * 打印输入区顶线（TTY 门控）后进入 readline prompt（§3.4 降级：打印式顶线 + 单行 prompt）。
    */
   const promptInput = (): void => {
     if (supportsAnsi()) {
-      process.stdout.write(paint(inputTopBar(process.stdout.columns || 80), "dim"));
+      const cols = process.stdout.columns || 80;
+      process.stdout.write(paint(inputTopBar(cols), "dim"));
+      lastColumns = cols;
     }
     rl.prompt();
   };
@@ -196,11 +203,19 @@ export async function runWeb(options: CliOptions): Promise<void> {
     process.stdout.on("resize", () => {
       if (running || closed) return;
       if (rl.line !== "") return;
+      if (redrawing) return; // 防重入：避免 rl.prompt() 触发同步 resize 造成递归风暴
       const cols = process.stdout.columns || 80;
-      process.stdout.write("\r\x1b[1A\x1b[2K"); // 回到顶线行并清空
-      process.stdout.write(paint(inputTopBar(cols), "dim")); // 新宽度顶线
-      process.stdout.write("\r\x1b[2K"); // 清空旧 prompt 行
-      rl.prompt();
+      if (cols === lastColumns) return; // 宽度未变不重绘，屏蔽持续同宽 resize 虚假事件
+      redrawing = true;
+      try {
+        lastColumns = cols;
+        process.stdout.write("\r\x1b[1A\x1b[2K"); // 回到顶线行并清空
+        process.stdout.write(paint(inputTopBar(cols), "dim")); // 新宽度顶线
+        process.stdout.write("\r\x1b[2K"); // 清空旧 prompt 行
+        rl.prompt();
+      } finally {
+        redrawing = false;
+      }
     });
   }
 

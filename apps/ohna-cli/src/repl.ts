@@ -93,15 +93,28 @@ export async function runRepl(
    * 框顶线到新列宽。有未提交输入时不重绘（避免 readline 行缓冲视觉错位）；run 进行中
    * 不重绘（避免污染流式输出）。已滚入历史的旧顶线无法回改，此为单框修正。
    */
+  /** 上次绘制顶线时的列宽：用于屏蔽「同宽 resize 虚假事件」与自触发风暴。 */
+  let lastColumns = process.stdout.columns || 80;
+  /** 重绘防重入：rl.prompt() 可能同步派发 resize，包成临界区避免递归风暴。 */
+  let redrawing = false;
+
   if (supportsAnsi()) {
     process.stdout.on("resize", () => {
       if (running || closed || inputClosed) return;
       if (rl.line !== "") return;
+      if (redrawing) return; // 防重入：避免 rl.prompt() 触发同步 resize 造成递归风暴
       const cols = process.stdout.columns || 80;
-      process.stdout.write("\r\x1b[1A\x1b[2K"); // 回到顶线行并清空
-      process.stdout.write(paint(inputTopBar(cols), "dim")); // 新宽度顶线
-      process.stdout.write("\r\x1b[2K"); // 清空旧 prompt 行
-      rl.prompt();
+      if (cols === lastColumns) return; // 宽度未变不重绘，屏蔽持续同宽 resize 虚假事件
+      redrawing = true;
+      try {
+        lastColumns = cols;
+        process.stdout.write("\r\x1b[1A\x1b[2K"); // 回到顶线行并清空
+        process.stdout.write(paint(inputTopBar(cols), "dim")); // 新宽度顶线
+        process.stdout.write("\r\x1b[2K"); // 清空旧 prompt 行
+        rl.prompt();
+      } finally {
+        redrawing = false;
+      }
     });
   }
 
@@ -113,7 +126,9 @@ export async function runRepl(
    */
   const promptInput = (): void => {
     if (supportsAnsi()) {
-      process.stdout.write(paint(inputTopBar(process.stdout.columns || 80), "dim"));
+      const cols = process.stdout.columns || 80;
+      process.stdout.write(paint(inputTopBar(cols), "dim"));
+      lastColumns = cols;
     }
     rl.prompt();
   };

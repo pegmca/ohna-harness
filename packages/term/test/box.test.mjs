@@ -69,6 +69,45 @@ test("三行对齐（显式 width + title）：ANSI 内容行同样与上下边�
   }
 });
 
+// 溢出回归（M6 整屏 TUI）：早期实现里显式 width 只是「建议值」，内容超宽时盒子被整体撑宽
+// （contentWidth = max(width, 行宽+2)），导致按终端列数算好的布局行宽超出终端、被折行错位。
+// 现在显式 width 是硬约束：超宽内容被截断，三行总可见宽恒等于 width + 2。
+test("显式 width 是硬约束：超长内容被截断，总可见宽恒为 width + 2", () => {
+  const longPainted = "\x1b[38;2;232;220;203m" + "x".repeat(300) + "\x1b[0m";
+  const cases = [
+    ["a".repeat(200), 20],
+    ["x".repeat(79), 80],
+    [longPainted, 30],
+    ["中文宽度2倍".repeat(20), 13],
+    ["\x1b[7m" + "b".repeat(100) + "\x1b[27m", 10],
+  ];
+
+  for (const [line, width] of cases) {
+    const result = box([line], { width });
+    assert.equal(result.length, 3);
+    for (const [i, l] of result.entries()) {
+      assert.equal(visibleWidth(l), width + 2, `width=${width} 的第 ${i} 行宽 ${visibleWidth(l)}`);
+    }
+    // ANSI 序列不得被切碎：截断后残余行里不应有半截转义（`\x1b[` 后必须有完整终字节）。
+    const body = result[1];
+    assert.ok(!/\x1b\[[0-9;?]*$/.test(body), `body 行尾残留半截转义：${JSON.stringify(body)}`);
+    assert.ok(!/\x1b\][^\x07\x1b]*$/.test(body), `body 行尾残留未闭合 OSC：${JSON.stringify(body)}`);
+  }
+});
+
+test("回归：终端宽 82 的输入框不得溢出（旧实现行宽 79/80 → 83/84）", () => {
+  // 复现 ohna-cli TuiApp.buildFrame(82, 24) 的输入区：innerWidth = 82 - 2 = 80，
+  // editor.render(innerWidth - 2) 产出最多 78 列的行；即使退化为 79/80 列也不许顶宽。
+  const terminalWidth = 82;
+  const innerWidth = terminalWidth - 2;
+  for (const contentWidth of [78, 79, 80, 120]) {
+    const result = box(["x".repeat(contentWidth)], { width: innerWidth, title: "ohna" });
+    for (const [i, line] of result.entries()) {
+      assert.equal(visibleWidth(line), terminalWidth, `内容 ${contentWidth} 列的第 ${i} 行溢出`);
+    }
+  }
+});
+
 test("box 行数 = 内容行数 + 上下边框（2 行）", () => {
   const result = box([painted, plain, "ccc"]);
   assert.equal(result.length, 5);

@@ -14,7 +14,7 @@
   "scripts": {
     "build": "tsc -b",
     "typecheck": "tsc -p tsconfig.json --pretty false --noEmit",
-    "test": "node --test test/*.test.mjs"
+    "test": "pnpm build && node --test test/*.test.mjs"
   },
   "dependencies": {},
   "devDependencies": {

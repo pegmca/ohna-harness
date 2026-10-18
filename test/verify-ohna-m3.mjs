@@ -204,7 +204,7 @@ try {
   {
     const before = requestCount();
     const result = await runCli(
-      ["--mode", "coding"],
+      [],
       baseEnv,
       workspace,
       "/help\n/model\n/cost\n/tools\n/resume\n/compact\n/exit\n",
@@ -214,7 +214,7 @@ try {
     assert.match(result.stdout, /当前模型：/, "/model 无参应列出当前模型");
     assert.match(result.stdout, /可用 profile：/, "/model 无参应列出可用 profile");
     assert.match(result.stdout, /累计用量：暂无/, "/cost 无用量应明确说明");
-    assert.match(result.stdout, /▸? ?read/, "/tools 应列出 read 等工具");
+    assert.match(result.stdout, /read/, "/tools 应列出 read 等工具");
     assert.match(result.stdout, /暂无历史会话|最近会话/, "/resume 无参应列出会话或提示为空");
     assert.match(result.stdout, /当前会话没有历史消息，无需压缩/, "/compact 空会话应说明");
     assert.equal(requestCount() - before, 0, "slash 命令不得触发任何模型请求");
@@ -223,7 +223,7 @@ try {
 
   // ---- C-M3-2：edit 前打印 unified diff，--yes 确认后落盘 ----
   {
-    const result = await runCli(["--mode", "coding", "--yes", "EDIT 请编辑 demo.txt"], baseEnv, workspace);
+    const result = await runCli(["--yes", "EDIT 请编辑 demo.txt"], baseEnv, workspace);
     assert.equal(result.code, 0, result.stderr);
     assert.match(result.stdout, /-hello/, "diff 应包含删除行");
     assert.match(result.stdout, /\+HELLO-M3/, "diff 应包含新增行");
@@ -234,9 +234,9 @@ try {
 
   // ---- C-M3-3：超长 bash 输出折叠 ----
   {
-    const result = await runCli(["--mode", "coding", "--yes", "LONGOUT 长输出"], baseEnv, workspace);
+    const result = await runCli(["--yes", "LONGOUT 长输出"], baseEnv, workspace);
     assert.equal(result.code, 0, result.stderr);
-    assert.match(result.stdout, /输出已折叠，省略 \d+ 行/);
+    assert.match(result.stdout, /\+(\d+) 行/);
     assert.match(result.stdout, /out-0/, "应保留头部");
     assert.doesNotMatch(result.stdout, /out-150/, "中段内容不应出现");
     console.log("✓ C-M3-3 超长 bash 输出被折叠（只显示头尾 + 省略提示）");
@@ -248,7 +248,7 @@ try {
     writeFileSync(mcpConfigPath, JSON.stringify({
       servers: [{ name: "finance", command: process.execPath, args: [mcpStdioPath] }],
     }));
-    const result = await runCli(["--mode", "coding", "--mcp", mcpConfigPath], baseEnv, workspace, "/tools\n/exit\n");
+    const result = await runCli(["--mcp", mcpConfigPath], baseEnv, workspace, "/tools\n/exit\n");
     assert.equal(result.code, 0, result.stderr);
     assert.match(result.stdout, /search_filings（MCP）/, "/tools 应列出 MCP 发现的工具并标注来源");
     assert.match(result.stderr, /\[mcp\] 已接入 server "finance"/, "发现事件应写 stderr 单行日志");
@@ -261,7 +261,7 @@ try {
   // ---- L3-1：/resume 无参列表 + 带参切换 ----
   {
     // 先造一个会话。
-    await runCli(["--mode", "coding", "--yes", "TEXT 第一会话"], baseEnv, workspace);
+    await runCli(["--yes", "TEXT 第一会话"], baseEnv, workspace);
     const sessionsDir = join(home, ".ohna", "sessions");
     const sessionId = readdirSync(sessionsDir).find((name) => {
       const raw = readFileSync(join(sessionsDir, name), "utf8");
@@ -269,7 +269,7 @@ try {
     }).slice(0, -".jsonl".length);
 
     const result = await runCli(
-      ["--mode", "coding", "--yes"],
+      ["--yes"],
       baseEnv,
       workspace,
       `/resume\n/resume ${sessionId}\nTEXT 切换后续跑\n/exit\n`,
@@ -287,7 +287,7 @@ try {
   // ---- L3-2：/cost 累计 ----
   {
     const result = await runCli(
-      ["--mode", "coding", "--yes"],
+      ["--yes"],
       baseEnv,
       workspace,
       "TEXT 成本\n/cost\n/exit\n",

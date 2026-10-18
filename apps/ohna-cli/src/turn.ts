@@ -14,7 +14,7 @@ import {
 } from "@aiagent/agent";
 import type { ActiveModel } from "@aiagent/ai";
 import type { AgentTool } from "@aiagent/tools";
-import { resolveMaxTurns, type CliMode } from "./mode.js";
+import { resolveMaxTurns } from "./mode.js";
 import { renderEvent, write, type UsageTracker } from "./render.js";
 import {
   filterFailedAssistants,
@@ -28,17 +28,16 @@ import {
 import type { ConfirmHook } from "./confirm.js";
 
 /**
- * 一轮 run 的模式配置：由 runCli 按 --mode / 预算参数解析一次，贯穿单次模式与 REPL 所有轮次。
- * 模式只影响「工具注册表 / 系统提示词 / 回合预算 / 是否挂确认闸门」，不改变 loop 内核契约。
+ * 一轮 run 的配置：由 runCli 按命令行参数解析一次，贯穿单次模式与 REPL 所有轮次。
+ * ohna 恒为编码助手，配置只承载「系统提示词 / 预算 / 作用域」，不改变 loop 内核契约。
  */
 export interface RunSetup {
-  mode: CliMode;
   systemPrompt: string;
   /** --yes：跳过写/执行的交互确认。 */
   autoApprove: boolean;
-  /** 工作区根目录（coding 模式的路径与命令作用域）。 */
+  /** 工作区根目录（路径与命令的唯一作用域）。 */
   cwd: string;
-  /** --max-turns 覆盖；缺省按模式取 resolveMaxTurns。 */
+  /** --max-turns 覆盖；缺省取 resolveMaxTurns。 */
   maxTurns?: number;
   /** --deadline-ms：单次 run 的墙钟上限（从 run 开始计时）。 */
   deadlineMs?: number;
@@ -65,7 +64,7 @@ export interface RunTurnResult {
  *
  * 治理语义（内核零改动，全部由钩子实现）：
  * - `deadlineMs`：从 createConfig 调用时刻起算，`shouldStopAfterTurn` 每轮查时钟；
- * - `maxTurns`：按 --max-turns 或模式默认值计数；
+ * - `maxTurns`：按 --max-turns 或默认值（MAX_TURNS）计数；
  * - `maxCost`：run 前检查 + 每轮结束后检查会话累计 cost（单轮内可能超出）；
  * - 停止原因只在「本轮仍有 toolCall / toolResult」时记录——模型给出最终文本属于自然结束，
  *   此时即便恰好达到 max-turns 也不应打印「已停止」；
@@ -73,7 +72,7 @@ export interface RunTurnResult {
  *
  * @param model 已解析的真实模型。
  * @param apiKey 真实 provider 凭据。
- * @param setup 本轮的模式与预算配置。
+ * @param setup 本轮的系统提示词与预算配置。
  * @param tracker 会话级用量累计器（max-cost 读取其快照）。
  * @param stopState 停止原因槽（供 runTurn 打印可读提示）。
  * @param beforeToolCall 可选的权限闸门钩子。
@@ -87,7 +86,7 @@ export function createConfig(
   stopState: RunStopState,
   beforeToolCall?: ConfirmHook,
 ): AgentLoopConfig {
-  const maxTurns = setup.maxTurns ?? resolveMaxTurns(setup.mode);
+  const maxTurns = setup.maxTurns ?? resolveMaxTurns();
   const deadlineAt = setup.deadlineMs !== undefined ? Date.now() + setup.deadlineMs : undefined;
   let turns = 0;
 
@@ -164,9 +163,9 @@ export function printStopReason(reason: RunStopReason): void {
  * @param active 已解析的真实模型与凭据。
  * @param tools 已装配的工具列表。
  * @param signal run 级 AbortSignal，用于 Ctrl-C 中断当前 run。
- * @param setup 本轮的模式配置（系统提示词 / 预算 / 渲染模式）。
+ * @param setup 本轮的配置（系统提示词 / 预算 / 作用域）。
  * @param tracker 会话级用量累计器（跨 run 复用，agent_end 打印累计值）。
- * @param beforeToolCall 可选的权限闸门钩子（coding 模式传入）。
+ * @param beforeToolCall 权限闸门钩子（写文件与执行命令前询问，--yes 时自动放行）。
  * @returns 更新后的 history 与本轮是否失败。
  */
 export async function runTurn(
@@ -211,7 +210,6 @@ export async function runTurn(
       failed = true;
     }
     renderEvent(event, tracker, {
-      mode: setup.mode,
       workspaceRoot: setup.cwd,
       ...(setup.mcpToolNames ? { mcpToolNames: setup.mcpToolNames } : {}),
     });

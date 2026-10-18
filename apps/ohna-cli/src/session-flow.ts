@@ -9,7 +9,6 @@
 import type { ActiveModel } from "@aiagent/ai";
 import type { AgentMessage } from "@aiagent/agent";
 import * as path from "node:path";
-import type { CliMode } from "./mode.js";
 import type { UsageSnapshot, UsageTracker } from "./render.js";
 import { write } from "./render.js";
 import {
@@ -170,11 +169,10 @@ export function replaceHistory(target: AgentMessage[], next: AgentMessage[]): vo
 /**
  * 打印会话 id 与恢复命令。
  *
+ * ohna 已移除运行模式，恢复命令只需带上会话 id。
+ *
  * @param sessionId 会话 id。
- * @param mode 运行模式（恢复命令需要保持一致）。
  */
-export function printResumeHint(sessionId: string, mode: CliMode): void {
-  process.stdout.write(
-    `\n会话已保存：${sessionId}\n恢复：ohna --mode ${mode} --resume ${sessionId}\n`,
-  );
+export function printResumeHint(sessionId: string): void {
+  process.stdout.write(`\n会话已保存：${sessionId}\n恢复：ohna --resume ${sessionId}\n`);
 }

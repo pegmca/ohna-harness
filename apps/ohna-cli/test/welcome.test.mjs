@@ -32,12 +32,12 @@ const toolNames = ["read", "write", "bash"];
 
 test("renderWelcome：非 TTY 输出纯文本头，不含 ANSI 与 ✻", () => {
   const out = captureStdout(() =>
-    renderWelcome(model, toolNames, { mode: "coding", cwd: "/tmp/ws" }),
+    renderWelcome(model, toolNames, { cwd: "/tmp/ws" }),
   );
   assert.equal(out.includes("\x1b"), false, "非 TTY 不应含 ANSI 转义");
   assert.doesNotMatch(out, /✻/, "非 TTY 不应含 ✻");
   assert.doesNotMatch(out, /╭/, "非 TTY 不应含边框");
-  assert.match(out, /ohna · 本地编码 Agent/, "应含标题");
+  assert.match(out, /  ohna\n/, "应含统一标题 ohna（不再按模式分叉）");
   assert.match(out, /deepseek-chat/, "应含模型 id");
   assert.match(out, /read · write · bash/, "应含工具清单");
 });
@@ -45,7 +45,7 @@ test("renderWelcome：非 TTY 输出纯文本头，不含 ANSI 与 ✻", () => {
 test("renderWelcome：TTY（forced）输出 ✻ 标题 + 边框面板", () => {
   configure({ forced: true });
   const out = captureStdout(() =>
-    renderWelcome(model, toolNames, { mode: "coding", cwd: "/tmp/ws", sessionId: "abc123" }),
+    renderWelcome(model, toolNames, { cwd: "/tmp/ws", sessionId: "abc123" }),
   );
   assert.match(out, /✻/, "应含 ✻ 标记");
   assert.match(out, /Welcome to ohna!/, "应含欢迎语");
@@ -58,7 +58,7 @@ test("renderWelcome：TTY（forced）输出 ✻ 标题 + 边框面板", () => {
 
 test("renderWelcome：TTY 输出含 ANSI 颜色（forced）", () => {
   configure({ forced: true });
-  const out = captureStdout(() => renderWelcome(model, toolNames, { mode: "coding" }));
+  const out = captureStdout(() => renderWelcome(model, toolNames, {}));
   assert.equal(out.includes("\x1b[38;2;"), true, "TTY 下应含 24-bit truecolor");
 });
 
@@ -73,7 +73,7 @@ test("CLI_LOGO：长度 4 的数组，含双环 ∞ ASCII 装饰", () => {
 test("renderWelcome：TTY（forced）输出含 logo 特征子串与配色", () => {
   configure({ forced: true });
   const out = captureStdout(() =>
-    renderWelcome(model, toolNames, { mode: "coding", cwd: "/tmp/ws" }),
+    renderWelcome(model, toolNames, { cwd: "/tmp/ws" }),
   );
   assert.match(out, /____/, "TTY 应含 logo 顶部横线");
   assert.equal(out.includes("\x1b"), true, "TTY 下 logo 应被着色（含 ANSI）");
@@ -81,7 +81,7 @@ test("renderWelcome：TTY（forced）输出含 logo 特征子串与配色", () =
 
 test("renderWelcome：非 TTY 不含 logo（纯文本管道）", () => {
   const out = captureStdout(() =>
-    renderWelcome(model, toolNames, { mode: "coding", cwd: "/tmp/ws" }),
+    renderWelcome(model, toolNames, { cwd: "/tmp/ws" }),
   );
   assert.doesNotMatch(out, /____/, "非 TTY 不应含 logo");
   assert.equal(out.includes("\x1b"), false, "非 TTY 不应含 ANSI");

@@ -397,7 +397,7 @@ const baseEnv = {
 try {
   // C-M2-5：max-turns（同时验证 --key=value 写法）
   const maxTurns = await runCli(
-    ["--mode", "coding", "--yes", "--max-turns=3", "TOOL 测试"],
+    ["--yes", "--max-turns=3", "TOOL 测试"],
     baseEnv,
     workspace,
   );
@@ -415,7 +415,7 @@ try {
 
   // P2-4：模型给出最终文本时自然结束，不能误报「已停止」
   const natural = await runCli(
-    ["--mode", "coding", "--yes", "--max-turns", "1", "TEXT 自然结束"],
+    ["--yes", "--max-turns", "1", "TEXT 自然结束"],
     baseEnv,
     workspace,
   );
@@ -427,20 +427,20 @@ try {
 
   // C-M2-6：零预算（--max-cost 0）在 run 前停止，不调用模型
   const maxCost = await runCli(
-    ["--mode", "coding", "--yes", "--max-turns", "10", "--max-cost", "0", "TOOL 预算"],
+    ["--yes", "--max-turns", "10", "--max-cost", "0", "TOOL 预算"],
     baseEnv,
     workspace,
   );
   assert.equal(maxCost.code, 0, maxCost.stderr);
   assert.match(maxCost.stdout, /⏹ 已停止：达到成本预算/);
-  assert.doesNotMatch(maxCost.stdout, /▸ 调用/, "零预算不应调用任何工具/模型");
+  assert.doesNotMatch(maxCost.stdout, /⏺/, "零预算不应调用任何工具/模型");
   const zeroBudgetSession = readSession(findSessionByTitle(home, "TOOL 预算"));
   assert.equal(zeroBudgetSession.messages.length, 0, "零预算路径不应写入模型消息");
   console.log("✓ C-M2-6 零预算在 run 前停止且不调用模型");
 
   // C-M2-4：deadline
   const deadline = await runCli(
-    ["--mode", "coding", "--yes", "--max-turns", "10", "--deadline-ms", "1", "TOOL 截止"],
+    ["--yes", "--max-turns", "10", "--deadline-ms", "1", "TOOL 截止"],
     baseEnv,
     workspace,
   );
@@ -452,7 +452,7 @@ try {
   // C-M2-1：resume（历史消息增长，标题保持首次输入）
   const sessionId = firstFile.slice(0, -".jsonl".length);
   const resumed = await runCli(
-    ["--mode", "coding", "--yes", "--resume", sessionId, "--max-turns", "1", "TEXT 继续"],
+    ["--yes", "--resume", sessionId, "--max-turns", "1", "TEXT 继续"],
     baseEnv,
     workspace,
   );
@@ -468,7 +468,7 @@ try {
 
   // P2-6：跨工作区 resume 必须给出明确中文警告，但不阻断恢复
   const crossWorkspace = await runCli(
-    ["--mode", "coding", "--yes", "--resume", sessionId, "--max-turns", "1", "TEXT 换目录"],
+    ["--yes", "--resume", sessionId, "--max-turns", "1", "TEXT 换目录"],
     baseEnv,
     workspace2,
   );
@@ -479,7 +479,7 @@ try {
   // C-M2-3：60KB 文件 read 产生大 ToolResult，触发会话级压缩并真正降到窗口以下
   const compactEnv = { ...baseEnv, AIAGENT_LLM_CONTEXT_WINDOW_DEEPSEEK: String(COMPACT_WINDOW) };
   const compact = await runCli(
-    ["--mode", "coding", "--yes", "--max-turns", "2", "READ 压缩测试"],
+    ["--yes", "--max-turns", "2", "READ 压缩测试"],
     compactEnv,
     workspace,
   );
@@ -519,7 +519,7 @@ try {
   // D3：单个 assistant 回合内两次大文件 read → 运行期压缩后 usage 很小，落盘仍必须压缩。
   const summaryBeforeD3 = summaryCount();
   const d3 = await runCli(
-    ["--mode", "coding", "--yes", "READ2 双读压缩"],
+    ["--yes", "READ2 双读压缩"],
     compactEnv,
     workspace,
   );
@@ -554,7 +554,7 @@ try {
   const d3Id = basename(d3SessionFile, ".jsonl");
   const requestCountBeforeResume = requests.length;
   const d3Resume = await runCli(
-    ["--mode", "coding", "--yes", "--resume", d3Id, "--max-turns", "1", "RESUME 继续"],
+    ["--yes", "--resume", d3Id, "--max-turns", "1", "RESUME 继续"],
     compactEnv,
     workspace,
   );
@@ -572,7 +572,7 @@ try {
 
   // D3 /cost：恢复后累计用量非零，且包含摘要 usage（摘要每次至少 100 input token）。
   const d3Cost = await runCliStaged(
-    ["--mode", "coding", "--yes", "--resume", d3Id],
+    ["--yes", "--resume", d3Id],
     compactEnv,
     workspace,
     [
@@ -589,7 +589,7 @@ try {
 
   // C-M2-2：REPL /cost 展示累计 token 与成本（cost 必须非零）
   const repl = await runCliStaged(
-    ["--mode", "coding", "--yes"],
+    ["--yes"],
     baseEnv,
     workspace,
     [
@@ -607,7 +607,7 @@ try {
 
   // P3-12：管道一次性输入多行时，run 必须串行而不是并发
   const piped = await runCli(
-    ["--mode", "coding", "--yes"],
+    ["--yes"],
     baseEnv,
     workspace,
     "TEXT 管道一\nTEXT 管道二\n/exit\n",
@@ -623,7 +623,7 @@ try {
   console.log("✓ P3-12 管道多行输入串行执行");
 
   // P1-3：provider 400 打印错误、单次模式退出码非零、JSONL 不写入空 assistant
-  const providerError = await runCli(["--mode", "coding", "--yes", "ERROR 测试"], baseEnv, workspace);
+  const providerError = await runCli(["--yes", "ERROR 测试"], baseEnv, workspace);
   assert.equal(providerError.code, 1, `provider 错误应非零退出，实际 ${providerError.code}`);
   assert.match(providerError.stdout + providerError.stderr, /模型调用失败/);
   const errorSession = readSession(findSessionByTitle(home, "ERROR 测试"));

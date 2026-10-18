@@ -5,11 +5,7 @@
  * 运行期编排已拆到 turn.ts（单轮 run）与 repl.ts（交互循环），避免组合根膨胀到 500 行以上。
  */
 import { type ActiveModel, resolveActiveModelFromEnv } from "@aiagent/ai";
-import {
-  createDefaultToolRegistry,
-  createFinancialDataSourceFromEnv,
-  type AgentTool,
-} from "@aiagent/tools";
+import type { AgentTool } from "@aiagent/tools";
 import { createCodingToolRegistry } from "@aiagent/coding";
 import { createToolConfirmGate } from "./confirm.js";
 import { loadMcpTools } from "./mcp-config.js";
@@ -81,10 +77,10 @@ async function runSingleTurn(
     const session = await openSession(store, setup.resumeId, setup.cwd);
     if (session.usage) tracker.restore(session.usage);
     const title = session.title ?? prompt.replace(/\s+/g, " ").slice(0, 40);
-    const beforeToolCall =
-      setup.mode === "coding"
-        ? createToolConfirmGate({ autoApprove: setup.autoApprove, cwd: setup.cwd })
-        : undefined;
+    const beforeToolCall = createToolConfirmGate({
+      autoApprove: setup.autoApprove,
+      cwd: setup.cwd,
+    });
 
     // 零预算 / 恢复后已超预算：不调用模型，仍然把当前会话落盘，保证 --resume 可继续。
     if (reachedCostBudget(tracker, setup.maxCost)) {
@@ -96,7 +92,7 @@ async function runSingleTurn(
         workspaceRoot: setup.cwd,
         usage: tracker,
       });
-      printResumeHint(session.id, setup.mode);
+      printResumeHint(session.id);
       return;
     }
 
@@ -117,7 +113,7 @@ async function runSingleTurn(
       workspaceRoot: setup.cwd,
       usage: tracker,
     });
-    printResumeHint(session.id, setup.mode);
+    printResumeHint(session.id);
     // provider 错误已由 renderEvent 打印；单次模式用非零退出码让脚本/CI 能感知失败。
     if (result.failed) process.exitCode = 1;
   } finally {
@@ -126,7 +122,7 @@ async function runSingleTurn(
 }
 
 /**
- * CLI 主入口：解析模型、装配工具、按模式启动 REPL 或单次运行。
+ * CLI 主入口：解析模型、装配编码工具集，然后启动 REPL 或单次运行。
  * 若没有任何真实 provider 可用，打印清晰错误并以非零码退出，绝不静默回退 mock。
  *
  * M3：`--web` 走进程内托管（web-entry.ts）；`--mcp` 挂载外部工具（失败只警告）。
@@ -150,11 +146,8 @@ export async function runCli(options: CliOptions): Promise<void> {
   }
 
   const cwd = process.cwd();
-  // 组合根按模式选注册表：coding 用编码工具集（作用域限定在 cwd），research 沿用金融工具集。
-  const tools: AgentTool<any>[] =
-    options.mode === "coding"
-      ? createCodingToolRegistry(cwd)
-      : createDefaultToolRegistry(createFinancialDataSourceFromEnv()).list();
+  // ohna 恒为编码助手：工具集固定为编码工具集，作用域限定在 cwd（路径与命令策略在 @aiagent/coding 内）。
+  const tools: AgentTool<any>[] = createCodingToolRegistry(cwd);
 
   // --mcp：外部 MCP server 接线（失败只打印结构化警告，不中断启动）。
   const mcpContext: ReplContext = {};
@@ -169,8 +162,7 @@ export async function runCli(options: CliOptions): Promise<void> {
     // 先建 tracker 再建摘要器：摘要调用的 usage 必须计入同一会话累计（/cost、header、--max-cost）。
     const tracker = createUsageTracker();
     const setup: RunSetup = {
-      mode: options.mode,
-      systemPrompt: await resolveSystemPrompt(options.mode, cwd),
+      systemPrompt: await resolveSystemPrompt(cwd),
       autoApprove: options.yes,
       cwd,
       maxTurns: options.maxTurns,

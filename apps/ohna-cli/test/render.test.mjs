@@ -45,7 +45,7 @@ test("renderEvent：超长 bash 结果折叠、isError 保留完整前 400 字�
     renderEvent(
       { type: "tool_execution_end", toolCallId: "t1", toolName: "bash", result: { content: [{ type: "text", text: longOutput }] }, isError: false },
       tracker,
-      { mode: "coding" },
+      {},
     ),
   );
   assert.match(success, /⎿/);
@@ -56,7 +56,7 @@ test("renderEvent：超长 bash 结果折叠、isError 保留完整前 400 字�
     renderEvent(
       { type: "tool_execution_end", toolCallId: "t2", toolName: "bash", result: { content: [{ type: "text", text: errorText }] }, isError: true },
       tracker,
-      { mode: "coding" },
+      {},
     ),
   );
   assert.match(failure, /⎿.*✗.*E{400}/);
@@ -93,7 +93,7 @@ test("renderEvent：write 的 tool_execution_start 在确认前打印 diff", () 
       renderEvent(
         { type: "tool_execution_start", toolCallId: "t3", toolName: "write", args: { path: join(root, "note.txt"), content: "正文" } },
         createUsageTracker(),
-        { mode: "coding", workspaceRoot: root },
+        { workspaceRoot: root },
       ),
     );
     assert.match(out, /⏺ write\(/);
@@ -107,16 +107,16 @@ test("renderEvent：懒打点——首个 text_delta 打 ⏺，纯 tool-call 消
   // 文本消息：首个 text_delta 打 ⏺。
   const tracker = createUsageTracker();
   const withText = captureStdout(() => {
-    renderEvent({ type: "message_start", message: { role: "assistant", content: [] } }, tracker, { mode: "coding" });
+    renderEvent({ type: "message_start", message: { role: "assistant", content: [] } }, tracker, {});
     renderEvent(
       { type: "message_update", message: {}, assistantMessageEvent: { type: "text_delta", delta: "你好" } },
       tracker,
-      { mode: "coding" },
+      {},
     );
     renderEvent(
       { type: "message_end", message: { role: "assistant", content: [], usage: { input: 1, output: 1, totalTokens: 2, cost: { total: 0 } } } },
       tracker,
-      { mode: "coding" },
+      {},
     );
   });
   assert.match(withText, /⏺ 你好/);
@@ -124,16 +124,16 @@ test("renderEvent：懒打点——首个 text_delta 打 ⏺，纯 tool-call 消
   // 纯 tool-call 消息：无 text_delta，不产生悬空 ⏺ 行。
   const tracker2 = createUsageTracker();
   const pureTool = captureStdout(() => {
-    renderEvent({ type: "message_start", message: { role: "assistant", content: [] } }, tracker2, { mode: "coding" });
+    renderEvent({ type: "message_start", message: { role: "assistant", content: [] } }, tracker2, {});
     renderEvent(
       { type: "message_update", message: {}, assistantMessageEvent: { type: "toolcall_delta" } },
       tracker2,
-      { mode: "coding" },
+      {},
     );
     renderEvent(
       { type: "message_end", message: { role: "assistant", content: [], usage: { input: 1, output: 1, totalTokens: 2, cost: { total: 0 } } } },
       tracker2,
-      { mode: "coding" },
+      {},
     );
   });
   assert.doesNotMatch(pureTool, /⏺/, "纯 tool-call 消息不应打 ⏺");
@@ -142,29 +142,29 @@ test("renderEvent：懒打点——首个 text_delta 打 ⏺，纯 tool-call 消
 test("renderEvent：非 TTY 输出不含任何 \\x1b 转义", () => {
   const tracker = createUsageTracker();
   const out = captureStdout(() => {
-    renderEvent({ type: "agent_start" }, tracker, { mode: "coding" });
-    renderEvent({ type: "message_start", message: { role: "assistant", content: [] } }, tracker, { mode: "coding" });
+    renderEvent({ type: "agent_start" }, tracker, {});
+    renderEvent({ type: "message_start", message: { role: "assistant", content: [] } }, tracker, {});
     renderEvent(
       { type: "message_update", message: {}, assistantMessageEvent: { type: "text_delta", delta: "你好" } },
       tracker,
-      { mode: "coding" },
+      {},
     );
     renderEvent(
       { type: "message_end", message: { role: "assistant", content: [], usage: { input: 1, output: 1, totalTokens: 2, cost: { total: 0 } } } },
       tracker,
-      { mode: "coding" },
+      {},
     );
     renderEvent(
       { type: "tool_execution_start", toolCallId: "t4", toolName: "bash", args: { command: "ls" } },
       tracker,
-      { mode: "coding" },
+      {},
     );
     renderEvent(
       { type: "tool_execution_end", toolCallId: "t4", toolName: "bash", result: { content: [{ type: "text", text: "ok" }] }, isError: false },
       tracker,
-      { mode: "coding" },
+      {},
     );
-    renderEvent({ type: "agent_end", messages: [] }, tracker, { mode: "coding" });
+    renderEvent({ type: "agent_end", messages: [] }, tracker, {});
   });
   assert.equal(out.includes("\x1b"), false, "非 TTY 渲染不得产生 ANSI 转义序列");
 });

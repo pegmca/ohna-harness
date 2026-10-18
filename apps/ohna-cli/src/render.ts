@@ -17,7 +17,6 @@ import * as path from "node:path";
 import type { AgentEvent } from "@aiagent/agent";
 import type { Usage } from "@aiagent/ai";
 import { formatUnifiedDiff } from "./diff.js";
-import type { CliMode } from "./mode.js";
 import { clearSpinner, setVerb, startSpinner, stopSpinner } from "./spinner.js";
 import { CROSS, DOT, ELLIPSIS, HOOK, paint } from "./theme.js";
 
@@ -51,10 +50,8 @@ export function write(text: string): void {
   outputSink(text);
 }
 
-/** 渲染选项：按运行模式调整工具调用的展示密度。 */
+/** 渲染选项：控制工具调用的展示细节与来源标注。 */
 export interface RenderOptions {
-  /** 运行模式；coding 模式下工具入参按「路径 / 命令」一行展示，避免整段 JSON 刷屏。 */
-  mode?: CliMode;
   /** 工作区根目录（diff 与路径展示基准）；缺省 process.cwd()。 */
   workspaceRoot?: string;
   /** MCP 发现的工具名：/tools 与欢迎头据此标注「(MCP)」来源。 */
@@ -207,7 +204,7 @@ export function renderEvent(event: AgentEvent, tracker: UsageTracker, options?: 
       clearSpinner();
       // ⏺ Tool(args)：⏺ accent、工具名 accent+bold、入参 dim（M6 主题：替换旧三角形调用标记）。
       write(
-        `${paint(DOT, "accent")} ${paint(event.toolName, "accent", "bold")}(${paint(formatToolArgs(event.toolName, event.args, options), "dim")})\n`,
+        `${paint(DOT, "accent")} ${paint(event.toolName, "accent", "bold")}(${paint(formatToolArgs(event.toolName, event.args), "dim")})\n`,
       );
       // 写前 diff 预览：必须在确认闸门询问之前展示，用户才能据此决定 allow / deny。
       // 红线（§2）：diff 行内容（+/- 行与 @@ 头）不进 ANSI，此处原样打印。
@@ -313,16 +310,17 @@ function truncateText(text: string, max: number): string {
 }
 
 /**
- * 工具入参的一行展示：coding 模式下写/读/编辑显示相对路径、bash 显示命令、grep/find 显示模式，
- * 其余情况（research 模式或结构意外）回退到紧凑 JSON，保持既有输出风格。
+ * 工具入参的一行展示：bash 显示命令、读写编辑显示相对路径、grep/find 显示模式，
+ * 结构意外时回退到紧凑 JSON，避免整段参数刷屏。
+ *
+ * ohna 恒为编码助手，因此这里的「路径 / 命令」摘要无条件生效，不再按模式开关。
  *
  * @param toolName 工具名。
  * @param args 工具入参。
- * @param options 渲染选项。
  * @returns 一行入参文本。
  */
-function formatToolArgs(toolName: string, args: unknown, options?: RenderOptions): string {
-  if (options?.mode !== "coding" || typeof args !== "object" || args === null) return shortJson(args);
+function formatToolArgs(toolName: string, args: unknown): string {
+  if (typeof args !== "object" || args === null) return shortJson(args);
 
   const record = args as Record<string, unknown>;
   if (typeof record.command === "string") return truncateText(record.command.replace(/\s+/g, " "), 160);

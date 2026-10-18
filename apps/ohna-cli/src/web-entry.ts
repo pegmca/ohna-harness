@@ -98,7 +98,7 @@ export async function runWeb(options: CliOptions): Promise<void> {
     return;
   }
 
-  // 工具装配与本地 coding 模式一致；--mcp 追加外部工具（失败只警告，不中断托管）。
+  // 工具装配与本地 CLI 完全一致（ohna 恒为编码助手）；--mcp 追加外部工具（失败只警告，不中断托管）。
   const tools = createCodingToolRegistry(workspaceRoot);
   const mcpToolNames = new Set<string>();
   let mcpServerNames: string[] = [];
@@ -127,7 +127,6 @@ export async function runWeb(options: CliOptions): Promise<void> {
 
   const tracker = createUsageTracker();
   const renderOptions: RenderOptions = {
-    mode: "coding",
     workspaceRoot,
     mcpToolNames,
   };

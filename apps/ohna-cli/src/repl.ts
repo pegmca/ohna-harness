@@ -152,7 +152,7 @@ export async function runRepl(
   renderWelcome(
     { id: currentModel.model.id, provider: currentModel.model.provider, baseUrl: currentModel.model.baseUrl },
     tools.map((tool) => tool.name),
-    { mode: setup.mode, sessionId, cwd: setup.cwd, mcpServers: context?.mcpServerNames },
+    { sessionId, cwd: setup.cwd, mcpServers: context?.mcpServerNames },
   );
 
   if (useTui) {
@@ -164,15 +164,13 @@ export async function runRepl(
     promptInput();
   }
 
-  // coding 模式挂确认闸门：TTY 整屏用 tui.confirm 收集 y/n，否则复用主 readline。
-  const beforeToolCall =
-    setup.mode === "coding"
-      ? createToolConfirmGate(
-          useTui
-            ? { autoApprove: setup.autoApprove, cwd: setup.cwd, confirm: (q) => tui!.confirm(q) }
-            : { autoApprove: setup.autoApprove, cwd: setup.cwd, readline: rl! },
-        )
-      : undefined;
+  // 恒挂确认闸门：ohna 就是编码助手，写文件与执行命令前必须经用户确认（--yes 自动放行）。
+  // TTY 整屏用 tui.confirm 收集 y/n，否则复用主 readline。
+  const beforeToolCall = createToolConfirmGate(
+    useTui
+      ? { autoApprove: setup.autoApprove, cwd: setup.cwd, confirm: (q) => tui!.confirm(q) }
+      : { autoApprove: setup.autoApprove, cwd: setup.cwd, readline: rl! },
+  );
 
   /** 关闭输入（readline 则关闭，TUI 仅置标志）；标记不再接收新输入。 */
   const closeInput = (): void => {
@@ -470,5 +468,5 @@ export async function runRepl(
     tui.stop();
     setSpinnerEnabled(true);
   }
-  printResumeHint(sessionId, setup.mode);
+  printResumeHint(sessionId);
 }

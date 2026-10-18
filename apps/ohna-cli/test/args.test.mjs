@@ -20,15 +20,15 @@ function parse(argv) {
 }
 
 test("--key=value 与 --key value 等价解析", () => {
-  const inline = parse(["--mode=coding", "--max-turns=3", "--max-cost=0.01", "--resume=abc"]);
-  assert.equal(inline.options.mode, "coding");
+  const inline = parse(["--model=deepseek", "--max-turns=3", "--max-cost=0.01", "--resume=abc"]);
+  assert.equal(inline.options.model, "deepseek");
   assert.equal(inline.options.maxTurns, 3);
   assert.equal(inline.options.maxCost, 0.01);
   assert.equal(inline.options.resume, "abc");
   assert.deepEqual(inline.warnings, []);
 
-  const spaced = parse(["--mode", "coding", "--max-turns", "3", "--max-cost", "0.01"]);
-  assert.equal(spaced.options.mode, "coding");
+  const spaced = parse(["--model", "deepseek", "--max-turns", "3", "--max-cost", "0.01"]);
+  assert.equal(spaced.options.model, "deepseek");
   assert.equal(spaced.options.maxTurns, 3);
   assert.equal(spaced.options.maxCost, 0.01);
   assert.deepEqual(spaced.warnings, []);
@@ -62,13 +62,13 @@ test("非法数字告警后忽略，不影响其它参数（P3-9）", () => {
     "-5",
     "--max-cost",
     "-1",
-    "--mode",
-    "coding",
+    "--model",
+    "deepseek",
   ]);
   assert.equal(options.maxTurns, undefined);
   assert.equal(options.deadlineMs, undefined);
   assert.equal(options.maxCost, undefined);
-  assert.equal(options.mode, "coding");
+  assert.equal(options.model, "deepseek", "非法数字只影响自己，不波及其它参数");
   assert.equal(warnings.length, 3);
   assert.match(warnings[0], /--max-turns 需要正整数/);
   assert.match(warnings[1], /--deadline-ms 需要正整数/);
@@ -99,10 +99,4 @@ test("--max-cost 0 是合法零预算；位置参数合并为 prompt", () => {
   assert.equal(options.maxCost, 0);
   assert.equal(options.prompt, "hello world");
   assert.deepEqual(warnings, []);
-});
-
-test("非法 --mode 回退 research 并告警", () => {
-  const { options, warnings } = parse(["--mode", "unknown"]);
-  assert.equal(options.mode, "research");
-  assert.match(warnings[0], /未知运行模式/);
 });

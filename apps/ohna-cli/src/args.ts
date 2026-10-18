@@ -4,20 +4,16 @@
  * 不引入第三方参数库：参数面很小，手写解析能精确控制「错误只告警、不崩溃」的产品语义。
  * 入口文件 index.ts 只负责调用 parseArgs / printHelp / runCli，不再夹带解析逻辑。
  */
-import type { CliMode } from "./mode.js";
-
 /** CLI 入口参数（已解析）。 */
 export interface CliOptions {
   model?: string;
   prompt?: string;
   help: boolean;
-  /** 运行模式：research 为默认（金融研究），coding 为编码助手。 */
-  mode: CliMode;
   /** true 表示 --yes：跳过写文件与执行命令的交互确认。 */
   yes: boolean;
   /** --resume <id>：恢复已有会话。 */
   resume?: string;
-  /** --max-turns <n>：单次 run 的最大回合数（缺省按模式取默认值）。 */
+  /** --max-turns <n>：单次 run 的最大回合数（缺省 MAX_TURNS）。 */
   maxTurns?: number;
   /** --deadline-ms <n>：单次 run 的墙钟上限。 */
   deadlineMs?: number;
@@ -38,14 +34,10 @@ export interface CliOptions {
 /** --web 模式的默认端口（与 ohna-api 一致）。 */
 export const DEFAULT_WEB_PORT = 4173;
 
-/** 合法运行模式集合，用于 --mode 取值校验。 */
-const MODES: readonly CliMode[] = ["research", "coding"];
-
 /** 取值选项的字段名（字符串原样收集，数字在解析末尾统一校验）。 */
 type ValueFlagKey =
   | "model"
   | "prompt"
-  | "mode"
   | "resume"
   | "maxTurns"
   | "deadlineMs"
@@ -57,7 +49,6 @@ type ValueFlagKey =
 const VALUE_FLAGS: ReadonlyMap<string, ValueFlagKey> = new Map([
   ["--model", "model"],
   ["--prompt", "prompt"],
-  ["--mode", "mode"],
   ["--resume", "resume"],
   ["--max-turns", "maxTurns"],
   ["--deadline-ms", "deadlineMs"],
@@ -95,21 +86,6 @@ function splitFlag(arg: string): [string, string | undefined] {
 function isOptionToken(token: string): boolean {
   if (token.startsWith("--")) return true;
   return token.length > 1 && token.startsWith("-") && !/^-\d/.test(token);
-}
-
-/**
- * 校验 --mode 取值：只接受 research / coding，非法值回退 research 并给出中文告警。
- *
- * @param raw 命令行上原样传入的模式字符串。
- * @param warn 告警输出。
- * @returns 合法的运行模式；undefined 或非法值返回 research。
- */
-function parseMode(raw: string | undefined, warn: (message: string) => void): CliMode {
-  if (!raw) return "research";
-  const matched = MODES.find((mode) => mode === raw);
-  if (matched) return matched;
-  warn(`未知运行模式 "${raw}"，已回退为 research（可选值：${MODES.join(" / ")}）。\n`);
-  return "research";
 }
 
 /**
@@ -196,7 +172,7 @@ export function parseArgs(
       continue;
     }
 
-    // 两种写法等价：--mode=coding 与 --mode coding。
+    // 两种写法等价：--resume=abc 与 --resume abc。
     const [flag, inlineValue] = splitFlag(arg);
     const key = VALUE_FLAGS.get(flag);
     if (key) {
@@ -234,7 +210,6 @@ export function parseArgs(
     model: parsed.model,
     prompt,
     help,
-    mode: parseMode(parsed.mode, warn),
     yes,
     resume: parsed.resume,
     maxTurns: parsePositiveInt(parsed.maxTurns, "--max-turns", warn),
@@ -262,14 +237,13 @@ export function printHelp(write: (text: string) => void = (text) => process.stdo
     "  ohna --model deepseek         选择指定 profile 的真实模型",
     "  ohna --help                   打印本帮助",
     "",
-    "编码模式（M1）：",
-    "  ohna --mode coding \"你的需求\"    用编码工具集（read/write/edit/bash/grep/find/ls）完成任务",
-    "  ohna --mode coding --yes \"…\"     跳过写文件与执行命令前的 y/n 确认（批处理用）",
-    "  ohna --mode coding              进入编码 REPL（多轮上下文保留）",
+    "编码能力（M1）：",
+    "  工具集：read / write / edit / bash / grep / find / ls（作用域限定在当前工作目录）",
+    "  ohna \"你的需求\" --yes         跳过写文件与执行命令前的 y/n 确认（批处理用）",
     "",
     "长任务治理（M2）：",
     "  ohna --resume <id>             恢复已保存的会话（启动/退出时会打印当前 id）",
-    "  ohna --max-turns <n>           单次 run 的最大回合数（缺省：research 8 / coding 24）",
+    "  ohna --max-turns <n>           单次 run 的最大回合数（缺省 24）",
     "  ohna --deadline-ms <n>         单次 run 的墙钟上限（毫秒，从 run 开始计时）",
     "  ohna --max-cost <n>            会话累计成本上限（美元；run 前 + 每轮后检查，单轮内可能超出）",
     "  会话内 /cost                  查看本会话累计 input/output token 与成本",
@@ -286,8 +260,7 @@ export function printHelp(write: (text: string) => void = (text) => process.stdo
     "  ohna --web --no-open          不自动打开浏览器",
     "",
     "说明：",
-    "  --mode 可选 research（默认，金融研究）与 coding（编码助手）；缺省保持原有金融问答行为。",
-    "  coding 模式的工作区为当前目录：路径越界与危险命令会被拒绝，不传 --yes 时写/执行需终端确认。",
+    "  工作区为当前目录：路径越界与危险命令会被拒绝，不传 --yes 时写/执行需终端确认。",
     "  达到 max-turns / deadline / max-cost 时打印「⏹ 已停止：…」并干净退出当前 run。",
     "  --max-cost 0 表示零预算：run 开始前即停止，不调用模型。",
     "  本 CLI 只走真实大模型，已彻底移除 mock。未配置任何真实 provider 时将报错并以非零码退出。",

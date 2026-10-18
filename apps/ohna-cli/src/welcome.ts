@@ -9,7 +9,6 @@
  * M6（CLI 主题）：TTY 下渲染 `✻ Welcome to ohna!` + 一次性边框面板（工作目录 / 模型 /
  * 工具数与 MCP 来源 / 命令 tips）；非 TTY 保持纯文本头（管道可稳定消费，不含 `\x1b`）。
  */
-import type { CliMode } from "./mode.js";
 import { write } from "./render.js";
 import { paint, SPIN, supportsAnsi } from "./theme.js";
 
@@ -27,8 +26,6 @@ export interface WelcomeModelInfo {
 
 /** 欢迎头可选信息。 */
 export interface WelcomeOptions {
-  /** 运行模式：决定标题文案（coding / research）。 */
-  mode?: CliMode;
   /** 当前会话 id；提供后打印 `--resume` 提示。 */
   sessionId?: string;
   /** 已接入的 MCP server 名（欢迎头展示来源）。 */
@@ -38,6 +35,9 @@ export interface WelcomeOptions {
 }
 
 const RULE = "─".repeat(60);
+
+/** 纯文本欢迎头的标题：ohna 恒为个人编码助手，标题固定，不随任何开关变化。 */
+const TITLE = "ohna";
 
 /**
  * CLI 启动 logo：以 ASCII 艺术还原 infinity-icon.svg 的「双环 ∞」形态（交叉双环）。
@@ -58,13 +58,12 @@ export const CLI_LOGO: readonly string[] = [
  *
  * @param model 当前生效的真实模型信息。
  * @param toolNames 已装配的工具名列表。
- * @param options 模式、会话 id、MCP server 名与工作目录。
+ * @param options 会话 id、MCP server 名与工作目录。
  */
 export function renderWelcome(model: WelcomeModelInfo, toolNames: string[], options?: WelcomeOptions): void {
-  const title = options?.mode === "coding" ? "ohna · 本地编码 Agent" : "ohna";
   const lines = supportsAnsi()
-    ? renderTtyWelcome(model, toolNames, options, title)
-    : renderPlainWelcome(model, toolNames, options, title);
+    ? renderTtyWelcome(model, toolNames, options)
+    : renderPlainWelcome(model, toolNames, options);
   // 经统一输出出口：TTY 整屏模式下由 sink 注入为 tui.append，进入对话模型顶部。
   write(lines.join("\n") + "\n");
 }
@@ -75,19 +74,17 @@ export function renderWelcome(model: WelcomeModelInfo, toolNames: string[], opti
  * @param model 模型信息。
  * @param toolNames 工具名列表。
  * @param options 可选信息。
- * @param title 标题文案。
  * @returns 行数组。
  */
 function renderPlainWelcome(
   model: WelcomeModelInfo,
   toolNames: string[],
   options: WelcomeOptions | undefined,
-  title: string,
 ): string[] {
   const tools = toolNames.length > 0 ? toolNames.join(" · ") : "（无）";
   const lines = [
     RULE,
-    "  " + title,
+    "  " + TITLE,
     RULE,
     "  模型   " + model.id + "（profile: " + model.provider + "）",
     "  端点   " + model.baseUrl,
@@ -119,14 +116,12 @@ function renderPlainWelcome(
  * @param model 模型信息。
  * @param toolNames 工具名列表。
  * @param options 可选信息。
- * @param title 标题文案。
  * @returns 行数组。
  */
 function renderTtyWelcome(
   model: WelcomeModelInfo,
   toolNames: string[],
   options: WelcomeOptions | undefined,
-  title: string,
 ): string[] {
   const tools = toolNames.length > 0 ? toolNames.join(" · ") : "（无）";
   const info: string[] = [
@@ -145,7 +140,7 @@ function renderTtyWelcome(
   const lines = [
     ...CLI_LOGO.map((line) => paint(line, "accent")),
     "",
-    `${paint(SPIN, "accent")} ${paint("Welcome to ohna!", "foreground", "bold")}（${paint(title, "note")}）`,
+    `${paint(SPIN, "accent")} ${paint("Welcome to ohna!", "foreground", "bold")}`,
     "",
     ...frame(info),
     "",

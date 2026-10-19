@@ -5,7 +5,9 @@
  * - raw mode 下 stdin 不再做行编辑缓冲，所有原始序列（UTF-8 字符串）逐字节交给本类；
  * - 支持：可打印字符插入、退格（`\x7f` / `\x08`）、左右光标（`\x1b[C` / `\x1b[D`）、
  *   Home/End（`\x1b[H` / `\x1b[1~` / `\x1b[F` / `\x1b[4~`）、Enter（`\r` 或 `\n`）提交、
- *   Ctrl+C（`\x03`）中断、上下方向键（`\x1b[A` / `\x1b[B`）历史、bracketed paste；
+ *   上下方向键（`\x1b[A` / `\x1b[B`）历史、bracketed paste；
+ * - 全局键（Ctrl+C / Ctrl+O / Shift+Tab / Esc）**不在这里消费**：C2 起由
+ *   `InputRouter` 在模式栈层统一裁决，editor 只保留「文本编辑 + 历史」职责；
  * - 不做 kill-ring / undo / word-nav / 水平滚动；超长输入直接从左裁切（MVP 假设宽度足够）。
  *
  * 输入解析：一次 stdin chunk 可能含多个键（快速连打 / IME 上屏 / 管道注入），因此
@@ -31,7 +33,8 @@ const PASTE_END = "\x1b[201~";
  * 从 `start` 处读取一个完整的 ESC 序列（ESC … 最终字节）。
  *
  * 只识别 CSI 形态（`ESC [` + 参数/中间字节 + `@`~`~` 之间的最终字节）；其余 ESC 前缀
- * （如 Alt+键）按两字节整体返回，交由上层忽略。序列被 chunk 边界截断时返回 null。
+ * （如 Alt+键）按两字节整体返回，交由上层忽略。序列被 chunk 边界截断时返回 null，
+ * 调用方（{@link LineEditor.consumeKeys}）会把残余缓冲到下一 chunk 拼装。
  *
  * @param input 输入串。
  * @param start ESC 所在下标。
@@ -39,7 +42,7 @@ const PASTE_END = "\x1b[201~";
  */
 function readEscapeSequence(input: string, start: number): { text: string; length: number } | null {
   const next = input[start + 1];
-  if (next === undefined) return null; // 只剩一个 ESC，等下一次 chunk（MVP 直接丢弃）
+  if (next === undefined) return null; // 只剩一个 ESC：缓冲等待下一 chunk 补齐
   if (next !== "[") return { text: `\x1b${next}`, length: 2 };
 
   let i = start + 2;
@@ -83,14 +86,17 @@ export class LineEditor {
   /** bracketed paste 缓冲（起始标记 `\x1b[200~` 之后、结束标记 `\x1b[201~` 之前的内容）。 */
   private pasteBuffer = "";
 
+  /**
+   * 跨 chunk 截断的残余输入缓冲（C1b 修复）。
+   *
+   * raw mode 下一次 stdin chunk 可能恰好落在转义序列中间（如 `\x1b[` 与 `A` 分两次到达，
+   * 或 bracketed paste 起始标记被切开）。改造前残缺序列被直接丢弃，导致方向键 / 粘贴偶发失效。
+   * 现在把「从最后一个不完整转义序列开始的残余」缓冲到下一次 chunk 前拼接后再解析。
+   */
+  private pendingInput = "";
+
   /** 提交回调：用户按 Enter 时以当前 value 调用。 */
   onSubmit?: (value: string) => void;
-  /** 中断回调：用户按 Ctrl+C 时调用（由上层决定中断 run 还是退出）。 */
-  onInterrupt?: () => void;
-  /** verbose 切换回调：用户按 Ctrl+O（`\x0f`）时调用（F-3，由上层切换开关并重打折叠块）。 */
-  onVerboseToggle?: () => void;
-  /** 权限模式循环回调：用户按 Shift+Tab（`\x1b[Z`）时调用（B2，由上层循环预设）。 */
-  onModeCycle?: () => void;
   /** 内容变化回调：每次 value/cursor 改变后调用（用于触发 requestRender）。 */
   onChange?: () => void;
 
@@ -113,7 +119,8 @@ export class LineEditor {
    * @param data 原始输入字节（UTF-8 字符串）。
    */
   handleInput(data: string): void {
-    let rest = data;
+    let rest = this.pendingInput + data;
+    this.pendingInput = "";
     while (rest.length > 0) {
       if (this.pasting) {
         // 粘贴进行中：只关心结束标记，其余全部进缓冲（可能跨 chunk）。
@@ -157,8 +164,11 @@ export class LineEditor {
         continue;
       }
       const seq = readEscapeSequence(input, i);
-      // 序列不完整（chunk 边界截断）：残余字节丢弃即可，粘贴/方向键不会跨 chunk 拆分。
-      if (!seq) return;
+      // 序列不完整（chunk 边界截断）：把残余缓冲到下一 chunk 拼装后再解析（C1b 修复）。
+      if (!seq) {
+        this.pendingInput = input.slice(i);
+        return;
+      }
       this.handleKey(seq.text);
       i += seq.length;
     }
@@ -167,24 +177,13 @@ export class LineEditor {
   /**
    * 分发单个键（单字符或一个完整转义序列）。
    *
-   * 优先级：Ctrl+C 中断 → Enter 提交 → 退格 → 方向键 / Home·End → 可打印字符插入。
+   * 优先级：Enter 提交 → 退格 → 方向键 / Home·End → 可打印字符插入。
+   * 全局键（Ctrl+C / Ctrl+O / Shift+Tab）由 InputRouter 提前裁决，到这里时已不可能命中。
    *
    * @param key 单字符或转义序列（如 `\x1b[A`）。
    */
   private handleKey(key: string): void {
     switch (key) {
-      // Ctrl+C（raw mode 下为 `\x03`）：中断当前 run，空闲时退出。
-      case "\x03":
-        this.onInterrupt?.();
-        return;
-      // Ctrl+O（`\x0f`）：切换 verbose 并重打折叠块全文（F-3）。
-      case "\x0f":
-        this.onVerboseToggle?.();
-        return;
-      // Shift+Tab（CSI Z，`\x1b[Z`）：循环权限模式 default → acceptEdits → plan（B2）。
-      case "\x1b[Z":
-        this.onModeCycle?.();
-        return;
       // 提交：`\r`（默认 Enter）或 `\n`。
       case "\r":
       case "\n":

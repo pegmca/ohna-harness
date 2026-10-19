@@ -9,10 +9,12 @@ import { mkdtemp, rm } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { createSessionStore } from "../dist/session/session-store.js";
+import { ensureFullHistory } from "../dist/session/session-flow.js";
 import { createUsageTracker } from "../dist/session/usage.js";
 import { setOutputSink } from "../dist/ui/render.js";
 import {
   clearSession,
+  compactNow,
   printMcp,
   printStatus,
   resumeSession,
@@ -155,6 +157,115 @@ test("/resume fork 缺少 id：只提示用法，不改变当前会话", async (
   }
 });
 
+test("/resume <id>：交互切换直接全量加载，不留下 tail 后缀（C4）", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "ohna-resume-full-"));
+  try {
+    const { ctx, store, getSessionId } = makeContext(dir);
+    const messages = Array.from({ length: 200 }, (_, index) => ({
+      role: "user",
+      content: `历史-${index}`,
+      timestamp: index,
+    }));
+    await store.create({ id: "long-switch", title: "长会话", workspaceRoot: dir, messages });
+    takeOutput();
+
+    await resumeSession(ctx, "long-switch");
+    assert.equal(getSessionId(), "long-switch");
+    assert.equal(ctx.history.length, 200, "切换后内存应就是完整历史");
+    assert.equal(ctx.history[0].content, "历史-0");
+    assert.match(takeOutput(), /已切换到会话 long-switch（200 条消息/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+/**
+ * 构造一个 tail 载入的长会话上下文（history 只有最近 80 条）。
+ *
+ * @param dir 临时目录。
+ * @param id 会话 id。
+ * @param count 磁盘上的完整消息条数。
+ * @returns 上下文、store 与 tail 载入的历史。
+ */
+async function makeTailContext(dir, id, count) {
+  const { ctx, store } = makeContext(dir);
+  const messages = Array.from({ length: count }, (_, index) => ({
+    role: "user",
+    content: `第 ${index} 条 ${"上下文".repeat(40)}`,
+    timestamp: index,
+  }));
+  await store.create({ id, title: "长会话", workspaceRoot: dir, messages });
+  // 小窗口确保 /compact 一定触发，从而覆盖「压缩后立即落盘」路径。
+  const model = { model: { id: "small", provider: "test", contextWindow: 100 }, apiKey: "k" };
+  ctx.getModel = () => model;
+  const tail = await store.loadSessionTail(id, 80);
+  assert.ok(tail);
+  assert.equal(tail.hasMore, true);
+  ctx.history.push(...tail.messages);
+  ctx.setSessionId(id);
+  takeOutput();
+  return { ctx, store, tail };
+}
+
+test("/compact：tail 会话先补载全量再压缩落盘（messageCountBefore 为 200 而非 80）", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "ohna-compact-tail-"));
+  try {
+    const { ctx, store } = await makeTailContext(dir, "long-compact", 200);
+    assert.equal(ctx.history.length, 80, "前置条件：内存只有 tail");
+    let ensureCalls = 0;
+    ctx.ensureFullHistory = async () => {
+      ensureCalls += 1;
+      assert.equal(await ensureFullHistory(store, "long-compact", ctx.history), true);
+    };
+
+    await compactNow(ctx);
+    assert.equal(ensureCalls, 1, "落盘前应调用注入的补载器一次");
+    assert.match(takeOutput(), /200 条 →/, "压缩必须基于完整历史");
+    const disk = await store.load("long-compact");
+    assert.ok(disk);
+    assert.ok(disk.messages.length < 200, "应确实发生压缩");
+    assert.equal(disk.meta.messageCount, disk.messages.length, "压缩结果已落盘");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("/compact：未注入 ensureFullHistory 时回退到全量 load（命令模块不依赖 REPL）", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "ohna-compact-fallback-"));
+  try {
+    const { ctx } = await makeTailContext(dir, "long-fallback", 120);
+    assert.equal(ctx.ensureFullHistory, undefined);
+
+    await compactNow(ctx);
+    assert.equal(ctx.history.length < 120, true, "压缩后内存应是合并后的历史");
+    assert.match(takeOutput(), /120 条 →/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("/compact：补载失败时取消压缩且不落盘（防止 tail 覆盖更早历史）", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "ohna-compact-guard-"));
+  try {
+    const { ctx, store } = await makeTailContext(dir, "long-guard", 200);
+    const before = ctx.history.length;
+    ctx.ensureFullHistory = async () => {
+      throw new Error("磁盘不可读");
+    };
+
+    await compactNow(ctx);
+    const text = takeOutput();
+    assert.match(text, /已取消压缩/);
+    assert.match(text, /磁盘不可读/);
+    assert.equal(ctx.history.length, before, "失败时不得改动内存历史");
+    const disk = await store.load("long-guard");
+    assert.ok(disk);
+    assert.equal(disk.messages.length, 200, "磁盘会话必须保持完整");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("/status：输出模型、会话、消息数、用量、MCP、Team 与权限", () => {
   const dir = "/tmp/ohna-status";
   const { ctx } = makeContext(dir);
@@ -177,6 +288,18 @@ test("/status：输出模型、会话、消息数、用量、MCP、Team 与权�
   assert.match(text, /MCP：1 个 server（srv-a）· 1 个工具/);
   assert.match(text, /Team：已启用（1 个工具）/);
   assert.match(text, /权限：default/);
+});
+
+test("/status：tail 未补载时标注「已加载最近 N 条」而非完整条数（m2）", () => {
+  const { ctx } = makeContext("/tmp/ohna-status-tail");
+  ctx.history.push(
+    ...Array.from({ length: 80 }, (_, index) => ({ role: "user", content: `消息-${index}`, timestamp: index })),
+  );
+  ctx.isFullHistoryLoaded = () => false;
+  takeOutput();
+  printStatus(ctx);
+  const text = takeOutput();
+  assert.match(text, /消息：已加载最近 80 条（完整历史未载入）/, "tail 恢复时不得把 80 当作会话总数");
 });
 
 test("/mcp：未接入时给出明确提示；已接入时列出 server 与工具", () => {

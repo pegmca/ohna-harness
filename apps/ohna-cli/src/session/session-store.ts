@@ -17,6 +17,7 @@ import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { AgentMessage } from "@aiagent/agent";
+import { readJsonlTail } from "./session-tail.js";
 
 /** 会话累计用量（供 --max-cost 与 /cost 跨进程恢复）。 */
 export interface SessionUsageTotals {
@@ -54,6 +55,12 @@ export interface SessionMeta {
 export interface SessionRecord {
   meta: SessionMeta;
   messages: AgentMessage[];
+}
+
+/** 尾部加载的返回值：`hasMore=true` 表示 `messages` 只是完整历史的严格后缀（更早消息未解码）。 */
+export interface SessionTailRecord extends SessionRecord {
+  /** 更早是否仍有未加载的有效消息（`n >= 总量` 时为 false）。 */
+  hasMore: boolean;
 }
 
 /** create 的输入。 */
@@ -99,8 +106,17 @@ export interface SessionStore {
   create(input?: CreateSessionInput): Promise<SessionMeta>;
   /** 覆盖式保存（原子替换）；返回最终元数据。 */
   save(id: string, messages: AgentMessage[], options?: SaveSessionOptions): Promise<SessionMeta>;
-  /** 读取会话；文件不存在返回 null。 */
+  /** 读取会话（全量解码）；文件不存在返回 null。 */
   load(id: string): Promise<SessionRecord | null>;
+  /**
+   * 只解码会话文件**尾部 n 条消息**（从文件尾倒读，避免大文件全量解码）。
+   * 损坏行按 `load` 的同一规则跳过；`n >= 有效消息总数` 时返回全部且 `hasMore=false`。
+   *
+   * @param id 会话 id。
+   * @param n 期望返回的最近消息条数（非负整数）。
+   * @returns 尾部记录；文件不存在返回 null。
+   */
+  loadSessionTail(id: string, n: number): Promise<SessionTailRecord | null>;
   /** 列出全部会话，按 updatedAt 倒序。 */
   list(): Promise<SessionMeta[]>;
 }
@@ -238,6 +254,50 @@ function isHeaderLine(value: unknown): value is SessionHeaderLine {
 }
 
 /**
+ * 由头部（可能缺失）与消息序列合成会话元数据。
+ *
+ * 全量 `load` 与尾部 `loadSessionTail` 共用同一套字段兜底规则：头部字段来自旧版本 /
+ * 手工编辑时，缺字段或类型错误一律用安全默认值，只有 id 必须存在。
+ * @param id 会话 id（以文件名为准，防止头部 id 被改坏后指向别的文件）。
+ * @param header 已解析的头部行；undefined 表示无头部 / 头部损坏。
+ * @param messages 已解析的消息（用于标题推导与 messageCount 兜底）。
+ * @param messageCount 元数据里的消息条数（全量传解析数，尾部传头部声明总数）。
+ * @returns 规范化后的会话元数据。
+ */
+function composeMeta(
+  id: string,
+  header: SessionHeaderLine | undefined,
+  messages: readonly AgentMessage[],
+  messageCount: number,
+): SessionMeta {
+  if (header) {
+    return {
+      // 以文件名为准：即使头部 id 被手工改坏，也不会让 list/load 指向另一个文件。
+      id,
+      title:
+        typeof header.title === "string" && header.title.trim()
+          ? header.title
+          : (deriveSessionTitle([...messages]) ?? "新会话"),
+      createdAt:
+        typeof header.createdAt === "number" && Number.isFinite(header.createdAt) ? header.createdAt : 0,
+      updatedAt:
+        typeof header.updatedAt === "number" && Number.isFinite(header.updatedAt) ? header.updatedAt : 0,
+      workspaceRoot: typeof header.workspaceRoot === "string" ? header.workspaceRoot : "",
+      messageCount,
+      usage: parseUsage(header.usage),
+    };
+  }
+  return {
+    id,
+    title: deriveSessionTitle([...messages]) ?? "新会话",
+    createdAt: 0,
+    updatedAt: 0,
+    workspaceRoot: "",
+    messageCount,
+  };
+}
+
+/**
  * 解析 JSONL 文本：损坏行（非法 JSON / 结构不符）跳过，保证单个坏行不毁掉整个会话。
  *
  * @param id 会话 id（用于无头部时合成元数据）。
@@ -267,39 +327,11 @@ function parseSessionFile(id: string, raw: string): SessionRecord {
   }
 
   // 头部损坏但消息可用时仍可恢复：用消息内容重建最小元数据（时间戳未知记 0）。
-  // 头部字段可能来自旧版本或被手工编辑：缺字段/类型错误一律用安全默认值，只有 id 必须存在
-  // （id 还是文件定位键，缺失时整行不视为 header，走重建分支）。
-  const meta: SessionMeta = header
-    ? {
-        // 以文件名为准：即使头部 id 被手工改坏，也不会让 list/load 指向另一个文件。
-        id,
-        title:
-          typeof header.title === "string" && header.title.trim()
-            ? header.title
-            : (deriveSessionTitle(messages) ?? "新会话"),
-        createdAt:
-          typeof header.createdAt === "number" && Number.isFinite(header.createdAt) ? header.createdAt : 0,
-        updatedAt:
-          typeof header.updatedAt === "number" && Number.isFinite(header.updatedAt) ? header.updatedAt : 0,
-        workspaceRoot: typeof header.workspaceRoot === "string" ? header.workspaceRoot : "",
-        messageCount: messages.length,
-        usage: parseUsage(header.usage),
-      }
-    : {
-        id,
-        title: deriveSessionTitle(messages) ?? "新会话",
-        createdAt: 0,
-        updatedAt: 0,
-        workspaceRoot: "",
-        messageCount: messages.length,
-      };
-
-  return { meta, messages };
+  return { meta: composeMeta(id, header, messages, messages.length), messages };
 }
 
 /**
  * 读取单个会话文件；不存在返回 null。
- *
  * @param filePath 会话文件路径。
  * @param id 会话 id。
  * @returns 会话记录或 null。
@@ -312,6 +344,52 @@ async function readSessionFile(filePath: string, id: string): Promise<SessionRec
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
     throw error;
   }
+}
+
+/** 尾部读取时用于跳过损坏行的最小形状校验（与 {@link isMessageLine} 同一规则）。 */
+function parseTailMessage(line: string): AgentMessage | undefined {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(line);
+  } catch {
+    return undefined;
+  }
+  return isMessageLine(parsed) ? parsed.message : undefined;
+}
+
+/**
+ * 尾部加载会话：只解码文件尾部 n 条消息，元数据仍从首行读取。
+ *
+ * 取舍（C4）：`--resume` / `/resume <id>` 只把尾部 n 条放进 history，换取大文件首帧的
+ * 解码与内存开销；完整历史由 `/export`、`/resume fork` 等调用点显式走全量 `load`，
+ * store 不做隐式补偿。
+ * @param filePath 会话文件路径。
+ * @param id 会话 id。
+ * @param n 期望返回的最近消息条数。
+ * @returns 尾部记录；文件不存在返回 null。
+ */
+async function readSessionTail(filePath: string, id: string, n: number): Promise<SessionTailRecord | null> {
+  const tail = await readJsonlTail(filePath, n, parseTailMessage);
+  if (!tail) return null;
+
+  let header: SessionHeaderLine | undefined;
+  if (tail.headerLine !== undefined) {
+    try {
+      const parsed: unknown = JSON.parse(tail.headerLine);
+      if (isHeaderLine(parsed)) header = parsed;
+    } catch {
+      // 头部损坏：与 load 一致，退化为按尾部消息重建 meta。
+    }
+  }
+
+  // messageCount 取头部声明总数（文件里保存的是完整条数）；头部缺失或字段非法时
+  // 只能退化为「本次解码的条数」——这是尾部加载相对全量 load 的唯一元数据降级。
+  const declared =
+    header && typeof header.messageCount === "number" && Number.isFinite(header.messageCount) && header.messageCount >= 0
+      ? Math.floor(header.messageCount)
+      : undefined;
+  const meta = composeMeta(id, header, tail.values, declared ?? tail.values.length);
+  return { meta, messages: tail.values, hasMore: tail.hasMore };
 }
 
 /**
@@ -393,6 +471,11 @@ export function createSessionStore(options?: SessionStoreOptions): SessionStore 
     async load(id: string): Promise<SessionRecord | null> {
       assertValidId(id);
       return readSessionFile(filePathFor(id), id);
+    },
+
+    async loadSessionTail(id: string, n: number): Promise<SessionTailRecord | null> {
+      assertValidId(id);
+      return readSessionTail(filePathFor(id), id, n);
     },
 
     async list(): Promise<SessionMeta[]> {

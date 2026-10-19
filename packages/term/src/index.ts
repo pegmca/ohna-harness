@@ -3,7 +3,7 @@
  *
  * 包边界（保持精简稳定）：
  * - `RawTerminal` / `Terminal`：raw mode 终端原语（尺寸/输入/清屏/光标）。
- * - `Screen`：节流 + 幂等全量重绘的整屏渲染循环。
+ * - `Screen`：节流 + 行差分重绘的整屏渲染循环（首帧 / resize 全量，其余只写变化行）。
  * - `box` / `visibleWidth`：极简边框组件与可见宽度计算。
  * - ANSI 原语 `rgb`/`reset`/`bold`/…：仅暴露转义序列生成，不内置语义调色板
  *   （颜色语义由调用方如 ohna-cli 的 theme.ts 负责，避免跨层重复）。

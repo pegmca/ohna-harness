@@ -9,51 +9,33 @@
  * EOF 语义：stdin 关闭后 readline 不再产生新行，但已入队的行仍要跑完；因此关闭事件
  * 只标记 `closed`，真正 resolve 要等 `running === false && 队列为空`。
  *
- * M3：命令解析与分发移到 slash.ts（命令表 + 注入 handler），本文件只提供
- * 本地会话语义下的 handler 实现（/model /compact /tools /resume 直接读写
- * 本文件的会话状态）；web 托管模式在 web-entry.ts 用同一分发器注入 serve 语义。
+ * M3：命令解析与分发移到 registry.ts（命令表 + 注入 handler）。本文件的职责按
+ * 「会话循环 / 终端装配 / UI 动作 / 命令接线」拆分：repl.ts 只保留循环与状态机，
+ * 其余分别由 repl-tui.ts、repl-actions.ts、repl-commands.ts 承担。
  */
 import * as readline from "node:readline";
 import type { ActiveModel } from "@aiagent/ai";
 import type { AgentTool } from "@aiagent/tools";
 import type { AgentMessage } from "@aiagent/agent";
-import { createToolConfirmGate } from "../permission/confirm.js";
 import { createFollowUpController } from "./follow-up.js";
 import { createPermissionSession } from "../permission/permission-session.js";
-import {
-  formatCostLine,
-  reprintRecentFolded,
-  setOutputSink,
-  toggleVerbose,
-  type UsageTracker,
-  write,
-} from "../ui/render.js";
-import { setSpinnerEnabled } from "../ui/spinner.js";
+import { write, type UsageTracker } from "../ui/render.js";
 import { createResizeRedraw } from "../ui/tui/resize-redraw.js";
 import { expandFileReferencesDetailed } from "../workspace/file-reference.js";
 import { handleDirectInput } from "../commands/direct-command.js";
 import {
+  ensureFullHistory,
   openSession,
   persistSession,
   printResumeHint,
   replaceHistory,
 } from "../session/session-flow.js";
 import { createSessionStore } from "../session/session-store.js";
-import {
-  clearSession,
-  compactNow,
-  exportSession,
-  printMcp,
-  printStatus,
-  printTools,
-  resumeSession,
-  switchModel,
-  type SessionCommandContext,
-} from "../commands/session-commands.js";
-import { inputTopBar, inputBottomBar, paint, supportsAnsi } from "../ui/theme.js";
-import { printReplCommands, renderWelcome } from "../ui/welcome.js";
-import { createSlashDispatcher, printUnknownCommand, type SlashHandlers } from "../commands/slash.js";
-import { TuiApp } from "../ui/tui/tui-app.js";
+import { inputTopBar, paint, supportsAnsi } from "../ui/theme.js";
+import { renderWelcome } from "../ui/welcome.js";
+import { createReplTui } from "./repl-tui.js";
+import { createReplActions, createReplToolGate } from "./repl-actions.js";
+import { createReplCommands } from "./repl-commands.js";
 import type { ReplContext } from "./repl-context.js";
 import {
   printStopReason,
@@ -85,6 +67,13 @@ export async function runRepl(
   if (session.usage) tracker.restore(session.usage);
   let sessionId = session.id;
   let sessionTitle = session.title;
+  /**
+   * C4 数据安全：tail 恢复（hasMore）时 history 只是磁盘历史的严格后缀，此时任何
+   * persistSession 都会把文件截断成尾部。首次真正需要完整上下文（run / 预算写盘 /
+   * /compact）前先 ensureFullHistory；补载成功后置 true，后续无需重复读盘。
+   * 新建会话、全量 /resume、fork、/clear 得到的历史本身就是完整的。
+   */
+  let fullHistoryLoaded = !session.hasMore;
   // /model 可在会话内切换 profile：当前模型放在可变绑定中，后续 run 与压缩都用它。
   let currentModel: ActiveModel = active;
   let controller: AbortController | null = null;
@@ -114,24 +103,17 @@ export async function runRepl(
 
   // TTY（支持 ANSI 颜色）走整屏 TUI；否则保留旧 readline 路径（非 TTY 完全不变）。
   const useTui = supportsAnsi();
-  let tui: TuiApp | undefined;
+  let tuiHandle: ReturnType<typeof createReplTui> | undefined;
   let rl: readline.Interface | undefined;
 
   if (useTui) {
     // 整屏 TUI：把 render 输出注入对话模型，并禁用 spinner（避免 \r\x1b[K 污染）。
-    tui = new TuiApp({ cwd: setup.cwd });
-    // 状态行：模型名 + 上下文占比（input / contextWindow）。两者都是闭包读取、每帧实时
-    // 求值，因此 `/model` 切换与每轮 tracker 增长都会自动反映到输入框下方居右的状态行。
-    tui.setStatus(() => ({
-      model: currentModel.model.id,
-      contextPercent: Math.round(
-        (tracker.snapshot().input / Math.max(1, currentModel.model.contextWindow)) * 100,
-      ),
-      // 权限模式放状态行左侧（与右侧模型/占比同处输入框下方），Shift+Tab 切换即时可见。
-      permissionMode: permissionSession.preset(),
-    }));
-    setOutputSink((s) => tui!.append(s));
-    setSpinnerEnabled(false);
+    tuiHandle = createReplTui({
+      cwd: setup.cwd,
+      getModel: () => currentModel,
+      tracker,
+      getPermissionPreset: () => permissionSession.preset(),
+    });
   } else {
     rl = readline.createInterface({
       input: process.stdin,
@@ -139,6 +121,14 @@ export async function runRepl(
       prompt: "│ > ",
     });
   }
+  const tui = tuiHandle?.tui;
+
+  // 终端动作（verbosity / 权限模式 / 折叠 / 回显）只依赖 TUI 与权限会话。
+  const actions = createReplActions({
+    ...(tui ? { tui } : {}),
+    permissionSession,
+  });
+  const { cyclePermissionMode, cycleVerbosity, toggleLastGroup, echoQueued, echoSubmitted } = actions;
 
   /**
    * 打印输入区顶线（TTY 门控）后进入 readline prompt。
@@ -177,14 +167,15 @@ export async function runRepl(
     { sessionId, cwd: setup.cwd, mcpServers: context?.mcpServerNames },
   );
 
-  if (useTui) {
+  if (tuiHandle) {
     // 整屏 TUI：提交/中断/Esc/verbose 切换/Shift+Tab 模式循环交给编辑器，启动后由 Screen 接管终端。
-    tui!.onSubmit = commitLine;
-    tui!.onInterrupt = handleInterrupt;
-    tui!.onEscape = handleEscape;
-    tui!.onVerboseToggle = toggleVerboseMode;
-    tui!.onModeCycle = cyclePermissionMode;
-    tui!.start();
+    tuiHandle.start({
+      onSubmit: commitLine,
+      onInterrupt: handleInterrupt,
+      onEscape: handleEscape,
+      onVerboseToggle: toggleLastGroup,
+      onModeCycle: cyclePermissionMode,
+    });
   } else {
     promptInput();
   }
@@ -192,21 +183,17 @@ export async function runRepl(
   // 恒挂确认闸门：ohna 就是编码助手，mutating 工具执行前必须按当前权限策略处理
   // （read 工具由 effect 声明直接放行；--yes 初始化为 bypass）。
   // TTY 整屏用 tui.confirm 收集三选项，否则复用主 readline。
-  const beforeToolCall = createToolConfirmGate({
+  // C3/D7：TTY 走结构化 askToolCall（权限卡 + diff 预览 + Toast 日志）；非 TTY 继续
+  // readline 字符串三选一问答，行为零变化。
+  const beforeToolCall = createReplToolGate({
     autoApprove: setup.autoApprove,
     cwd: setup.cwd,
-    state: permissionSession.state,
-    getPreset: () => permissionSession.preset(),
-    ...(useTui ? { confirm: (q: string) => tui!.confirm(q) } : { readline: rl! }),
+    permissionSession,
+    ...(tui ? { tui } : { readline: rl! }),
   });
   // K3 时序回填：team controller 在组合根已创建，但其子代理的 beforeToolCall 是可变引用；
   // 此处把「真正持有 readline/TUI 与 PolicyState 的闸门」写回，保证子代理与 supervisor 同审。
   context?.onGateReady?.(beforeToolCall);
-
-  /** Shift+Tab：按 default → acceptEdits → plan → default 循环，并回显当前模式。 */
-  function cyclePermissionMode(): void {
-    write(permissionSession.cycle());
-  }
 
   /** 关闭输入（readline 则关闭，TUI 仅置标志）；标记不再接收新输入。 */
   const closeInput = (): void => {
@@ -250,31 +237,12 @@ export async function runRepl(
   };
 
   /**
-   * F-3：切换 verbose 模式并（开启时）重打最近折叠块全文。
-   *
-   * TUI 的 `ctrl+o` 与（非 TTY / 会话内）`/verbose` 共用本函数；append-only 的 TUI 语义是
-   * 「重打全文」而非「改写已打印行」——重打内容经 render 的 write() 注入对话模型。
-   * 声明为函数（hoisted），以便上方 TUI 装配（`tui.onVerboseToggle = toggleVerboseMode`）引用。
+   * 会话命令分发：repl-commands.ts 用 getter/setter 读取会话状态，避免把输入循环
+   * 搬进命令模块；`/exit` 的队列清理仍由本文件负责。
    */
-  function toggleVerboseMode(): void {
-    const nowVerbose = toggleVerbose();
-    if (nowVerbose) {
-      write("已开启 verbose：思考过程将以灰色斜体展示，最近折叠块全文重打如下。\n");
-      reprintRecentFolded();
-    } else {
-      write("已关闭 verbose。\n");
-    }
-  }
-
-  /**
-   * 会话命令上下文：把可变绑定（模型 / 会话 id / 标题）以 getter/setter 暴露给
-   * session-commands.ts，命令实现不再挤在输入循环里。
-   */
-  const commandCtx: SessionCommandContext = {
+  const dispatch = createReplCommands({
     tools,
-    ...(context?.mcpToolNames ? { mcpToolNames: context.mcpToolNames } : {}),
-    ...(context?.mcpServerNames ? { mcpServerNames: context.mcpServerNames } : {}),
-    ...(context?.teamToolNames ? { teamToolNames: context.teamToolNames } : {}),
+    ...(context ? { context } : {}),
     store,
     tracker,
     setup,
@@ -291,67 +259,19 @@ export async function runRepl(
     setTitle: (title) => {
       sessionTitle = title;
     },
-    getPermissionPreset: () => permissionSession.preset(),
-    // /resume 成功切换后清空会话规则（/clear 通过同一钩子完成）。
-    onSessionSwitched: () => permissionSession.reset(),
-  };
-
-  // 命令分发：slash.ts 负责解析与别名，这里只注入本地会话语义的 handler。
-  const dispatch = createSlashDispatcher({
-    onUnknown: printUnknownCommand,
-    handlers: {
-      help: () => printReplCommands(),
-      cost: () => {
-        write(formatCostLine(tracker) + "\n");
-      },
-      model: (arg) => switchModel(commandCtx, arg),
-      compact: () => compactNow(commandCtx),
-      tools: () => printTools(commandCtx),
-      resume: async (arg) => {
-        const trimmed = arg.trim();
-        // TUI 无参：打开可上下选择的会话面板（对齐 Claude Code）；
-        // 非 TTY 仍回退为打印列表 + `/resume <id>`。
-        if (!trimmed && tui) {
-          let metas;
-          try {
-            metas = await store.list();
-          } catch (error) {
-            write(`读取会话列表失败（${error instanceof Error ? error.message : String(error)}）。\n`);
-            return;
-          }
-          if (metas.length === 0) {
-            write("暂无历史会话。\n");
-            return;
-          }
-          tui.openSessionPicker(
-            metas.map((meta) => ({
-              id: meta.id,
-              title: meta.title,
-              updatedAt: meta.updatedAt,
-              messageCount: meta.messageCount,
-            })),
-          );
-          return;
-        }
-        await resumeSession(commandCtx, arg);
-      },
-      // F-3 非 TTY 等价入口：readline 下无法可靠捕获 ctrl+o，用 /verbose 切换同样的开关。
-      verbose: () => toggleVerboseMode(),
-      // B2：/permissions 是无 TTY 环境下 Shift+Tab 的等价管理入口。
-      permissions: (arg) => {
-        write(permissionSession.handleCommand(arg));
-      },
-      clear: () => clearSession(commandCtx),
-      status: () => printStatus(commandCtx),
-      mcp: () => printMcp(commandCtx),
-      export: () => exportSession(commandCtx),
-      exit: () => {
-        // /exit 清空待处理队列并关闭输入；当前 run 结束后主 Promise 才会 resolve。
-        stopRequested = true;
-        followUps.clear();
-        closeInput();
-      },
-    } satisfies SlashHandlers,
+    permissionSession,
+    isFullHistoryLoaded: () => fullHistoryLoaded,
+    markFullHistoryLoaded: () => {
+      fullHistoryLoaded = true;
+    },
+    ...(tui ? { tui } : {}),
+    cycleVerbosity,
+    onExit: () => {
+      // /exit 清空待处理队列并关闭输入；当前 run 结束后主 Promise 才会 resolve。
+      stopRequested = true;
+      followUps.clear();
+      closeInput();
+    },
   });
 
   /**
@@ -379,6 +299,18 @@ export async function runRepl(
 
       // 会话内命令优先于模型调用：不消耗 token，也不进 history。
       if (await dispatch(text)) return;
+
+      // C4：普通文本会进入 run / 预算写盘 / persistSession，必须先把 tail 历史补全。
+      // 补载失败时跳过本轮——宁可不执行，也不能用 80 条后缀覆盖磁盘上的完整会话。
+      if (!fullHistoryLoaded) {
+        fullHistoryLoaded = await ensureFullHistory(store, sessionId, history, (message) =>
+          write(`⚠️ ${message}\n`),
+        );
+        if (!fullHistoryLoaded) {
+          write("⚠️ 已跳过本轮：未补载完整历史时落盘会覆盖磁盘上的更早消息。\n");
+          return;
+        }
+      }
 
       // 标题固定取首条用户输入（压缩后 history 可能不再以 user 开头，不能临时推导）。
       if (!sessionTitle) {
@@ -476,15 +408,11 @@ export async function runRepl(
     if (running) {
       // K2/F-2：run 进行中入队；follow-up 只会注入普通文本，slash 命令留到 run 结束后分发。
       const index = followUps.enqueue(trimmed);
-      if (useTui) tui!.appendLine(paint(`❯ ${trimmed}`, "user"));
-      write(`» 已排队（#${index}）\n`);
+      echoQueued(trimmed, index);
       return;
     }
     // 提交：TTY 下把用户输入回显进对话区；readline 下打印输入框下边框闭合盒子。
-    if (supportsAnsi()) {
-      if (useTui) tui!.appendLine(paint(`❯ ${trimmed}`, "user"));
-      else write(paint(inputBottomBar(process.stdout.columns || 80), "dim"));
-    }
+    echoSubmitted(trimmed);
     void processLine(trimmed);
   }
 
@@ -522,10 +450,6 @@ export async function runRepl(
   });
 
   // 退出 TUI：复位输出 sink（先复位，避免后续输出进对话模型）、停 Screen 还原终端、恢复 spinner。
-  if (useTui && tui) {
-    setOutputSink(undefined);
-    tui.stop();
-    setSpinnerEnabled(true);
-  }
+  tuiHandle?.dispose();
   printResumeHint(sessionId);
 }

@@ -1,10 +1,22 @@
 /**
- * F-3 thinking 降级展示单测：spinner 被整屏模式禁用时，默认模式追加一次 `✻ 思考中…`。
+ * F-3 thinking 降级展示 / C1 presenter 状态重置单测。
+ *
+ * 覆盖：
+ * - spinner 被整屏模式禁用时，默认模式追加一次 `✻ 思考中…`；
+ * - spinner 启用（非 TTY）时 thinking 交给 spinner，正文不重复提示；
+ * - verbose（verbosity=high）时 thinking 走灰色斜体块，不打印占位行；
+ * - C1 新语义：`resetPresentation()` 清空归约条目（折叠全文缓存已随 ctrl+o 重打语义删除）。
  */
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createUsageTracker, foldOutput, renderEvent, reprintRecentFolded, resetFoldCache, setVerbose } from "../dist/ui/render.js";
-import { setSpinnerEnabled } from "../dist/ui/spinner.js";
+import {
+  createUsageTracker,
+  printPresenter,
+  renderEvent,
+  resetPresentation,
+  setSpinnerEnabled,
+  setVerbose,
+} from "../dist/ui/render.js";
 
 /** 捕获 stdout 的工具函数。 */
 function captureStdout(run) {
@@ -66,13 +78,38 @@ test("verbose：thinking 不进占位行，留给灰色斜体块", () => {
   setSpinnerEnabled(true);
 });
 
-test("resetFoldCache：/clear /resume 后 ctrl+o 不再重打上一会话的折叠块", () => {
-  const longText = Array.from({ length: 200 }, (_, index) => `line-${index}`).join("\n");
-  foldOutput(longText);
-  resetFoldCache();
-  setVerbose(true);
-  const out = captureStdout(() => reprintRecentFolded());
-  setVerbose(false);
-  assert.match(out, /还没有折叠过工具输出/);
-  assert.doesNotMatch(out, /line-50/, "已清理的全文不得再被重打");
+test("resetPresentation：/clear /resume 后 presenter 不残留上一会话条目", () => {
+  // 先造一条 assistant 流式条目，确认归约器确实持有内容。
+  renderEvent(
+    { type: "message_start", message: { role: "assistant", content: [] } },
+    createUsageTracker(),
+    {},
+  );
+  renderEvent(
+    { type: "message_update", message: {}, assistantMessageEvent: { type: "text_delta", delta: "上一会话正文" } },
+    createUsageTracker(),
+    {},
+  );
+  assert.ok(printPresenter.entries().length > 0, "重置前应有上一会话的条目");
+
+  // C1：会话切换调用 resetPresentation，条目与打印布局状态一并清空（折叠全文缓存已删除）。
+  resetPresentation();
+  assert.equal(printPresenter.entries().length, 0, "重置后不得残留上一会话条目");
+
+  // 新会话重新开始时应从干净状态输出（不叠加旧内容）。
+  const out = captureStdout(() => {
+    renderEvent(
+      { type: "message_start", message: { role: "assistant", content: [] } },
+      createUsageTracker(),
+      {},
+    );
+    renderEvent(
+      { type: "message_update", message: {}, assistantMessageEvent: { type: "text_delta", delta: "新会话首句" } },
+      createUsageTracker(),
+      {},
+    );
+  });
+  assert.match(out, /⏺ 新会话首句/);
+  assert.doesNotMatch(out, /上一会话正文/, "旧会话内容不得混入新会话输出");
+  resetPresentation();
 });

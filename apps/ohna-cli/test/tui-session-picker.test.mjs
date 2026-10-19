@@ -5,6 +5,8 @@
  */
 import assert from "node:assert/strict";
 import test from "node:test";
+import { visibleWidth } from "@aiagent/term";
+import { configure, resetForTest } from "../dist/ui/theme.js";
 import { SessionPicker, MAX_SESSION_PICKER_ITEMS } from "../dist/ui/tui/tui-session-picker.js";
 
 /**
@@ -32,7 +34,17 @@ test("openWith：截断到上限并展示标题 / 短 id / 时间", () => {
   assert.equal(lines.length, MAX_SESSION_PICKER_ITEMS + 2, "header + 10 条 + footer");
   assert.match(lines[1], /会话 1/);
   assert.match(lines[1], /id-1-000/);
-  assert.ok(lines[1].startsWith("\x1b[7m"), "首行默认选中");
+  configure({ forced: true });
+  try {
+    const surfaced = picker.buildLines(60);
+    assert.match(surfaced[1], /^\x1b\[48;2;58;42;32;38;2;252;233;212m/, "首行默认选中（selected 颜色块）");
+    assert.doesNotMatch(surfaced[1], /\x1b\[7m/, "选中态不再依赖反转视频");
+    for (const line of surfaced) {
+      assert.ok(visibleWidth(line) <= 60, `面板行可见宽 ${visibleWidth(line)} > 60`);
+    }
+  } finally {
+    resetForTest();
+  }
 });
 
 test("handleKey：↑/↓ 移动选中，Enter 返回 id 并关闭", () => {
@@ -40,7 +52,12 @@ test("handleKey：↑/↓ 移动选中，Enter 返回 id 并关闭", () => {
   picker.openWith([item(1), item(2)]);
 
   picker.handleKey("\x1b[B");
-  assert.ok(picker.buildLines()[2].startsWith("\x1b[7m"), "下移后第二行选中");
+  configure({ forced: true });
+  try {
+    assert.match(picker.buildLines()[2], /^\x1b\[48;2;58;42;32;38;2;252;233;212m/, "下移后第二行选中");
+  } finally {
+    resetForTest();
+  }
 
   const result = picker.handleKey("\r");
   assert.equal(result.consumed, true);

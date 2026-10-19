@@ -1,15 +1,17 @@
 /**
- * Screen：整屏 TUI 渲染循环（裁剪版 TUI 的渲染模型，但只做全量幂等重绘）。
+ * Screen：整屏 TUI 渲染循环（节流 + 行差分重绘）。
  *
  * 核心思路来自 pi-tui 的成熟方案，用于根治 readline 滚动输出在 resize 时无法安全重绘、
  * 从而引发「风暴」的问题：
  *
  * 1. 节流（requestRender）：用 `renderRequested` 标志 + `MIN_RENDER_INTERVAL_MS` 去抖，
  *    同一事件循环 tick 内的多次请求只排程一次真正的绘制，避免高频输入/连续 resize 触发风暴。
- * 2. 幂等重绘（doRender）：每次都先 `clearScreen()` 再全量重写当前帧，因此 resize 连续
- *    触发也只会画出同一帧，永不出现「残留/错位/无限滚动」的竞态。
+ * 2. 行差分（doRender）：首帧与尺寸变化时仍走 `clearScreen()` + 整帧全写（保留幂等语义）；
+ *    其余情况逐行比较**含 ANSI 的原始字节串**，只对变化行做「回到行首 + clearLine + 重写」，
+ *    行数减少时逐行清除末尾多余行。差分是 Screen 内部优化，调用方零感知：
+ *    RenderFn 仍返回整帧最终行。
  * 3. 渲染与布局分离：整屏内容由调用方通过 `setRenderFn` 提供（返回已是带 ANSI 的最终文本），
- *    Screen 不关心行内语义与颜色，只负责「取尺寸 → 调回调 → 清屏 → 写整帧」。
+ *    Screen 不关心行内语义与颜色，只负责「取尺寸 → 调回调 → 位置光标 → 写变化行」。
  */
 import type { Terminal } from "./terminal.js";
 
@@ -23,7 +25,10 @@ export type RenderFn = (width: number, height: number) => string[];
 export type InputFn = (data: string) => void;
 
 /**
- * 整屏渲染器：驱动一个 {@link Terminal} 做节流 + 幂等全量重绘。
+ * 整屏渲染器：驱动一个 {@link Terminal} 做节流 + 行差分重绘。
+ *
+ * 首帧与 resize 走全量清屏重绘，其余帧只重写变化行；对调用方保持
+ * 「返回整帧最终行」的契约不变。
  *
  * 典型用法：
  * ```ts
@@ -54,6 +59,18 @@ export class Screen {
 
   /** 上次真正绘制的时间戳（用于计算节流延迟）。 */
   private lastRenderAt = 0;
+
+  /** 上一帧的最终行（含 ANSI 原始字节串），差分比较的唯一事实源。 */
+  private prevFrame: string[] = [];
+
+  /** 上一帧绘制时的终端列数，用于判定 resize。 */
+  private prevWidth = 0;
+
+  /** 上一帧绘制时的终端行数，用于判定 resize。 */
+  private prevHeight = 0;
+
+  /** 是否已成功绘制过至少一帧；首帧必须走全量重绘。 */
+  private hasRenderedFrame = false;
 
   /**
    * 构造一个整屏渲染器。
@@ -125,20 +142,120 @@ export class Screen {
   }
 
   /**
-   * 执行一次整屏绘制：幂等——先清屏再全量写当前帧。
+   * 执行一次绘制：首帧 / 尺寸变化走全量重绘，其余情况只写变化行。
    *
-   * 因为每次都清屏重画，resize 连续触发也只会画出同一帧，绝不风暴。
-   * 内容由 `renderFn` 生成，Screen 只负责拼成 `\r\n` 分隔的整帧并一次写出。
+   * 逐行比较使用**含 ANSI 的原始字节串**（不做 stripAnsi），避免「颜色变了但文本没变」
+   * 被误判为无变化。帧内容与尺寸都未变时直接返回，不产生任何终端写入。
    */
   private doRender(): void {
     const width = this.terminal.columns;
     const height = this.terminal.rows;
     const lines = this.renderFn ? this.renderFn(width, height) : [];
+    // 防御性钳制（M1）：RenderFn 返回行数超过屏高时只取前 rows 行，保证任何调用方
+    // 都无法驱动差分写出越过终端底部的行（差分按行位移，越界会污染滚动缓冲）。
+    // height<=0 表示终端尺寸未知（非 TTY 兜底），此时不裁剪，交由调用方处理。
+    const frame = height > 0 ? lines.slice(0, height) : lines;
 
-    // 整帧以清屏开头，再逐行写出（行间 \r\n），可一次 write 完成。
+    // 首帧与 resize 必须全量重绘：旧帧的行数与折行关系都已失效，只有清屏能保证幂等。
+    const needsFullRedraw =
+      !this.hasRenderedFrame || width !== this.prevWidth || height !== this.prevHeight;
+    if (needsFullRedraw) {
+      this.renderFullFrame(frame, width, height);
+      return;
+    }
+
+    // 内容完全一致时连光标移动都不写，减少流式渲染期间的 stdout 噪声。
+    if (this.framesEqual(this.prevFrame, frame)) return;
+
+    this.renderDiff(this.prevFrame, frame);
+    this.prevFrame = frame.slice();
+  }
+
+  /**
+   * 全量重绘：先清屏回到左上角，再一次性写出以 `\r\n` 连接的整帧。
+   *
+   * 这是首帧与 resize 的兜底路径，保留原「幂等全量重绘」语义：连续 resize 也只会
+   * 画出同一帧，不会残留旧尺寸的行。
+   *
+   * @param lines 当前帧的最终行（含 ANSI）。
+   * @param width 当前终端列数。
+   * @param height 当前终端行数。
+   * @returns 无
+   */
+  private renderFullFrame(lines: string[], width: number, height: number): void {
     this.terminal.clearScreen();
-    const buffer = lines.join("\r\n");
-    this.terminal.write(buffer);
+    this.terminal.write(lines.join("\r\n"));
+
+    this.prevFrame = lines.slice();
+    this.prevWidth = width;
+    this.prevHeight = height;
+    this.hasRenderedFrame = true;
+  }
+
+  /**
+   * 行差分重绘：从上一帧末尾回到帧起点，逐行向下，只重写内容变化的行。
+   *
+   * 输出协议（测试据此断言）：
+   * 1. 若上一帧多于 1 行，`moveCursorUp(prev.length - 1)` 回到帧首行；`moveCursorToColumn(1)`
+   *    回到行首（列位置与行位移无关）。
+   * 2. 逐行 `moveCursorDown(1)` 下移；变化行输出 `\r` + `clearLine()` + 新行内容；
+   *    未变化行只下移、不写文本。
+   * 3. 新帧比旧帧短时，多出的尾部行逐行 `\r` + `clearLine()` 清除，再把光标移回
+   *    新帧最后一行（新帧为空时回到帧首行），保证下一次差分仍从「帧末尾」起算。
+   *
+   * 全量清屏不参与常规差分；只有首帧 / resize 走 {@link renderFullFrame}。
+   *
+   * @param prev 上一帧的最终行。
+   * @param next 当前帧的最终行。
+   * @returns 无
+   */
+  private renderDiff(prev: string[], next: string[]): void {
+    if (prev.length > 1) {
+      this.terminal.moveCursorUp(prev.length - 1);
+    }
+    this.terminal.moveCursorToColumn(1);
+
+    const rowCount = Math.max(prev.length, next.length);
+    for (let i = 0; i < rowCount; i += 1) {
+      if (i > 0) this.terminal.moveCursorDown(1);
+
+      if (i < next.length) {
+        // 变化行：回到行首、清掉旧内容、写新内容；未变化行保持原样。
+        if (i >= prev.length || next[i] !== prev[i]) {
+          this.terminal.write("\r");
+          this.terminal.clearLine();
+          this.terminal.write(next[i]);
+        }
+        continue;
+      }
+
+      // 新帧没有这一行：清掉上一帧遗留的尾部内容。
+      this.terminal.write("\r");
+      this.terminal.clearLine();
+    }
+
+    // 行数减少后光标停在已清除的尾部；移回新帧最后一行，维持下次差分的起点假设。
+    if (prev.length > next.length) {
+      const targetRow = Math.max(next.length - 1, 0);
+      const currentRow = prev.length - 1;
+      const moveUp = currentRow - targetRow;
+      if (moveUp > 0) this.terminal.moveCursorUp(moveUp);
+    }
+  }
+
+  /**
+   * 判断两帧是否逐行完全相同（字符串原始比较，包含 ANSI 序列）。
+   *
+   * @param a 上一帧。
+   * @param b 当前帧。
+   * @returns 行数与每行内容都相同时为 true。
+   */
+  private framesEqual(a: string[], b: string[]): boolean {
+    if (a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i += 1) {
+      if (a[i] !== b[i]) return false;
+    }
+    return true;
   }
 
   /**

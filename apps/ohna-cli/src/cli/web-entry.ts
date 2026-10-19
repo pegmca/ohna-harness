@@ -30,7 +30,7 @@ import { printProviderError } from "./provider-error.js";
 import { loadMcpTools } from "../runtime/mcp-config.js";
 import { formatPermissionStatus } from "../permission/permission-mode.js";
 import { createUsageTracker, formatCostLine, renderEvent, type RenderOptions } from "../ui/render.js";
-import { createSlashDispatcher, printUnknownCommand } from "../commands/slash.js";
+import { createSlashDispatcher, printUnknownCommand } from "../commands/registry.js";
 import { CROSS, inputTopBar, inputBottomBar, paint, STOP, supportsAnsi } from "../ui/theme.js";
 import { printReplCommands } from "../ui/welcome.js";
 import type { CliOptions } from "./args.js";
@@ -235,7 +235,7 @@ export async function runWeb(options: CliOptions): Promise<void> {
 
   const dispatch = createSlashDispatcher({
     onUnknown: printUnknownCommand,
-    handlers: {
+    context: {
       help: () => printReplCommands(),
       cost: () => {
         // F-3：与本地 REPL 共用 formatCostLine（含 reasoning token 展示）。

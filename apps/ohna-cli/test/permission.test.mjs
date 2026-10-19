@@ -8,6 +8,9 @@
  */
 import assert from "node:assert/strict";
 import test from "node:test";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import * as path from "node:path";
 import { createToolConfirmGate, parsePermissionAnswer } from "../dist/permission/confirm.js";
 import {
   formatPermissionStatus,
@@ -168,6 +171,116 @@ test("非 TTY 默认拒绝：mutating 工具返回 block（不悬挂等待输入
     });
     assert.equal(result?.block, true);
     assert.match(result.reason, /用户拒绝/);
+  } finally {
+    process.stdout.write = originalWrite;
+  }
+});
+
+/**
+ * 临时把 stdin 伪装成 TTY 执行回调，随后恢复原值。
+ *
+ * TUI 结构化协议只在 TTY 下启用；测试环境 stdin 非 TTY，必须显式伪造，
+ * 且 afterEach 式恢复避免污染后续「非 TTY 默认拒绝」用例。
+ */
+async function withTty(fn) {
+  const original = process.stdin.isTTY;
+  Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
+  try {
+    return await fn();
+  } finally {
+    Object.defineProperty(process.stdin, "isTTY", { value: original, configurable: true });
+  }
+}
+
+/** 构造一个 write 工具调用的 BeforeToolCallContext。 */
+function writeContext(target = "a.txt") {
+  return {
+    assistantMessage: { role: "assistant", content: [], timestamp: 0 },
+    toolCall: { type: "toolCall", id: "c-card", name: "write", arguments: { path: target, content: "next" } },
+    args: { path: target, content: "next" },
+    context: { systemPrompt: "", messages: [], tools: [{ name: "write", effect: "mutate" }] }
+  };
+}
+
+test("askToolCall：TTY 结构化协议收到摘要与写前 diff，session 映射为会话放行", async () => {
+  const seen = [];
+  const gate = createToolConfirmGate({
+    autoApprove: false,
+    cwd: "/tmp/ohna",
+    askToolCall: async (info) => {
+      seen.push(info);
+      return "session";
+    }
+  });
+
+  const result = await withTty(() => gate(writeContext()));
+  assert.equal(result, undefined, "session 应放行本次调用");
+  assert.equal(seen.length, 1, "askToolCall 应被调用一次");
+  assert.equal(seen[0].tool, "write");
+  assert.match(seen[0].summary, /write 写入文件：a\.txt/);
+});
+
+test("askToolCall：write/edit 携带 unified diff 预览（写前展示）", async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "ohna-card-"));
+  const file = path.join(dir, "a.txt");
+  writeFileSync(file, "old\n");
+
+  let info;
+  const gate = createToolConfirmGate({
+    autoApprove: false,
+    cwd: dir,
+    askToolCall: async (value) => {
+      info = value;
+      return "allow";
+    }
+  });
+  const context = writeContext("a.txt");
+  context.context = { ...context.context, tools: [{ name: "write", effect: "mutate" }] };
+  await withTty(() => gate(context));
+
+  assert.ok(info.diff, "应把 diff 预览交给权限卡");
+  assert.match(info.diff, /^-old$/m, "diff 应含删除行");
+  assert.match(info.diff, /^\+next$/m, "diff 应含新增行");
+});
+
+test("askToolCall：deny 与 null 都按拒绝处理（block）", async () => {
+  const context = writeContext();
+
+  const denied = createToolConfirmGate({
+    autoApprove: false,
+    cwd: "/tmp/ohna",
+    askToolCall: async () => "deny"
+  });
+  const denyResult = await withTty(() => denied(context));
+  assert.equal(denyResult?.block, true, "deny 应阻断工具执行");
+
+  const interrupted = createToolConfirmGate({
+    autoApprove: false,
+    cwd: "/tmp/ohna",
+    askToolCall: async () => null
+  });
+  const interruptedResult = await withTty(() => interrupted(context));
+  assert.equal(interruptedResult?.block, true, "null（中断）应阻断工具执行");
+});
+
+test("notify：TTY 下 --yes 自动放行日志走注入通道而非 stdout", async () => {
+  const chunks = [];
+  const notified = [];
+  const originalWrite = process.stdout.write;
+  process.stdout.write = (chunk) => {
+    chunks.push(String(chunk));
+    return true;
+  };
+  try {
+    const gate = createToolConfirmGate({
+      autoApprove: true,
+      cwd: "/tmp/ohna",
+      notify: (text) => notified.push(text)
+    });
+    assert.equal(await gate(writeContext()), undefined);
+    assert.equal(chunks.length, 0, "注入 notify 后不得再直写 stdout");
+    assert.equal(notified.length, 1);
+    assert.match(notified[0], /--yes 自动放行/);
   } finally {
     process.stdout.write = originalWrite;
   }

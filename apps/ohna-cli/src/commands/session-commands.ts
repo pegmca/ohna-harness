@@ -10,9 +10,13 @@ import type { AgentMessage } from "@aiagent/agent";
 import type { AgentTool } from "@aiagent/tools";
 import { compactSessionHistory } from "../session/session-runtime.js";
 import { exportSessionMarkdown } from "../session/session-export.js";
-import { persistSession, replaceHistory } from "../session/session-flow.js";
+import {
+  ensureFullHistory,
+  persistSession,
+  replaceHistory,
+} from "../session/session-flow.js";
 import { createSessionStore } from "../session/session-store.js";
-import { resetFoldCache, write, type UsageTracker } from "../ui/render.js";
+import { resetPresentation, write, type UsageTracker } from "../ui/render.js";
 import type { RunSetup } from "../runtime/turn.js";
 
 /** 本地会话存储（JSONL）的类型别名，避免在上下文里重复 ReturnType 推导。 */
@@ -56,10 +60,24 @@ export interface SessionCommandContext {
   /** 读取当前权限预设（/status 快照）；可选，便于只关心历史的调用方不提供。 */
   getPermissionPreset?: () => string;
   /**
+   * 读取内存 history 是否为**完整历史**（M2 的 /status 文案）。
+   *
+   * tail 恢复（`--resume`）后内存 history 只是磁盘历史的尾部后缀（最多 80 条），
+   * 此时不能把 `history.length` 当作会话消息总数展示。可选；未提供时按「已完整」处理。
+   */
+  isFullHistoryLoaded?: () => boolean;
+  /**
    * 切换会话成功后的清理钩子（B2）：会话级权限规则不得泄漏到新会话。
    * 可选，便于只关心历史的调用方（如测试）不强制提供。
    */
   onSessionSwitched?: () => void;
+  /**
+   * 补载完整历史（C4 数据安全）：tail 恢复后 /compact 压缩并落盘前必须调用。
+   * REPL 注入自己的加载器（内含「已补载」短路）；未注入时命令模块回退到
+   * `ensureFullHistory`（直接 store.load + replaceHistory），不依赖 REPL。
+   * 失败时应 reject，让 /compact 放弃落盘。
+   */
+  ensureFullHistory?: () => Promise<void>;
 }
 
 /**
@@ -113,6 +131,22 @@ export async function compactNow(ctx: SessionCommandContext): Promise<void> {
   const model = ctx.getModel();
   if (ctx.history.length === 0) {
     write("当前会话没有历史消息，无需压缩。\n");
+    return;
+  }
+  // C4 数据安全：tail 恢复时 history 只是后缀，必须先补全再压缩 / 落盘。
+  // 补载失败则取消本次压缩，避免用尾部（或尾部压缩结果）覆盖磁盘上的更早消息。
+  try {
+    if (ctx.ensureFullHistory) {
+      await ctx.ensureFullHistory();
+    } else if (!(await ensureFullHistory(ctx.store, ctx.getSessionId(), ctx.history))) {
+      throw new Error("完整历史补载失败");
+    }
+  } catch (error) {
+    write(
+      `已取消压缩：未能补载完整历史，落盘会覆盖更早消息（${
+        error instanceof Error ? error.message : String(error)
+      }）。\n`,
+    );
     return;
   }
   const result = await compactSessionHistory(ctx.history, {
@@ -175,6 +209,8 @@ export async function resumeSession(ctx: SessionCommandContext, arg: string): Pr
   }
 
   try {
+    // C4 数据安全：交互切换直接全量加载。启动 --resume 才有首帧延迟诉求；切换后随时可能
+    // 继续 run 并覆盖落盘，tail 后缀会成为下一轮截断的隐患。
     const record = await ctx.store.load(trimmed);
     if (!record) {
       write(`未找到会话 "${trimmed}"，保持当前会话不变。\n`);
@@ -184,11 +220,12 @@ export async function resumeSession(ctx: SessionCommandContext, arg: string): Pr
     if (record.meta.usage) ctx.tracker.restore(record.meta.usage);
     ctx.setSessionId(record.meta.id);
     ctx.setTitle(record.meta.title === "新会话" ? undefined : record.meta.title);
-    // 折叠缓存属于上一个会话：切走后不得被 ctrl+o 重打到新会话。
-    resetFoldCache();
+    // C1：打印 presenter 的折叠/思考块状态属于会话级展示状态，切会话时一并重置，
+    // 避免上个会话的条目/未收尾行泄漏到新会话。
+    resetPresentation();
     // 会话级权限规则同理：旧会话的「本会话一律允许」不能带入新会话。
     ctx.onSessionSwitched?.();
-    write(`已切换到会话 ${record.meta.id}（${ctx.history.length} 条消息，标题：${record.meta.title}）。\n`);
+    write(`已切换到会话 ${record.meta.id}（${record.messages.length} 条消息，标题：${record.meta.title}）。\n`);
   } catch (error) {
     write(
       `恢复会话失败（${error instanceof Error ? error.message : String(error)}），保持当前会话不变。\n`,
@@ -225,7 +262,7 @@ async function forkSession(ctx: SessionCommandContext, targetId: string): Promis
     else ctx.tracker.restore({ input: 0, output: 0, total: 0, cost: 0 });
     ctx.setSessionId(created.id);
     ctx.setTitle(created.title === "新会话" ? undefined : created.title);
-    resetFoldCache();
+    resetPresentation();
     ctx.onSessionSwitched?.();
     write(
       `已 fork 自 ${record.meta.id}，新会话 ${created.id}（${ctx.history.length} 条消息，标题：${created.title}）。\n`,
@@ -246,8 +283,8 @@ export async function clearSession(ctx: SessionCommandContext): Promise<void> {
   const previousId = ctx.getSessionId();
   ctx.history.length = 0;
   ctx.tracker.restore({ input: 0, output: 0, total: 0, cost: 0 });
-  // 折叠缓存是会话级状态：不清空会让 ctrl+o 重打上一个会话的输出。
-  resetFoldCache();
+  // C1：折叠全文缓存已删除；仍重置 presenter，清空上个会话的条目与思考块状态。
+  resetPresentation();
   const meta = await ctx.store.create({ workspaceRoot: ctx.setup.cwd });
   ctx.setSessionId(meta.id);
   ctx.setTitle(undefined);
@@ -272,10 +309,15 @@ export function printStatus(ctx: SessionCommandContext): void {
   const mcpTools = ctx.mcpToolNames?.size ?? 0;
   const teamTools = ctx.teamToolNames?.size ?? 0;
   const preset = ctx.getPermissionPreset?.() ?? "未提供";
+  // tail 恢复时 history 只是后缀，直接展示长度会误导（恒为 80）；标注「已加载最近」。
+  const loadedAll = ctx.isFullHistoryLoaded?.() ?? true;
+  const messageLine = loadedAll
+    ? `消息：${ctx.history.length} 条`
+    : `消息：已加载最近 ${ctx.history.length} 条（完整历史未载入）`;
 
   write(`模型：${model.model.id}（profile: ${model.model.provider}）\n`);
   write(`会话：${ctx.getSessionId()} · ${ctx.getTitle() ?? "新会话"}\n`);
-  write(`消息：${ctx.history.length} 条\n`);
+  write(`${messageLine}\n`);
   if (usage.total === 0) {
     write("用量：暂无（本会话尚未产生模型调用）\n");
   } else {
@@ -304,16 +346,32 @@ export function printMcp(ctx: SessionCommandContext): void {
 }
 
 /**
- * /export：把当前 history 导出为 Markdown，并打印写入路径。
+ * /export：把当前会话的**完整历史**导出为 Markdown，并打印写入路径。
+ *
+ * C4：resume 后内存 history 只是尾部 n 条，因此导出必须从磁盘全量 `load` 一次，
+ * 否则长会话只会导出最后 80 条。磁盘不可读时退回内存 history（至少导出当前可见内容）。
  *
  * @param ctx 会话命令上下文。
  */
 export async function exportSession(ctx: SessionCommandContext): Promise<void> {
+  const sessionId = ctx.getSessionId();
+  let messages = ctx.history;
+  let title = ctx.getTitle();
+  try {
+    const record = await ctx.store.load(sessionId);
+    if (record) {
+      messages = record.messages;
+      // 内存标题优先（可能刚由首条输入固定），否则用磁盘标题。
+      title = title ?? (record.meta.title === "新会话" ? undefined : record.meta.title);
+    }
+  } catch {
+    // 全量读取失败不阻断导出：降级为当前内存 history（与改造前行为一致）。
+  }
   const result = await exportSessionMarkdown({
-    sessionId: ctx.getSessionId(),
-    title: ctx.getTitle(),
+    sessionId,
+    ...(title !== undefined ? { title } : {}),
     model: ctx.getModel().model.id,
-    messages: ctx.history,
+    messages,
     usage: ctx.tracker.snapshot(),
   });
   if (result.ok) {

@@ -14,6 +14,7 @@ import { resolveSystemPrompt } from "../runtime/mode.js";
 import { createUsageTracker, type UsageTracker } from "../ui/render.js";
 import { createLlmSummarizer } from "../session/session-runtime.js";
 import {
+  ensureFullHistory,
   openSession,
   persistSession,
   printResumeHint,
@@ -71,6 +72,20 @@ async function runSingleTurn(
     // 单次模式也落盘：退出后仍可用 --resume 接续；传了 --resume 时先恢复历史再追加本轮。
     const session = await openSession(store, setup.resumeId, setup.cwd);
     if (session.usage) tracker.restore(session.usage);
+    // C4：tail 恢复只拿到后缀；单次模式随后必然落盘，所以预算检查 / runTurn / persist
+    // 之前必须补载全量，否则会用后缀覆盖磁盘历史。补载失败则中止本次运行（不写盘）。
+    if (session.hasMore) {
+      const loaded = await ensureFullHistory(store, session.id, session.messages, (message) =>
+        process.stderr.write(`⚠️ ${message}\n`),
+      );
+      if (!loaded) {
+        process.stderr.write(
+          "未能补载会话完整历史，已中止本次运行以避免覆盖磁盘上的更早消息。\n",
+        );
+        process.exitCode = 1;
+        return;
+      }
+    }
     const title = session.title ?? prompt.replace(/\s+/g, " ").slice(0, 40);
     const beforeToolCall = createToolConfirmGate({
       autoApprove: setup.autoApprove,

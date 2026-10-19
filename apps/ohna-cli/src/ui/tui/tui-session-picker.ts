@@ -13,7 +13,8 @@
  * - 行内展示标题 / 短 id / 时间 / 消息数；完整 id 放在 footer，便于需要时 `/resume fork <id>`；
  * - 可打印字符会关闭面板并交回编辑器，用户可以直接开始输入下一条内容。
  */
-import { paint } from "../theme.js";
+import { truncateToWidth, visibleWidth } from "@aiagent/term";
+import { paint, paintBg, paintOnSurface } from "../theme.js";
 
 /** 选择器条目：只依赖展示所需字段，避免 TuiApp 耦合 session-store 类型。 */
 export interface SessionPickerItem {
@@ -87,20 +88,23 @@ export class SessionPicker {
   /**
    * 渲染选择器面板：头部提示 + 候选行 + footer（选中项完整 id）。
    *
-   * 选中行用 reverse video（与 `/` 命令面板一致）；行内容不在此处按终端宽度裁剪，
-   * 由 TuiApp 的整屏兜底统一处理。
+   * 选中行使用 `selected` / `selectedText` 颜色块（不再依赖反转视频）；`width > 0` 时
+   * 每行先裁剪再补空格，使 panel 背景铺满整行。宽度计算全部经 `visibleWidth`，
+   * 背景 ANSI 不占列，实际裁剪仍由 TuiApp 的整屏兜底复核。
    *
+   * @param width 面板目标可见宽；0 表示不补齐（单测 / 旧调用）。
    * @returns 面板行；未打开时返回空数组。
    */
-  buildLines(): string[] {
+  buildLines(width: number = 0): string[] {
     if (!this.open || this.items.length === 0) return [];
-    const lines = [paint(PICKER_HEADER, "dim")];
+    const lines = [paintOnSurface(fitToWidth(paint(PICKER_HEADER, "dim"), width), "panel")];
     this.items.forEach((item, index) => {
       const label = `  ${truncateTitle(item.title)}  ${item.id.slice(0, 8)}  ${formatTime(item.updatedAt)}  ${item.messageCount} 条`;
-      lines.push(index === this.selected ? `\x1b[7m${label}\x1b[27m` : label);
+      const fitted = fitToWidth(label, width);
+      lines.push(index === this.selected ? paintBg(fitted, "selected", "selectedText") : paintOnSurface(fitted, "panel"));
     });
     const current = this.items[this.selected];
-    if (current) lines.push(paint(`ID: ${current.id}`, "dim"));
+    if (current) lines.push(paintOnSurface(fitToWidth(paint(`ID: ${current.id}`, "dim"), width), "panel"));
     return lines;
   }
 
@@ -146,6 +150,19 @@ export class SessionPicker {
     this.close();
     return { consumed: false, closed: true };
   }
+}
+
+/**
+ * 按目标可见宽裁剪并补空格（供背景铺满整行）。
+ *
+ * @param line 原始行（可含 ANSI）。
+ * @param width 目标可见宽；0 表示不处理。
+ * @returns 可见宽恰为 width 的行（width > 0 时）。
+ */
+function fitToWidth(line: string, width: number): string {
+  if (width <= 0) return line;
+  const clipped = truncateToWidth(line, width);
+  return clipped + " ".repeat(Math.max(0, width - visibleWidth(clipped)));
 }
 
 /**

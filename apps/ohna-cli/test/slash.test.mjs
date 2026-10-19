@@ -3,7 +3,7 @@
  */
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createSlashDispatcher, parseSlashCommand } from "../dist/commands/slash.js";
+import { createSlashDispatcher, parseSlashCommand } from "../dist/commands/registry.js";
 
 test("parseSlashCommand：命令名与参数切分", () => {
   assert.deepEqual(parseSlashCommand("/model deepseek"), { name: "model", arg: "deepseek" });
@@ -28,7 +28,7 @@ test("parseSlashCommand：旧别名保持兼容（/?、/reset、:q、exit）", (
 test("createSlashDispatcher：命中回调且不进入模型调用", async () => {
   const calls = [];
   const dispatch = createSlashDispatcher({
-    handlers: {
+    context: {
       tools: () => calls.push("tools"),
       cost: () => calls.push("cost"),
       model: (arg) => calls.push(`model:${arg}`),
@@ -48,7 +48,7 @@ test("createSlashDispatcher：命中回调且不进入模型调用", async () =>
 test("createSlashDispatcher：已注册但未提供 handler 的命令走 onUnknown", async () => {
   const unknown = [];
   const dispatch = createSlashDispatcher({
-    handlers: {},
+    context: {},
     onUnknown: (name) => unknown.push(name),
   });
   assert.equal(await dispatch("/exit"), true);

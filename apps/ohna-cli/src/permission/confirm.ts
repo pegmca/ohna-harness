@@ -8,6 +8,10 @@
  * plan / bypass），本文件只实现「三选项 AskAdapter」这一宿主细节：
  *   1. 允许一次  2. 本会话一律允许  3. 拒绝
  *
+ * 问询协议（C3 · D7）：TTY 整屏走结构化 `askToolCall({ tool, summary, diff? })`（权限卡），
+ * 非 TTY / readline 保留字符串三选一问答（`parsePermissionAnswer` 行为零变化）；
+ * 两者都按「null = 拒绝」收口，保证闸门永不悬挂。
+ *
  * readline 边界（关键）：REPL 在 run 期间把主 readline pause 掉了。
  * 这里优先复用调用方传入的主 readline 实例调用 question——question 会隐式 resume，
  * 且在回调 pending 期间输入只交给 question，不会触发主循环的 'line' 事件（避免抢输入）；
@@ -27,8 +31,10 @@ import {
   type PermissionRequest,
   type PolicyState,
 } from "@aiagent/agent";
-import { write } from "../ui/render.js";
-import { resumeSpinner, suspendSpinner } from "../ui/spinner.js";
+// spinner 的挂起 / 恢复入口在 C1 随打印 presenter 收编到 render.js（同一 presenter 实例，
+// 保证 confirm 挂起的是真正在写 stdout 的那个写者）。
+import { resumeSpinner, suspendSpinner, write } from "../ui/render.js";
+import { renderToolDiff } from "../ui/stream/print-format.js";
 import { CROSS, DOT, paint } from "../ui/theme.js";
 
 /** 终端单行展示的最大长度，避免超长命令/路径刷屏。 */
@@ -40,6 +46,28 @@ export type ConfirmHook = (
   signal?: AbortSignal,
 ) => Promise<BeforeToolCallResult | undefined>;
 
+/** 结构化 ask 协议的用户裁决（D7）；`null` 由闸门按拒绝处理。 */
+export type ToolCallDecision = "allow" | "session" | "deny";
+
+/** 结构化 ask 协议的问询信息（D7）：摘要 + 可选写前 diff。 */
+export interface ToolCallInfo {
+  /** 工具名（如 write / bash）。 */
+  tool: string;
+  /** 已本地化的单行摘要。 */
+  summary: string;
+  /** 写前 unified diff 预览（仅 write/edit 且可算出差异时存在）。 */
+  diff?: string;
+}
+
+/**
+ * TTY 整屏模式的结构化确认读取器（D7）：替代字符串三选一问答。
+ *
+ * 实现方（TuiApp）负责开卡、渲染 diff 预览与独占按键；第二参数 `signal` 为 run 级
+ * 中断信号（可选）：调用方可据此在中断时关闭卡片。返回 `null` 表示被中断，
+ * 闸门按拒绝处理（与 readline 路径的 null 语义一致）。
+ */
+export type AskToolCall = (info: ToolCallInfo, signal?: AbortSignal) => Promise<ToolCallDecision | null>;
+
 /** 确认闸门的构造参数。 */
 export interface ToolConfirmGateOptions {
   /** true 表示 --yes：默认使用 bypass 预设（可被 getPreset 覆盖）。 */
@@ -49,7 +77,14 @@ export interface ToolConfirmGateOptions {
   /** REPL 的主 readline 实例；缺省（单次模式）时临时创建一个并在回答后关闭。 */
   readline?: readline.Interface;
   /**
-   * TTY 整屏模式下的确认读取器：替代 readline 提问 y/n（TUI 下无 readline）。
+   * TUI 路径的结构化确认读取器（优先于 {@link confirm}）。
+   *
+   * 与 `confirm` 二选一：TTY 整屏模式注入本项，非 TTY / readline 路径既不传它，
+   * 也继续走「三选一文本问答」，行为零变化。
+   */
+  askToolCall?: AskToolCall;
+  /**
+   * 旧字符串确认读取器（保留兼容；新的 TUI 装配不再使用）。
    * 接收已着色的提问文本，返回用户输入原文，null 表示被中断（Ctrl-C）。
    */
   confirm?: (question: string) => Promise<string | null>;
@@ -60,6 +95,13 @@ export interface ToolConfirmGateOptions {
    * 在下一次工具调用立即看到新模式；缺省按 autoApprove 固定为 bypass/default。
    */
   getPreset?: () => PermissionPreset;
+  /**
+   * 宿主提示通道（C3）：`--yes 自动放行` 日志走它。
+   *
+   * TUI 注入 Toast（不污染对话流），非 TTY / readline 不注入 → 继续 `write()` 直写，
+   * 保证非 TTY 输出逐字节不变。
+   */
+  notify?: (text: string) => void;
 }
 
 /**
@@ -114,6 +156,20 @@ export function createToolConfirmGate(options: ToolConfirmGateOptions): ConfirmH
       return "deny";
     }
 
+    // 结构化协议（D7）：TTY 整屏把摘要 + 写前 diff 交给权限卡，不再走字符串问答。
+    if (options.askToolCall) {
+      const diff = renderToolDiff(request.toolName, request.args, { workspaceRoot: options.cwd });
+      const decision = await askToolCallVia(
+        options.askToolCall,
+        { tool: request.toolName, summary, ...(diff ? { diff } : {}) },
+        signal,
+      );
+      // null 表示中断：按拒绝处理，避免闸门悬挂（与 readline 路径一致）。
+      if (decision === null) return "deny";
+      if (decision === "session") return "allow-session";
+      return decision;
+    }
+
     const question = paint(
       `? 是否允许 ${summary}？1) 允许一次  2) 本会话一律允许  3) 拒绝 > `,
       "warn",
@@ -137,8 +193,11 @@ export function createToolConfirmGate(options: ToolConfirmGateOptions): ConfirmH
       resolveToolEffect(context.context.tools, context.toolCall.name) === "mutate"
     ) {
       const summary = describeToolCall(context.toolCall.name, context.args, options.cwd);
-      // 走 write()：整屏模式下放行提示会进对话模型，直写 stdout 会被下一帧清屏抹掉。
-      write(paint(`${DOT} --yes 自动放行：${summary}`, "dim") + "\n");
+      // TUI（C3）：日志走注入的 Toast 通道，不再进对话流；非 TTY 仍 write() 直写，
+      // 保证管道输出与改造前逐字节一致。
+      const message = `${DOT} --yes 自动放行：${summary}`;
+      if (options.notify) options.notify(paint(message, "dim"));
+      else write(paint(message, "dim") + "\n");
     }
     return gate(context, signal);
   };
@@ -241,16 +300,44 @@ async function askConfirmationVia(
 }
 
 /**
+ * 用结构化读取器（权限卡）问一次，并与 run 的 AbortSignal 竞争：
+ * Ctrl-C / run 中断时立即返回 null（按拒绝处理），避免卡片悬挂导致 run 无法结束。
+ *
+ * 卡片实现方通常也会监听同一 signal 自行关闭卡片；这里再做一层竞速是双保险，
+ * 保证即使实现方忽略 signal，闸门也不会挂住。
+ *
+ * @param askToolCall 结构化确认读取器。
+ * @param info 工具摘要与可选 diff。
+ * @param signal run 级中断信号。
+ * @returns 用户裁决；null 表示被中断。
+ */
+async function askToolCallVia(
+  askToolCall: AskToolCall,
+  info: ToolCallInfo,
+  signal?: AbortSignal,
+): Promise<ToolCallDecision | null> {
+  const abort = waitAbort(signal);
+  try {
+    // 挂起 spinner（单写者协议）：卡片绘制期间不能有 spinner 帧叠加。
+    suspendSpinner();
+    return await Promise.race([askToolCall(info, signal), abort.promise]);
+  } finally {
+    resumeSpinner();
+    abort.dispose();
+  }
+}
+
+/**
  * 构造「等待中断」的竞速分支：无 signal 时返回一个永不 resolve 的 Promise（交由用户输入决定）。
  *
  * @param signal run 级中断信号。
  * @returns promise 在中断时 resolve 为 null；dispose 用于摘除监听。
  */
-function waitAbort(signal: AbortSignal | undefined): { promise: Promise<string | null>; dispose: () => void } {
-  if (!signal) return { promise: new Promise<string | null>(() => {}), dispose: () => {} };
+function waitAbort(signal: AbortSignal | undefined): { promise: Promise<null>; dispose: () => void } {
+  if (!signal) return { promise: new Promise<null>(() => {}), dispose: () => {} };
 
   let onAbort: (() => void) | undefined;
-  const promise = new Promise<string | null>((resolve) => {
+  const promise = new Promise<null>((resolve) => {
     if (signal.aborted) {
       resolve(null);
       return;

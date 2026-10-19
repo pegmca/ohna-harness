@@ -25,13 +25,13 @@ Before implementing a task, read the relevant roadmap stage, architecture/design
 - `apps/ohna-cli`: 终端 Agent（`ohna` bin）。M1 编码工具闭环 + M2 长任务治理 + M3 体验对齐 + v1.3 B1-B3 交互/权限/能力扩展已实现。`src/` 按依赖方向分层，入口 `src/index.ts` 保持极薄（仅 parseArgs → runCli）：
   - `cli/`：进程入口与组合根（`args.ts` / `harness.ts` / `provider-error.ts` / `web-entry.ts`）。`harness.ts` 只装配模型、工具、MCP、Team 与会话配置；`--web` 托管在 `web-entry.ts`。
   - `runtime/`：单轮 run 与内核接线（`turn.ts`）及策略常量（`mode.ts`）、外部能力装配（`mcp-config.ts` / `team-wiring.ts`）。
-  - `session/`：会话持久化与生命周期（`session-store.ts` / `session-flow.ts` / `session-runtime.ts` / `session-export.ts` / `usage.ts`）；硬收敛直接消费 `@aiagent/agent` 的共享实现。
-  - `permission/`：宿主侧权限（三选项确认 `confirm.ts`、模式纯函数 `permission-mode.ts`、会话状态 `permission-session.ts`）。
-  - `commands/`：斜杠命令协议与实现（`slash.ts` / `session-commands.ts`）以及 `!` / `#` 直通（`direct-command.ts`）。
+  - `session/`：会话持久化与生命周期（`session-store.ts` / `session-tail.ts` / `session-flow.ts` / `session-runtime.ts` / `session-export.ts` / `usage.ts`）；`session-tail.ts` 提供尾部倒读，`session-flow.ts` 的 `ensureFullHistory` 保证尾部恢复后落盘不截断；硬收敛直接消费 `@aiagent/agent` 的共享实现。
+  - `permission/`：宿主侧权限（权限卡结构化协议 `askToolCall` 与 readline 降级路径在 `confirm.ts`、模式纯函数 `permission-mode.ts`、会话状态 `permission-session.ts`）。
+  - `commands/`：斜杠命令单一注册表（`registry.ts`，`slash.ts` 仅剩薄壳）与会话命令实现（`session-commands.ts`）、`!` / `#` 直通（`direct-command.ts`）。
   - `workspace/`：工作区文件能力（`@` 文件引用 `file-reference.ts`、`#` 记忆写入 `memory-note.ts`）。
-  - `input/`：交互循环（`repl.ts` / `repl-context.ts` / K2 排队 `follow-up.ts`）。
-  - `ui/`：终端输出（`render.ts` / `theme.ts` / `spinner.ts` / `diff.ts` / `welcome.ts`）；整屏 TUI 在 `ui/tui/`（`tui-app.ts` / `tui-editor.ts` / 面板与手势）。
-  - 依赖方向：`ui/theme`、`ui/diff`、`ui/spinner`、`session/usage` 是最底层原语，`ui/render` 只组合它们；`runtime` / `session` / `permission` / `commands` / `input` / `cli` 逐层向上装配。`commands/slash.ts` 是**无会话状态的命令语法与目录协议**，`ui/welcome` 与 `ui/tui` 只读取其命令表用于帮助/面板，不构成反向编排依赖。任何模块都不得反向 import `input/repl` 或 `cli/harness`；`ui/tui` 可依赖 `workspace/file-reference`，但不得引用 `input/repl`。
+  - `input/`：交互循环（`repl.ts` 主循环 / `repl-tui.ts` TUI 装配 / `repl-actions.ts` UI 动作 / `repl-commands.ts` 命令接线 / `repl-context.ts` / K2 排队 `follow-up.ts`）。
+  - `ui/`：终端输出（`render.ts` 薄委托壳 / `theme.ts` / `spinner.ts` / `diff.ts` / `welcome.ts`）；语义条目与双 presenter 在 `ui/stream/`（`entries.ts` 唯一契约 / `reducer.ts` 单一归约器 / `print.ts` 非 TTY presenter / `print-format.ts` 折叠与 diff 纯函数）；整屏 TUI 在 `ui/tui/`（`tui-app.ts` / `frame.ts` / `tui-editor.ts` / `input-router.ts` / `input-assembler.ts` / `keymap.ts` / `grouping.ts` / `classifier.ts` / `rows.ts` / `mount.ts` / `transcript.ts` / `state.ts` / `panels.ts` / `composer.ts` / `permission-card.ts` / `toast.ts`）。
+  - 依赖方向：`ui/theme`、`ui/diff`、`ui/spinner`、`session/usage` 是最底层原语，`ui/render` 只组合它们；`ui/stream` 位于 `ui/tui` 之下（投影消费 entry 契约），`runtime` / `session` / `permission` / `commands` / `input` / `cli` 逐层向上装配。命令目录的唯一来源是 `commands/registry.ts`（无会话状态），`ui/welcome` 与 `ui/tui` 只读取其命令表用于帮助/面板，不构成反向编排依赖。任何模块都不得反向 import `input/repl` 或 `cli/harness`；`ui/tui` 可依赖 `workspace/file-reference`，但不得引用 `input/repl`。
 - `apps/ohna-api`: L0 本地服务薄入口（`ohna-api` bin）：`[dir]` / `--port` / `--data-dir` / `--auto-approve` / `--no-open`，只做进程生命周期。
 - `apps/ohna-web`: 本地 Web UI（Phase 4 已实现）：会话/时间线/composer + 待确认卡片（从 run 事件推导，SSE 重放恢复）+ 文件树面板（`/api/local/fs` 只读，write/edit/bash 事件联动刷新）；只依赖 `@aiagent/types`。
 
@@ -42,7 +42,7 @@ Before implementing a task, read the relevant roadmap stage, architecture/design
 - `packages/tools`: `AgentTool` 契约（含 `effect?: "read" | "mutate"` 副作用声明，权限体系的单一事实源；缺省按 mutate 保守处理）+ 金融工具注册表与执行边界。
 - `packages/trace`: Minimal run-event type contract and cross-boundary value redaction.
 - `packages/serve`: ohna 服务端装配包（`createOhnaServer`）：JSONL stores（sessions / conversations / runs）+ run-v2 HTTP/SSE + 异步确认闸门（`confirm-gate.ts` / `routes/confirmations.ts`，K1 后复用 `@aiagent/agent` 的 permission 策略，自身只保留 SSE AskAdapter 与 Promise 挂起生命周期）+ 只读 `routes/fs.ts`（复用 `@aiagent/coding` 路径策略）+ 静态 fallback + 进程内句柄（`createConversation` / `listConversations` / `createRun` / `subscribeRun` / `subscribeConversation` / `cancelRun` / `listenWithRetry`）；`run 前会话级 compaction`（L3-3，摘要持久化为 `messageType:"compaction"`）在 `RunManager.createRun` 内生效；`ohna-api` 与 `ohna-cli --web` 共用。
-- `packages/term`: ohna CLI 的整屏 TUI 渲染基础包（零外部依赖）：`RawTerminal`（raw mode / bracketed paste / resize 监听 / 光标与清屏原语）+ `Screen`（节流 + 幂等全量整屏重绘：先 `clearScreen()` 再写当前帧，resize 只触发一次节流重绘，因此永不出现重绘风暴）+ `box` 边框组件、`visibleWidth` 显示宽工具与 `truncateToWidth` 按可见列截断（ANSI 不占列、CJK 计 2）。颜色只提供 ANSI 原语，语义调色板由 `apps/ohna-cli/src/ui/theme.ts` 负责（包边界：term 不内置业务色板、不反向依赖 app）。
+- `packages/term`: ohna CLI 的整屏 TUI 渲染基础包（零外部依赖）：`RawTerminal`（raw mode / bracketed paste / resize 监听 / 光标定位与清屏原语）+ `Screen`（节流 + 行差分重绘：首帧与 resize 走 `clearScreen()` 全量、其余帧只重写变化行并清除尾部多余行，`RenderFn` 仍返回整帧最终行，调用方零感知）+ `box` 边框组件、`visibleWidth` 显示宽工具与 `truncateToWidth` 按可见列截断（ANSI 不占列、CJK 计 2）。颜色只提供 ANSI 原语，语义调色板由 `apps/ohna-cli/src/ui/theme.ts` 负责（包边界：term 不内置业务色板、不反向依赖 app）。
 - `docs/LEARNING_AND_EVOLUTION_ROADMAP.md`: Ongoing learning stages, engineering outcomes, and acceptance evidence.
 
 Keep package boundaries explicit. Do not move runtime behavior into an app when it belongs in a package. `apps/ohna-api` / `apps/ohna-cli` / `apps/ohna-web` must not depend on `apps/finance-api` / `apps/finance-web`, nor on each other.

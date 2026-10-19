@@ -139,8 +139,7 @@ test("renderEvent：懒打点——首个 text_delta 打 ⏺，纯 tool-call 消
   assert.doesNotMatch(pureTool, /⏺/, "纯 tool-call 消息不应打 ⏺");
 });
 
-test("renderEvent：非 TTY 输出不含任何 \\x1b 转义", () => {
-  const tracker = createUsageTracker();
+test("renderEvent：非 TTY 输出不含任何 \\x1b 转义", () => {  const tracker = createUsageTracker();
   const out = captureStdout(() => {
     renderEvent({ type: "agent_start" }, tracker, {});
     renderEvent({ type: "message_start", message: { role: "assistant", content: [] } }, tracker, {});
@@ -167,4 +166,30 @@ test("renderEvent：非 TTY 输出不含任何 \\x1b 转义", () => {
     renderEvent({ type: "agent_end", messages: [] }, tracker, {});
   });
   assert.equal(out.includes("\x1b"), false, "非 TTY 渲染不得产生 ANSI 转义序列");
+});
+
+test("foldOutput：非 TTY 提示指向 /export（M3），不再出现不可执行的 ctrl+o", () => {
+  const longText = Array.from({ length: 200 }, (_, index) => `line-${index}`).join("\n");
+  const defaultHint = foldOutput(longText);
+  assert.match(defaultHint, /完整输出见 \/export/);
+  assert.doesNotMatch(defaultHint, /ctrl\+o/, "非 TTY 打印路径不应出现 ctrl+o 提示");
+
+  // TUI 路径显式传入自己的文案（rows.ts 的调用），折叠逻辑不复制。
+  const tuiHint = foldOutput(longText, "（ctrl+o 展开分组 · 完整输出见 /export）");
+  assert.match(tuiHint, /ctrl\+o 展开分组/);
+  assert.match(tuiHint, /完整输出见 \/export/);
+});
+
+test("renderEvent：超长 bash 结果的折叠提示只指向 /export（M3）", () => {
+  const tracker = createUsageTracker();
+  const longOutput = Array.from({ length: 100 }, (_, index) => `out-${index}`).join("\n");
+  const out = captureStdout(() =>
+    renderEvent(
+      { type: "tool_execution_end", toolCallId: "m3", toolName: "bash", result: { content: [{ type: "text", text: longOutput }] }, isError: false },
+      tracker,
+      {},
+    ),
+  );
+  assert.match(out, /完整输出见 \/export/);
+  assert.doesNotMatch(out, /ctrl\+o/);
 });

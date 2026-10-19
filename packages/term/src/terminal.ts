@@ -28,6 +28,43 @@ export interface Terminal {
   get rows(): number;
   /** 清屏并回到左上角（等价 `\x1b[2J\x1b[H`）。 */
   clearScreen(): void;
+  /** 清除当前行光标之后的内容（`\x1b[K`）。 */
+  clearLine(): void;
+  /**
+   * 光标向上移动 n 行（`\x1b[{n}A`），列位置不变。
+   *
+   * @param n 移动行数，按 ANSI 语义夹紧为至少 1（非有限值同样按 1 处理）。
+   * @returns 无
+   */
+  moveCursorUp(n: number): void;
+  /**
+   * 光标向下移动 n 行（`\x1b[{n}B`），列位置不变。
+   *
+   * @param n 移动行数，按 ANSI 语义夹紧为至少 1（非有限值同样按 1 处理）。
+   * @returns 无
+   */
+  moveCursorDown(n: number): void;
+  /**
+   * 光标移动到当前行的第 n 列（`\x1b[{n}G`，1 为行首）。
+   *
+   * @param n 目标列号，按 ANSI 语义夹紧为至少 1（非有限值同样按 1 处理）。
+   * @returns 无
+   */
+  moveCursorToColumn(n: number): void;
+}
+
+/**
+ * 把光标移动数量夹紧为 ANSI 语义允许的正整数。
+ *
+ * ANSI 的 `CSI n A/B/G` 在 n 为 0 或负数时按 1 处理；这里显式夹紧，
+ * 避免调用方传入 0 时产生与直觉不符的位移。
+ *
+ * @param n 调用方期望的移动量。
+ * @returns 至少为 1 的整数。
+ */
+function clampCursorCount(n: number): number {
+  if (!Number.isFinite(n)) return 1;
+  return Math.max(1, Math.floor(n));
 }
 
 /**
@@ -149,5 +186,35 @@ export class RawTerminal implements Terminal {
   /** 清除当前行光标之后的内容（`\x1b[K`）。 */
   clearLine(): void {
     process.stdout.write("\x1b[K");
+  }
+
+  /**
+   * 光标向上移动 n 行（`\x1b[{n}A`），列位置不变。
+   *
+   * @param n 移动行数，至少按 1 处理。
+   * @returns 无
+   */
+  moveCursorUp(n: number): void {
+    process.stdout.write(`\x1b[${clampCursorCount(n)}A`);
+  }
+
+  /**
+   * 光标向下移动 n 行（`\x1b[{n}B`），列位置不变。
+   *
+   * @param n 移动行数，至少按 1 处理。
+   * @returns 无
+   */
+  moveCursorDown(n: number): void {
+    process.stdout.write(`\x1b[${clampCursorCount(n)}B`);
+  }
+
+  /**
+   * 光标移动到当前行的第 n 列（`\x1b[{n}G`，1 为行首）。
+   *
+   * @param n 目标列号，至少按 1 处理。
+   * @returns 无
+   */
+  moveCursorToColumn(n: number): void {
+    process.stdout.write(`\x1b[${clampCursorCount(n)}G`);
   }
 }

@@ -8,6 +8,8 @@
  * 加载策略：首次出现 `@fragment` 时才扫描工作区，扫描完成后经 `onUpdate` 触发一次重绘；
  * 文件列表在整个会话内缓存，后续输入不再重复 walk。
  */
+import { truncateToWidth, visibleWidth } from "@aiagent/term";
+import { paintBg, paintOnSurface } from "../theme.js";
 import {
   filterWorkspaceFiles,
   findFileReferenceFragment,
@@ -80,17 +82,21 @@ export class FileReferencePalette {
   /**
    * 渲染候选行（面板关闭或无候选时为空数组）。
    *
+   * 选中行使用 `selected` / `selectedText` 颜色块；`width > 0` 时裁剪并补齐，
+   * 让 panel 背景铺满整行。
+   *
    * @param value 输入框内容。
-   * @returns 最多 {@link MAX_FILE_PALETTE_ITEMS} 行文本（选中行反色）。
+   * @param width 面板目标可见宽；0 表示不补齐。
+   * @returns 最多 {@link MAX_FILE_PALETTE_ITEMS} 行文本（选中行颜色块）。
    */
-  buildLines(value: string): string[] {
+  buildLines(value: string, width: number = 0): string[] {
     const candidates = this.candidates(value);
     if (candidates.length === 0) return [];
     const selected = resolveIndex(this.selected, candidates.length);
-    const width = Math.max(...candidates.map((file) => file.length));
+    const nameWidth = Math.max(...candidates.map((file) => file.length));
     return candidates.map((file, index) => {
-      const label = `  @${file.padEnd(width)}`;
-      return index === selected ? `\x1b[7m${label}\x1b[27m` : label;
+      const fitted = fitToWidth(`  @${file.padEnd(nameWidth)}`, width);
+      return index === selected ? paintBg(fitted, "selected", "selectedText") : paintOnSurface(fitted, "panel");
     });
   }
 
@@ -168,6 +174,19 @@ export class FileReferencePalette {
         this.options.onUpdate();
       });
   }
+}
+
+/**
+ * 按目标可见宽裁剪并补空格（供背景铺满整行）。
+ *
+ * @param line 原始行（可含 ANSI）。
+ * @param width 目标可见宽；0 表示不处理。
+ * @returns 可见宽恰为 width 的行（width > 0 时）。
+ */
+function fitToWidth(line: string, width: number): string {
+  if (width <= 0) return line;
+  const clipped = truncateToWidth(line, width);
+  return clipped + " ".repeat(Math.max(0, width - visibleWidth(clipped)));
 }
 
 /**

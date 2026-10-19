@@ -1,82 +1,61 @@
 /**
- * TuiApp：封装整屏 TUI（全屏 shell + 输入编辑器 + 追加式对话区）。
+ * TuiApp：整屏 TUI 外壳（全屏 shell + 语义条目投影 + 输入编辑器 + 面板）。
  *
- * 架构要点：
- * - 终端原语由 `@aiagent/term` 的 `RawTerminal` 提供（raw mode + bracketed paste +
- *   resize 监听）；整屏重绘由 `Screen` 负责——它用「节流 + 幂等全量重绘」根治
- *   readline 滚动输出在 resize 时无法安全重绘引发的「风暴」：连续 resize 只触发一次
- *   节流重绘，且每次都先清屏再画当前帧，永不残留/错位。
- * - 对话内容模型 `contentLines`：追加式，每项已是「含 ANSI 的最终行」，由 render 层
- *   经 `setOutputSink(s => tui.append(s))` 注入；流式 delta 以「开放行」`buffer` 累积，
- *   遇 `\n` 固化为一行。Phase B2 的「流式原地刷新」不在本阶段范围。
- * - 输入区用 `box([editor.render(...)], {title:"ohna"})` 包成边框，始终贴底。
+ * Phase C1b 的架构变化（相对 C1a 的追加式模型）：
+ * - 不再持有 `contentLines / buffer`（预合成 ANSI 行）；改为持有 {@link TuiState}
+ *   —— 语义条目 + verbosity + 展开状态，所有可见行由 `rows.projectRows` 纯投影产出；
+ * - `append(text)` 仍是公共入口（repl 的 `write()` / 欢迎头 / slash 输出走它），但内部
+ *   把文本转为 `notice` 条目（`meta.rawAnsi=true` 原样透传 ANSI），按 `\n` 固化；
+ * - `attachStream(presenter)` 订阅 C1a 的 `PrintPresenter`；事件不再打印到 sink，而由同一归约流投影成整屏帧；
+ * - ctrl+o 原地开关「最近一个折叠组」（不再向对话流追加全文）。
  *
- * resize 安全性完全由 Screen 保证（已建好的节流 + 幂等），本类无需任何 resize 代码。
+ * Phase C2 的输入分派变化：
+ * - `handleInput` 先经 {@link InputAssembler} 拼合跨 chunk 的完整序列，再交给 {@link InputRouter} 模式栈；
+ * - editor 常驻底栈，picker / palette / file-palette 按压栈弹出；全局键（ctrl+o / Shift+Tab / Esc / Ctrl+C）
+ *   由 router 统一裁决，editor 不再优先消费；confirm 是独占顶栈模式（权限卡激活时吞掉一切按键）。
+ *
+ * Phase C3 的合成槽（D8）：
+ * - `askToolCall(info)` 打开 {@link PermissionCard} 并替换输入区；对话流不再出现权限问题文本；
+ * - `toast(text)` 把瞬时提示推进 {@link TuiState.toasts}，`buildFrame` 在输入框上方渲染最多 1 条；
+ * - 两者都在全帧重算里合成，不引入备用屏 / 浮层 / zIndex。
+ *
+ * 终端原语（raw mode / 光标 / 清屏）与节流幂等重绘由 `@aiagent/term` 提供；
+ * resize 安全性完全由 `Screen` 保证，本类无需 resize 代码。
+ *
+ * Phase C4 的结构变化：帧组合（对话区 / 合成槽 / 面板 / 状态行 + 高度钳制）已抽到
+ * `frame.ts` 的 {@link composeFrame} 纯函数；本类只做「取状态快照 → 组合 → 回写滚动预算」。
  */
-import { RawTerminal, Screen, box, truncateToWidth, visibleWidth } from "@aiagent/term";
-import { isDoubleEscape, splitLeadingEscapes } from "./esc-gesture.js";
-import { paint, type ThemeRole } from "../theme.js";
+import { RawTerminal, Screen } from "@aiagent/term";
+import { isDoubleEscape } from "./esc-gesture.js";
+import { paint } from "../theme.js";
 import { LineEditor } from "./tui-editor.js";
 import { FileReferencePalette } from "./tui-file-palette.js";
 import { SessionPicker, type SessionPickerItem } from "./tui-session-picker.js";
-import { filterSlashCommands, type SlashCommandDef } from "../../commands/slash.js";
+import { TuiState, type TuiEntrySource } from "./state.js";
+import { lastGroup } from "./rows.js";
+import { scrollState } from "./transcript.js";
+import {
+  clampIndex,
+  filteredCommands,
+  handleFilePaletteKey,
+  handlePanelKey,
+  paletteActive,
+  type TuiStatus,
+} from "./panels.js";
+import { InputRouter, type InputMode } from "./input-router.js";
+import { InputAssembler } from "./input-assembler.js";
+import type { PermissionCardDecision, PermissionCardInfo } from "./permission-card.js";
+import { PermissionCardRequest } from "./permission-request.js";
+import { composeFrame } from "./frame.js";
+import type { ToastAction } from "./toast.js";
+import type { TuiVerbosity } from "../stream/entries.js";
 
-/** 命令面板最多显示的条目数（与 SLASH_COMMANDS 规模一致，当前 12 条全部可见）。 */
-export const MAX_PALETTE_ITEMS = 12;
-
-/**
- * 把过滤后的命令渲染成 `/` 面板行：`  /cmd        描述`，选中行整行 reverse video 高亮。
- *
- * 纯函数（不依赖 TuiApp 状态），便于单测；不在此处做宽度裁剪——裁剪由调用方按终端
- * 列数统一 `truncateToWidth` 兜底。
- *
- * @param commands 已过滤的命令列表（保持顺序）。
- * @param selectedIndex 选中下标（调用方需已夹紧到 [0, len)）。
- * @returns 最多 {@link MAX_PALETTE_ITEMS} 行的面板文本（可能含 ANSI 反色高亮）。
- */
-export function buildPalette(
-  commands: readonly SlashCommandDef[],
-  selectedIndex: number,
-): string[] {
-  const shown = commands.slice(0, MAX_PALETTE_ITEMS);
-  if (shown.length === 0) return [];
-  const nameWidth = Math.max(...shown.map((c) => c.name.length));
-  return shown.map((c, i) => {
-    const label = `  ${c.name.padEnd(nameWidth)}  ${c.description}`;
-    return i === selectedIndex ? `\x1b[7m${label}\x1b[27m` : label;
-  });
-}
-
-/**
- * 把选中下标夹紧到 `[0, length-1]`（过滤结果变化后调用，防止越界）。
- *
- * @param index 当前选中下标。
- * @param length 过滤结果条数。
- * @returns 夹紧后的下标；length <= 0 时返回 0。
- */
-export function clampIndex(index: number, length: number): number {
-  if (length <= 0) return 0;
-  return Math.min(Math.max(0, index), length - 1);
-}
-
-/**
- * 权限模式对应的语义色：default 低调、acceptEdits 强调、plan 警示、bypass 危险。
- *
- * @param mode 权限模式名。
- * @returns 主题色位；未知模式回退 dim。
- */
-function permissionModeRole(mode: string): ThemeRole {
-  switch (mode) {
-    case "acceptEdits":
-      return "accent";
-    case "plan":
-      return "warn";
-    case "bypass":
-      return "error";
-    default:
-      return "dim";
-  }
-}
+// 面板工具从 panels.ts 拆出；这里 re-export 保持既有公共入口与测试导入路径不变。
+export { buildPalette, clampIndex } from "./panels.js";
+export type { TuiStatus } from "./panels.js";
+// C3：权限卡类型从本入口透出，供 repl 装配与单测引用。
+export type { PermissionCardDecision, PermissionCardInfo } from "./permission-card.js";
+export type { ToastAction } from "./toast.js";
 
 /** TuiApp 的构造选项。 */
 export interface TuiAppOptions {
@@ -87,30 +66,13 @@ export interface TuiAppOptions {
 }
 
 /**
- * 状态行内容：输入框下方居右展示的一行「模型 + 上下文占比」。
+ * 整屏 TUI 应用：持有 Screen、LineEditor、面板与 {@link TuiState}，
+ * 提供整屏组合与生命周期。
  *
- * 由上层（repl）通过 `setStatus` 注入一个求值函数，`buildFrame` 每帧调用它以实时
- * 反映最新的模型（`/model` 切换）与上下文占比（tracker 随每轮增长）。
- */
-export interface TuiStatus {
-  /** 模型名（如 hy3-x）。 */
-  model: string;
-  /** 上下文占比（0..100 的百分比）；负值 / 超界由 {@link TuiApp} 侧夹紧。 */
-  contextPercent: number;
-  /**
-   * 当前权限模式（default / acceptEdits / plan / bypass），状态行左侧展示。
-   *
-   * 缺省按 `default` 渲染，保证未接权限会话的宿主（测试 / 旧装配）仍有稳定布局。
-   */
-  permissionMode?: string;
-}
-
-/**
- * 整屏 TUI 应用：持有 Screen 与 LineEditor，维护对话内容模型并提供整屏组合与生命周期。
- *
- * 上层（repl）通过 `setOutputSink(s => tui.append(s))` 把 render 输出接入对话模型，
- * 通过设置 `onSubmit` / `onInterrupt` 钩子接收用户输入与中断，通过 `confirm()` 在
- * coding 模式确认闸门下提问 y/n。
+ * 上层（repl）通过 `setOutputSink(s => tui.append(s))` 把宿主输出接入 notice 流，
+ * 通过 `attachStream(printPresenter)` 订阅事件归约结果，通过设置
+ * `onSubmit` / `onInterrupt` 钩子接收用户输入与中断，通过 `askToolCall(info)`
+ * 在 coding 模式确认闸门下开权限卡，通过 `toast(text)` 展示瞬时提示。
  */
 export class TuiApp {
   /** 整屏渲染器（驱动 RawTerminal 做节流 + 幂等重绘）。 */
@@ -121,12 +83,24 @@ export class TuiApp {
   private readonly filePalette: FileReferencePalette;
   /** `/resume` 会话选择面板（无参时展示最近会话）。 */
   private readonly sessionPicker = new SessionPicker();
-  /** 对话内容：已固化的「含 ANSI 最终行」，追加式增长。 */
-  private contentLines: string[] = [];
-  /** 当前未结束的开放行：流式 delta 累积于此，遇 `\n` 固化为 contentLines 一项。 */
-  private buffer = "";
-  /** 进行中的确认解析器：存在时编辑器提交/中断改走确认语义。 */
-  private confirmResolver?: (value: string | null) => void;
+  /** 投影状态：语义条目 + verbosity + 展开状态（唯一可变状态容器，D5）。 */
+  private readonly state = new TuiState();
+  /** 输入路由模式栈（Phase C2）。 */
+  private readonly router: InputRouter;
+  /** 跨 chunk 输入序列拼装器：未闭合转义序列缓冲 + 超时兜底（见 input-assembler.ts）。 */
+  private readonly inputAssembler: InputAssembler;
+  /** 底栈编辑器模式：所有未消费输入最终落到这里。 */
+  private readonly editorMode: InputMode;
+  /** 独占确认模式：权限卡激活时压栈（C3）。 */
+  private readonly confirmMode: InputMode;
+  /** `/` 命令面板模式（输入派生，随输入自动注册 / 注销）。 */
+  private readonly paletteMode: InputMode;
+  /** `/resume` 会话选择模式。 */
+  private readonly sessionPickerMode: InputMode;
+  /** `@` 文件候选模式。 */
+  private readonly filePaletteMode: InputMode;
+  /** 权限卡请求生命周期（C3）：Promise / abort / 结算收口见 {@link PermissionCardRequest}。 */
+  private readonly cardRequest: PermissionCardRequest;
 
   /** `/` 命令面板的选中下标（面板关闭时无意义，见 {@link filteredCommands}）。 */
   private selectedIndex = 0;
@@ -137,13 +111,22 @@ export class TuiApp {
   /** 上一次 Esc 时刻：用于识别「双击 Esc」手势（F-2，见 {@link handleEscape}）。 */
   private lastEscapeAt = 0;
 
+  /** 最近一次 buildFrame 的终端宽度与对话区预算（C4 输入分派时复用）。 */
+  private lastWidth = 80;
+  private lastDialogueBudget = 0;
+
   /** 提交钩子：用户按 Enter（且非确认态）时以输入文本调用。 */
   onSubmit?: (value: string) => void;
   /** 中断钩子：用户按 Ctrl+C（且非确认态）时调用（上层决定中断 run 或退出）。 */
   onInterrupt?: () => void;
   /** Esc 中断钩子：用户按单次 Esc（且非确认态、非面板态）时调用；上层仅中断 run、空闲不退出（F-2）。 */
   onEscape?: () => void;
-  /** verbose 切换钩子：用户按 Ctrl+O 时调用（上层切换开关并重打折叠块全文）。 */
+  /**
+   * verbosity / 折叠切换钩子：用户按 Ctrl+O 时调用。
+   *
+   * C1b 起 ctrl+o 是「原地开关最近一个折叠组」：上层通常转调
+   * {@link toggleLastGroup}；不再向对话流追加全文。
+   */
   onVerboseToggle?: () => void;
   /** 权限模式循环钩子：用户按 Shift+Tab 时调用（上层循环 default → acceptEdits → plan）。 */
   onModeCycle?: () => void;
@@ -153,7 +136,7 @@ export class TuiApp {
   /**
    * 构造整屏 TUI。
    *
-   * @param options 可选提示符。
+   * @param options 可选提示符与工作目录。
    */
   constructor(options?: TuiAppOptions) {
     const terminal = new RawTerminal();
@@ -164,12 +147,127 @@ export class TuiApp {
       cwd: options?.cwd ?? process.cwd(),
       onUpdate: () => this.requestRender(),
     });
+
+    this.editorMode = {
+      id: "editor",
+      handle: (data) => {
+        this.editor.handleInput(data);
+        return true;
+      },
+    };
+    this.confirmMode = {
+      id: "confirm",
+      exclusive: true,
+      handle: (data) => {
+        // 独占：所有按键都交给权限卡（有裁决则结算并弹栈，否则仅移动选中）。
+        this.cardRequest.handleKey(data);
+        return true;
+      },
+    };
+    this.paletteMode = {
+      id: "palette",
+      handle: (data) => {
+        const result = handlePanelKey(
+          {
+            editor: this.editor,
+            selectedIndex: this.selectedIndex,
+            sessionPicker: this.sessionPicker,
+            filePalette: this.filePalette,
+          },
+          data,
+        );
+        this.selectedIndex = result.selectedIndex;
+        return result.consumed;
+      },
+      onExit: () => {
+        this.editor.value = "";
+        this.editor.cursor = 0;
+        this.selectedIndex = 0;
+        this.editor.onChange?.();
+      },
+    };
+    this.sessionPickerMode = {
+      id: "session-picker",
+      handle: (data) => {
+        const result = this.sessionPicker.handleKey(data);
+        if (result.selectedId) this.onSessionSelected?.(result.selectedId);
+        return result.consumed;
+      },
+      onExit: () => {
+        // Esc / Ctrl+C 弹栈时必须真正关闭选择器，否则 syncModes 会立刻把它重新压栈。
+        this.sessionPicker.close();
+      },
+    };
+    this.filePaletteMode = {
+      id: "file-palette",
+      handle: (data) => handleFilePaletteKey(this.editor, this.filePalette, data),
+      onExit: () => {
+        // 让文件面板记住「被 Esc 关闭时的输入」，避免下一帧又自动弹出。
+        this.filePalette.handleKey("\x1b", this.editor.value);
+      },
+    };
+
+    this.router = new InputRouter({
+      onVerbose: () => this.onVerboseToggle?.(),
+      onModeCycle: () => this.onModeCycle?.(),
+      onScrollUp: () => scrollState(this.state, { width: this.lastWidth, budget: this.lastDialogueBudget }, "up"),
+      onScrollDown: () => scrollState(this.state, { width: this.lastWidth, budget: this.lastDialogueBudget }, "down"),
+      onScrollBottom: () => scrollState(this.state, { width: this.lastWidth, budget: this.lastDialogueBudget }, "bottom"),
+      onInterrupt: () => this.onInterrupt?.(),
+      onEscape: () => this.handleEscape(),
+    });
+    this.router.push(this.editorMode);
+
+    // 输入最上游：缓冲跨 chunk 未闭合转义序列；即时片段与超时兜底共用同一路由。
+    this.inputAssembler = new InputAssembler({ onFlush: (sequence) => this.dispatchInput(sequence) });
+
+    // 权限卡请求：开卡压 confirm 独占模式，结算弹栈并重绘（C3）。
+    this.cardRequest = new PermissionCardRequest({
+      onOpen: () => {
+        this.router.remove("confirm");
+        this.router.push(this.confirmMode);
+        // M5：确认态冻结 toast 计时器，避免用户在决策期间被超时吞掉提示。
+        this.state.toasts.pause();
+      },
+      onClose: () => {
+        this.router.remove("confirm");
+        this.state.toasts.resume();
+      },
+      onChange: () => this.requestRender(),
+    });
+
+    // 状态是唯一变更源：任何写入最终都汇聚到一次 requestRender。
+    this.state.subscribe(() => this.requestRender());
   }
+
+  /** 当前 verbosity（repl 的 `/verbose` 循环读取）。 */
+  getVerbosity(): TuiVerbosity {
+    return this.state.verbosity;
+  }
+
+  /**
+   * 设置 verbosity 三档（TUI 投影语义，D6）。
+   *
+   * @param level 目标档位。
+   */
+  setVerbosity(level: TuiVerbosity): void {
+    this.state.setVerbosity(level);
+  }
+
+  /**
+   * 订阅事件归约流（C1a 的 `PrintPresenter`）。
+   *
+   * 事件仍由 presenter 归约与广播，但宿主应同时关闭 presenter 的事件打印
+   * （`setEventRenderingEnabled(false)`），否则事件行会与投影重复。
+   *
+   * @param source 条目源（`entries()` + `subscribe()`；可选 `appendNotice`）。
+   */
+  attachStream(source: TuiEntrySource): void {
+    this.state.attachSource(source);
+  }
+
   /**
    * 设置状态行求值函数：`buildFrame` 每帧调用它求值（返回 undefined 则不显示状态行）。
-   *
-   * 无需在此触发重绘——repl 装配完即 `start()` 画首帧，后续每帧都实时求值；
-   * `/model` 切换与每轮 run 结束都会触发一次重绘，状态行随之更新。
    *
    * @param fn 求值函数，或 undefined 表示隐藏状态行。
    */
@@ -180,212 +278,166 @@ export class TuiApp {
   /**
    * 打开 `/resume` 会话选择面板（输入框下方展示最近会话）。
    *
-   * 由 repl 的 `/resume` handler 在取到 `store.list()` 结果后调用；面板打开期间
-   * `handleInput` 优先把 ↑/↓/Enter/Esc 交给选择器，其余按键关闭面板并交回编辑器。
-   *
    * @param items 最近会话（调用方已按更新时间倒序）。
    */
   openSessionPicker(items: readonly SessionPickerItem[]): void {
     this.sessionPicker.openWith(items);
+    this.syncModes();
     this.requestRender();
   }
 
   /**
-   * 追加一段文本到对话模型：按 `\n` 拆分成固化行，末段作为开放行保留（流式累积）。
+   * 追加一段文本到对话流：按 `\n` 固化为 `notice` 条目（`rawAnsi` 原样透传）。
    *
    * @param text 来自 render 层的整块文本（可能含多行与 ANSI）。
    */
   append(text: string): void {
-    this.buffer += text;
-    let idx: number;
-    while ((idx = this.buffer.indexOf("\n")) >= 0) {
-      const line = this.buffer.slice(0, idx);
-      this.buffer = this.buffer.slice(idx + 1);
-      this.contentLines.push(line);
-    }
-    this.requestRender();
+    this.state.appendNotice(text, { rawAnsi: true });
   }
 
   /**
-   * 追加一条完整行（立即固化，并刷新开放行）。
+   * 追加一条用户输入回显为 `user` 条目（M3：整屏 TUI 对话流的语义条目）。
+   *
+   * 与 `append`（notice + rawAnsi）的区别：这里存**未上色原文**，由投影层负责
+   * `❯ ` 标记与 user 配色，因此用户输入与 assistant / tool 条目共享分组与滚动模型。
+   *
+   * @param text 用户输入原文（未上色）。
+   */
+  appendUser(text: string): void {
+    this.state.appendUser(text);
+  }
+
+  /**
+   * 会话级视图重置（M2）：清空展开状态、滚动归零并清空 toast。
+   *
+   * 会话切换（/clear、/resume、fork）时由 `repl-commands` 经 `onSessionSwitched` 调用，
+   * 避免上一个会话的 `expanded` / 滚动位置 / 提示残留到新会话。
+   */
+  resetView(): void {
+    this.state.resetView();
+  }
+
+  /**
+   * 追加一条完整行（立即固化）。
    *
    * @param line 单行文本（可含 ANSI）。
    */
   appendLine(line: string): void {
-    if (this.buffer.length > 0) {
-      this.contentLines.push(this.buffer);
-      this.buffer = "";
-    }
-    this.contentLines.push(line);
-    this.requestRender();
+    this.append(`${line}\n`);
   }
 
   /**
-   * 提问并等待单行回答（coding 模式确认闸门用）：把问题写入对话区，用户在下方的输入
-   * 框键入并回车即作为答案；Ctrl+C 回答 null（被中断/拒绝）。
+   * 原地开关「最近一个折叠组」的展开状态（ctrl+o 的新语义）。
    *
-   * @param question 已着色的提问文本。
-   * @returns 用户输入原文；null 表示被中断。
+   * 不再向对话流追加全文：只改 `state.expanded`，下一帧由投影层重算。
+   *
+   * @returns 是否找到可折叠组（false 表示当前无可折叠组，调用方可提示用户）。
    */
-  confirm(question: string): Promise<string | null> {
-    this.appendLine(question);
-    return new Promise((resolve) => {
-      this.confirmResolver = resolve;
-    });
+  toggleLastGroup(): boolean {
+    const last = lastGroup(this.state.entries(), this.state.verbosity, this.state.expanded);
+    if (!last) return false;
+    this.state.setExpanded(last.id, !last.expanded);
+    return true;
   }
 
   /**
-   * 组合整屏帧：顶部对话区取 contentLines（含开放行）尾部，底部输入区用 box 包边；
-   * 输入框下方在 `/` 面板打开时叠一个命令面板，最下方在状态行启用时追加居右的
-   * 「模型 + 上下文占比」状态行。所有行最后统一按终端列宽裁剪。
+   * 推入一条瞬时提示（C3 · D8）：队列语义与 1 行渲染槽见 {@link ToastQueue}。
    *
-   * 布局顺序（上 → 下）：对话区 → 输入框 → 命令面板 → 状态行（面板与状态行高度都从
-   * 对话区扣除，保证贴底）。
+   * 不经对话流，因此排队 / 模式切换 / 自动放行等提示不会污染历史。
+   *
+   * @param text 展示文本（可含 ANSI，调用方自行着色）。
+   * @param options 可选时长与动作。
+   */
+  toast(text: string, options?: { duration?: number; action?: ToastAction }): void {
+    this.state.toasts.push({ text, ...options });
+  }
+
+  /**
+   * 打开权限卡并等待裁决（D7 结构化 ask 协议）。
+   *
+   * 卡片替换输入区（D8 合成槽），压 confirm 独占模式；`Esc` / `Ctrl+C` 都是显式拒绝，
+   * `signal` 中断时按 null 收口——任何路径都保证 Promise 必定 resolve，不会悬挂。
+   *
+   * @param info 工具名 / 摘要 / 可选 diff 预览。
+   * @param signal run 级中断信号（可选）。
+   * @returns 用户裁决；null 表示被中断（闸门按拒绝处理）。
+   */
+  askToolCall(info: PermissionCardInfo, signal?: AbortSignal): Promise<PermissionCardDecision | null> {
+    return this.cardRequest.ask(info, signal);
+  }
+
+  /**
+   * 组合整屏帧：对话区（条目纯投影的尾部）→ 输入框 → 面板 → 状态行，全部按屏宽裁剪。
+   *
+   * 纯组合逻辑已抽到 {@link composeFrame}（`frame.ts`）；这里只负责取当前状态快照，
+   * 并把「对话区预算」回写给滚动键复用（C4）。
    *
    * @param width 终端列数。
    * @param height 终端行数。
    * @returns 整屏每一行（已是带 ANSI 的最终文本，且无任何行可见宽超过 width）。
    */
   buildFrame(width: number, height: number): string[] {
-    const innerWidth = Math.max(1, width - 2);
-    // 输入区：上边框 / 输入行 / 下边框（inputBoxHeight = 3）。
-    // 宽度预算：box 的内容区是 innerWidth，其两侧内边距各占 1 列、边框各占 1 列，
-    // 因此留给 editor 的列数是 innerWidth - 2——否则 box 会把盒子顶到「屏宽 + 2」，
-    // 末 2 列（` │` / `╯`）被终端折行走样。
-    const inputLines = box([this.editor.render(innerWidth - 2)], {
-      title: "ohna",
-      width: innerWidth,
+    this.lastWidth = width;
+    const frame = composeFrame({
+      width,
+      height,
+      editor: this.editor,
+      ...(this.cardRequest.current ? { card: this.cardRequest.current } : {}),
+      ...(this.state.toasts.current ? { toast: this.state.toasts.current } : {}),
+      pending: this.state.toasts.pending,
+      sessionPicker: this.sessionPicker,
+      filePalette: this.filePalette,
+      selectedIndex: this.selectedIndex,
+      entries: this.state.entries(),
+      verbosity: this.state.verbosity,
+      expanded: this.state.expanded,
+      backfill: this.state.backfill,
+      historyOffset: this.state.historyOffset,
+      status: this.statusFn?.(),
     });
-    const inputBoxHeight = inputLines.length;
-
-    // 候选面板：`/` 命令面板、`@` 文件面板、`/resume` 会话选择器统一渲染在输入框下方。
-    // 三者输入形态互斥（命令已提交 / `@fragment` / 空输入），正常不会同时有内容。
-    const panelLines = [
-      ...this.sessionPicker.buildLines(),
-      ...this.buildPaletteLines(),
-      ...this.filePalette.buildLines(this.editor.value),
-    ];
-    const panelHeight = panelLines.length;
-
-    // 状态行（模型 + 上下文占比）：存在时占 1 行，同样从对话区高度扣除，保证贴底。
-    const statusLine = this.buildStatusLine(width);
-    const statusHeight = statusLine === undefined ? 0 : 1;
-
-    const dialogueHeight = Math.max(0, height - inputBoxHeight - panelHeight - statusHeight);
-
-    const pending = this.buffer;
-    const all = pending ? [...this.contentLines, pending] : this.contentLines;
-    // 对话区只保留能容纳的尾部行；高度不足时仅显示最近内容 + 输入区 + 面板 + 状态行。
-    const dialogueLines = all.slice(Math.max(0, all.length - dialogueHeight));
-
-    const combined = [
-      ...dialogueLines,
-      ...inputLines,
-      ...panelLines,
-      ...(statusLine === undefined ? [] : [statusLine]),
-    ];
-    // 宽度安全兜底：任何一行（含长 cwd/session 的欢迎头、开放行、面板行）都不超过屏宽，
-    // 因此永不折行、边框永不错位。输入区已按 innerWidth 预算，此处截断只是兜底。
-    return combined.map((line) => truncateToWidth(line, width));
+    this.lastDialogueBudget = frame.dialogueBudget;
+    return frame.lines;
   }
 
   /**
-   * 求值并渲染状态行：左侧「⏵⏵ 权限模式」，右侧「模型 · 上下文占比」。
-   *
-   * 布局动机（对齐 Claude Code）：权限模式是当前会话的「操作约束」，放在左下角与输入区
-   * 同侧，用户不用扫到右侧数字区就能确认当前是 default / acceptEdits / plan / bypass；
-   * 模型与上下文占比仍居右，保持原有视觉锚点。
-   *
-   * 宽度策略：先按可见宽（ANSI 不占列）计算中间填充；极窄终端（左右之和超过屏宽）时
-   * 截断左侧模式文本、优先保留右侧模型/占比。占比先四舍五入再夹紧到 [0, 100]。
-   *
-   * @param width 终端列数。
-   * @returns 左模式 + 右模型/占比的状态行；未装配 statusFn 或它返回空时返回 undefined。
-   */
-  private buildStatusLine(width: number): string | undefined {
-    const status = this.statusFn?.();
-    if (!status) return undefined;
-    const percent = Math.min(100, Math.max(0, Math.round(status.contextPercent)));
-    const mode = status.permissionMode ?? "default";
-    const left = paint(`⏵⏵ ${mode}`, permissionModeRole(mode));
-    const right = paint(status.model, "accent") + paint(` · ${percent}%`, "dim");
-
-    // 极窄终端：保留右侧（模型/占比更关键），左侧按剩余列截断。
-    if (visibleWidth(left) + visibleWidth(right) >= width) {
-      const availableLeft = Math.max(0, width - visibleWidth(right) - 1);
-      const trimmedLeft = availableLeft > 0 ? truncateToWidth(left, availableLeft) : "";
-      const gap = Math.max(0, width - visibleWidth(trimmedLeft) - visibleWidth(right));
-      return trimmedLeft + " ".repeat(gap) + right;
-    }
-
-    const gap = width - visibleWidth(left) - visibleWidth(right);
-    return left + " ".repeat(gap) + right;
-  }
-
-  /**
-   * 输入分发：面板打开时先消费面板导航键（Up/Down/Tab/Esc/Enter），其余照常交给编辑器。
-   *
-   * 每次输入/选择变化都会经 `requestRender`（编辑器 onChange 或本方法显式触发）重绘。
+   * 输入分发入口：先经 {@link InputAssembler} 拼装跨 chunk 的完整序列，再逐段路由；
+   * 半截 `\x1b`（可能是 Esc，也可能是 CSI 前缀）由 assembler 缓冲后按超时兜底。
    *
    * @param data 原始 stdin 输入（可能是单键或一小段 chunk）。
    */
   private handleInput(data: string): void {
-    // `/resume` 选择器优先：↑/↓/Enter/Esc 归选择器；可打印字符关闭面板后继续交给编辑器。
-    if (this.sessionPicker.isOpen()) {
-      const result = this.sessionPicker.handleKey(data);
-      if (result.selectedId) {
-        this.onSessionSelected?.(result.selectedId);
-        this.requestRender();
-        return;
-      }
-      if (result.consumed) {
-        this.requestRender();
-        return;
-      }
-      // 未消费（可打印字符 / 粘贴）：选择器已关闭，继续走下面的编辑器路径。
-      this.requestRender();
-    }
-    if (this.panelOpen() && this.handlePanelKey(data)) {
-      this.requestRender();
-      return;
-    }
-    // F-6：`@fragment` 面板优先消费导航 / 补全键；未命中时按键照常进入编辑器。
-    if (this.handleFilePaletteKey(data)) {
-      this.requestRender();
-      return;
-    }    // F-2：面板关闭时识别 Esc。只有「独立 Esc」或「连续多个 Esc」才算中断手势；
-    // `\x1b[A`（方向键）、`\x1bO...`（功能键）、`\x1bA`（Alt+键）整体交回编辑器，
-    // 避免把 Alt+字母误判成中断。
-    const { escapes, remainder } = splitLeadingEscapes(data);
-    for (let i = 0; i < escapes; i += 1) this.handleEscape();
-    if (remainder.length > 0) {
-      // 非 Esc 输入中断「双击」判定：两下 Esc 之间若夹了别的按键，不应再算双击。
-      this.lastEscapeAt = 0;
-      this.editor.handleInput(remainder);
-    }
-    // 过滤结果可能已变化，夹紧选中下标（若面板仍打开）。
-    this.selectedIndex = clampIndex(this.selectedIndex, this.filteredCommands.length);
+    for (const sequence of this.inputAssembler.feed(data)) this.dispatchInput(sequence);
+  }
+
+  /** @param data 已拼装完整的输入片段（即时序列与超时兜底共用）。 */
+  private dispatchInput(data: string): void {
+    // confirm（权限卡）独占期间不注册其它弹出模式，避免它们被压到确认模式之上。
+    if (!this.cardRequest.active) this.syncModes();
+    this.router.dispatch(data);
+    if (!this.cardRequest.active) this.syncModes();
+    this.selectedIndex = clampIndex(this.selectedIndex, filteredCommands(this.editor.value).length);
+    this.requestRender();
   }
 
   /**
-   * F-2：处理一次 Esc 按下（面板已关闭）。
+   * 按输入派生状态注册 / 注销弹出模式。
    *
-   * 单次 Esc 立即触发中断（复用 {@link onEscape}，仅中断 run、空闲不退出）；
-   * 若距上一次 Esc 在 {@link ESC_DOUBLE_WINDOW_MS} 内，则识别为「双击」手势，占位
-   * 「编辑上一条输入」（真正的 rewind 待 checkpoint/rewind 落地后启用）。
+   * 压栈顺序保证旧优先级：session-picker > palette > file-palette > editor。
+   * 这里只是「模式生命周期」同步，不再承担按键优先级判断（那归 router）。
+   */
+  private syncModes(): void {
+    this.router.setTransientMode("file-palette", this.filePalette.fragment(this.editor.value) !== null, this.filePaletteMode);
+    this.router.setTransientMode("palette", paletteActive(this.editor.value), this.paletteMode);
+    this.router.setTransientMode("session-picker", this.sessionPicker.isOpen(), this.sessionPickerMode);
+  }
+
+  /**
+   * F-2：处理一次 Esc 按下（无弹出面板时）。
    *
-   * 确认态下不走上述手势：Esc 与 Ctrl+C 一致（回答 null + 中断 run），否则确认
-   * Promise 会永久悬挂；此路径直接复用编辑器装配好的 onInterrupt。
-   *
-   * 取舍：单次 Esc 立即中断（不引入 500ms 延迟），因此双击时第一次 Esc 已先触发中断，
-   * 第二次 Esc 再补一条占位提示——这是占位阶段的合理降级，后续落地 rewind 时再收紧语义。
+   * 单次 Esc 立即触发中断；双击 Esc 识别为「编辑上一条输入」占位手势。
+   * 确认态由独占 confirm 模式先行消费，不会走到这里。
    */
   private handleEscape(): void {
-    // 确认态：Esc 等价于 Ctrl+C（回答 null + 中断 run），否则 confirm Promise 会永久悬挂。
-    if (this.confirmResolver) {
-      this.editor.onInterrupt?.();
-      return;
-    }
     const now = Date.now();
     if (isDoubleEscape(this.lastEscapeAt, now)) {
       this.lastEscapeAt = 0;
@@ -397,174 +449,34 @@ export class TuiApp {
   }
 
   /**
-   * `/` 面板是否打开：输入以 `/` 开头且尚未敲空格（仍在选命令名，未进入参数）。
-   */
-  private panelOpen(): boolean {
-    const v = this.editor.value;
-    return v.startsWith("/") && !/\s/.test(v);
-  }
-
-  /** 当前过滤后的命令（面板打开时）；关闭时为空数组。 */
-  private get filteredCommands(): SlashCommandDef[] {
-    if (!this.panelOpen()) return [];
-    return filterSlashCommands(this.editor.value);
-  }
-
-  /**
-   * 渲染命令面板行（面板关闭时为空数组）。选中下标在此夹紧，保证过滤变化后不越界。
-   */
-  private buildPaletteLines(): string[] {
-    const commands = this.filteredCommands;
-    if (commands.length === 0) return [];
-    const selected = clampIndex(this.selectedIndex, commands.length);
-    return buildPalette(commands, selected);
-  }
-
-  /** 处理 `@` 文件面板按键；Tab / Enter 命中候选时替换为 `@<相对路径> `。 */
-  private handleFilePaletteKey(data: string): boolean {
-    const result = this.filePalette.handleKey(data, this.editor.value);
-    if (!result.consumed) return false;
-    if (result.value !== undefined) {
-      this.editor.value = result.value;
-      this.editor.cursor = result.value.length;
-      this.editor.onChange?.();
-    }
-    return true;
-  }
-
-  /**
-   * 面板打开时消费面板专属键。返回 true 表示已消费（不再交给编辑器）。
-   *
-   * 键序：Up/Down 移动选中（不当作历史浏览）；Tab 补全选中命令到输入框（如 `/help `）；
-   * 单字节 Esc 关闭面板；Enter 有选中项时直接提交该命令。方向键 `\x1b[A/B` 是完整三字节
-   * 序列，先于单字节 Esc 匹配，raw mode 下不会被误判为 Esc。
-   *
-   * @param data 原始输入。
-   * @returns 是否为面板键。
-   */
-  private handlePanelKey(data: string): boolean {
-    // Esc 先于「是否有匹配项」处理：面板已打开但过滤结果为空时，Esc 仍应只关闭面板，
-    // 不能落到「中断 run」分支（用户当下是在操作面板，不是在操作运行）。
-    if (data === "\x1b") {
-      this.lastEscapeAt = 0; // 面板关闭属于一次完整手势，避免后续 Esc 误判双击。
-      this.editor.value = "";
-      this.editor.cursor = 0;
-      this.selectedIndex = 0;
-      this.editor.onChange?.();
-      return true;
-    }
-    const commands = this.filteredCommands;
-    if (commands.length === 0) return false;
-    switch (data) {
-      case "\x1b[A": // Up
-        this.selectedIndex = clampIndex(this.selectedIndex - 1, commands.length);
-        return true;
-      case "\x1b[B": // Down
-        this.selectedIndex = clampIndex(this.selectedIndex + 1, commands.length);
-        return true;
-      case "\t": // Tab：补全选中命令，末尾补空格便于继续输入参数，面板随之关闭。
-        this.completeCommand(commands[clampIndex(this.selectedIndex, commands.length)]);
-        return true;
-      case "\r":
-      case "\n": // Enter：直接提交选中命令。
-        this.submitCommand(commands[clampIndex(this.selectedIndex, commands.length)]);
-        return true;
-      default:
-        return false;
-    }
-  }
-
-  /**
-   * Tab 补全：把选中命令写入输入框并在末尾补一个空格（如 `/help `），光标置行尾。
-   *
-   * @param command 选中的命令。
-   */
-  private completeCommand(command: SlashCommandDef): void {
-    this.editor.value = `${command.name} `;
-    this.editor.cursor = this.editor.value.length;
-    this.selectedIndex = 0;
-    this.editor.onChange?.();
-  }
-
-  /**
-   * Enter 提交选中命令：把命令名写入输入框后走编辑器既有提交路径（复用历史/清空/回调）。
-   *
-   * @param command 选中的命令。
-   */
-  private submitCommand(command: SlashCommandDef): void {
-    this.editor.value = command.name;
-    this.editor.cursor = command.name.length;
-    this.selectedIndex = 0;
-    this.editor.handleInput("\r");
-  }
-
-  /**
    * 启动整屏 TUI：接管终端、装配渲染与输入、注册编辑器回调、绘制首帧。
-   *
-   * 注意：进入前隐藏硬件光标（编辑位置仅凭反色块指示），退出时恢复。
    */
   start(): void {
     process.stdout.write("\x1b[?25l");
     this.screen.setRenderFn((w, h) => this.buildFrame(w, h));
     this.screen.setOnInput((d) => this.handleInput(d));
 
-    // 提交：确认态下解析 confirm，否则上交上层（repl 的 processLine）。
     this.editor.onSubmit = (value) => {
-      // 提交成功即结束 Esc 手势窗口，避免紧接着的 Esc 被误判为「双击」。
       this.lastEscapeAt = 0;
-      if (this.confirmResolver) {
-        const resolver = this.confirmResolver;
-        this.confirmResolver = undefined;
-        this.editor.value = "";
-        this.editor.cursor = 0;
-        this.editor.onChange?.();
-        resolver(value);
-        return;
-      }
+      // confirm 模式的 Enter 已被 router 独占消费，这里只处理普通提交。
       this.onSubmit?.(value);
     };
 
-    // 中断：确认态下回答 null 并同时尝试中断进行中的 run；否则上交上层。
-    this.editor.onInterrupt = () => {
-      if (this.confirmResolver) {
-        const resolver = this.confirmResolver;
-        this.confirmResolver = undefined;
-        this.editor.value = "";
-        this.editor.cursor = 0;
-        this.editor.onChange?.();
-        resolver(null);
-        this.onInterrupt?.();
-        return;
-      }
-      this.onInterrupt?.();
-    };
-
     this.editor.onChange = () => this.requestRender();
-    // F-3：Ctrl+O 切换 verbose（确认态下不切换，与提交/中断一致）。
-    this.editor.onVerboseToggle = () => {
-      if (this.confirmResolver) return;
-      this.onVerboseToggle?.();
-    };
-    // B2：Shift+Tab 循环权限模式；确认态下不切换，避免审批问题被模式切换打断。
-    this.editor.onModeCycle = () => {
-      if (this.confirmResolver) return;
-      this.onModeCycle?.();
-    };
     this.screen.start();
-    this.requestRender(); // 首帧立即绘制（含已注入的欢迎头）
+    this.requestRender();
   }
 
-  /**
-   * 停止整屏 TUI：交还终端控制权并恢复硬件光标。
-   */
+  /** 停止整屏 TUI：结算在途权限卡、释放 Toast 计时器、交还终端并恢复硬件光标。 */
   stop(): void {
+    this.inputAssembler.dispose();
+    this.cardRequest.dispose();
+    this.state.toasts.dispose();
     this.screen.stop();
     process.stdout.write("\x1b[?25h");
   }
 
-  /**
-   * 触发一次整屏重绘（委托 Screen 节流）。
-   */
+  /** 触发一次整屏重绘（委托 Screen 节流）。 */
   private requestRender(): void {
     this.screen.requestRender();
   }

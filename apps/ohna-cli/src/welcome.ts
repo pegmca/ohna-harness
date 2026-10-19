@@ -6,11 +6,13 @@
  * M3 起命令的解析与分发移到 slash.ts（命令表 + 注入式 handler），
  * 本文件不再持有命令表，避免两处维护同一份别名列表。
  *
- * M6（CLI 主题）：TTY 下渲染 `✻ Welcome to ohna!` + 一次性边框面板（工作目录 / 模型 /
- * 工具数与 MCP 来源 / 命令 tips）；非 TTY 保持纯文本头（管道可稳定消费，不含 `\x1b`）。
+ * M6（CLI 主题）：TTY 下渲染块状 ∞ logo + `✻ Welcome to ohna!` + 信息行（无边框，
+ * 长值由 TuiApp 截断兜底）；命令提示改由输入框内 `/` 面板提供，/help 文案同源于
+ * {@link SLASH_COMMANDS}；非 TTY 保持纯文本头（管道可稳定消费，不含 `\x1b`）。
  */
 import { write } from "./render.js";
 import { paint, SPIN, supportsAnsi } from "./theme.js";
+import { SLASH_COMMANDS } from "./slash.js";
 
 /**
  * 欢迎头所需的模型信息（从已解析的真实模型上取，避免本模块反向依赖 harness）。
@@ -40,21 +42,23 @@ const RULE = "─".repeat(60);
 const TITLE = "ohna";
 
 /**
- * CLI 启动 logo：以 ASCII 艺术还原 infinity-icon.svg 的「双环 ∞」形态（交叉双环）。
- * 仅 TTY 欢迎头使用，accent 橙色着色作为品牌标记；非 TTY 不输出（保持管道纯文本）。
+ * CLI 启动 logo：用 `█`（U+2588）块状 pixel-art 还原 infinity-icon.svg 的「双环 ∞ / lemniscate」
+ * 形态——左右对称、中间交叉。5 行高，仅 TTY 欢迎头使用，accent 橙色着色作为品牌标记；
+ * 非 TTY 不输出（保持管道纯文本）。
  */
 export const CLI_LOGO: readonly string[] = [
-  "  ____      ____",
-  " /    \\____/    \\",
-  " \\    /    \\    /",
-  "  \\__/      \\__/",
+  "    ███████    ███████",
+  "   ██     ██  ██     ██",
+  "   ██      ████      ██",
+  "   ██     ██  ██     ██",
+  "    ███████    ███████",
 ];
 
 /**
- * 打印会话开场欢迎头：标题 + 生效模型 / 端点 / 工具清单 + 会话 id + 多轮与命令提示。
- * 只写 stdout，不持有任何运行态。
+ * 打印会话开场欢迎头：标题 + 生效模型 / 端点 / 工具清单 + 会话 id（TTY 无边框 +
+ * 块状 logo；非 TTY 追加多轮与命令提示，因非 TTY 没有 `/` 面板）。只写 stdout，不持有任何运行态。
  *
- * TTY 门控：支持 ANSI 时输出 `✻` 标题 + 边框面板；否则保持纯文本头（§4.3）。
+ * TTY 门控：支持 ANSI 时输出块状 logo + `✻` 标题 + 信息行；否则保持纯文本头（§4.3）。
  *
  * @param model 当前生效的真实模型信息。
  * @param toolNames 已装配的工具名列表。
@@ -111,7 +115,12 @@ function renderPlainWelcome(
 }
 
 /**
- * TTY 欢迎面板：`✻ Welcome to ohna!` + 一次性边框信息框 + 命令 tips。
+ * TTY 欢迎头：无边框 CodeBuddy 风格——块状 logo + `✻ Welcome to ohna!` + 信息行。
+ *
+ * 不再用边框面板（旧实现的边框宽度由最长行决定，长 cwd / session id 会把面板撑到
+ * 超过终端宽度、折行丢右边框）；长值一律交给 TuiApp 的 `truncateToWidth` 兜底裁剪。
+ * 命令提示也不写在欢迎头里，改由输入框内的 `/` 命令面板提供（/help 文案同源于
+ * {@link SLASH_COMMANDS}）。
  *
  * @param model 模型信息。
  * @param toolNames 工具名列表。
@@ -137,88 +146,26 @@ function renderTtyWelcome(
     info.push(`MCP       ${options.mcpServers.join(" · ")}`);
   }
 
-  const lines = [
+  return [
     ...CLI_LOGO.map((line) => paint(line, "accent")),
     "",
     `${paint(SPIN, "accent")} ${paint("Welcome to ohna!", "foreground", "bold")}`,
     "",
-    ...frame(info),
-    "",
-    `  ${paint("/help", "accent")}    查看会话内命令`,
-    `  ${paint("/clear", "accent")}   清空当前上下文并另开新会话（旧会话保留在磁盘）`,
-    `  ${paint("/cost", "accent")}    查看本会话累计 token 与成本`,
-    `  ${paint("/exit", "accent")}    退出（等价别名：exit、:q）`,
-    `  ${paint("Ctrl-C", "accent")}   中断当前回答；空闲时 Ctrl-C 直接退出`,
+    ...info,
     "",
   ];
-  return lines;
 }
 
 /**
- * 把信息行包进一次性边框面板（`╭─…─╮` / `│ … │` / `╰─…─╯`）。
- *
- * @param lines 信息行（键值文本）。
- * @returns 带边框的行数组（边框用 dim 色）。
- */
-function frame(lines: string[]): string[] {
-  const contentWidth = Math.max(...lines.map(displayWidth), 12);
-  const top = `╭${"─".repeat(contentWidth + 2)}╮`;
-  const bottom = `╰${"─".repeat(contentWidth + 2)}╯`;
-  const body = lines.map((line) => `│ ${padToWidth(line, contentWidth)} │`);
-  return [paint(top, "dim"), ...body.map((line) => paint(line, "dim")), paint(bottom, "dim")];
-}
-
-/**
- * 估算一段文本的终端显示宽度：CJK / 全角字符按 2 列，其余按 1 列。
- *
- * 用于边框面板的列对齐；只做近似估算（组合字符、emoji ZWJ 等不计入），TTY 目检可接受。
- *
- * @param text 文本。
- * @returns 终端列宽。
- */
-function displayWidth(text: string): number {
-  let width = 0;
-  for (const ch of text) {
-    const cp = ch.codePointAt(0) ?? 0;
-    const wide =
-      (cp >= 0x1100 && cp <= 0x115f) ||
-      (cp >= 0x2e80 && cp <= 0xa4cf) ||
-      (cp >= 0xac00 && cp <= 0xd7a3) ||
-      (cp >= 0xf900 && cp <= 0xfaff) ||
-      (cp >= 0xfe30 && cp <= 0xfe4f) ||
-      (cp >= 0xff00 && cp <= 0xff60) ||
-      (cp >= 0xffe0 && cp <= 0xffe6);
-    width += wide ? 2 : 1;
-  }
-  return width;
-}
-
-/**
- * 按终端列宽右补齐到指定宽度（空格填充），保证 CJK 内容在边框内对齐。
- *
- * @param text 文本。
- * @param width 目标列宽。
- * @returns 补齐后的文本。
- */
-function padToWidth(text: string, width: number): string {
-  return text + " ".repeat(Math.max(width - displayWidth(text), 0));
-}
-
-/**
- * 打印 REPL 会话内命令列表（供 /help 复用，与欢迎头提示保持同一份文案）。
+ * 打印 REPL 会话内命令列表（供 /help 复用）：命令行由 {@link SLASH_COMMANDS} 生成，
+ * 与 `/` 命令面板共用同一份命令名/描述，避免两处维护。
  */
 export function printReplCommands(): void {
+  const pad = Math.max(...SLASH_COMMANDS.map((c) => c.name.length));
   const lines = [
     "会话内命令：",
-    "  /help            查看本帮助",
-    "  /clear           清空当前上下文并另开新会话（旧会话保留在磁盘）",
-    "  /cost            查看本会话累计 token 与成本",
-    "  /model [profile] 无参列出可用 profile 与当前；带参切换模型（对后续 run 生效）",
-    "  /compact         立即对当前会话做一次上下文压缩（打印压缩前后 token）",
-    "  /tools           列出当前工具（MCP 工具标注来源）",
-    "  /resume [id]     无参列出最近会话；带参切换会话并载入历史",
-    "  /exit            退出会话（等价别名：exit、:q）",
-    "  Ctrl-C           中断当前回答；空闲时 Ctrl-C 直接退出",
+    ...SLASH_COMMANDS.map((c) => `  ${c.name.padEnd(pad)}  ${c.description}`),
+    `  ${"Ctrl-C".padEnd(pad)}  中断当前回答；空闲时 Ctrl-C 直接退出`,
     "",
     "会话持久化：",
     "  每轮 run 结束自动保存到 ~/.ohna/sessions/<id>.jsonl（纯 JSONL，可直接 cat）。",

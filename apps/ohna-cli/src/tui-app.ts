@@ -13,9 +13,48 @@
  *
  * resize 安全性完全由 Screen 保证（已建好的节流 + 幂等），本类无需任何 resize 代码。
  */
-import { RawTerminal, Screen, box } from "@aiagent/term";
+import { RawTerminal, Screen, box, truncateToWidth } from "@aiagent/term";
 import { paint } from "./theme.js";
 import { LineEditor } from "./tui-editor.js";
+import { filterSlashCommands, type SlashCommandDef } from "./slash.js";
+
+/** 命令面板最多显示的条目数（超出部分滚动不到，MVP 截断即可）。 */
+export const MAX_PALETTE_ITEMS = 8;
+
+/**
+ * 把过滤后的命令渲染成 `/` 面板行：`  /cmd        描述`，选中行整行 reverse video 高亮。
+ *
+ * 纯函数（不依赖 TuiApp 状态），便于单测；不在此处做宽度裁剪——裁剪由调用方按终端
+ * 列数统一 `truncateToWidth` 兜底。
+ *
+ * @param commands 已过滤的命令列表（保持顺序）。
+ * @param selectedIndex 选中下标（调用方需已夹紧到 [0, len)）。
+ * @returns 最多 {@link MAX_PALETTE_ITEMS} 行的面板文本（可能含 ANSI 反色高亮）。
+ */
+export function buildPalette(
+  commands: readonly SlashCommandDef[],
+  selectedIndex: number,
+): string[] {
+  const shown = commands.slice(0, MAX_PALETTE_ITEMS);
+  if (shown.length === 0) return [];
+  const nameWidth = Math.max(...shown.map((c) => c.name.length));
+  return shown.map((c, i) => {
+    const label = `  ${c.name.padEnd(nameWidth)}  ${c.description}`;
+    return i === selectedIndex ? `\x1b[7m${label}\x1b[27m` : label;
+  });
+}
+
+/**
+ * 把选中下标夹紧到 `[0, length-1]`（过滤结果变化后调用，防止越界）。
+ *
+ * @param index 当前选中下标。
+ * @param length 过滤结果条数。
+ * @returns 夹紧后的下标；length <= 0 时返回 0。
+ */
+export function clampIndex(index: number, length: number): number {
+  if (length <= 0) return 0;
+  return Math.min(Math.max(0, index), length - 1);
+}
 
 /** TuiApp 的构造选项。 */
 export interface TuiAppOptions {
@@ -41,6 +80,9 @@ export class TuiApp {
   private buffer = "";
   /** 进行中的确认解析器：存在时编辑器提交/中断改走确认语义。 */
   private confirmResolver?: (value: string | null) => void;
+
+  /** `/` 命令面板的选中下标（面板关闭时无意义，见 {@link filteredCommands}）。 */
+  private selectedIndex = 0;
 
   /** 提交钩子：用户按 Enter（且非确认态）时以输入文本调用。 */
   onSubmit?: (value: string) => void;
@@ -104,11 +146,14 @@ export class TuiApp {
   }
 
   /**
-   * 组合整屏帧：顶部对话区取 contentLines（含开放行）尾部，底部输入区用 box 包边。
+   * 组合整屏帧：顶部对话区取 contentLines（含开放行）尾部，底部输入区用 box 包边；
+   * 输入框下方在 `/` 面板打开时叠一个命令面板。所有行最后统一按终端列宽裁剪。
+   *
+   * 布局顺序（上 → 下）：对话区 → 输入框 → 命令面板（面板高度从对话区扣除，保证贴底）。
    *
    * @param width 终端列数。
    * @param height 终端行数。
-   * @returns 整屏每一行（已是带 ANSI 的最终文本）。
+   * @returns 整屏每一行（已是带 ANSI 的最终文本，且无任何行可见宽超过 width）。
    */
   buildFrame(width: number, height: number): string[] {
     const innerWidth = Math.max(1, width - 2);
@@ -121,14 +166,125 @@ export class TuiApp {
       width: innerWidth,
     });
     const inputBoxHeight = inputLines.length;
-    const dialogueHeight = Math.max(0, height - inputBoxHeight);
+
+    // 命令面板：`/` 开头且尚无空格时打开，渲染在输入框下方，高度从对话区扣除。
+    const panelLines = this.buildPaletteLines();
+    const panelHeight = panelLines.length;
+
+    const dialogueHeight = Math.max(0, height - inputBoxHeight - panelHeight);
 
     const pending = this.buffer;
     const all = pending ? [...this.contentLines, pending] : this.contentLines;
-    // 对话区只保留能容纳的尾部行；高度不足时仅显示最近内容 + 输入区。
+    // 对话区只保留能容纳的尾部行；高度不足时仅显示最近内容 + 输入区 + 面板。
     const dialogueLines = all.slice(Math.max(0, all.length - dialogueHeight));
 
-    return [...dialogueLines, ...inputLines];
+    const combined = [...dialogueLines, ...inputLines, ...panelLines];
+    // 宽度安全兜底：任何一行（含长 cwd/session 的欢迎头、开放行、面板行）都不超过屏宽，
+    // 因此永不折行、边框永不错位。输入区已按 innerWidth 预算，此处截断只是兜底。
+    return combined.map((line) => truncateToWidth(line, width));
+  }
+
+  /**
+   * 输入分发：面板打开时先消费面板导航键（Up/Down/Tab/Esc/Enter），其余照常交给编辑器。
+   *
+   * 每次输入/选择变化都会经 `requestRender`（编辑器 onChange 或本方法显式触发）重绘。
+   *
+   * @param data 原始 stdin 输入（可能是单键或一小段 chunk）。
+   */
+  private handleInput(data: string): void {
+    if (this.panelOpen() && this.handlePanelKey(data)) {
+      this.requestRender();
+      return;
+    }
+    this.editor.handleInput(data);
+    // 过滤结果可能已变化，夹紧选中下标（若面板仍打开）。
+    this.selectedIndex = clampIndex(this.selectedIndex, this.filteredCommands.length);
+  }
+
+  /**
+   * `/` 面板是否打开：输入以 `/` 开头且尚未敲空格（仍在选命令名，未进入参数）。
+   */
+  private panelOpen(): boolean {
+    const v = this.editor.value;
+    return v.startsWith("/") && !/\s/.test(v);
+  }
+
+  /** 当前过滤后的命令（面板打开时）；关闭时为空数组。 */
+  private get filteredCommands(): SlashCommandDef[] {
+    if (!this.panelOpen()) return [];
+    return filterSlashCommands(this.editor.value);
+  }
+
+  /**
+   * 渲染命令面板行（面板关闭时为空数组）。选中下标在此夹紧，保证过滤变化后不越界。
+   */
+  private buildPaletteLines(): string[] {
+    const commands = this.filteredCommands;
+    if (commands.length === 0) return [];
+    const selected = clampIndex(this.selectedIndex, commands.length);
+    return buildPalette(commands, selected);
+  }
+
+  /**
+   * 面板打开时消费面板专属键。返回 true 表示已消费（不再交给编辑器）。
+   *
+   * 键序：Up/Down 移动选中（不当作历史浏览）；Tab 补全选中命令到输入框（如 `/help `）；
+   * 单字节 Esc 关闭面板；Enter 有选中项时直接提交该命令。方向键 `\x1b[A/B` 是完整三字节
+   * 序列，先于单字节 Esc 匹配，raw mode 下不会被误判为 Esc。
+   *
+   * @param data 原始输入。
+   * @returns 是否为面板键。
+   */
+  private handlePanelKey(data: string): boolean {
+    const commands = this.filteredCommands;
+    if (commands.length === 0) return false;
+    switch (data) {
+      case "\x1b[A": // Up
+        this.selectedIndex = clampIndex(this.selectedIndex - 1, commands.length);
+        return true;
+      case "\x1b[B": // Down
+        this.selectedIndex = clampIndex(this.selectedIndex + 1, commands.length);
+        return true;
+      case "\t": // Tab：补全选中命令，末尾补空格便于继续输入参数，面板随之关闭。
+        this.completeCommand(commands[clampIndex(this.selectedIndex, commands.length)]);
+        return true;
+      case "\x1b": // 单字节 Esc：关闭面板（清空输入，恢复空行）。
+        this.editor.value = "";
+        this.editor.cursor = 0;
+        this.selectedIndex = 0;
+        this.editor.onChange?.();
+        return true;
+      case "\r":
+      case "\n": // Enter：直接提交选中命令。
+        this.submitCommand(commands[clampIndex(this.selectedIndex, commands.length)]);
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  /**
+   * Tab 补全：把选中命令写入输入框并在末尾补一个空格（如 `/help `），光标置行尾。
+   *
+   * @param command 选中的命令。
+   */
+  private completeCommand(command: SlashCommandDef): void {
+    this.editor.value = `${command.name} `;
+    this.editor.cursor = this.editor.value.length;
+    this.selectedIndex = 0;
+    this.editor.onChange?.();
+  }
+
+  /**
+   * Enter 提交选中命令：把命令名写入输入框后走编辑器既有提交路径（复用历史/清空/回调）。
+   *
+   * @param command 选中的命令。
+   */
+  private submitCommand(command: SlashCommandDef): void {
+    this.editor.value = command.name;
+    this.editor.cursor = command.name.length;
+    this.selectedIndex = 0;
+    this.editor.handleInput("\r");
   }
 
   /**
@@ -139,7 +295,7 @@ export class TuiApp {
   start(): void {
     process.stdout.write("\x1b[?25l");
     this.screen.setRenderFn((w, h) => this.buildFrame(w, h));
-    this.screen.setOnInput((d) => this.editor.handleInput(d));
+    this.screen.setOnInput((d) => this.handleInput(d));
 
     // 提交：确认态下解析 confirm，否则上交上层（repl 的 processLine）。
     this.editor.onSubmit = (value) => {

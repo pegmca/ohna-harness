@@ -25,6 +25,43 @@ export type SlashCommandName =
   | "tools"
   | "resume";
 
+/** 命令面板条目：命令名（含 `/` 前缀）与一句话描述，供 `/` 面板与 /help 共用。 */
+export interface SlashCommandDef {
+  /** 面板展示的命令名，如 `/help`。 */
+  name: string;
+  /** 一句话描述。 */
+  description: string;
+}
+
+/**
+ * 会话内命令的单一来源（single source of truth）。
+ *
+ * `/` 命令面板与 /help 文案都从这份列表生成，避免两处维护同一份命令名/描述。
+ * 顺序即面板展示顺序；解析器仍走 {@link COMMAND_ALIASES}（含旧别名），两者互补：
+ * 这里管「展示/过滤」，别名表管「输入 → 命令」的归一化。
+ */
+export const SLASH_COMMANDS: readonly SlashCommandDef[] = [
+  { name: "/help", description: "查看会话内命令" },
+  { name: "/clear", description: "清空上下文并另开新会话（旧会话保留）" },
+  { name: "/cost", description: "查看本会话累计 token 与成本" },
+  { name: "/model", description: "无参列出 profile，带参切换模型" },
+  { name: "/compact", description: "立即压缩当前会话上下文" },
+  { name: "/tools", description: "列出当前工具（MCP 工具标注来源）" },
+  { name: "/resume", description: "无参列出最近会话，带参切换会话" },
+  { name: "/exit", description: "退出会话（等价别名 exit、:q）" },
+];
+
+/**
+ * 按前缀过滤命令（大小写不敏感），用于 `/` 命令面板的实时筛选。
+ *
+ * @param prefix 输入框当前内容（如 `/`、`/he`）；空串返回全部命令。
+ * @returns 命中前缀的命令列表（保持 {@link SLASH_COMMANDS} 原始顺序）。
+ */
+export function filterSlashCommands(prefix: string): SlashCommandDef[] {
+  const p = prefix.toLowerCase();
+  return SLASH_COMMANDS.filter((c) => c.name.toLowerCase().startsWith(p));
+}
+
 /** 命令别名表：keep 旧别名（exit/:q 等）以兼容 M2 的输入习惯与既有脚本。 */
 const COMMAND_ALIASES: ReadonlyArray<readonly [SlashCommandName, readonly string[]]> = [
   ["help", ["/help", "/?", "help"]],

@@ -42,15 +42,15 @@ test("renderWelcome：非 TTY 输出纯文本头，不含 ANSI 与 ✻", () => {
   assert.match(out, /read · write · bash/, "应含工具清单");
 });
 
-test("renderWelcome：TTY（forced）输出 ✻ 标题 + 边框面板", () => {
+test("renderWelcome：TTY（forced）输出 ✻ 标题 + 信息行（无边框）", () => {
   configure({ forced: true });
   const out = captureStdout(() =>
     renderWelcome(model, toolNames, { cwd: "/tmp/ws", sessionId: "abc123" }),
   );
   assert.match(out, /✻/, "应含 ✻ 标记");
   assert.match(out, /Welcome to ohna!/, "应含欢迎语");
-  assert.match(out, /╭/, "应含边框上缘");
-  assert.match(out, /╰/, "应含边框下缘");
+  assert.doesNotMatch(out, /╭/, "无边框：不应再画框面板");
+  assert.doesNotMatch(out, /╰/, "无边框：不应再画框面板");
   assert.match(out, /工作目录/, "应含工作目录行");
   assert.match(out, /\/tmp\/ws/, "应含工作目录路径");
   assert.match(out, /abc123/, "应含会话 id");
@@ -62,20 +62,20 @@ test("renderWelcome：TTY 输出含 ANSI 颜色（forced）", () => {
   assert.equal(out.includes("\x1b[38;2;"), true, "TTY 下应含 24-bit truecolor");
 });
 
-test("CLI_LOGO：长度 4 的数组，含双环 ∞ ASCII 装饰", () => {
-  assert.equal(CLI_LOGO.length, 4, "应为 4 行");
+test("CLI_LOGO：长度 5 的数组，含块状 ∞ 像素 logo", () => {
+  assert.equal(CLI_LOGO.length, 5, "应为 5 行");
   const joined = CLI_LOGO.join("\n");
-  assert.match(joined, /____/, "应含双环顶部横线");
-  assert.match(joined, /\\/, "应含交叉反斜杠");
-  assert.match(joined, /_/, "应含环底划线");
+  assert.match(joined, /█/, "应含块状像素（U+2588）");
+  assert.equal(joined.includes("\x1b"), false, "logo 源文本不应含 ANSI（着色在渲染时 paint）");
+  assert.ok(CLI_LOGO.every((line) => line.includes("█")), "每行都应含块状像素");
 });
 
-test("renderWelcome：TTY（forced）输出含 logo 特征子串与配色", () => {
+test("renderWelcome：TTY（forced）输出含块状 logo 与配色", () => {
   configure({ forced: true });
   const out = captureStdout(() =>
     renderWelcome(model, toolNames, { cwd: "/tmp/ws" }),
   );
-  assert.match(out, /____/, "TTY 应含 logo 顶部横线");
+  assert.match(out, /█/, "TTY 应含块状 logo");
   assert.equal(out.includes("\x1b"), true, "TTY 下 logo 应被着色（含 ANSI）");
 });
 
@@ -83,6 +83,6 @@ test("renderWelcome：非 TTY 不含 logo（纯文本管道）", () => {
   const out = captureStdout(() =>
     renderWelcome(model, toolNames, { cwd: "/tmp/ws" }),
   );
-  assert.doesNotMatch(out, /____/, "非 TTY 不应含 logo");
+  assert.doesNotMatch(out, /█/, "非 TTY 不应含 logo");
   assert.equal(out.includes("\x1b"), false, "非 TTY 不应含 ANSI");
 });

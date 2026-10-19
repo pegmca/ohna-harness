@@ -6,12 +6,12 @@
  * M3 起命令的解析与分发移到 slash.ts（命令表 + 注入式 handler），
  * 本文件不再持有命令表，避免两处维护同一份别名列表。
  *
- * M6（CLI 主题）：TTY 下渲染块状 ∞ logo + `✻ Welcome to ohna!` + 信息行（无边框，
- * 长值由 TuiApp 截断兜底）；命令提示改由输入框内 `/` 面板提供，/help 文案同源于
- * {@link SLASH_COMMANDS}；非 TTY 保持纯文本头（管道可稳定消费，不含 `\x1b`）。
+ * M6（CLI 主题）：TTY 下渲染块状 OHNA logo + 信息行（无边框，长值由 TuiApp 截断兜底）；
+ * 命令提示改由输入框内 `/` 面板提供，/help 文案同源于 {@link SLASH_COMMANDS}；
+ * 非 TTY 保持纯文本头（管道可稳定消费，不含 `\x1b`）。
  */
 import { write } from "./render.js";
-import { paint, SPIN, supportsAnsi } from "./theme.js";
+import { paint, supportsAnsi } from "./theme.js";
 import { SLASH_COMMANDS } from "./slash.js";
 
 /**
@@ -42,23 +42,23 @@ const RULE = "─".repeat(60);
 const TITLE = "ohna";
 
 /**
- * CLI 启动 logo：用 `█`（U+2588）块状 pixel-art 还原 infinity-icon.svg 的「双环 ∞ / lemniscate」
- * 形态——左右对称、中间交叉。5 行高，仅 TTY 欢迎头使用，accent 橙色着色作为品牌标记；
- * 非 TTY 不输出（保持管道纯文本）。
+ * CLI 启动 logo：用 `█`（U+2588）块状 pixel-art 拼出大写 "OHNA" 品牌字样——每个字母
+ * 7 列宽、5 行高，字母间留 1 列空隙，整体左右对称居中。仅 TTY 欢迎头使用，
+ * accent 橙色着色作为品牌标记；非 TTY 不输出（保持管道纯文本）。
  */
 export const CLI_LOGO: readonly string[] = [
-  "    ███████    ███████",
-  "   ██     ██  ██     ██",
-  "   ██      ████      ██",
-  "   ██     ██  ██     ██",
-  "    ███████    ███████",
+  "███████ ██   ██ ██   ██ ███████",
+  "██   ██ ██   ██ ███  ██ ██   ██",
+  "██   ██ ███████ ██ █ ██ ██   ██",
+  "██   ██ ██   ██ ██  ███ ███████",
+  "███████ ██   ██ ██   ██ ██   ██",
 ];
 
 /**
  * 打印会话开场欢迎头：标题 + 生效模型 / 端点 / 工具清单 + 会话 id（TTY 无边框 +
  * 块状 logo；非 TTY 追加多轮与命令提示，因非 TTY 没有 `/` 面板）。只写 stdout，不持有任何运行态。
  *
- * TTY 门控：支持 ANSI 时输出块状 logo + `✻` 标题 + 信息行；否则保持纯文本头（§4.3）。
+ * TTY 门控：支持 ANSI 时输出块状 OHNA logo + 信息行；否则保持纯文本头（§4.3）。
  *
  * @param model 当前生效的真实模型信息。
  * @param toolNames 已装配的工具名列表。
@@ -115,7 +115,7 @@ function renderPlainWelcome(
 }
 
 /**
- * TTY 欢迎头：无边框 CodeBuddy 风格——块状 logo + `✻ Welcome to ohna!` + 信息行。
+ * TTY 欢迎头：无边框 CodeBuddy 风格——块状 OHNA logo + 信息行。
  *
  * 不再用边框面板（旧实现的边框宽度由最长行决定，长 cwd / session id 会把面板撑到
  * 超过终端宽度、折行丢右边框）；长值一律交给 TuiApp 的 `truncateToWidth` 兜底裁剪。
@@ -148,8 +148,6 @@ function renderTtyWelcome(
 
   return [
     ...CLI_LOGO.map((line) => paint(line, "accent")),
-    "",
-    `${paint(SPIN, "accent")} ${paint("Welcome to ohna!", "foreground", "bold")}`,
     "",
     ...info,
     "",

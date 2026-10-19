@@ -12,7 +12,7 @@ import {
   type AgentLoopConfig,
   type AgentMessage,
 } from "@aiagent/agent";
-import type { ActiveModel } from "@aiagent/ai";
+import type { ActiveModel, UserMessage } from "@aiagent/ai";
 import type { AgentTool } from "@aiagent/tools";
 import { resolveMaxTurns } from "./mode.js";
 import { renderEvent, write, type UsageTracker } from "./render.js";
@@ -76,6 +76,8 @@ export interface RunTurnResult {
  * @param tracker 会话级用量累计器（max-cost 读取其快照）。
  * @param stopState 停止原因槽（供 runTurn 打印可读提示）。
  * @param beforeToolCall 可选的权限闸门钩子。
+ * @param getSteeringMessages 可选的 steering 钩子：内核每轮前拉取运行中中途输入（B1 阶段挂载点预留，暂无来源）。
+ * @param getFollowUpMessages 可选的 follow-up 钩子：内核将结束时拉取排队消息并继续当前 run（K2）。
  * @returns 可直接传给 agentLoop 的配置。
  */
 export function createConfig(
@@ -85,6 +87,8 @@ export function createConfig(
   tracker: UsageTracker,
   stopState: RunStopState,
   beforeToolCall?: ConfirmHook,
+  getSteeringMessages?: () => Promise<AgentMessage[]>,
+  getFollowUpMessages?: () => Promise<AgentMessage[]>,
 ): AgentLoopConfig {
   const maxTurns = setup.maxTurns ?? resolveMaxTurns();
   const deadlineAt = setup.deadlineMs !== undefined ? Date.now() + setup.deadlineMs : undefined;
@@ -95,6 +99,9 @@ export function createConfig(
     apiKey,
     convertToLlm: defaultConvertToLlm,
     beforeToolCall,
+    // K2：运行中中途输入（steering）与排队继续（follow-up）由上层 REPL 注入，内核零改动。
+    getSteeringMessages,
+    getFollowUpMessages,
     deadlineMs: setup.deadlineMs,
     // 运行期压缩：摘要失败时用确定性兜底，保证正在进行的 run 不被摘要异常打断。
     transformContext: createCompactionTransform({
@@ -159,24 +166,28 @@ export function printStopReason(reason: RunStopReason): void {
  * 既保留往轮上下文，又避免重复。
  *
  * @param history 之前所有轮次的消息（会被本轮增量扩展后返回）。
- * @param userText 本轮用户输入。
+ * @param userText 本轮用户输入；字符串或内容块数组（`@` 文件引用会展开为数组）。
  * @param active 已解析的真实模型与凭据。
  * @param tools 已装配的工具列表。
  * @param signal run 级 AbortSignal，用于 Ctrl-C 中断当前 run。
  * @param setup 本轮的配置（系统提示词 / 预算 / 作用域）。
  * @param tracker 会话级用量累计器（跨 run 复用，agent_end 打印累计值）。
  * @param beforeToolCall 权限闸门钩子（写文件与执行命令前询问，--yes 时自动放行）。
+ * @param getSteeringMessages 可选的 steering 钩子（透传给 createConfig；REPL 注入）。
+ * @param getFollowUpMessages 可选的 follow-up 钩子（透传给 createConfig；REPL 注入）。
  * @returns 更新后的 history 与本轮是否失败。
  */
 export async function runTurn(
   history: AgentMessage[],
-  userText: string,
+  userText: UserMessage["content"],
   active: ActiveModel,
   tools: AgentTool<any>[],
   signal: AbortSignal,
   setup: RunSetup,
   tracker: UsageTracker,
   beforeToolCall?: ConfirmHook,
+  getSteeringMessages?: () => Promise<AgentMessage[]>,
+  getFollowUpMessages?: () => Promise<AgentMessage[]>,
 ): Promise<RunTurnResult> {
   const userMessage: AgentMessage = {
     role: "user",
@@ -185,7 +196,16 @@ export async function runTurn(
   };
 
   const stopState: RunStopState = {};
-  const config = createConfig(active.model, active.apiKey, setup, tracker, stopState, beforeToolCall);
+  const config = createConfig(
+    active.model,
+    active.apiKey,
+    setup,
+    tracker,
+    stopState,
+    beforeToolCall,
+    getSteeringMessages,
+    getFollowUpMessages,
+  );
   let failed = false;
 
   // streamFn 省略：agentLoop 默认走 @aiagent/ai 的 streamSimple，直接对接真实 provider。

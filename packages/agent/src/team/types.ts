@@ -8,7 +8,7 @@
  */
 import type { Api, Message, Model } from "@aiagent/ai";
 import type { AgentTool } from "@aiagent/tools";
-import type { AgentMessage, StreamFn } from "../types.js";
+import type { AgentLoopConfig, AgentMessage, StreamFn } from "../types.js";
 import type { BudgetGuardConfig, TeamBudgetAccumulator } from "./budget.js";
 
 export type { BudgetGuardConfig, TeamBudgetAccumulator } from "./budget.js";
@@ -27,8 +27,8 @@ export interface TeamMember {
   /** 该子代理使用的模型；由 supervisor 在 TeamCreate 时决定（成本路由）。 */
   model: Model<Api>;
   /**
-   * 被授权工具名子集（权限最小化）。缺省时由 controller 从可用池全量授予；
-   * 生产实践应只给任务所需子集（如评审代理只给只读工具）。
+   * 被授权工具名子集（权限最小化）。缺省（undefined）时由 controller 从可用池全量授予；
+   * 显式空数组 `[]` 表示授予零工具。生产实践应只给任务所需子集（如评审代理只给只读工具）。
    */
   allowedTools?: string[];
   /** 角色专属 system prompt，注入子代理上下文（覆盖默认角色提示）。 */
@@ -104,7 +104,7 @@ export interface TeamCreateParams {
    * 由 `resolveModel(id)` 解析成具体 Model；不可解析时报结构化错误。
    */
   model?: string;
-  /** 授权工具名子集；省略时由 controller 从可用池全量授予。 */
+  /** 授权工具名子集；省略时从可用池全量授予，`[]` 表示零工具。 */
   tools?: string[];
   /** 角色 system prompt 覆盖。 */
   systemPrompt?: string;
@@ -163,4 +163,13 @@ export interface TeamControllerOptions {
    * 通过 `AgentLoopConfig.shouldStopAfterTurn` 钩子注入子代理，内核零改动。
    */
   budget?: BudgetGuardConfig;
+  /**
+   * 策略继承（K3）：把 supervisor 的权限闸门原样注入每个子代理的 `agentLoop`。
+   *
+   * 子代理与 supervisor 共用**同一权限闸门与会话 PolicyState**：write / edit / bash
+   * 在子代理内部执行时同样受审（Shift+Tab 模式、会话 allowlist、plan 模式全部生效）。
+   * 这里只声明 `AgentLoopConfig` 的钩子类型，不 import permission 模块——策略本体
+   * 仍由组合根装配，team 包保持「只管编排、不感知审批实现」的边界。
+   */
+  beforeToolCall?: AgentLoopConfig["beforeToolCall"];
 }

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { AssistantMessageEventStream } from "@aiagent/ai";
+import { z } from "zod";
 import {
   createTeamController,
   createBullBearRiskTeam,
@@ -328,3 +329,104 @@ test("(d) 并发下团队总 ceiling 原子生效（Mutex 防超支，A-1 修复
   );
 });
 
+
+test("(K3) runMember 把 beforeToolCall 继承给子代理：deny write 时子代理写入被拦下", async () => {
+  // 子代理脚本：先发起 write 工具调用，再给出最终文本。
+  const responses = [
+    assistantMessage(
+      [{ type: "toolCall", id: "t1", name: "write", arguments: { path: "a.txt", content: "x" } }],
+      "toolUse",
+    ),
+    textMessage("已完成探索（写入被拒绝）"),
+  ];
+  let step = 0;
+  const streamFn = () => createMockStreamFn(responses[Math.min(step++, responses.length - 1)])();
+
+  let executed = 0;
+  const writeTool = {
+    name: "write",
+    description: "写文件",
+    label: "write",
+    parameters: z.object({ path: z.string(), content: z.string() }),
+    effect: "mutate",
+    async execute() {
+      executed += 1;
+      return { content: [{ type: "text", text: "written" }], details: {} };
+    },
+  };
+
+  // 模拟 supervisor 的权限闸门：plan 模式语义——所有 mutate 直接 block。
+  const hookCalls = [];
+  const beforeToolCall = async (ctx) => {
+    hookCalls.push({
+      toolName: ctx.toolCall.name,
+      args: ctx.args,
+      toolNames: (ctx.context.tools ?? []).map((tool) => tool.name),
+    });
+    if (ctx.toolCall.name === "write") {
+      return { block: true, reason: "当前为 plan 模式，已拒绝 write 的写操作（未执行）。" };
+    }
+    return undefined;
+  };
+
+  const controller = createTeamController({
+    defaultModel: makeModel(),
+    streamFn,
+    availableTools: [writeTool],
+    beforeToolCall,
+  });
+  await controller.createMember({ name: "writer", role: "写手" });
+  const result = await controller.runMember("writer", "写一个文件");
+
+  // 钩子确实被调用，且看到的是子代理自己的工具表与校验后参数。
+  assert.equal(hookCalls.length, 1, "子代理的 write 调用必须经过继承的 beforeToolCall");
+  assert.equal(hookCalls[0].toolName, "write");
+  assert.equal(hookCalls[0].args.path, "a.txt");
+  // 子代理看到的是自己的工具子集（availableTools 快照），不是 supervisor 的完整工具表。
+  assert.deepEqual(hookCalls[0].toolNames, ["write"]);
+  // 被 block 后工具未真正执行，子代理仍以 completed 收尾（错误即数据）。
+  assert.equal(executed, 0, "block 后子代理不得执行 write");
+  assert.equal(result.status, "done");
+  assert.match(result.summary, /写入被拒绝/);
+});
+
+test("TeamCreate / SendMessage 声明 effect=read（编排原语不触发审批）", () => {
+  const controller = createTeamController({ defaultModel: makeModel() });
+  for (const tool of controller.tools) {
+    assert.equal(tool.effect, "read", `${tool.name} 应为只读编排原语`);
+  }
+});
+
+test("allowedTools: [] 表示零工具（不再被误判为全量池）", async () => {
+  const capturedTools = [];
+  const streamFn = (_model, context) => {
+    capturedTools.push(context.tools ?? []);
+    return createMockStreamFn(textMessage("无工具完成"))();
+  };
+  const writeTool = {
+    name: "write",
+    description: "写文件",
+    label: "write",
+    parameters: z.object({ path: z.string() }),
+    effect: "mutate",
+    async execute() {
+      return { content: [{ type: "text", text: "written" }], details: {} };
+    },
+  };
+
+  const controller = createTeamController({
+    defaultModel: makeModel(),
+    streamFn,
+    availableTools: [writeTool],
+  });
+  await controller.createMember({ name: "no-tools", role: "零工具成员", tools: [] });
+  const result = await controller.runMember("no-tools", "只思考");
+
+  assert.equal(result.status, "done");
+  assert.deepEqual(capturedTools[0], [], "显式空数组必须授予零工具");
+
+  // 对照组：省略 tools 仍表示全量池（保持既有语义）。
+  await controller.createMember({ name: "all-tools", role: "全量成员" });
+  await controller.runMember("all-tools", "只思考");
+  assert.deepEqual(capturedTools[1].map((tool) => tool.name), ["write"], "undefined 应回退全量池");
+});

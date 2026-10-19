@@ -9,7 +9,12 @@
  * 分属不同子树，且高频事件不值得触发整树 re-render。
  */
 
-/** 会改动工作区文件的 Agent 工具集合（与 packages/serve 确认闸门的 MUTATING_TOOLS 一致）。 */
+/**
+ * 会改动工作区文件的 Agent 工具集合（仅用于文件树刷新启发式）。
+ *
+ * 注意：权限审批已改为读取 `AgentTool.effect`（K1），本集合不再是审批名单；
+ * 这里保留工具名判断是因为前端只消费事件流，拿不到 serve 侧的工具表。
+ */
 const FILE_MUTATING_TOOLS: ReadonlySet<string> = new Set(["write", "edit", "bash"]);
 
 type FilesChangedListener = (toolName: string) => void;

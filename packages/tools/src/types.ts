@@ -11,6 +11,17 @@ import type { z } from "zod";
 export type ToolExecutionMode = "sequential" | "parallel";
 
 /**
+ * 工具副作用声明（权限体系的单一事实源）。
+ *
+ * - `read`：只读工具，权限闸门直接放行；
+ * - `mutate`：可能产生副作用的工具，进入权限策略（ask / deny / allow）。
+ *
+ * 缺省视为 `mutate`：MCP 等外部工具无需改动宿主代码即可自动进入审批体系，
+ * 这是「保守优先」的取舍——宁可多问一次，也不能静默执行未知副作用。
+ */
+export type ToolEffect = "read" | "mutate";
+
+/**
  * 工具结果：content 回喂模型，details 仅供 trace/UI，不进 LLM 上下文。
  */
 export interface AgentToolResult<TDetails = unknown> {
@@ -60,6 +71,11 @@ export interface AgentTool<TSchema extends z.ZodType = z.ZodType, TDetails = unk
   ) => Promise<AgentToolResult<TDetails>>;
   /** 默认 parallel；任一为 sequential 则整批降级为串行。 */
   executionMode?: ToolExecutionMode;
+  /**
+   * 副作用声明：`read` 直接放行，`mutate` 进入权限策略。
+   * 缺省按 `mutate` 处理（覆盖未显式标注的 MCP / 第三方工具）。
+   */
+  effect?: ToolEffect;
   /** 数据来源标记：real 表示真实 adapter，mock 表示确定性假数据；v1.2 起统一为 real。 */
   source?: "real" | "mock";
 }

@@ -11,14 +11,24 @@
  * - 符号无条件替换（⏺ / ⎿ / ✗）；颜色由 theme.ts 的 `paint` 门控，仅 TTY 生效；
  * - spinner 单写者协议：正文写入前 `clearSpinner`、agent_start 启动、agent_end 停帧；
  * - 数字骨架（累计 token / 成本 $X）与 diff 行内容**不进 ANSI**（§2 红线）。
+ *
+ * B1（F-3）：
+ * - verbose 开关 + 最近折叠块全文缓存；ctrl+o / `/verbose` 重打全文；
+ * - thinking 增量按 verbose 分派（spinner 文案 / 灰色斜体块）。
+ * 会话级用量累计（UsageTracker / formatCostLine）已移到 usage.ts，本文件只保留 re-export。
  */
 import { readFileSync } from "node:fs";
 import * as path from "node:path";
 import type { AgentEvent } from "@aiagent/agent";
-import type { Usage } from "@aiagent/ai";
 import { formatUnifiedDiff } from "./diff.js";
-import { clearSpinner, setVerb, startSpinner, stopSpinner } from "./spinner.js";
-import { CROSS, DOT, ELLIPSIS, HOOK, paint } from "./theme.js";
+import { clearSpinner, isSpinnerEnabled, setVerb, startSpinner, stopSpinner } from "./spinner.js";
+import { CROSS, DOT, ELLIPSIS, HOOK, paint, SPIN } from "./theme.js";
+import type { UsageTracker } from "./usage.js";
+
+// 用量的累计 / 展示已拆到 usage.ts（会话级状态与事件渲染的职责分离）；
+// 这里保留 re-export，使既有调用方（repl / harness / web-entry / session-flow）零修改。
+export { createUsageTracker, formatCostLine } from "./usage.js";
+export type { UsageSnapshot, UsageTracker } from "./usage.js";
 
 /**
  * 输出 sink：所有 render 层写入都经 {@link write} 转发，便于 TTY 整屏模式注入。
@@ -48,6 +58,70 @@ export function setOutputSink(fn: ((s: string) => void) | undefined): void {
  */
 export function write(text: string): void {
   outputSink(text);
+}
+
+/**
+ * 设置 verbose 模式开关（F-3）。
+ *
+ * @param value true 开启、false 关闭。
+ */
+export function setVerbose(value: boolean): void {
+  // 思考流进行中关闭 verbose：先补换行收尾，避免后续工具/正文行拼到灰色思考块末尾。
+  if (verbose && !value && thinkingBlockOpen) {
+    write("\n");
+    thinkingBlockOpen = false;
+  }
+  verbose = value;
+}
+
+/**
+ * 读取当前 verbose 开关状态。
+ *
+ * @returns verbose 是否开启。
+ */
+export function isVerbose(): boolean {
+  return verbose;
+}
+
+/**
+ * 切换 verbose 并返回切换后的状态（TUI ctrl+o 与 /verbose 共用）。
+ *
+ * @returns 切换后是否开启。
+ */
+export function toggleVerbose(): boolean {
+  setVerbose(!verbose);
+  return verbose;
+}
+
+/**
+ * 清空折叠块全文缓存（/clear、/resume 切换会话时调用）。
+ *
+ * 缓存是模块级会话状态：不清理会让 ctrl+o 把上一个会话的工具输出重打到新会话里，
+ * 既误导用户，也可能泄露已切走会话的内容。
+ */
+export function resetFoldCache(): void {
+  recentFolded.length = 0;
+}
+
+/**
+ * 重打最近被折叠的工具输出全文（F-3：verbose 打开时经 write 输出）。
+ *
+ * append-only TUI 的取舍：ctrl+o 只能「把缓存全文追加重打」而非「改写已打印行」，
+ * 因此这里把 {@link recentFolded} 里每个块全文重新输出一遍；无缓存时给出明确提示。
+ * 开头先写 `\n`：若上一段正文/工具输出尚未以换行收尾，可避免重打内容黏在流式行尾。
+ */
+export function reprintRecentFolded(): void {
+  // 只有 verbose 打开时才重打：关闭态下调用应是无副作用的（避免把全文混进普通会话）。
+  if (!isVerbose()) return;
+  if (recentFolded.length === 0) {
+    write("（本会话还没有折叠过工具输出，无可重打内容）\n");
+    return;
+  }
+  write(`\n--- 重打最近 ${recentFolded.length} 个折叠块全文 ---\n`);
+  for (const full of recentFolded) {
+    write(`${full}\n`);
+  }
+  write("--- 折叠块全文结束 ---\n");
 }
 
 /** 渲染选项：控制工具调用的展示细节与来源标注。 */
@@ -80,85 +154,28 @@ const DIFF_TAIL_LINES = 120;
  */
 let assistantDotPrinted = false;
 
-/** 会话累计用量的可持久化快照（与 session-store 的 SessionUsageTotals 同形）。 */
-export interface UsageSnapshot {
-  /** 累计输入 token。 */
-  input: number;
-  /** 累计输出 token。 */
-  output: number;
-  /** 累计 token 总数。 */
-  total: number;
-  /** 累计成本（美元）。 */
-  cost: number;
-}
+/**
+ * F-3 verbose 模式开关：打开后思考过程以灰色斜体展示、折叠块可重打全文。
+ *
+ * 为什么是模块级状态：renderEvent 是无状态同步事件处理器，事件按序到达；verbose 是
+ * 「全局渲染偏好」而非单条消息状态，用模块级开关最贴合（TUI ctrl+o 与 /verbose 都改它）。
+ */
+let verbose = false;
+
+/** verbose 思考块是否已开启（流式期间跟踪，保证思考与正文之间有换行分隔、收尾干净）。 */
+let thinkingBlockOpen = false;
 
 /**
- * 会话级 token / 成本累计器：逐条吸收 assistant 消息的 usage。
- *
- * 与 M1 的「单轮累计」不同，同一实例跨 run 复用，因此 /cost 与 --max-cost 看到的是
- * 整个会话（含 --resume 恢复）的真实累计，而不是最后一轮的局部数字。
+ * 非 verbose + spinner 禁用（TTY 整屏）时，当前 assistant 消息是否已打过
+ * `✻ 思考中…` 占位行。每条 assistant 消息只打一次，由 message_start 复位。
  */
-export interface UsageTracker {
-  /** 累加一条 assistant 消息的用量。 */
-  add(usage: Usage): void;
-  /** 生成累计小结文案；无任何用量时返回 null（例如被中断的空 run）。 */
-  line(): string | null;
-  /** 读取当前累计快照（用于 --max-cost 判定与落盘）。 */
-  snapshot(): UsageSnapshot;
-  /** 从落盘快照恢复（--resume）；覆盖当前累计值。 */
-  restore(snapshot: UsageSnapshot): void;
-}
+let thinkingHintPrinted = false;
 
-/**
- * 创建会话级用量累计器。
- *
- * @returns 可累加、快照、恢复的 UsageTracker。
- */
-export function createUsageTracker(): UsageTracker {
-  let input = 0;
-  let output = 0;
-  let total = 0;
-  let cost = 0;
+/** 折叠块全文缓存上限：ctrl+o / /verbose 重打「最近 N 个被折叠的工具输出」。 */
+const FOLD_CACHE_SIZE = 8;
 
-  return {
-    add(usage: Usage): void {
-      input += usage.input;
-      output += usage.output;
-      total += usage.totalTokens;
-      cost += usage.cost.total;
-    },
-    line(): string | null {
-      if (total === 0) return null;
-      return `累计 token: ${total}（输入 ${input} / 输出 ${output}），成本 $${cost.toFixed(6)}`;
-    },
-    snapshot(): UsageSnapshot {
-      return { input, output, total, cost };
-    },
-    restore(snapshot: UsageSnapshot): void {
-      input = snapshot.input;
-      output = snapshot.output;
-      total = snapshot.total;
-      cost = snapshot.cost;
-    },
-  };
-}
-
-/**
- * 生成 `/cost` 的展示文案：始终有输出（无用量时明确说明，而不是空行）。
- *
- * 注意：本行数字骨架（累计 token N / 成本 $X）必须保持纯文本，不进 ANSI（§2 红线），
- * 否则 verify 脚本的两个数字捕获组会被转义序列打断。
- *
- * @param tracker 会话级累计器。
- * @returns 单行中文用量文案。
- */
-export function formatCostLine(tracker: UsageTracker): string {
-  const snapshot = tracker.snapshot();
-  if (snapshot.total === 0) {
-    return "累计用量：暂无（本会话尚未产生模型调用）";
-  }
-  return `累计用量：token ${snapshot.total}（输入 ${snapshot.input} / 输出 ${snapshot.output}），成本 $${snapshot.cost.toFixed(6)}`;
-}
+/** 最近被折叠的工具输出原文（FIFO，最多 {@link FOLD_CACHE_SIZE} 个）。 */
+const recentFolded: string[] = [];
 
 /**
  * 把单个 AgentEvent 渲染到终端。
@@ -179,14 +196,23 @@ export function renderEvent(event: AgentEvent, tracker: UsageTracker, options?: 
 
     case "message_start": {
       // 新 assistant 消息复位懒打点标志；纯 tool-call 消息（无文本）不产生悬空 ⏺ 行。
-      if (event.message.role === "assistant") assistantDotPrinted = false;
+      if (event.message.role === "assistant") {
+        assistantDotPrinted = false;
+        thinkingBlockOpen = false; // 新消息复位 verbose 思考块状态
+        thinkingHintPrinted = false; // 新消息允许再打一次「思考中」占位行
+      }
       return;
     }
 
     case "message_update": {
-      // 仅转发文本增量；thinking / toolcall 增量不在 CLI 主输出中渲染，避免打断正文流。
+      // 正文 / 思考增量按 verbose 分派：默认思考进 spinner 文案，verbose 下灰色斜体展示。
       const inner = event.assistantMessageEvent;
       if (inner.type === "text_delta") {
+        // verbose 思考块未闭合时先补换行，保证正文另起一行、不与思考内容拼接。
+        if (isVerbose() && thinkingBlockOpen) {
+          write("\n");
+          thinkingBlockOpen = false;
+        }
         // 每个 delta 都清帧并标记一次正文写入，抑制 spinner 在流式期间重启帧（撕裂防护）。
         clearSpinner();
         if (!assistantDotPrinted) {
@@ -195,6 +221,35 @@ export function renderEvent(event: AgentEvent, tracker: UsageTracker, options?: 
           assistantDotPrinted = true;
         }
         write(paint(inner.delta, "foreground"));
+      } else if (inner.type === "thinking_start") {
+        if (isVerbose()) {
+          // verbose：等第一个 thinking_delta 再开灰色斜体块（无增量时不留空块）。
+          return;
+        }
+        if (isSpinnerEnabled()) {
+          // 非 TTY：spinner 是唯一写者，把动词切回「思考中」（tool 执行会改成「执行 X」）。
+          // 只在 start 切一次，避免每增量重置已耗时。
+          setVerb("思考中");
+        } else if (!thinkingHintPrinted) {
+          // TTY 整屏禁用了 spinner（避免 \r\x1b[K 污染对话模型）：退化为追加一行
+          // `✻ 思考中…`，让用户至少能感知思考阶段。每条 assistant 消息只打一次，
+          // 避免多段 thinking 刷屏；与 verbose 灰色斜体块互斥。若正文已开始流式
+          // （非典型顺序），先换行，避免提示黏在正文行尾。
+          if (assistantDotPrinted) write("\n");
+          write(paint(`${SPIN} 思考中${ELLIPSIS}`, "dim") + "\n");
+          thinkingHintPrinted = true;
+        }
+      } else if (inner.type === "thinking_delta") {
+        if (isVerbose()) {
+          // verbose：灰色斜体块；首段前打 ✻ 标记，与正文的 ⏺ 区分。
+          clearSpinner();
+          if (!thinkingBlockOpen) {
+            write(paint(`${SPIN} `, "dim"));
+            thinkingBlockOpen = true;
+          }
+          write(paint(inner.delta, "dim", "italic"));
+        }
+        // 非 verbose：thinking 内容不落正文，spinner 已在 agent_start / thinking_start 显示「思考中」。
       }
       return;
     }
@@ -236,6 +291,11 @@ export function renderEvent(event: AgentEvent, tracker: UsageTracker, options?: 
         if (assistantDotPrinted) {
           write("\n");
           assistantDotPrinted = false;
+        }
+        // verbose 思考块若未闭合（如思考后直接跟 toolcall、或流异常），补换行收尾。
+        if (isVerbose() && thinkingBlockOpen) {
+          write("\n");
+          thinkingBlockOpen = false;
         }
         // provider 错误不会进入 agent_end.error（loop 把失败编码在 assistant 消息里）；
         // 这里必须显式提示，否则用户只看到空白 + 退出码 0。
@@ -374,10 +434,14 @@ export function foldOutput(text: string): string {
   const lines = text.split("\n");
   if (lines.length <= FOLD_MAX_LINES && text.length <= FOLD_MAX_CHARS) return text;
 
+  // F-3：折叠前缓存全文，供 ctrl+o / /verbose 重打（append-only TUI 只能「重打」不能「改写」）。
+  recentFolded.push(text);
+  if (recentFolded.length > FOLD_CACHE_SIZE) recentFolded.shift();
+
   const head = lines.slice(0, FOLD_HEAD_LINES);
   const tail = lines.length > FOLD_HEAD_LINES ? lines.slice(-FOLD_TAIL_LINES) : [];
   const omitted = lines.length - head.length - tail.length;
-  const omittedNote = omitted > 0 ? `${ELLIPSIS} +${omitted} 行` : "";
+  const omittedNote = omitted > 0 ? `${ELLIPSIS} +${omitted} 行（ctrl+o 展开）` : "";
   return [...head, omittedNote, ...tail].filter(Boolean).join("\n");
 }
 

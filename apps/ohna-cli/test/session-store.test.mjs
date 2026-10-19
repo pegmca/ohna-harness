@@ -101,6 +101,24 @@ test("save/load 往返：元数据、user/assistant/toolResult 与 CompactionMes
   assert.deepEqual(loaded.meta.usage, { input: 10, output: 5, total: 15, cost: 0.001 });
 });
 
+test("user content 块数组往返：@ 文件引用落盘后保真，并参与标题推导", async () => {
+  const dir = makeTempDir();
+  const store = createSessionStore({ dir });
+  // F-6：user message 的 content 可能是 [原文本, 文件块]；JSONL 必须原样保存，
+  // load 的形状校验（isContentValue）也必须接受数组，否则恢复会话会丢掉引用内容。
+  const content = [
+    { type: "text", text: "解释 @src/a.ts" },
+    { type: "text", text: "文件 src/a.ts：\nexport const a = 1;" },
+  ];
+  const meta = await store.create({ messages: [{ role: "user", content, timestamp: 1 }] });
+  const loaded = await store.load(meta.id);
+  assert.ok(loaded);
+  assert.deepEqual(loaded.messages[0].content, content);
+  const title = deriveSessionTitle(loaded.messages);
+  assert.ok(title.startsWith("解释 @src/a.ts 文件 src/a.ts："));
+  assert.equal(title.length, 40, "标题仍按 40 字符截断");
+});
+
 test("header.usage 逐字段校验：任一字段非法则整体丢弃，避免 NaN 进入预算（D4）", async () => {
   const dir = makeTempDir();
   const store = createSessionStore({ dir });

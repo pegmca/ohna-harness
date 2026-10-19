@@ -246,3 +246,59 @@ serve `MUTATING_TOOLS`（confirm-gate.ts:68）；「会话记住 / 规则 / 模�
 - 文档同步义务（每批）：`notes/` 对应主题笔记（B1：`coding-cli.md` 补交互协议；B2 新增
   `permission-policy.md`；B3 新增 `subagent-task.md`）；`docs/v1.3/README.md` 状态表；
   K1 / K3 触及公共 API 的，同步 AGENTS.md 的 Repository Structure 描述。
+
+---
+
+## 6. 落地结果（B1-B3，2025-10）
+
+> 本节记录本轮实际交付、关键实现位置与**已知偏差**；后续维护以此为准，勿只看 §2-§4 的规划态描述。
+
+### 6.1 批次状态
+
+| 批次 | 状态 | 核心交付 | 主要文件 |
+|---|---|---|---|
+| **B1 交互手感** | **已实现** | K2 follow-up 排队注入当前 run（slash 命令不注入）；Esc 中断 / 双击 Esc 占位；`» 已排队（#N）`；ctrl+o verbose + 折叠块重打；thinking（TUI 占位行 / 非 TTY spinner）；`/cost` reasoning token | `follow-up.ts`、`esc-gesture.ts`、`render.ts`、`tui-app.ts`、`tui-editor.ts`、`turn.ts`、`usage.ts` |
+| **B2 权限系统** | **已实现** | `AgentTool.effect` 单一事实源；`packages/agent/src/permission/`；三选项 + 会话记住；Shift+Tab default/acceptEdits/plan；plan 过滤 mutating 工具；`/permissions`；serve SSE AskAdapter 复用同一 policy | `packages/tools/src/{types,agent-tool}.ts`、`packages/agent/src/permission/*`、`confirm.ts`、`permission-session.ts`、`permission-mode.ts`、`packages/serve/src/confirm-gate.ts` |
+| **B3 能力扩展** | **已实现** | K3 TeamCreate/SendMessage 接线；子代理策略继承（fail-closed）；`--no-team`；`/tools` Team 标注；`@` 文件引用（TUI 面板 + 提交展开）；`!` bash 直通（过闸门）/ `#` 记忆；`/status` `/mcp` `/export` `/resume fork` | `team-wiring.ts`、`packages/agent/src/team/{types,controller,tools}.ts`、`file-reference.ts`、`tui-file-palette.ts`、`direct-command.ts`、`memory-note.ts`、`session-export.ts`、`session-commands.ts` |
+| 远期 | 未启动 | K4 rewind、hooks、自定义命令、statusline、vim、图片输入、headless JSON | — |
+
+### 6.2 关键落地决策（与 §2 规划的差异）
+
+1. **TUI 已是主路径**：§2 中「readline completer / raw-mode 地基」的描述已过时——CLI 在 v1.3 已迁移整屏 TUI，`/` 与 `@` 面板都落在 `TuiApp` / `LineEditor`；非 TTY 保留 readline 降级路径。
+2. **ctrl+o 的 append-only 语义**：TUI 对话区是追加式内容模型，ctrl+o 只能「重打最近 N 个折叠块全文」，不能原地展开已打印行；这是刻意的 MVP 取舍，已在 `` 说明。
+3. **effect 单一事实源**：`AgentTool.effect` 缺省 `mutate`（覆盖 MCP / 未标注工具）；`TeamCreate` / `SendMessage` 标 `read`（编排本身无直接文件副作用，真正写操作在子代理内受同一闸门裁决）。
+4. **策略继承用可变 gateRef**：team controller 先于 REPL 创建（工具表要并入），闸门后建；转发器 `createTeamGateForwarder` 在闸门未就绪时 **fail-closed**（返回 block），避免未来新增入口漏回调导致静默放行。
+5. **content 数组兼容**：`@` 展开后 `runTurn` 接受 `UserMessage["content"]`（字符串或块数组）；compaction 估算/摘要、session-store、`/export` 均已适配并补测试。
+6. **状态行双锚点**：输入框下方左侧显示 `⏵⏵ <权限模式>`（default / acceptEdits / plan / bypass，带语义色），右侧保留 `模型 · 上下文占比`；模式由 `permissionSession.preset()` 每帧实时求值，Shift+Tab 切换即时可见。
+7. **`/resume` 会话选择面板**：无参时在输入框下方展示最近 10 个会话（标题 / 短 id / 时间 / 条数），↑/↓ 选择、Enter 切换、Esc 取消；选中回调复用 `processLine('/resume <id>')` 的命令分发与串行保护。非 TTY 仍回退为文本列表 + `/resume <id>`。
+
+### 6.3 已知偏差与后续项
+
+- **web 模式 K2 语义**：`--web` 走 serve 的 `createRun`（每次一个完整 run），终端侧没有 agentLoop 级 follow-up 可注入；web 排队仍是「run 结束后串行新开 run」+ `» 已排队` 回显。已登记为 B1 已知偏差（``）。
+- **serve 会话记住**：Web 确认卡片仍只有 allow/deny，没有「本会话一律允许」；B2 的会话记住仅 CLI 提供（`PolicyState` 在 serve 侧为空）。
+- **plan 模式的子代理工具池**：plan 只过滤 supervisor 的 mutating 工具；子代理池仍完整，靠继承闸门 deny 兜底（无越权，但可能白耗 turn）。
+- **`!` 直通不进 history**：结果只打印，不进入模型上下文；长命令可被 Esc/Ctrl-C 中断（B3b 已接线）。
+- **`@` 扫描上限**：默认最多 2000 个文件、深度 12；超大仓库可能漏掉深层文件，可按前缀继续过滤。
+- **`/export` 预算**：单文件 2MB 上限、写入 `0600`；`--web` 托管模式暂不支持导出。
+- **`#` 记忆边界**：要求 `# `（井号+空白）才当记忆；`#include` 等按普通文本交给模型；plan 模式拒绝写入 AGENTS.md。
+
+### 6.4 验证证据
+
+本轮最终门禁全绿：
+
+```bash
+pnpm typecheck          # 全仓通过
+pnpm build              # 全仓通过
+pnpm test               # 全仓通过（ohna-cli 140 / agent 89 / coding 79 / serve 25；finance-api 42 pass + 3 skipped）
+pnpm architecture:check # 590 modules / 1162 dependencies，无违规
+```
+
+`pnpm lint` 仍有 12 个存量 error（均在未改动的历史测试文件），本轮改动文件 0 error（仅存量 warning）。
+
+### 6.5 相关笔记
+
+- `` —— B1 交互协议（follow-up / steering、Esc、ctrl+o、thinking）。
+- `` —— B2 权限策略内核（effect、preset、组合、双宿主、会话记忆）。
+- `` —— B3 K3 团队接线与策略继承（gateRef 时序、fail-closed、已知限制）。
+- `` —— B3 F-6/F-7/F-8（`@` / `!` / `#` / 命令补表）。
+- `` —— 本轮 B1-B3 总览与学习检查点。

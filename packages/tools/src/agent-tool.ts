@@ -5,7 +5,7 @@
  */
 import { z } from "zod";
 import { withTimeoutAndRetry } from "./executor.js";
-import type { AgentTool, AgentToolResult, ToolExecutionOptions, ToolExecutionMode } from "./types.js";
+import type { AgentTool, AgentToolResult, ToolEffect, ToolExecutionOptions, ToolExecutionMode } from "./types.js";
 
 /** defineAgentTool 的配置项。 */
 export interface DefineAgentToolConfig<TSchema extends z.ZodType, TOutput> {
@@ -18,6 +18,11 @@ export interface DefineAgentToolConfig<TSchema extends z.ZodType, TOutput> {
   /** 可选 zod 输出 schema；提供时对执行结果再校验一次，防止坏数据进 LLM 上下文。 */
   outputSchema?: z.ZodType<TOutput>;
   executionMode?: ToolExecutionMode;
+  /**
+   * 副作用声明：`read` 工具直接放行，`mutate` 进入权限策略。
+   * 缺省不写该字段，由权限闸门按 `mutate` 兜底（MCP 等外部工具保守处理）。
+   */
+  effect?: ToolEffect;
   /** 原始参数兼容 shim（对齐 pi prepareArguments），zod 校验前调用。 */
   prepareArguments?: (args: unknown) => unknown;
   /** 超时/重试/deadline 包装选项（per-tool 默认值；run 级 deadline 由调用方覆盖）。 */
@@ -56,6 +61,8 @@ export function defineAgentTool<TSchema extends z.ZodType, TOutput = unknown>(
       ? { prepareArguments: config.prepareArguments as (args: unknown) => z.infer<TSchema> }
       : {}),
     ...(config.executionMode ? { executionMode: config.executionMode } : {}),
+    // effect 是权限体系的单一事实源：由工具自声明，宿主不再维护工具名单。
+    ...(config.effect ? { effect: config.effect } : {}),
     ...(config.source ? { source: config.source } : {}),
     /**
      * AgentTool.execute 实现；抛出的带 code Error 由 loop 转成 isError ToolResultMessage。

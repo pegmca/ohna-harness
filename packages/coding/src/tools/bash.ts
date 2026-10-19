@@ -121,6 +121,8 @@ export function createBashTool(cwd: string, options: BashToolOptions = {}): Agen
       "Dangerous commands (rm -rf /, sudo, curl | sh, forced git pushes, writes outside the working directory) are rejected without running. " +
       "在会话工作目录下执行命令，默认超时 60 秒，可用 timeout 参数调整。",
     parameters: bashInputSchema,
+    // 执行命令有副作用：acceptEdits 下仍会询问（只对写/改文件放宽）。
+    effect: "mutate",
     source: "real",
     // 命令有真实副作用：声明 hasSideEffects 后包装层不会自动重试（防重复执行）。
     // 这里的 timeoutMs 同时是单次超时的默认值与上限，kill 由 executeBash 执行。

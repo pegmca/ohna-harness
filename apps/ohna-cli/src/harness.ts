@@ -7,7 +7,8 @@
 import { type ActiveModel, resolveActiveModelFromEnv } from "@aiagent/ai";
 import type { AgentTool } from "@aiagent/tools";
 import { createCodingToolRegistry } from "@aiagent/coding";
-import { createToolConfirmGate } from "./confirm.js";
+import { createToolConfirmGate, type ConfirmHook } from "./confirm.js";
+import { createTeamToolset } from "./team-wiring.js";
 import { loadMcpTools } from "./mcp-config.js";
 import { resolveSystemPrompt } from "./mode.js";
 import { createUsageTracker, type UsageTracker } from "./render.js";
@@ -58,6 +59,7 @@ import { printProviderError as printProviderErrorImpl } from "./provider-error.j
  * @param setup 本轮的模式配置。
  * @param tracker 会话级用量累计器。
  * @param store 会话存储。
+ * @param onGateReady 权限闸门就绪回调（K3：回填 team controller 的可变 gate 引用）。
  */
 async function runSingleTurn(
   prompt: string,
@@ -66,6 +68,7 @@ async function runSingleTurn(
   setup: RunSetup,
   tracker: UsageTracker,
   store: SessionStore,
+  onGateReady?: (gate: ConfirmHook) => void,
 ): Promise<void> {
   const controller = new AbortController();
   // 单次模式无 readline，需显式把进程 SIGINT 接到 AbortController（与 REPL 对齐），
@@ -81,6 +84,8 @@ async function runSingleTurn(
       autoApprove: setup.autoApprove,
       cwd: setup.cwd,
     });
+    // K3：闸门在此才构造（单次模式无 readline 实例），立即回填给 team controller。
+    onGateReady?.(beforeToolCall);
 
     // 零预算 / 恢复后已超预算：不调用模型，仍然把当前会话落盘，保证 --resume 可继续。
     if (reachedCostBudget(tracker, setup.maxCost)) {
@@ -133,6 +138,7 @@ export async function runCli(options: CliOptions): Promise<void> {
   if (options.help) return; // --help 已由 index.ts 打印，此处仅短路。
 
   // --web：进程内托管（D8 主路径），工具装配与会话语义都在 web-entry 内完成。
+  // K3/B3：--web 本批次不接 team（serve 侧仍用其既有确认闸门，子代理策略继承留待后续批次）。
   if (options.web) {
     await runWeb(options);
     return;
@@ -147,7 +153,9 @@ export async function runCli(options: CliOptions): Promise<void> {
 
   const cwd = process.cwd();
   // ohna 恒为编码助手：工具集固定为编码工具集，作用域限定在 cwd（路径与命令策略在 @aiagent/coding 内）。
-  const tools: AgentTool<any>[] = createCodingToolRegistry(cwd);
+  // 子代理只继承这份「编码工具池」快照（不含 MCP / team 自身），避免递归 spawn 与外部工具越权。
+  const codingTools: AgentTool<any>[] = createCodingToolRegistry(cwd);
+  const tools: AgentTool<any>[] = [...codingTools];
 
   // --mcp：外部 MCP server 接线（失败只打印结构化警告，不中断启动）。
   const mcpContext: ReplContext = {};
@@ -156,6 +164,27 @@ export async function runCli(options: CliOptions): Promise<void> {
     tools.push(...mcp.tools);
     mcpContext.mcpToolNames = new Set(mcp.toolNames);
     mcpContext.mcpServerNames = mcp.serverNames;
+  }
+
+  /**
+   * K3 策略继承（可变引用时序）：team controller 必须先于 REPL 创建（工具表要并入），
+   * 但真正的权限闸门依赖 REPL/单次模式的 readline/TUI 实例，只能后建。因此这里先给
+   * 子代理一个转发闭包，等宿主构造完闸门后通过 `onGateReady` 回填 `gateRef`——此后
+   * 子代理与 supervisor 指向同一个闸门、共享同一 PolicyState（write/edit/bash 同审）。
+   */
+  let gateRef: ConfirmHook | undefined;
+  const team = createTeamToolset({
+    enabled: options.team,
+    codingTools,
+    defaultModel: active.model,
+    getGate: () => gateRef,
+  });
+  tools.push(...team.tools);
+  if (team.teamToolNames.size > 0) {
+    mcpContext.teamToolNames = team.teamToolNames;
+    mcpContext.onGateReady = (gate) => {
+      gateRef = gate;
+    };
   }
 
   try {
@@ -178,7 +207,9 @@ export async function runCli(options: CliOptions): Promise<void> {
     };
 
     if (options.prompt !== undefined) {
-      await runSingleTurn(options.prompt, active, tools, setup, tracker, createSessionStore());
+      await runSingleTurn(options.prompt, active, tools, setup, tracker, createSessionStore(), (gate) => {
+        gateRef = gate;
+      });
     } else {
       await runRepl(active, tools, setup, tracker, mcpContext);
     }

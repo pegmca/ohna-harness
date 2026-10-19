@@ -10,7 +10,7 @@
 > - `04-development-plan.md` —— 依赖有序、文件级交付清单的分阶段开发计划
 > - `05-verify-cases.md` —— 分层验收用例（安全 P0 / ohna-cli M2 / serve L0-L1 / ohna-web / L3 / 回归）
 > - `06-cli-theme.md` —— CLI 终端样式改造（复刻 Claude Code 风格，已落地：门控裁决 + spinner 单写者协议 + **整屏 TUI 输入区**（v3，取代原「打印式顶线」降级方案，根治 resize 重绘风暴））
-> - `07-cli-feature-parity.md` —— CLI 功能对齐 Claude Code：差距清单 + 编码建议 + 内核改动设计（K1 权限策略内核 / K2 排队与 steering 接线 / K3 子 agent 接线，批次 B1-B3，规划中）
+> - `07-cli-feature-parity.md` —— CLI 功能对齐 Claude Code：差距清单 + 编码建议 + 内核改动设计（K1 权限策略内核 / K2 排队与 steering 接线 / K3 子 agent 接线，批次 B1-B3，**已落地**；落地结果与已知偏差见 07 §6）
 >
 > 历史背景文档：`01-coding-cli.md`（CLI M1 移植细节，仍有效）、`02-local-web-runtime.md`（本地 Web 早期设计，**其 §3.2「复用 createApiServer」已被用户决策取代**，其余 JSONL/目录沙箱/UI 思路沿用）。
 > 落地切片遵循 `LEARNING_AND_EVOLUTION_ROADMAP.md` §3 七步法与 Definition of Done。
@@ -30,7 +30,7 @@
 | M3 | 体验对齐：slash 命令、diff 渲染、输出折叠、MCP 接入、`--web` 进程内托管 | **已实现**（04 Phase 5；`src/slash.ts`（/model /cost /compact /tools /resume）+ `src/diff.ts` 零依赖 LCS unified diff（写前预览、400 行折叠）+ `tool_execution_end` 头尾折叠 + `--mcp` 外部 server（`<untrusted_context>` 已由 mcp adapter 封装）+ `--web` 托管 `src/web-entry.ts`；自动化见 `test/verify-ohna-m3.mjs`） |
 | L3 | 长任务治理（ohna）：`/resume`、compaction、成本展示 | **已实现**（04 Phase 5；CLI `/resume` 切换 + `/cost` 累计 + serve **run 前会话级 compaction**：双基准估算 → 摘要持久化 `messageType:"compaction"` → 硬收敛（与 CLI 共用 `packages/agent` 的 `enforceContextWindow`）；自动化见 `packages/serve/test/compaction.test.mjs` 与 `test/verify-ohna-m3.mjs`） |
 | CLI 样式 | 终端样式复刻 Claude Code：ANSI 主题层（Amberwood 暖栗×橙）、`⏺/⎿/✻` 符号、整屏 TUI 输入区、`--no-color` | **已实现**（06-cli-theme.md v3：符号无条件替换 + 颜色/spinner TTY 门控、spinner 单写者协议；输入区由 v2 的「打印式顶线 + 单行 prompt」改为 `packages/term` 整屏 TUI——resize 节流幂等重绘、彻底消除重绘风暴，`box` 显式宽度为硬约束保证边框对齐；非 TTY 保留原滚动输出） |
-| CLI 功能对齐 | 权限三选项与会话记住（K1）、queued/Esc/ctrl+o/thinking 交互（K2 接线 + 渲染层）、Task 子 agent（K3）、命令与补全补表 | 规划中（07-cli-feature-parity.md，批次 B1-B3；内核现状已核实：thinking 事件 / 工具结果全文 / steering 钩子 / team 原语均已备，多为接线与策略内核化） |
+| CLI 功能对齐 | 权限三选项与会话记住（K1）、queued/Esc/ctrl+o/thinking 交互（K2 接线 + 渲染层）、Task 子 agent（K3）、命令与补全补表 | **已实现**（07 批次 B1-B3：B1 K2 follow-up 排队注入 + Esc/双击 Esc + ctrl+o verbose + thinking + reasoning token；B2 `AgentTool.effect` 单一事实源 + `packages/agent/src/permission/`（default/acceptEdits/plan/bypass）+ 三选项/会话记住/Shift+Tab/plan 工具过滤/`/permissions` + serve SSE AskAdapter；B3 TeamCreate/SendMessage 接线 + 策略继承（fail-closed）+ `--no-team` + `@` 文件引用 / `!` 直通（过闸门）/ `#` 记忆 / `/status` `/mcp` `/export` `/resume fork`；`/resume` 无参打开输入框下方可选择的会话面板；`pnpm typecheck/build/test/architecture:check` 全绿） |
 
 ## 一·一、架构决策（本轮已拍板，见 03 §7）
 

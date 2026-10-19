@@ -29,6 +29,8 @@ export interface CliOptions {
   open: boolean;
   /** --mcp <config.json>：外部 MCP server 配置文件路径。 */
   mcpConfig?: string;
+  /** 团队编排是否开启（默认 true；--no-team 关闭 TeamCreate / SendMessage）。 */
+  team: boolean;
 }
 
 /** --web 模式的默认端口（与 ohna-api 一致）。 */
@@ -151,6 +153,8 @@ export function parseArgs(
   let help = false;
   let web = false;
   let open = true;
+  // 团队编排默认开启：--no-team 是唯一关闭开关（不提供 --team，避免两套真值来源）。
+  let team = true;
   const positional: string[] = [];
 
   for (let i = 0; i < argv.length; i += 1) {
@@ -169,6 +173,10 @@ export function parseArgs(
     }
     if (arg === "--no-open") {
       open = false;
+      continue;
+    }
+    if (arg === "--no-team") {
+      team = false;
       continue;
     }
 
@@ -220,6 +228,7 @@ export function parseArgs(
     webPort: parsePositiveInt(parsed.webPort, "--web-port", warn) ?? DEFAULT_WEB_PORT,
     open,
     mcpConfig: parsed.mcpConfig,
+    team,
   };
 }
 
@@ -252,10 +261,11 @@ export function printHelp(write: (text: string) => void = (text) => process.stdo
     "体验与扩展（M3）：",
     "  会话内 /model [profile]       无参列出可用 profile 与当前；带参切换模型（对后续 run 生效）",
     "  会话内 /compact               立即对当前会话做一次上下文压缩",
-    "  会话内 /tools                 列出当前工具（MCP 工具标注来源）",
+    "  会话内 /tools                 列出当前工具（MCP / Team 工具分别标注来源）",
+    "  ohna --no-team                关闭子代理编排（默认注册 TeamCreate / SendMessage）",
     "  会话内 /resume [id]           无参列出最近会话；带参切换会话",
     "  ohna --mcp <config.json>      挂载外部 MCP server：{\"servers\":[{\"command\",\"args\"?,\"env\"?,\"name\"?}]}",
-    "  ohna --web [dir]              进程内托管本地 Web UI（终端与浏览器看同一会话）",
+    "  ohna --web [dir]              进程内托管本地 Web UI（终端与浏览器看同一会话；暂不注册 Team 工具）",
     "  ohna --web --web-port <n>     指定托管端口（默认 4173，占用自动 +1）",
     "  ohna --web --no-open          不自动打开浏览器",
     "",

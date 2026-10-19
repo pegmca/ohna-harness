@@ -54,6 +54,9 @@ export function createTeamCreateTool(deps: TeamToolDeps): AgentTool<typeof teamC
       "创建一个隔离子代理成员（独立上下文窗口与模型）。参数包含名称、角色、可选 model id、可选授权工具子集与角色 system prompt。",
     label: "组建子代理",
     parameters: teamCreateSchema,
+    // 编排原语本身不直接改文件：真正的写操作发生在子代理内部，由继承的权限闸门裁决。
+    // 标 read 后 TeamCreate 不触发审批，避免「每次 spawn 都弹一次」；子代理的写仍受审。
+    effect: "read",
     async execute(_toolCallId, params): Promise<AgentToolResult> {
       const member = deps.createMember(params as TeamCreateParams) as {
         name: string;
@@ -89,6 +92,9 @@ export function createSendMessageTool(deps: TeamToolDeps): AgentTool<typeof send
     description: "向团队成员派发一条任务消息，触发其隔离 subagent 运行并回收摘要。失败以可读文本回传，不中断 supervisor。",
     label: "向成员发消息",
     parameters: sendMessageSchema,
+    // 同 TeamCreate：派发动作本身无文件副作用；子代理内部的工具调用才是副作用发生点，
+    // 它们走继承的 beforeToolCall，因此这里标 read 不会绕过权限。
+    effect: "read",
     async execute(_toolCallId, params, signal): Promise<AgentToolResult> {
       const result = await deps.runMember(params.recipient, params.content, signal);
       const budgetNote = result.budgetExceeded ? "（⚠被成本护栏停止，仅回传部分摘要）" : "";

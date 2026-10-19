@@ -60,6 +60,19 @@ export function setSpinnerEnabled(value: boolean): void {
 }
 
 /**
+ * 读取 spinner 是否启用（只读探测）。
+ *
+ * 用途：render 在非 verbose 时默认把 thinking 交给 spinner；TTY 整屏模式禁用了
+ * spinner，此时需要退化为追加一行 `✻ 思考中…`，否则用户对思考阶段完全无感。
+ * 以 spinner 自身的 enabled 为单一事实源，避免 render 另存一份「是否 TUI」。
+ *
+ * @returns spinner 是否启用。
+ */
+export function isSpinnerEnabled(): boolean {
+  return enabled;
+}
+
+/**
  * 绘制一帧：`✻ 动词… (Ns)`，覆盖上一次帧。
  *
  * 空闲窗未到时直接返回（撕裂防护）；帧内容用 dim 色呈现为系统行。

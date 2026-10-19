@@ -221,6 +221,8 @@ export function createEditTool(cwd: string, options?: EditToolOptions): AgentToo
       "(including whitespace and newlines) and must be unique in the file. Use read first to get the exact content. " +
       "Use write instead for new files or complete rewrites.",
     parameters: editInputSchema,
+    // 修改文件有副作用：与 write 同属 acceptEdits 可直接放行的编辑类操作。
+    effect: "mutate",
     // 写操作不可重试：第二次执行会因 oldText 已被替换而失败或产生重复改动。
     execution: { hasSideEffects: true, timeoutMs: DEFAULT_EDIT_TIMEOUT_MS },
     source: "real",

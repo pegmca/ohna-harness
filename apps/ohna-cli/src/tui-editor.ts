@@ -87,6 +87,10 @@ export class LineEditor {
   onSubmit?: (value: string) => void;
   /** 中断回调：用户按 Ctrl+C 时调用（由上层决定中断 run 还是退出）。 */
   onInterrupt?: () => void;
+  /** verbose 切换回调：用户按 Ctrl+O（`\x0f`）时调用（F-3，由上层切换开关并重打折叠块）。 */
+  onVerboseToggle?: () => void;
+  /** 权限模式循环回调：用户按 Shift+Tab（`\x1b[Z`）时调用（B2，由上层循环预设）。 */
+  onModeCycle?: () => void;
   /** 内容变化回调：每次 value/cursor 改变后调用（用于触发 requestRender）。 */
   onChange?: () => void;
 
@@ -172,6 +176,14 @@ export class LineEditor {
       // Ctrl+C（raw mode 下为 `\x03`）：中断当前 run，空闲时退出。
       case "\x03":
         this.onInterrupt?.();
+        return;
+      // Ctrl+O（`\x0f`）：切换 verbose 并重打折叠块全文（F-3）。
+      case "\x0f":
+        this.onVerboseToggle?.();
+        return;
+      // Shift+Tab（CSI Z，`\x1b[Z`）：循环权限模式 default → acceptEdits → plan（B2）。
+      case "\x1b[Z":
+        this.onModeCycle?.();
         return;
       // 提交：`\r`（默认 Enter）或 `\n`。
       case "\r":

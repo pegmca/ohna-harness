@@ -28,7 +28,8 @@ import {
 import type { RunStreamEventDtoV2 } from "@aiagent/types";
 import { printProviderError } from "./provider-error.js";
 import { loadMcpTools } from "./mcp-config.js";
-import { createUsageTracker, renderEvent, type RenderOptions } from "./render.js";
+import { formatPermissionStatus } from "./permission-mode.js";
+import { createUsageTracker, formatCostLine, renderEvent, type RenderOptions } from "./render.js";
 import { createSlashDispatcher, printUnknownCommand } from "./slash.js";
 import { CROSS, inputTopBar, inputBottomBar, paint, STOP, supportsAnsi } from "./theme.js";
 import { printReplCommands } from "./welcome.js";
@@ -237,18 +238,23 @@ export async function runWeb(options: CliOptions): Promise<void> {
     handlers: {
       help: () => printReplCommands(),
       cost: () => {
-        const snapshot = tracker.snapshot();
-        process.stdout.write(
-          snapshot.total === 0
-            ? "累计用量：暂无（本会话尚未产生模型调用）\n"
-            : `累计用量：token ${snapshot.total}（输入 ${snapshot.input} / 输出 ${snapshot.output}），成本 $${snapshot.cost.toFixed(6)}\n`,
-        );
+        // F-3：与本地 REPL 共用 formatCostLine（含 reasoning token 展示）。
+        process.stdout.write(formatCostLine(tracker) + "\n");
       },
       tools: () => {
         for (const tool of tools) {
           process.stdout.write(`  ${tool.name}${mcpToolNames.has(tool.name) ? "（MCP）" : ""}\n`);
         }
         process.stdout.write(`共 ${tools.length} 个工具。\n`);
+      },
+      // B2：web 托管模式的策略固定由 serve 装配决定（--yes → bypass，否则 default）；
+      // 会话记住与 Shift+Tab 模式切换目前仅本地 REPL 支持，这里只做只读展示。
+      permissions: () => {
+        const preset = options.yes ? "bypass" : "default";
+        process.stdout.write(`${formatPermissionStatus(preset, [])}\n`);
+        process.stdout.write(
+          "提示：Web 托管模式的权限策略由 serve 启动参数决定，暂不支持会话记住与模式切换。\n",
+        );
       },
       model: (arg) => {
         if (!arg) {
@@ -268,6 +274,29 @@ export async function runWeb(options: CliOptions): Promise<void> {
         process.stdout.write(
           "web 托管模式下，会话压缩由 serve 在每次 run 前自动管理（超窗时摘要并落盘 compaction 消息），无需手动触发。\n",
         );
+      },
+      // F-8：web 模式只读快照（history 与 fork / export 由 serve 的会话存储负责）。
+      status: () => {
+        const usage = tracker.snapshot();
+        const reasoning = usage.reasoning ?? 0;
+        const output = reasoning > 0 ? `输出 ${usage.output}（推理 ${reasoning}）` : `输出 ${usage.output}`;
+        process.stdout.write(`模型：${active.model.id}（profile: ${active.model.provider}）\n`);
+        process.stdout.write(`会话：${conversationId} · ${conversationTitle}\n`);
+        process.stdout.write(`用量：${usage.total === 0 ? "暂无" : `token ${usage.total}（输入 ${usage.input} / ${output}），成本 $${usage.cost.toFixed(6)}`}\n`);
+        process.stdout.write(`MCP：${mcpServerNames.length} 个 server · ${mcpToolNames.size} 个工具\n`);
+        process.stdout.write("Team：未启用（web 托管模式不接 Team）\n");
+        process.stdout.write(`权限：${options.yes ? "bypass" : "default"}\n`);
+      },
+      mcp: () => {
+        if (mcpServerNames.length === 0 && mcpToolNames.size === 0) {
+          process.stdout.write("未接入 MCP server（启动时使用 --mcp <config.json> 接入）。\n");
+          return;
+        }
+        process.stdout.write(`MCP server（${mcpServerNames.length}）：${mcpServerNames.join("、") || "无"}\n`);
+        process.stdout.write(`工具（${mcpToolNames.size}）：${[...mcpToolNames].join("、") || "（无）"}\n`);
+      },
+      export: () => {
+        process.stdout.write("web 托管模式暂不支持 /export；会话由 serve 持久化，可在本地 REPL 导出。\n");
       },
       resume: async (arg) => {
         const conversations = await server.listConversations();
@@ -363,7 +392,12 @@ export async function runWeb(options: CliOptions): Promise<void> {
     }
     if (closed) return;
     if (running) {
+      // K2/F-2 排队语义说明：web 模式的 run 由 serve 的 createRun 管理（每次一个完整 run），
+      // 终端侧没有 agentLoop 级 follow-up 钩子可注入「中途继续」，因此排队行仍保留
+      // 「run 结束后串行新开 run」的现状（与 repl.ts 的 follow-up 注入不同，但语义等价：
+      // 用户输入绝不并发读写同一会话）。仅补齐排队回显，不改造 web 的 run 生命周期。
       pending.push(text);
+      process.stdout.write(`» 已排队（#${pending.length}）\n`);
       return;
     }
     // 提交输入：先打印输入框下边框，把当前输入行在滚动历史里闭合为完整盒子。

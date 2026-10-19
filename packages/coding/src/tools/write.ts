@@ -108,6 +108,8 @@ export function createWriteTool(cwd: string, options?: WriteToolOptions): AgentT
       "Automatically creates parent directories. Use write only for new files or complete rewrites; " +
       "use edit for precise changes to an existing file.",
     parameters: writeInputSchema,
+    // 写文件有副作用：进入权限策略（default 需确认，acceptEdits 放行，plan 拒绝）。
+    effect: "mutate",
     // 写操作不可重试：重试可能重复落盘或覆盖并发写入的结果。
     execution: { hasSideEffects: true, timeoutMs: DEFAULT_WRITE_TIMEOUT_MS },
     source: "real",

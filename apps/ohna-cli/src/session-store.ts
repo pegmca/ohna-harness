@@ -28,6 +28,8 @@ export interface SessionUsageTotals {
   total: number;
   /** 累计成本（美元）。 */
   cost: number;
+  /** 累计推理 token（provider 上报；是 output 子集）。旧文件可能没有该字段。 */
+  reasoning?: number;
 }
 
 /** 会话元数据（JSONL 首行）。 */
@@ -209,11 +211,17 @@ function parseUsage(value: unknown): SessionUsageTotals | undefined {
     const field = record[key];
     if (typeof field !== "number" || !Number.isFinite(field) || field < 0) return undefined;
   }
+  // reasoning 是可选字段（旧文件没有）：合法时才保留，否则省略（restore 按 0 兜底）。
+  const reasoning =
+    typeof record.reasoning === "number" && Number.isFinite(record.reasoning) && record.reasoning >= 0
+      ? record.reasoning
+      : undefined;
   return {
     input: record.input as number,
     output: record.output as number,
     total: record.total as number,
     cost: record.cost as number,
+    ...(reasoning !== undefined ? { reasoning } : {}),
   };
 }
 

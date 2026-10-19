@@ -1,8 +1,12 @@
 /**
  * 写/执行确认闸门：以 AgentLoopConfig.beforeToolCall 的形式挂在组合根上。
  *
- * 为什么放在这里而不是工具内部：权限是「组合根策略」——工具只提供能力，
- * 换 CLI / 换 API 时整套审批策略可整体替换；这也是 packages/agent 明确不接审批逻辑的原因。
+ * 单一事实源（K1）：本文件不再维护任何工具名单——工具通过 `AgentTool.effect` 自声明
+ * 副作用，`createPermissionGate` 从上下文工具表读取；MCP 等未标注工具按 mutate 保守处理。
+ *
+ * 策略与问询分离：预设策略来自 `@aiagent/agent` 的 permission 模块（default / acceptEdits /
+ * plan / bypass），本文件只实现「三选项 AskAdapter」这一宿主细节：
+ *   1. 允许一次  2. 本会话一律允许  3. 拒绝
  *
  * readline 边界（关键）：REPL 在 run 期间把主 readline pause 掉了。
  * 这里优先复用调用方传入的主 readline 实例调用 question——question 会隐式 resume，
@@ -11,13 +15,21 @@
  */
 import * as path from "node:path";
 import * as readline from "node:readline";
-import type { BeforeToolCallContext, BeforeToolCallResult } from "@aiagent/agent";
+import {
+  createPermissionGate,
+  createPolicyState,
+  createPresetPolicy,
+  resolveToolEffect,
+  type BeforeToolCallContext,
+  type BeforeToolCallResult,
+  type PermissionAnswer,
+  type PermissionPreset,
+  type PermissionRequest,
+  type PolicyState,
+} from "@aiagent/agent";
 import { write } from "./render.js";
 import { resumeSpinner, suspendSpinner } from "./spinner.js";
 import { CROSS, DOT, paint } from "./theme.js";
-
-/** 需要人工确认的高风险工具：写文件、改文件、执行命令；只读工具直接放行。 */
-const CONFIRM_TOOL_NAMES: ReadonlySet<string> = new Set(["write", "edit", "bash"]);
 
 /** 终端单行展示的最大长度，避免超长命令/路径刷屏。 */
 const MAX_DISPLAY_LENGTH = 160;
@@ -30,7 +42,7 @@ export type ConfirmHook = (
 
 /** 确认闸门的构造参数。 */
 export interface ToolConfirmGateOptions {
-  /** true 表示 --yes：跳过所有确认直接放行，适用于批处理与非交互场景。 */
+  /** true 表示 --yes：默认使用 bypass 预设（可被 getPreset 覆盖）。 */
   autoApprove: boolean;
   /** 工作区根目录，用于把绝对路径渲染成相对路径。 */
   cwd: string;
@@ -41,41 +53,94 @@ export interface ToolConfirmGateOptions {
    * 接收已着色的提问文本，返回用户输入原文，null 表示被中断（Ctrl-C）。
    */
   confirm?: (question: string) => Promise<string | null>;
+  /** 跨轮共享的会话记忆；缺省每次构造闸门时新建（单次模式）。 */
+  state?: PolicyState;
+  /**
+   * 实时读取当前预设。REPL 的 Shift+Tab / `/permissions mode` 通过它让闸门
+   * 在下一次工具调用立即看到新模式；缺省按 autoApprove 固定为 bypass/default。
+   */
+  getPreset?: () => PermissionPreset;
 }
 
 /**
- * 创建写/执行确认闸门。
+ * 解析三选项回答（纯函数，便于单测）。
  *
- * @param options 是否自动放行、工作区根目录、可复用的 readline 实例。
+ * 兼容输入：1=y=yes → 允许一次；2 → 本会话一律允许；3=n=no / 空 / 非法 → 拒绝。
+ * 非法输入按拒绝处理（安全默认），不重试提问。
+ *
+ * @param answer 用户输入原文。
+ * @returns AskAdapter 的标准回答。
+ */
+export function parsePermissionAnswer(answer: string): PermissionAnswer {
+  const normalized = answer.trim().toLowerCase();
+  if (normalized === "1" || normalized === "y" || normalized === "yes") return "allow";
+  if (normalized === "2" || normalized === "a" || normalized === "all" || normalized === "always") {
+    return "allow-session";
+  }
+  return "deny";
+}
+
+/**
+ * 创建权限确认闸门。
+ *
+ * @param options 自动放行开关、工作区根目录、可复用的 readline / TUI 读取器与策略状态。
  * @returns 可直接赋给 AgentLoopConfig.beforeToolCall 的钩子。
  */
 export function createToolConfirmGate(options: ToolConfirmGateOptions): ConfirmHook {
-  return async (context, signal): Promise<BeforeToolCallResult | undefined> => {
-    const toolName = context.toolCall.name;
-    if (!CONFIRM_TOOL_NAMES.has(toolName)) return undefined;
+  const state = options.state ?? createPolicyState();
+  const getPreset =
+    options.getPreset ?? (() => (options.autoApprove ? "bypass" : "default"));
 
-    const summary = describeToolCall(toolName, context.args, options.cwd);
+  /**
+   * 三选项 ask 适配器：把策略的 ask 裁决转成一次终端问询。
+   *
+   * @param request 权限请求。
+   * @param decision 策略给出的 ask 裁决（含通用摘要）。
+   * @param signal run 级中断信号。
+   * @returns 允许一次 / 本会话允许 / 拒绝。
+   */
+  const ask = async (
+    request: PermissionRequest,
+    decision: { outcome: "ask"; summary: string },
+    signal?: AbortSignal,
+  ): Promise<PermissionAnswer> => {
+    const summary = describeToolCall(request.toolName, request.args, options.cwd);
 
-    if (options.autoApprove) {
-      // 走 write()：整屏模式下放行提示会进对话模型，直写 stdout 会被下一帧清屏抹掉。
-      write(paint(`${DOT} --yes 自动放行：${summary}`, "dim") + "\n");
-      return undefined;
-    }
-
-    // 非交互环境（无 TTY）无法取得确认，默认拒绝而不是无限等待输入。
+    // 非交互环境无法取得确认：默认拒绝而不是无限等待输入（--yes / bypass 不会走到这里）。
     if (!process.stdin.isTTY) {
-      process.stdout.write(paint(`${CROSS} 已拒绝 ${summary}：非交互环境未传 --yes，默认拒绝写与执行。`, "error") + "\n");
-      return { block: true, reason: `非交互环境且未传 --yes，已拒绝：${summary}` };
+      process.stdout.write(
+        paint(`${CROSS} 已拒绝 ${summary}：非交互环境未传 --yes，默认拒绝写与执行。`, "error") + "\n",
+      );
+      return "deny";
     }
 
-    const question = paint(`? 是否允许 ${summary}？(y/N) `, "warn");
+    const question = paint(
+      `? 是否允许 ${summary}？1) 允许一次  2) 本会话一律允许  3) 拒绝 > `,
+      "warn",
+    );
     const answer = options.confirm
       ? await askConfirmationVia(options.confirm, question, signal)
       : await askConfirmation(options.readline, question, signal);
-    if (answer === null) {
-      return { block: true, reason: `用户中断（Ctrl-C），已取消：${summary}` };
+
+    // null 表示 Ctrl-C / run 中断：按拒绝处理，避免闸门悬挂。
+    if (answer === null) return "deny";
+    return parsePermissionAnswer(answer);
+  };
+
+  const gate = createPermissionGate(() => createPresetPolicy(getPreset()), state, ask);
+
+  return async (context, signal) => {
+    // 只有「当前实时预设」确实是 bypass 才打印自动放行：--yes 启动后用户可能用
+    // Shift+Tab 切到 default/acceptEdits/plan，此时策略已不是全放行，日志必须随之消失。
+    if (
+      getPreset() === "bypass" &&
+      resolveToolEffect(context.context.tools, context.toolCall.name) === "mutate"
+    ) {
+      const summary = describeToolCall(context.toolCall.name, context.args, options.cwd);
+      // 走 write()：整屏模式下放行提示会进对话模型，直写 stdout 会被下一帧清屏抹掉。
+      write(paint(`${DOT} --yes 自动放行：${summary}`, "dim") + "\n");
     }
-    return /^y(es)?$/i.test(answer.trim()) ? undefined : { block: true, reason: `用户拒绝执行：${summary}` };
+    return gate(context, signal);
   };
 }
 
@@ -102,7 +167,7 @@ function describeToolCall(toolName: string, args: unknown, cwd: string): string 
 }
 
 /**
- * 用 readline 问一个 y/n 问题，并与 run 的 AbortSignal 竞争：
+ * 用 readline 问一个三选项问题，并与 run 的 AbortSignal 竞争：
  * Ctrl-C 中断当前 run 时立即返回 null（按拒绝处理），避免闸门悬挂导致 run 无法结束。
  *
  * @param rl 可复用的主 readline 实例；缺省时临时创建（回答后关闭）。
@@ -150,7 +215,7 @@ async function askConfirmation(
 }
 
 /**
- * 用 TUI 确认读取器问一个 y/n 问题，并与 run 的 AbortSignal 竞争：
+ * 用 TUI 确认读取器问一个三选项问题，并与 run 的 AbortSignal 竞争：
  * TTY 整屏模式下无 readline，由 TuiApp.confirm 在对话框下方收集单行输入。
  *
  * @param confirm TUI 确认读取器（接收已着色提问，返回输入原文或 null）。

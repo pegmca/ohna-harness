@@ -307,6 +307,7 @@ export function createGrepTool(cwd: string, options?: GrepToolOptions): AgentToo
       " chars.",
     label: "grep",
     parameters: grepInputSchema,
+    effect: "read",
     source: "real",
     execution: { timeoutMs: 30_000, hasSideEffects: false, idempotent: true },
     formatResult: (output) => output.output,

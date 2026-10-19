@@ -119,6 +119,29 @@ export * from "./team-controller.js";
 export { projectTeamCostSummary, projectContextBudgetSummary } from "./team/run-event.js";
 export type { TeamCostMember, TeamCostSection } from "./team/run-event.js";
 
+// K1 权限策略领域模块：与 team/ 同范式——策略在内核包、问询 UI 在组合根，
+// agent-loop.ts 不 import 本模块，宿主通过 beforeToolCall 挂载 createPermissionGate 的产物。
+export {
+  composePolicy,
+  createPermissionGate,
+  createPolicyState,
+  createPresetPolicy,
+  resolvePermissionTarget,
+  resolveToolEffect,
+  summarizePermissionRequest,
+} from "./permission/index.js";
+export type {
+  AskAdapter,
+  PermissionAnswer,
+  PermissionDecision,
+  PermissionEffect,
+  PermissionPolicy,
+  PermissionPreset,
+  PermissionRequest,
+  PermissionRule,
+  PolicyState,
+} from "./permission/index.js";
+
 // SLO / 容量证据聚合（docs/v1.2 §3 差距#7 收口）：成本已由 cost_summary 覆盖，本层补
 // 时延/成功率/并发三类可量化证据。纯函数聚合，run-service 在 agent_end 并入 cost_summary.payload。
 export { summarizeSlo } from "./team/slo.js";

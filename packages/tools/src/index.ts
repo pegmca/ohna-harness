@@ -4,6 +4,7 @@ export type {
   AgentToolUpdateCallback,
   ToolError,
   ToolErrorCode,
+  ToolEffect,
   ToolExecutionMode,
   ToolExecutionOptions,
   ToolRegistrySummary,

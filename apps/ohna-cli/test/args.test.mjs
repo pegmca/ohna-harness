@@ -100,3 +100,13 @@ test("--max-cost 0 是合法零预算；位置参数合并为 prompt", () => {
   assert.equal(options.prompt, "hello world");
   assert.deepEqual(warnings, []);
 });
+
+test("--no-team 关闭团队编排；缺省保持开启（F-4）", () => {
+  const enabled = parse([]);
+  assert.equal(enabled.options.team, true, "团队编排默认开启");
+
+  const disabled = parse(["--no-team", "做一个任务"]);
+  assert.equal(disabled.options.team, false);
+  assert.equal(disabled.options.prompt, "做一个任务", "--no-team 是开关，不吞位置参数");
+  assert.deepEqual(disabled.warnings, []);
+});

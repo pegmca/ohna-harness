@@ -193,6 +193,8 @@ export function createReadTool(
       `${Math.floor(maxBytes / 1024)}KB (whichever is hit first). Use offset/limit for large files and continue with offset.`,
     label: "read",
     parameters: readInputSchema,
+    // 只读：不进入权限问询（effect 为权限体系的单一事实源）。
+    effect: "read",
     source: "real",
     execution: { timeoutMs: 15_000, hasSideEffects: false, idempotent: true },
     formatResult: (output) => output.output,

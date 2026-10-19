@@ -61,6 +61,18 @@ test("estimateTokens uses the chars/4 heuristic", () => {
   assert.ok(estimateTokens(withToolCall) > 0);
 });
 
+test("estimateTokens / estimateContextTokens 支持 user content 块数组（@ 文件引用）", () => {
+  // F-6：`@` 引用把用户消息扩成 [原文本, 文件块]，压缩估算必须按全部文本块求和，
+  // 不能因为 content 不是 string 而漏算（漏算会让上下文在真实超窗时仍不触发压缩）。
+  const content = [
+    { type: "text", text: "看看文件" },
+    { type: "text", text: "文件 a.ts：\n" + "x".repeat(40) },
+  ];
+  const message = { role: "user", content, timestamp: 1 };
+  assert.equal(estimateTokens(message), 14); // 4 + 9 + 40 字符 → ceil(53/4)
+  assert.equal(estimateContextTokens([message]), 14);
+});
+
 test("estimateContextTokens prefers the last assistant usage and adds the tail", () => {
   const withUsage = assistantText("answer");
   withUsage.usage = { input: 1000, output: 100, cacheRead: 0, cacheWrite: 0, totalTokens: 1100, cost: ZERO_COST };

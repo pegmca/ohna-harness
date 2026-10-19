@@ -92,6 +92,7 @@ export function createLsTool(cwd: string, options?: LsToolOptions): AgentTool<ty
       `Dotfiles are hidden unless showHidden is true. Output is truncated to ${Math.floor(maxBytes / 1024)}KB.`,
     label: "ls",
     parameters: lsInputSchema,
+    effect: "read",
     source: "real",
     execution: { timeoutMs: 15_000, hasSideEffects: false, idempotent: true },
     formatResult: (output) => output.output,

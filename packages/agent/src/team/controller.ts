@@ -145,7 +145,9 @@ export function createTeamController(options: TeamControllerOptions): TeamContro
   /** 解析成员应使用的工具子集：按 allowedTools 名从可用池过滤（权限最小化）。 */
   function resolveTools(member: TeamMember): AgentTool[] {
     const pool = options.availableTools ?? [];
-    if (!member.allowedTools || member.allowedTools.length === 0) return pool;
+    // 语义区分：undefined = 未指定（全量池）；[] = 显式授权零工具（权限最小化的极端情形）。
+    // 若把空数组也当全量，TeamCreate 传 `tools: []` 会意外拿到全部写工具，与 schema 语义相反。
+    if (member.allowedTools === undefined) return pool;
     const allowed = new Set(member.allowedTools);
     return pool.filter((t) => allowed.has(t.name));
   }
@@ -289,6 +291,11 @@ export function createTeamController(options: TeamControllerOptions): TeamContro
       const subConfig: AgentLoopConfig = {
         model: member.model,
         convertToLlm,
+        // K3 策略继承：把 supervisor 的 beforeToolCall 原样透传给子代理。
+        // 子代理的 `context.tools` 是它自己的工具子集，权限闸门从该上下文解析 effect，
+        // 因此 write/edit/bash 在子代理内部同样会走 ask/deny，并写入共享 PolicyState。
+        // 仅在调用方提供时注入，保持「无权限装配」场景（如纯离线测试）零多余钩子。
+        ...(options.beforeToolCall ? { beforeToolCall: options.beforeToolCall } : {}),
         // A-2 修复：不再向 subConfig 注入 deadlineMs——agent-loop 从不消费它，
         // 真正生效的是护栏闭包内的墙钟自查（见 ）。
         ...(hook

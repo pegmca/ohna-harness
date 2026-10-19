@@ -23,7 +23,12 @@ export type SlashCommandName =
   | "model"
   | "compact"
   | "tools"
-  | "resume";
+  | "resume"
+  | "verbose"
+  | "permissions"
+  | "status"
+  | "mcp"
+  | "export";
 
 /** 命令面板条目：命令名（含 `/` 前缀）与一句话描述，供 `/` 面板与 /help 共用。 */
 export interface SlashCommandDef {
@@ -49,6 +54,11 @@ export const SLASH_COMMANDS: readonly SlashCommandDef[] = [
   { name: "/tools", description: "列出当前工具（MCP 工具标注来源）" },
   { name: "/resume", description: "无参列出最近会话，带参切换会话" },
   { name: "/exit", description: "退出会话（等价别名 exit、:q）" },
+  // 面板展示上限为 MAX_PALETTE_ITEMS（现为 12）：当前命令全部可见；/help 始终完整列出。
+  { name: "/permissions", description: "查看权限模式与会话规则；clear / mode 管理" },
+  { name: "/status", description: "查看模型 / 会话 / 用量 / MCP / 权限快照" },
+  { name: "/mcp", description: "列出已接入的 MCP server 与工具" },
+  { name: "/export", description: "把当前会话导出为 Markdown" },
 ];
 
 /**
@@ -72,6 +82,13 @@ const COMMAND_ALIASES: ReadonlyArray<readonly [SlashCommandName, readonly string
   ["compact", ["/compact"]],
   ["tools", ["/tools"]],
   ["resume", ["/resume"]],
+  ["permissions", ["/permissions"]],
+  ["status", ["/status"]],
+  ["mcp", ["/mcp"]],
+  ["export", ["/export"]],
+  // F-3：/verbose 是「非 TTY 下 ctrl+o 的等价入口」，**刻意不入面板 / /help**：
+  // 它是 TTY 能力（ctrl+o）的降级入口而非通用命令，避免主面板出现两条等价路径。
+  ["verbose", ["/verbose"]],
 ];
 
 /** 解析出的命令调用。 */
@@ -112,6 +129,19 @@ export interface SlashHandlers {
   tools?: () => void | Promise<void>;
   /** /resume [id]：无参列出最近会话；带参切换会话并载入历史。 */
   resume?: (arg: string) => void | Promise<void>;
+  /** /verbose：切换详细模式（思考过程 / 折叠块全文）；非 TTY 下 ctrl+o 的等价入口。 */
+  verbose?: () => void | Promise<void>;
+  /**
+   * /permissions：无参展示当前模式 + 会话规则；`clear` 清空规则；
+   * `mode <preset>` 便于非 TTY 环境切换（TTY 下等价入口是 Shift+Tab）。
+   */
+  permissions?: (arg: string) => void | Promise<void>;
+  /** /status：模型 / 会话 / 用量 / MCP / Team / 权限快照。 */
+  status?: () => void | Promise<void>;
+  /** /mcp：列出已接入的 MCP server 与工具。 */
+  mcp?: () => void | Promise<void>;
+  /** /export：把当前 history 导出为 Markdown。 */
+  export?: () => void | Promise<void>;
 }
 
 /** 分发器的构造参数。 */

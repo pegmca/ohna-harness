@@ -234,6 +234,7 @@ export function createFindTool(cwd: string, options?: FindToolOptions): AgentToo
       "KB (whichever is hit first).",
     label: "find",
     parameters: findInputSchema,
+    effect: "read",
     source: "real",
     execution: { timeoutMs: 30_000, hasSideEffects: false, idempotent: true },
     formatResult: (output) => output.output,

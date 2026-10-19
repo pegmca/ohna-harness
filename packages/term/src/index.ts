@@ -15,7 +15,7 @@ export type { Terminal } from "./terminal.js";
 export { Screen } from "./screen.js";
 export type { RenderFn, InputFn } from "./screen.js";
 
-export { box } from "./components/box.js";
+export { box, truncateToWidth } from "./components/box.js";
 export type { BoxOptions } from "./components/box.js";
 
 export { visibleWidth, stripAnsi } from "./utils.js";

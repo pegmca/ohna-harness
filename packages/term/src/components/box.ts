@@ -86,7 +86,7 @@ const ESCAPE_HEAD = /^\x1b(?:\[[0-9;?]*[0-9A-Za-z]|\][^\x07\x1b]*(?:\x07|\x1b\\)
  * @param maxWidth 允许的最大可见列宽。
  * @returns 可见宽 <= `maxWidth` 的行；未超宽时原样返回（不额外补复位）。
  */
-function truncateToWidth(line: string, maxWidth: number): string {
+export function truncateToWidth(line: string, maxWidth: number): string {
   if (visibleWidth(line) <= maxWidth) return line;
 
   const out: string[] = [];

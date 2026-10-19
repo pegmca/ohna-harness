@@ -7,7 +7,9 @@
  *
  * 为什么探测必须惰性：ESM import 链（index → harness → turn → render → theme）会在
  * `parseArgs` 之前求值模块级常量。若在模块顶层读 `process.stdout.isTTY`，则
- * `--no-color` 解析完成前颜色开关已固化，导致 CLI 参数无法覆盖环境探测。
+ * 颜色开关已固化，环境变化（重定向 / NO_COLOR 注入）后无法覆盖。
+ * 裁决：不提供 CLI `--no-color` 参数，色彩关闭依赖自动降级（非 TTY / NO_COLOR / TERM=dumb）；
+ * `configure` / `resetForTest` 仅作测试注入入口（见 `test/theme.test.mjs`）。
  */
 
 /** 主题语义色角色：对应 Amberwood 设计稿的「语义块 → 颜色」映射。 */
@@ -66,7 +68,7 @@ let forcedAnsi: boolean | undefined;
  * 判断当前环境是否支持 ANSI 颜色输出。
  *
  * 每次调用现查环境（惰性求值），门控条件：stdout 为 TTY 且未设 NO_COLOR 且
- * TERM 不是 dumb，且未被 `configure` 显式覆盖（如 `--no-color`）。
+ * TERM 不是 dumb，且未被 `configure` 显式覆盖。
  *
  * @returns 支持颜色输出时返回 true。
  */
@@ -82,8 +84,8 @@ export function supportsAnsi(): boolean {
 /**
  * 显式覆盖 ANSI 开关。
  *
- * `index.ts` 解析完 `--no-color` 后立即调用 `configure({ forced: false })`，
- * 覆盖因 import 链早于 parseArgs 而固化的探测结果。
+ * 当前仅测试注入使用（`configure({ forced: true })` 后 `supportsAnsi()` 恒返回该值），
+ * 生产路径色彩开关完全由惰性探测决定（非 TTY / NO_COLOR / TERM=dumb 自动降级）。
  *
  * @param options forced 为 true / false；此后 supportsAnsi 恒返回该值。
  */
@@ -104,7 +106,7 @@ export function resetForTest(): void {
 /**
  * 用主题色包装一段文本；环境不支持 ANSI 时原样返回（降级）。
  *
- * 这是所有「带色输出」的唯一出口：非 TTY / NO_COLOR / dumb 终端 / --no-color
+ * 这是所有「带色输出」的唯一出口：非 TTY / NO_COLOR / dumb 终端
  * 下不产生任何 `\x1b` 转义序列，保证管道输出可被逐字节消费。
  *
  * @param text 原始文本。

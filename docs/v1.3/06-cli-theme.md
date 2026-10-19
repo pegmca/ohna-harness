@@ -1,6 +1,6 @@
 # 06 · CLI 终端样式改造（复刻 Claude Code 风格）· v2
 
-> **范围声明**：本方案只覆盖**视觉层**——ANSI 颜色、`⏺`/`⎿` 符号、`✻` spinner、输入区样式、`--no-color`。
+> **范围声明**：本方案只覆盖**视觉层**——ANSI 颜色、`⏺`/`⎿` 符号、`✻` spinner、输入区样式。
 > 与 Claude Code 的**功能层差距**（权限三选项、Esc 中断、queued 回显、ctrl+o 展开、thinking 展示、
 > Task 子 agent、命令补全等）统一收敛到 `07-cli-feature-parity.md`；其中 **ctrl+o 展开与 thinking 展示
 > 涉及 render.ts 同一段代码**，实现顺序上建议 06 与 07 的批次 B1 协同交付，避免二次返工。
@@ -65,7 +65,7 @@ verify 脚本跑在管道（非 TTY）模式，TTY 门控后颜色自动降级�
 v1 的 3.2「符号仅 TTY 生效」与 4.7「同步更新测试断言」相互矛盾（测试跑非 TTY）。v2 裁决：
 
 - **符号（`⏺ ⎿ ⏹ …`）无条件替换**：管道模式也用新符号，全部测试断言统一指向新符号集合；
-- **颜色 / spinner / 整屏 TUI（含输入区边框）**仅 TTY 生效：`stdout.isTTY && !NO_COLOR && TERM !== "dumb" && !--no-color`；
+- **颜色 / spinner / 整屏 TUI（含输入区边框）**仅 TTY 生效：`stdout.isTTY && !NO_COLOR && TERM !== "dumb"`；
 - 红线收窄为：数字骨架与 diff 行内容不进 ANSI（§2）。
 
 ### 3.3 spinner：单写者协议（v2 重设计）
@@ -108,13 +108,15 @@ assistant 正文的 `⏺` 不在 `message_start` 打，而在**首个 `text_delt
 消息（无文本内容）不产生悬空 `⏺` 行（对齐 Claude Code 行为）。thinking 增量的展示归 07-F3
 （spinner 文案 / verbose 灰色 italic），06 不渲染 thinking。
 
-### 3.6 `--no-color` 接线时序（v2，评审 P2-2）
+### 3.6 ANSI 探测的时序约束（v2，评审 P2-2）
 
 ESM import 链（index→harness→turn→render→theme）会在 `parseArgs` **之前**求值模块级常量。因此：
 
 - theme 探测必须**惰性求值**（`supportsAnsi()` 每次调用现查环境）；
-- 提供 `configure({ forced })` 显式覆盖（`index.ts` 解析完 `--no-color` 后立即调用）与
-  `resetForTest()` 复位钩子——注入覆盖若不复位，会让后续「非 TTY 无 `\x1b`」断言假绿。
+- 提供 `configure({ forced })` 显式覆盖与 `resetForTest()` 复位钩子（测试注入用）——
+  注入覆盖若不复位，会让后续「非 TTY 无 `\x1b`」断言假绿；
+- **裁决：不引入 CLI `--no-color` 参数**。色彩关闭依赖自动降级三件套
+  （非 TTY / `NO_COLOR=1` / `TERM=dumb`），theme 的 `configure` / `resetForTest` 仅作测试注入入口。
 
 ## 4. 交付清单（v2）
 
@@ -136,7 +138,8 @@ ESM import 链（index→harness→turn→render→theme）会在 `parseArgs` **
    `Screen` + `TuiApp`），输入区为 `box` 包起来的完整边框；非 TTY 保留原 readline 路径。
 6. 符号触点补全（v1 遗漏，评审 P2-1）：`confirm.ts:52`（`▸ --yes 自动放行`）、`confirm.ts:58`
    （`✖ 已拒绝`）、`web-entry.ts:378-384`（`⏹ run 已中断。` / `✖ run 失败。`）全部换新符号。
-7. `apps/ohna-cli/src/cli/args.ts` / `index.ts`：新增 `--no-color` + `theme.configure()` 接线；help 更新。
+7. **裁决（事后记录）**：`--no-color` CLI 参数**不交付**。色彩关闭由自动降级覆盖（非 TTY /
+   `NO_COLOR=1` / `TERM=dumb`），见 §3.6；`configure` / `resetForTest` 保留为测试注入机制。
 8. 测试：
    - 新增 `theme.test.mjs`（探测矩阵 + paint 降级 + configure/resetForTest）、
      `welcome.test.mjs`（TTY / 非 TTY 双路径）；
@@ -144,8 +147,7 @@ ESM import 链（index→harness→turn→render→theme）会在 `parseArgs` **
      新增「非 TTY 输出不含 `\x1b`」断言；
    - `test/verify-ohna-m2.mjs` / `m3.mjs`：同步符号类断言与折叠断言（m3:239-241），
      **两个数字捕获组（m2:584、m3:296）不动**。
-9. 文档：`` 记录主题层 / TTY 门控 / 单写者协议取舍；根 `README.md` 补
-   `--no-color`；`docs/v1.3/README.md` 状态表同步。
+9. 文档：`` 记录主题层 / TTY 门控 / 单写者协议取舍；`docs/v1.3/README.md` 状态表同步。
 
 ## 5. 风险与对策（v2）
 
@@ -175,5 +177,5 @@ pnpm typecheck && pnpm architecture:check && pnpm build && pnpm test && pnpm lin
   - 助手 `⏺` + 流式正文（懒打点，纯工具轮无悬空 `⏺`）；工具 `⏺ Tool(args)` + `⎿` dim 结果 + 折叠提示；
   - diff 预览红绿；`✻` spinner 动词文案与耗时；run 中触发 y/n 确认时 spinner 挂起、提示不被帧覆盖；
   - `--web` 模式：浏览器发起 run 期间终端 prompt 不与 spinner 打架；
-  - `--no-color` 与 `NO_COLOR=1` 下恢复无色输出；管道模式输出无 `\x1b`。
+  - `NO_COLOR=1` 下恢复无色输出；管道模式输出无 `\x1b`。
 - 执行方式：沿用 **coder 实现 → reviewer 验证**（重点跑单测 + 2 个 verify 脚本 + TTY 目检清单）。

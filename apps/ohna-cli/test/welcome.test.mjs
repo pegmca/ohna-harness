@@ -38,7 +38,10 @@ test("renderWelcome：非 TTY 输出纯文本头，不含 ANSI 与 ✻", () => {
   assert.doesNotMatch(out, /✻/, "非 TTY 不应含 ✻");
   assert.doesNotMatch(out, /╭/, "非 TTY 不应含边框");
   assert.match(out, /  ohna\n/, "应含统一标题 ohna");
+  assert.match(out, /模型/, "非 TTY 应含模型行");
   assert.match(out, /deepseek-chat/, "应含模型 id");
+  assert.doesNotMatch(out, /端点/, "非 TTY 不应含端点行");
+  assert.doesNotMatch(out, /api\.example\.com/, "非 TTY 不应含 baseUrl");
   assert.match(out, /read · write · bash/, "应含工具清单");
 });
 
@@ -55,6 +58,9 @@ test("renderWelcome：TTY（forced）输出块状 logo + 信息行（无边框�
   assert.match(out, /工作目录/, "应含工作目录行");
   assert.match(out, /\/tmp\/ws/, "应含工作目录路径");
   assert.match(out, /abc123/, "应含会话 id");
+  assert.doesNotMatch(out, /模型/, "TTY 不应含模型行");
+  assert.doesNotMatch(out, /端点/, "TTY 不应含端点行");
+  assert.doesNotMatch(out, /api\.example\.com/, "TTY 不应含 baseUrl");
 });
 
 test("renderWelcome：TTY 输出含 ANSI 颜色（forced）", () => {

@@ -22,8 +22,6 @@ export interface WelcomeModelInfo {
   id: string;
   /** provider profile 名，如 deepseek / openrouter / bridge_ai。 */
   provider: string;
-  /** OpenAI 兼容端点地址。 */
-  baseUrl: string;
 }
 
 /** 欢迎头可选信息。 */
@@ -55,8 +53,9 @@ export const CLI_LOGO: readonly string[] = [
 ];
 
 /**
- * 打印会话开场欢迎头：标题 + 生效模型 / 端点 / 工具清单 + 会话 id（TTY 无边框 +
- * 块状 logo；非 TTY 追加多轮与命令提示，因非 TTY 没有 `/` 面板）。只写 stdout，不持有任何运行态。
+ * 打印会话开场欢迎头：标题 + 工具清单 + 会话 id（TTY 无边框 + 块状 logo，不展示
+ * 模型 / 端点——模型改由输入框下方的状态行展示；非 TTY 保留模型行、不展示端点，并追加
+ * 多轮与命令提示，因非 TTY 没有 `/` 面板）。只写 stdout，不持有任何运行态。
  *
  * TTY 门控：支持 ANSI 时输出块状 OHNA logo + 信息行；否则保持纯文本头（§4.3）。
  *
@@ -66,7 +65,7 @@ export const CLI_LOGO: readonly string[] = [
  */
 export function renderWelcome(model: WelcomeModelInfo, toolNames: string[], options?: WelcomeOptions): void {
   const lines = supportsAnsi()
-    ? renderTtyWelcome(model, toolNames, options)
+    ? renderTtyWelcome(toolNames, options)
     : renderPlainWelcome(model, toolNames, options);
   // 经统一输出出口：TTY 整屏模式下由 sink 注入为 tui.append，进入对话模型顶部。
   write(lines.join("\n") + "\n");
@@ -91,7 +90,6 @@ function renderPlainWelcome(
     "  " + TITLE,
     RULE,
     "  模型   " + model.id + "（profile: " + model.provider + "）",
-    "  端点   " + model.baseUrl,
     "  工具   " + tools + "（" + String(toolNames.length) + " 个）",
   ];
   if (options?.sessionId) {
@@ -120,23 +118,20 @@ function renderPlainWelcome(
  * 不再用边框面板（旧实现的边框宽度由最长行决定，长 cwd / session id 会把面板撑到
  * 超过终端宽度、折行丢右边框）；长值一律交给 TuiApp 的 `truncateToWidth` 兜底裁剪。
  * 命令提示也不写在欢迎头里，改由输入框内的 `/` 命令面板提供（/help 文案同源于
- * {@link SLASH_COMMANDS}）。
+ * {@link SLASH_COMMANDS}）。模型名与端点也不在此展示：模型名移入输入框下方的状态行
+ * （随 `/model` 切换实时刷新），端点属于服务地址、对用户无展示价值。
  *
- * @param model 模型信息。
  * @param toolNames 工具名列表。
  * @param options 可选信息。
  * @returns 行数组。
  */
 function renderTtyWelcome(
-  model: WelcomeModelInfo,
   toolNames: string[],
   options: WelcomeOptions | undefined,
 ): string[] {
   const tools = toolNames.length > 0 ? toolNames.join(" · ") : "（无）";
   const info: string[] = [
     `工作目录  ${options?.cwd ?? process.cwd()}`,
-    `模型      ${model.id}（profile: ${model.provider}）`,
-    `端点      ${model.baseUrl}`,
     `工具      ${tools}（${toolNames.length} 个）`,
   ];
   if (options?.sessionId) {

@@ -92,6 +92,14 @@ export async function runRepl(
   if (useTui) {
     // 整屏 TUI：把 render 输出注入对话模型，并禁用 spinner（避免 \r\x1b[K 污染）。
     tui = new TuiApp();
+    // 状态行：模型名 + 上下文占比（input / contextWindow）。两者都是闭包读取、每帧实时
+    // 求值，因此 `/model` 切换与每轮 tracker 增长都会自动反映到输入框下方居右的状态行。
+    tui.setStatus(() => ({
+      model: currentModel.model.id,
+      contextPercent: Math.round(
+        (tracker.snapshot().input / Math.max(1, currentModel.model.contextWindow)) * 100,
+      ),
+    }));
     setOutputSink((s) => tui!.append(s));
     setSpinnerEnabled(false);
   } else {
@@ -150,7 +158,7 @@ export async function runRepl(
   };
 
   renderWelcome(
-    { id: currentModel.model.id, provider: currentModel.model.provider, baseUrl: currentModel.model.baseUrl },
+    { id: currentModel.model.id, provider: currentModel.model.provider },
     tools.map((tool) => tool.name),
     { sessionId, cwd: setup.cwd, mcpServers: context?.mcpServerNames },
   );

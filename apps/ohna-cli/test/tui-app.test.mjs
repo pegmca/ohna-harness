@@ -101,6 +101,33 @@ test("buildFrame：输入含空格后关闭面板（进入参数阶段）", () =
   assert.equal(frame.length, 3, "面板应关闭，帧仅输入框 3 行");
 });
 
+test("buildFrame：setStatus 后在帧末尾追加居右状态行（模型 · 占比）", () => {
+  const tui = new TuiApp();
+  const frameWithout = tui.buildFrame(80, 24);
+  assert.equal(frameWithout.length, 3, "无状态时帧仅输入框 3 行");
+
+  tui.setStatus(() => ({ model: "hy3-x", contextPercent: 42 }));
+  const frameWith = tui.buildFrame(80, 24);
+  assert.equal(frameWith.length, frameWithout.length + 1, "setStatus 后帧末尾应多一行");
+
+  const statusLine = frameWith[frameWith.length - 1];
+  assert.ok(visibleWidth(statusLine) <= 80, `状态行可见宽 ${visibleWidth(statusLine)} > 80`);
+  assert.match(statusLine, /hy3-x · 42%$/, "状态行应以「模型 · 占比」收尾（右对齐到行尾）");
+  assert.match(statusLine, /·/, "状态行应含 · 分隔符");
+  assert.match(statusLine, /%/, "状态行应含 % 占比");
+});
+
+test("buildFrame：状态行占比越界时夹紧到 [0, 100]", () => {
+  const tui = new TuiApp();
+  tui.setStatus(() => ({ model: "hy3-x", contextPercent: 250 }));
+  let frame = tui.buildFrame(80, 24);
+  assert.match(frame[frame.length - 1], /100%$/, ">100 应夹紧到 100%");
+
+  tui.setStatus(() => ({ model: "hy3-x", contextPercent: -3 }));
+  frame = tui.buildFrame(80, 24);
+  assert.match(frame[frame.length - 1], /0%$/, "<0 应夹紧到 0%");
+});
+
 test("filterSlashCommands：按前缀过滤（大小写不敏感、空串返回全部）", () => {
   assert.equal(filterSlashCommands("").length, 8);
   assert.equal(filterSlashCommands("/").length, 8);

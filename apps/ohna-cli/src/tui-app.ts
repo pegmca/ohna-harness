@@ -13,7 +13,7 @@
  *
  * resize 安全性完全由 Screen 保证（已建好的节流 + 幂等），本类无需任何 resize 代码。
  */
-import { RawTerminal, Screen, box, truncateToWidth } from "@aiagent/term";
+import { RawTerminal, Screen, box, truncateToWidth, visibleWidth } from "@aiagent/term";
 import { paint } from "./theme.js";
 import { LineEditor } from "./tui-editor.js";
 import { filterSlashCommands, type SlashCommandDef } from "./slash.js";
@@ -63,6 +63,19 @@ export interface TuiAppOptions {
 }
 
 /**
+ * 状态行内容：输入框下方居右展示的一行「模型 + 上下文占比」。
+ *
+ * 由上层（repl）通过 `setStatus` 注入一个求值函数，`buildFrame` 每帧调用它以实时
+ * 反映最新的模型（`/model` 切换）与上下文占比（tracker 随每轮增长）。
+ */
+export interface TuiStatus {
+  /** 模型名（如 hy3-x）。 */
+  model: string;
+  /** 上下文占比（0..100 的百分比）；负值 / 超界由 {@link TuiApp} 侧夹紧。 */
+  contextPercent: number;
+}
+
+/**
  * 整屏 TUI 应用：持有 Screen 与 LineEditor，维护对话内容模型并提供整屏组合与生命周期。
  *
  * 上层（repl）通过 `setOutputSink(s => tui.append(s))` 把 render 输出接入对话模型，
@@ -84,6 +97,9 @@ export class TuiApp {
   /** `/` 命令面板的选中下标（面板关闭时无意义，见 {@link filteredCommands}）。 */
   private selectedIndex = 0;
 
+  /** 状态行求值函数：返回 undefined 表示不显示状态行（如非 TTY / 未装配）。 */
+  private statusFn?: () => TuiStatus | undefined;
+
   /** 提交钩子：用户按 Enter（且非确认态）时以输入文本调用。 */
   onSubmit?: (value: string) => void;
   /** 中断钩子：用户按 Ctrl+C（且非确认态）时调用（上层决定中断 run 或退出）。 */
@@ -99,6 +115,18 @@ export class TuiApp {
     this.screen = new Screen(terminal);
     const prompt = options?.prompt ?? paint("❯ ", "user");
     this.editor = new LineEditor({ prompt });
+  }
+
+  /**
+   * 设置状态行求值函数：`buildFrame` 每帧调用它求值（返回 undefined 则不显示状态行）。
+   *
+   * 无需在此触发重绘——repl 装配完即 `start()` 画首帧，后续每帧都实时求值；
+   * `/model` 切换与每轮 run 结束都会触发一次重绘，状态行随之更新。
+   *
+   * @param fn 求值函数，或 undefined 表示隐藏状态行。
+   */
+  setStatus(fn: (() => TuiStatus | undefined) | undefined): void {
+    this.statusFn = fn;
   }
 
   /**
@@ -147,9 +175,11 @@ export class TuiApp {
 
   /**
    * 组合整屏帧：顶部对话区取 contentLines（含开放行）尾部，底部输入区用 box 包边；
-   * 输入框下方在 `/` 面板打开时叠一个命令面板。所有行最后统一按终端列宽裁剪。
+   * 输入框下方在 `/` 面板打开时叠一个命令面板，最下方在状态行启用时追加居右的
+   * 「模型 + 上下文占比」状态行。所有行最后统一按终端列宽裁剪。
    *
-   * 布局顺序（上 → 下）：对话区 → 输入框 → 命令面板（面板高度从对话区扣除，保证贴底）。
+   * 布局顺序（上 → 下）：对话区 → 输入框 → 命令面板 → 状态行（面板与状态行高度都从
+   * 对话区扣除，保证贴底）。
    *
    * @param width 终端列数。
    * @param height 终端行数。
@@ -171,17 +201,45 @@ export class TuiApp {
     const panelLines = this.buildPaletteLines();
     const panelHeight = panelLines.length;
 
-    const dialogueHeight = Math.max(0, height - inputBoxHeight - panelHeight);
+    // 状态行（模型 + 上下文占比）：存在时占 1 行，同样从对话区高度扣除，保证贴底。
+    const statusLine = this.buildStatusLine(width);
+    const statusHeight = statusLine === undefined ? 0 : 1;
+
+    const dialogueHeight = Math.max(0, height - inputBoxHeight - panelHeight - statusHeight);
 
     const pending = this.buffer;
     const all = pending ? [...this.contentLines, pending] : this.contentLines;
-    // 对话区只保留能容纳的尾部行；高度不足时仅显示最近内容 + 输入区 + 面板。
+    // 对话区只保留能容纳的尾部行；高度不足时仅显示最近内容 + 输入区 + 面板 + 状态行。
     const dialogueLines = all.slice(Math.max(0, all.length - dialogueHeight));
 
-    const combined = [...dialogueLines, ...inputLines, ...panelLines];
+    const combined = [
+      ...dialogueLines,
+      ...inputLines,
+      ...panelLines,
+      ...(statusLine === undefined ? [] : [statusLine]),
+    ];
     // 宽度安全兜底：任何一行（含长 cwd/session 的欢迎头、开放行、面板行）都不超过屏宽，
     // 因此永不折行、边框永不错位。输入区已按 innerWidth 预算，此处截断只是兜底。
     return combined.map((line) => truncateToWidth(line, width));
+  }
+
+  /**
+   * 求值并渲染状态行：`status.model` 用 accent 色、` · N%` 用 dim 色，整行居右。
+   *
+   * 占比先四舍五入取整再夹紧到 [0, 100]；居右用「左补空格到 width - 可见宽」，可见宽
+   * 已剥离 ANSI，因此带色文本也能对齐到行尾。若状态行可见宽超过 width，交由外层
+   * `truncateToWidth` 兜底截断（截掉左侧空格或文本，可接受）。
+   *
+   * @param width 终端列数。
+   * @returns 居右的状态行文本；未装配 statusFn 或它返回空时返回 undefined（不占行）。
+   */
+  private buildStatusLine(width: number): string | undefined {
+    const status = this.statusFn?.();
+    if (!status) return undefined;
+    const percent = Math.min(100, Math.max(0, Math.round(status.contextPercent)));
+    const text = paint(status.model, "accent") + paint(` · ${percent}%`, "dim");
+    const pad = Math.max(0, width - visibleWidth(text));
+    return " ".repeat(pad) + text;
   }
 
   /**

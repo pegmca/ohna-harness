@@ -8,9 +8,9 @@ import test from "node:test";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { setOutputSink } from "../dist/render.js";
-import { createUsageTracker } from "../dist/usage.js";
-import { handleDirectInput, runBashDirect } from "../dist/direct-command.js";
+import { setOutputSink } from "../dist/ui/render.js";
+import { createUsageTracker } from "../dist/session/usage.js";
+import { handleDirectInput, runBashDirect } from "../dist/commands/direct-command.js";
 
 /** 捕获输出。 */
 const output = [];

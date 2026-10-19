@@ -23,12 +23,12 @@ import type { AgentEvent } from "@aiagent/agent";
 import { formatUnifiedDiff } from "./diff.js";
 import { clearSpinner, isSpinnerEnabled, setVerb, startSpinner, stopSpinner } from "./spinner.js";
 import { CROSS, DOT, ELLIPSIS, HOOK, paint, SPIN } from "./theme.js";
-import type { UsageTracker } from "./usage.js";
+import type { UsageTracker } from "../session/usage.js";
 
 // 用量的累计 / 展示已拆到 usage.ts（会话级状态与事件渲染的职责分离）；
 // 这里保留 re-export，使既有调用方（repl / harness / web-entry / session-flow）零修改。
-export { createUsageTracker, formatCostLine } from "./usage.js";
-export type { UsageSnapshot, UsageTracker } from "./usage.js";
+export { createUsageTracker, formatCostLine } from "../session/usage.js";
+export type { UsageSnapshot, UsageTracker } from "../session/usage.js";
 
 /**
  * 输出 sink：所有 render 层写入都经 {@link write} 转发，便于 TTY 整屏模式注入。

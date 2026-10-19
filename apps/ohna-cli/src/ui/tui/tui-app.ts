@@ -15,11 +15,11 @@
  */
 import { RawTerminal, Screen, box, truncateToWidth, visibleWidth } from "@aiagent/term";
 import { isDoubleEscape, splitLeadingEscapes } from "./esc-gesture.js";
-import { paint, type ThemeRole } from "./theme.js";
+import { paint, type ThemeRole } from "../theme.js";
 import { LineEditor } from "./tui-editor.js";
 import { FileReferencePalette } from "./tui-file-palette.js";
 import { SessionPicker, type SessionPickerItem } from "./tui-session-picker.js";
-import { filterSlashCommands, type SlashCommandDef } from "./slash.js";
+import { filterSlashCommands, type SlashCommandDef } from "../../commands/slash.js";
 
 /** 命令面板最多显示的条目数（与 SLASH_COMMANDS 规模一致，当前 12 条全部可见）。 */
 export const MAX_PALETTE_ITEMS = 12;

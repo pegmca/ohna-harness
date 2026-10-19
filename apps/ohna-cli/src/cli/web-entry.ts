@@ -27,12 +27,12 @@ import {
 } from "@aiagent/serve";
 import type { RunStreamEventDtoV2 } from "@aiagent/types";
 import { printProviderError } from "./provider-error.js";
-import { loadMcpTools } from "./mcp-config.js";
-import { formatPermissionStatus } from "./permission-mode.js";
-import { createUsageTracker, formatCostLine, renderEvent, type RenderOptions } from "./render.js";
-import { createSlashDispatcher, printUnknownCommand } from "./slash.js";
-import { CROSS, inputTopBar, inputBottomBar, paint, STOP, supportsAnsi } from "./theme.js";
-import { printReplCommands } from "./welcome.js";
+import { loadMcpTools } from "../runtime/mcp-config.js";
+import { formatPermissionStatus } from "../permission/permission-mode.js";
+import { createUsageTracker, formatCostLine, renderEvent, type RenderOptions } from "../ui/render.js";
+import { createSlashDispatcher, printUnknownCommand } from "../commands/slash.js";
+import { CROSS, inputTopBar, inputBottomBar, paint, STOP, supportsAnsi } from "../ui/theme.js";
+import { printReplCommands } from "../ui/welcome.js";
 import type { CliOptions } from "./args.js";
 
 /** 在途 run 的状态：用于 Ctrl-C 中断与「run 结束后恢复 prompt」。 */

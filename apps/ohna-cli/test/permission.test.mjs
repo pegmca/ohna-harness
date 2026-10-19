@@ -8,13 +8,13 @@
  */
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createToolConfirmGate, parsePermissionAnswer } from "../dist/confirm.js";
+import { createToolConfirmGate, parsePermissionAnswer } from "../dist/permission/confirm.js";
 import {
   formatPermissionStatus,
   nextPermissionPreset,
   parsePermissionPreset
-} from "../dist/permission-mode.js";
-import { createPermissionSession } from "../dist/permission-session.js";
+} from "../dist/permission/permission-mode.js";
+import { createPermissionSession } from "../dist/permission/permission-session.js";
 
 test("parsePermissionAnswer：1/2/3 与 y/n 映射", () => {
   assert.equal(parsePermissionAnswer("1"), "allow");

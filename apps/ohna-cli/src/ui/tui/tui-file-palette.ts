@@ -13,7 +13,7 @@ import {
   findFileReferenceFragment,
   listWorkspaceFiles,
   type FileReferenceFragment,
-} from "./file-reference.js";
+} from "../../workspace/file-reference.js";
 
 /** 文件面板最多展示的候选数（与 `/` 面板的 9 条保持一致）。 */
 export const MAX_FILE_PALETTE_ITEMS = 9;

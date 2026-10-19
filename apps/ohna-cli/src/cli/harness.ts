@@ -7,25 +7,24 @@
 import { type ActiveModel, resolveActiveModelFromEnv } from "@aiagent/ai";
 import type { AgentTool } from "@aiagent/tools";
 import { createCodingToolRegistry } from "@aiagent/coding";
-import { createToolConfirmGate, type ConfirmHook } from "./confirm.js";
-import { createTeamToolset } from "./team-wiring.js";
-import { loadMcpTools } from "./mcp-config.js";
-import { resolveSystemPrompt } from "./mode.js";
-import { createUsageTracker, type UsageTracker } from "./render.js";
-import { createLlmSummarizer } from "./session-runtime.js";
+import { createToolConfirmGate, type ConfirmHook } from "../permission/confirm.js";
+import { createTeamToolset } from "../runtime/team-wiring.js";
+import { loadMcpTools } from "../runtime/mcp-config.js";
+import { resolveSystemPrompt } from "../runtime/mode.js";
+import { createUsageTracker, type UsageTracker } from "../ui/render.js";
+import { createLlmSummarizer } from "../session/session-runtime.js";
 import {
   openSession,
   persistSession,
   printResumeHint,
-} from "./session-flow.js";
-import { createSessionStore, type SessionStore } from "./session-store.js";
-import { printStopReason, reachedCostBudget, runTurn, type RunSetup } from "./turn.js";
-import { runRepl, type ReplContext } from "./repl.js";
+} from "../session/session-flow.js";
+import { createSessionStore, type SessionStore } from "../session/session-store.js";
+import { printStopReason, reachedCostBudget, runTurn, type RunSetup } from "../runtime/turn.js";
+import { runRepl } from "../input/repl.js";
+import type { ReplContext } from "../input/repl-context.js";
 import { runWeb } from "./web-entry.js";
 import type { CliOptions } from "./args.js";
-
-/** 公共入口的参数类型仍从 harness 导出，调用方无需感知 args.ts 拆分。 */
-export type { CliOptions } from "./args.js";
+import { printProviderError } from "./provider-error.js";
 
 /**
  * 解析当前环境可用的真实模型。
@@ -39,13 +38,6 @@ export type { CliOptions } from "./args.js";
 export function resolveActiveModel(modelFlag?: string): ActiveModel | null {
   return resolveActiveModelFromEnv(modelFlag);
 }
-
-/**
- * 打印「未配置真实 provider」的中文错误（实现已拆到 provider-error.ts，
- * 此处 re-export 保持既有导入路径；拆出原因见该文件说明）。
- */
-export { printProviderError } from "./provider-error.js";
-import { printProviderError as printProviderErrorImpl } from "./provider-error.js";
 
 /**
  * 单次模式：跑完一轮、压缩并保存会话后返回（由调用方退出进程）。
@@ -146,7 +138,7 @@ export async function runCli(options: CliOptions): Promise<void> {
 
   const active = resolveActiveModel(options.model);
   if (!active) {
-    printProviderErrorImpl(options.model);
+    printProviderError(options.model);
     process.exit(1);
     return;
   }

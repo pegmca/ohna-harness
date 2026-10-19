@@ -3,7 +3,7 @@
  */
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createSlashDispatcher, parseSlashCommand } from "../dist/slash.js";
+import { createSlashDispatcher, parseSlashCommand } from "../dist/commands/slash.js";
 
 test("parseSlashCommand：命令名与参数切分", () => {
   assert.deepEqual(parseSlashCommand("/model deepseek"), { name: "model", arg: "deepseek" });

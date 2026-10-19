@@ -6,7 +6,7 @@ import test from "node:test";
 import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { exportSessionMarkdown, formatSessionMarkdown } from "../dist/session-export.js";
+import { exportSessionMarkdown, formatSessionMarkdown } from "../dist/session/session-export.js";
 
 /** assistant 消息的最小合法形状。 */
 const assistant = {

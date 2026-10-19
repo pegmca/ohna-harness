@@ -96,12 +96,12 @@ packages/
     src/policy/path-policy.ts      改：isDeniedPath 走 realpath
     src/policy/command-rules.ts    改：补 RM_DANGEROUS_TARGETS、SHELL_INTERPRETERS 绝对路径
     src/policy/command-policy.ts   改：checkFetchPipedToShell 覆盖 ; 切分
-    src/prompt.ts                  新：buildCodingSystemPrompt(cwd)（从 apps/ohna-cli/src/mode.ts 下沉）
+    src/prompt.ts                  新：buildCodingSystemPrompt(cwd)（从 apps/ohna-cli/src/runtime/mode.ts 下沉）
     src/tools/ls.ts                改：消费 signal
     src/tools/find.ts              改：全量收集→排序→截断
   ai/
     src/providers/env-runtime.ts   改：模型元数据可配（contextWindow/maxTokens/reasoning/cost）
-    src/model-selection.ts         新：resolveActiveModelFromEnv（从 apps/ohna-cli/src/harness.ts 下沉，CLI 改薄封装）
+    src/model-selection.ts         新：resolveActiveModelFromEnv（从 apps/ohna-cli/src/cli/harness.ts 下沉，CLI 改薄封装）
     src/providers/anthropic.ts     改：实现直连（M3 可选，可走 OpenRouter 兼容层）
   serve/                           [新] ohna 服务端装配包（@aiagent/serve）
     src/index.ts                   createOhnaServer(options)：组装 routes + 进程内事件 fan-out

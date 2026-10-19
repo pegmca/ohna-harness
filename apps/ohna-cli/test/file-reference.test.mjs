@@ -16,8 +16,8 @@ import {
   findFileReferenceFragment,
   listWorkspaceFiles,
   MAX_FILE_REFERENCES,
-} from "../dist/file-reference.js";
-import { FileReferencePalette } from "../dist/tui-file-palette.js";
+} from "../dist/workspace/file-reference.js";
+import { FileReferencePalette } from "../dist/ui/tui/tui-file-palette.js";
 
 /**
  * 创建临时工作区并在结束后清理。

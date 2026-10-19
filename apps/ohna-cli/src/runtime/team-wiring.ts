@@ -16,7 +16,7 @@ import {
   type BeforeToolCallContext,
   type BeforeToolCallResult,
 } from "@aiagent/agent";
-import type { ConfirmHook } from "./confirm.js";
+import type { ConfirmHook } from "../permission/confirm.js";
 
 /** 转发闭包的签名，与 `AgentLoopConfig.beforeToolCall` 一致。 */
 export type TeamGateForwarder = (

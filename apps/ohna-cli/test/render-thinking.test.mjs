@@ -3,8 +3,8 @@
  */
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createUsageTracker, foldOutput, renderEvent, reprintRecentFolded, resetFoldCache, setVerbose } from "../dist/render.js";
-import { setSpinnerEnabled } from "../dist/spinner.js";
+import { createUsageTracker, foldOutput, renderEvent, reprintRecentFolded, resetFoldCache, setVerbose } from "../dist/ui/render.js";
+import { setSpinnerEnabled } from "../dist/ui/spinner.js";
 
 /** 捕获 stdout 的工具函数。 */
 function captureStdout(run) {

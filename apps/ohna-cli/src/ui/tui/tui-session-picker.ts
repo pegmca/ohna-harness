@@ -13,7 +13,7 @@
  * - 行内展示标题 / 短 id / 时间 / 消息数；完整 id 放在 footer，便于需要时 `/resume fork <id>`；
  * - 可打印字符会关闭面板并交回编辑器，用户可以直接开始输入下一条内容。
  */
-import { paint } from "./theme.js";
+import { paint } from "../theme.js";
 
 /** 选择器条目：只依赖展示所需字段，避免 TuiApp 耦合 session-store 类型。 */
 export interface SessionPickerItem {

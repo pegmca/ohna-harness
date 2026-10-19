@@ -5,7 +5,7 @@
  */
 import assert from "node:assert/strict";
 import test from "node:test";
-import { SessionPicker, MAX_SESSION_PICKER_ITEMS } from "../dist/tui-session-picker.js";
+import { SessionPicker, MAX_SESSION_PICKER_ITEMS } from "../dist/ui/tui/tui-session-picker.js";
 
 /**
  * 构造一个会话条目。

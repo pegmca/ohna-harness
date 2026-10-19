@@ -5,8 +5,8 @@
  */
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
-import { configure, resetForTest } from "../dist/theme.js";
-import { CLI_LOGO, renderWelcome } from "../dist/welcome.js";
+import { configure, resetForTest } from "../dist/ui/theme.js";
+import { CLI_LOGO, renderWelcome } from "../dist/ui/welcome.js";
 
 /** 每个用例后复位 forced 覆盖。 */
 afterEach(() => resetForTest());

@@ -6,7 +6,7 @@
  */
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
-import { configure, inputBottomBar, inputTopBar, paint, resetForTest, supportsAnsi } from "../dist/theme.js";
+import { configure, inputBottomBar, inputTopBar, paint, resetForTest, supportsAnsi } from "../dist/ui/theme.js";
 
 /** 每个用例后复位 forced 覆盖，避免注入状态跨用例泄漏（§3.6）。 */
 afterEach(() => resetForTest());

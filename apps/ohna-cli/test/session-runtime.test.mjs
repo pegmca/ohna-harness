@@ -14,7 +14,7 @@ import {
   filterFailedAssistants,
   resolveCompactionSettings,
   withSummaryFallback,
-} from "../dist/session-runtime.js";
+} from "../dist/session/session-runtime.js";
 
 /** 构造一条足够长的 user 消息（约 2000 token）。 */
 function longUserMessage(index) {

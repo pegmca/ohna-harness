@@ -8,7 +8,7 @@ import { after, test } from "node:test";
 import { mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createSessionStore, deriveSessionTitle } from "../dist/session-store.js";
+import { createSessionStore, deriveSessionTitle } from "../dist/session/session-store.js";
 
 /** 本文件创建的临时目录，统一在 after 清理。 */
 const tempDirs = [];

@@ -8,15 +8,15 @@ import test from "node:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { createSessionStore } from "../dist/session-store.js";
-import { createUsageTracker } from "../dist/usage.js";
-import { setOutputSink } from "../dist/render.js";
+import { createSessionStore } from "../dist/session/session-store.js";
+import { createUsageTracker } from "../dist/session/usage.js";
+import { setOutputSink } from "../dist/ui/render.js";
 import {
   clearSession,
   printMcp,
   printStatus,
   resumeSession,
-} from "../dist/session-commands.js";
+} from "../dist/commands/session-commands.js";
 
 /** 本轮测试捕获到的全部输出。 */
 const output = [];

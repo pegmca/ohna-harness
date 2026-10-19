@@ -13,11 +13,11 @@
 import type { AssistantMessage } from "@aiagent/ai";
 import type { AgentMessage } from "@aiagent/agent";
 import type { AgentTool } from "@aiagent/tools";
-import { appendMemoryNote } from "./memory-note.js";
-import { resolveSystemPrompt } from "./mode.js";
-import { renderEvent, write, type UsageTracker } from "./render.js";
-import type { ConfirmHook } from "./confirm.js";
-import type { RunSetup } from "./turn.js";
+import { appendMemoryNote } from "../workspace/memory-note.js";
+import { resolveSystemPrompt } from "../runtime/mode.js";
+import { renderEvent, write, type UsageTracker } from "../ui/render.js";
+import type { ConfirmHook } from "../permission/confirm.js";
+import type { RunSetup } from "../runtime/turn.js";
 
 /** 直通命令的装配上下文（全部是只读依赖，`setup` 因记忆刷新而可变）。 */
 export interface DirectCommandContext {

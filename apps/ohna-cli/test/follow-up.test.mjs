@@ -6,7 +6,7 @@ import test from "node:test";
 import {
   createFollowUpController,
   partitionQueuedLines,
-} from "../dist/follow-up.js";
+} from "../dist/input/follow-up.js";
 
 test("partitionQueuedLines：普通文本与 slash 命令分区且各自保持顺序", () => {
   const { followUps, commands } = partitionQueuedLines([

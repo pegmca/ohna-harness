@@ -5,7 +5,7 @@
  * REPL 的接线信息」，不参与输入循环本身；拆出后 repl 只保留 `import type` 与 re-export，
  * 既有导入方（harness）无需修改。
  */
-import type { ConfirmHook } from "./confirm.js";
+import type { ConfirmHook } from "../permission/confirm.js";
 
 /** REPL 的装配上下文：MCP / Team 来源标注与闸门回填。 */
 export interface ReplContext {

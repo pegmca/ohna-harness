@@ -5,7 +5,7 @@
  */
 import assert from "node:assert/strict";
 import test from "node:test";
-import { parseArgs } from "../dist/args.js";
+import { parseArgs } from "../dist/cli/args.js";
 
 /**
  * 运行一次解析并收集告警。

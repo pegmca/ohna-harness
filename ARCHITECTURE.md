@@ -36,7 +36,7 @@ The repository has two product lines that share only `packages/` and never impor
 - `packages/coding` owns coding tools (read/write/edit/bash/grep/find/ls), path/command policy, project-context loading, and `buildCodingSystemPrompt` (coding prompt template + project context, with an injected `onContextError` so packages never write to stderr); it is consumed by `apps/ohna-cli` and `packages/serve`.
 - `packages/tools`, `packages/rag`, `packages/workflow`, `packages/report`, and `packages/mcp` own their bounded contexts.
 - `packages/trace` owns the minimal run-event type contract and cross-boundary value redaction; it no longer owns a separate recorder/store.
-- `packages/term` owns the ohna CLI's full-screen TUI rendering primitives (zero external dependencies): `RawTerminal` (raw mode / bracketed paste / resize listener / cursor and clear primitives) and `Screen` (throttled + idempotent whole-screen redraw — it clears the screen then writes the current frame, so resize triggers at most one throttled redraw and can never cause a redraw storm), plus the `box` border component, `visibleWidth`, and `truncateToWidth` (visible-column truncation, ANSI-aware / CJK=2). It provides only ANSI primitives; the semantic palette (Amberwood) stays in `apps/ohna-cli/src/theme.ts`, and it must not depend on any app.
+- `packages/term` owns the ohna CLI's full-screen TUI rendering primitives (zero external dependencies): `RawTerminal` (raw mode / bracketed paste / resize listener / cursor and clear primitives) and `Screen` (throttled + idempotent whole-screen redraw — it clears the screen then writes the current frame, so resize triggers at most one throttled redraw and can never cause a redraw storm), plus the `box` border component, `visibleWidth`, and `truncateToWidth` (visible-column truncation, ANSI-aware / CJK=2). It provides only ANSI primitives; the semantic palette (Amberwood) stays in `apps/ohna-cli/src/ui/theme.ts`, and it must not depend on any app.
 - `packages/security` owns prompt-injection assessment and untrusted-context encapsulation; it has no business dependencies and can be used by agent, rag, tools, and report boundaries.
 - `packages/types` owns transport contracts only and has no runtime dependencies.
 - `packages/conversation` owns the mapping between pi `Message` and the linear message store; `packages/database` implements the PostgreSQL adapter without depending on `@aiagent/ai`.
@@ -87,7 +87,7 @@ context-assembly（调用方显式注入 `contextAssemblyTransform` 才启用）
 
 ## 4.3 ohna-cli 长任务治理（M2）
 
-- **会话持久化**：`apps/ohna-cli/src/session-store.ts` 落 `~/.ohna/sessions/<id>.jsonl`，首行 `type:"session"`
+- **会话持久化**：`apps/ohna-cli/src/session/session-store.ts` 落 `~/.ohna/sessions/<id>.jsonl`，首行 `type:"session"`
   （id/title/timestamps/workspaceRoot/messageCount/usage），后续每行 `type:"message"`；临时文件 + rename 原子写，
   load 跳过损坏行，id 走 `^[A-Za-z0-9_-]+$` 白名单。
 - **两层 compaction**：run 内 `transformContext`（`createCompactionTransform`）压缩 loop 副本以防超窗；

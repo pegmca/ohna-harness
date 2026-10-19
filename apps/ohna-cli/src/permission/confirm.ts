@@ -27,9 +27,9 @@ import {
   type PermissionRequest,
   type PolicyState,
 } from "@aiagent/agent";
-import { write } from "./render.js";
-import { resumeSpinner, suspendSpinner } from "./spinner.js";
-import { CROSS, DOT, paint } from "./theme.js";
+import { write } from "../ui/render.js";
+import { resumeSpinner, suspendSpinner } from "../ui/spinner.js";
+import { CROSS, DOT, paint } from "../ui/theme.js";
 
 /** 终端单行展示的最大长度，避免超长命令/路径刷屏。 */
 const MAX_DISPLAY_LENGTH = 160;

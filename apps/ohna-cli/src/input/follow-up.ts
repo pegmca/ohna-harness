@@ -10,7 +10,7 @@
  * processLine 的串行分支按原逻辑分发；只有普通文本才会被内核当作 user 消息续进当前 run。
  */
 import type { AgentMessage } from "@aiagent/agent";
-import { parseSlashCommand } from "./slash.js";
+import { parseSlashCommand } from "../commands/slash.js";
 
 /** 排队行的分区结果：可注入当前 run 的普通文本 + 必须串行执行的 slash 命令。 */
 export interface QueuedLinePartition {

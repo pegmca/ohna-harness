@@ -6,7 +6,7 @@ import test from "node:test";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { appendMemoryNote, MEMORY_SECTION_TITLE } from "../dist/memory-note.js";
+import { appendMemoryNote, MEMORY_SECTION_TITLE } from "../dist/workspace/memory-note.js";
 
 /**
  * 创建临时工作区并在结束后清理。

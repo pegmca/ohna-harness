@@ -16,11 +16,11 @@
 
 | 文件 | 职责 | 现状样式 |
 |---|---|---|
-| `apps/ohna-cli/src/render.ts` | 事件渲染（唯一入口，本地与 `--web` 共用） | `▸ 调用 tool(...)` / `✓ 完成` / `✖ 失败` / 流式裸 delta / diff 预览 / 折叠 / cost 小结 |
-| `apps/ohna-cli/src/welcome.ts` | 欢迎头 + `/help` 文案 | `────` 分隔线 |
-| `apps/ohna-cli/src/slash.ts` | 命令分发输出 | 纯文本 |
-| `apps/ohna-cli/src/confirm.ts` | y/n 确认提示 | `? 是否允许 …(y/N)` |
-| `apps/ohna-cli/src/repl.ts` / `web-entry.ts` | prompt `你> `、run 状态行 | 纯文本 |
+| `apps/ohna-cli/src/ui/render.ts` | 事件渲染（唯一入口，本地与 `--web` 共用） | `▸ 调用 tool(...)` / `✓ 完成` / `✖ 失败` / 流式裸 delta / diff 预览 / 折叠 / cost 小结 |
+| `apps/ohna-cli/src/ui/welcome.ts` | 欢迎头 + `/help` 文案 | `────` 分隔线 |
+| `apps/ohna-cli/src/commands/slash.ts` | 命令分发输出 | 纯文本 |
+| `apps/ohna-cli/src/permission/confirm.ts` | y/n 确认提示 | `? 是否允许 …(y/N)` |
+| `apps/ohna-cli/src/input/repl.ts` / `web-entry.ts` | prompt `你> `、run 状态行 | 纯文本 |
 
 - 渲染管线硬约束：
   - `renderEvent` 必须保持**同步**（diff 预览同步读盘，render.ts:317 注释明确）；
@@ -118,25 +118,25 @@ ESM import 链（index→harness→turn→render→theme）会在 `parseArgs` **
 
 ## 4. 交付清单（v2）
 
-1. `apps/ohna-cli/src/theme.ts`（新）
+1. `apps/ohna-cli/src/ui/theme.ts`（新）
    - 惰性 `supportsAnsi()` + `configure()` / `resetForTest()`；
    - 色板：accent（Claude 橙 208）、dim、success、error、warn、info、bold、italic；
    - `paint()` 安全包装（非 ANSI 返回原串）；符号常量（`⏺ ⎿ ✻ ⏹ …`）。
-2. `apps/ohna-cli/src/render.ts` 重排（保持同步，预计 ~430 行）
+2. `apps/ohna-cli/src/ui/render.ts` 重排（保持同步，预计 ~430 行）
    - assistant：首个 `text_delta` 时打 `⏺`（accent，懒打点），流式 delta 顺排，`message_end` 收行；
    - 工具：`⏺ Tool(args)`（工具名 bold、args dim）替代 `▸ 调用`；结果 `⎿  …`（dim、缩进 2 格），
      失败 `⎿  ✖ …`（error 色）；折叠提示 `… +N 行`（dim，**不带 ctrl+o 提示**——文案待 07-F3
      落地后追加）；
    - diff 预览：`+` 绿、`-` 红、`@@` 头 accent（仅 TTY；diff 行内容本身不进 ANSI，红线见 §2）；
    - cost / 停止原因 / 错误行套色；数字骨架原样。
-3. `apps/ohna-cli/src/welcome.ts`：`✻ Welcome to ohna!` + 一次性边框面板（工作目录 / 模型 /
+3. `apps/ohna-cli/src/ui/welcome.ts`：`✻ Welcome to ohna!` + 一次性边框面板（工作目录 / 模型 /
    工具数与 MCP 来源 / 命令 tips），TTY 门控；非 TTY 保持现纯文本头。
-4. `apps/ohna-cli/src/spinner.ts`（新，TTY only）：§3.3 单写者协议 + 动词文案 + confirm 挂起联动。
-5. `apps/ohna-cli/src/repl.ts` / `web-entry.ts`：TTY 下改走整屏 TUI（§3.4，`packages/term` 的
+4. `apps/ohna-cli/src/ui/spinner.ts`（新，TTY only）：§3.3 单写者协议 + 动词文案 + confirm 挂起联动。
+5. `apps/ohna-cli/src/input/repl.ts` / `web-entry.ts`：TTY 下改走整屏 TUI（§3.4，`packages/term` 的
    `Screen` + `TuiApp`），输入区为 `box` 包起来的完整边框；非 TTY 保留原 readline 路径。
 6. 符号触点补全（v1 遗漏，评审 P2-1）：`confirm.ts:52`（`▸ --yes 自动放行`）、`confirm.ts:58`
    （`✖ 已拒绝`）、`web-entry.ts:378-384`（`⏹ run 已中断。` / `✖ run 失败。`）全部换新符号。
-7. `apps/ohna-cli/src/args.ts` / `index.ts`：新增 `--no-color` + `theme.configure()` 接线；help 更新。
+7. `apps/ohna-cli/src/cli/args.ts` / `index.ts`：新增 `--no-color` + `theme.configure()` 接线；help 更新。
 8. 测试：
    - 新增 `theme.test.mjs`（探测矩阵 + paint 降级 + configure/resetForTest）、
      `welcome.test.mjs`（TTY / 非 TTY 双路径）；

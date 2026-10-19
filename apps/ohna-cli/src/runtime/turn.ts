@@ -15,7 +15,7 @@ import {
 import type { ActiveModel, UserMessage } from "@aiagent/ai";
 import type { AgentTool } from "@aiagent/tools";
 import { resolveMaxTurns } from "./mode.js";
-import { renderEvent, write, type UsageTracker } from "./render.js";
+import { renderEvent, write, type UsageTracker } from "../ui/render.js";
 import {
   filterFailedAssistants,
   resolveCompactionSettings,
@@ -24,8 +24,8 @@ import {
   type RunStopReason,
   type RunStopState,
   type SessionSummarizer,
-} from "./session-runtime.js";
-import type { ConfirmHook } from "./confirm.js";
+} from "../session/session-runtime.js";
+import type { ConfirmHook } from "../permission/confirm.js";
 
 /**
  * 一轮 run 的配置：由 runCli 按命令行参数解析一次，贯穿单次模式与 REPL 所有轮次。

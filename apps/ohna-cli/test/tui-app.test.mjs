@@ -9,8 +9,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { visibleWidth } from "@aiagent/term";
-import { buildPalette, clampIndex, TuiApp } from "../dist/tui-app.js";
-import { filterSlashCommands, SLASH_COMMANDS } from "../dist/slash.js";
+import { buildPalette, clampIndex, TuiApp } from "../dist/ui/tui/tui-app.js";
+import { filterSlashCommands, SLASH_COMMANDS } from "../dist/commands/slash.js";
 
 /**
  * 构造一个带指定输入内容的 TuiApp。

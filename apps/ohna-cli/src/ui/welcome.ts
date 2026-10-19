@@ -12,7 +12,7 @@
  */
 import { write } from "./render.js";
 import { paint, supportsAnsi } from "./theme.js";
-import { SLASH_COMMANDS } from "./slash.js";
+import { SLASH_COMMANDS } from "../commands/slash.js";
 
 /**
  * 欢迎头所需的模型信息（从已解析的真实模型上取，避免本模块反向依赖 harness）。

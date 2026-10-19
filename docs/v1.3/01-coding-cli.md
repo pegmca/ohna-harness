@@ -17,7 +17,7 @@
 | MCP stdio client + `discoverMcpAgentTools` | `packages/mcp/src/tool-adapter.ts` | **未接入** |
 | 子代理 team controller | `packages/agent/src/team/controller.ts` | 未用 |
 | Prompt injection 评估 / `<untrusted_context>` 封装 | `packages/security/src/security.ts` | CLI 未用 |
-| 会话开场 + 多轮 + `/help` `/clear` `/exit` | `apps/ohna-cli/src/welcome.ts`、`harness.ts` | **M0 已实现** |
+| 会话开场 + 多轮 + `/help` `/clear` `/exit` | `apps/ohna-cli/src/ui/welcome.ts`、`harness.ts` | **M0 已实现** |
 
 ### 1.2 缺口清单（编号沿用会诊结论，M1–M3 逐项消化）
 
@@ -25,12 +25,12 @@
 |---|---|---|---|
 | 1 | 无文件/命令工具 | `packages/tools/src/default-registry.ts:16` 只有 4 个金融工具 | M1 |
 | 2 | 无权限与沙箱 | `packages/agent/src/types.ts:161` 明确「不接任何审批逻辑（approval 体系已删除）」 | M1 |
-| 3 | 系统提示词写死金融场景 | `apps/ohna-cli/src/harness.ts:29` | M1 |
+| 3 | 系统提示词写死金融场景 | `apps/ohna-cli/src/cli/harness.ts:29` | M1 |
 | 4 | 会话不落盘，退出即丢 | `harness.ts` 的 `runRepl` 仅内存 `history` | M2 |
-| 5 | compaction 未挂、`MAX_TURNS=8` 太小 | `apps/ohna-cli/src/harness.ts:26`；`createConfig` 未传 `transformContext` | M2 |
+| 5 | compaction 未挂、`MAX_TURNS=8` 太小 | `apps/ohna-cli/src/cli/harness.ts:26`；`createConfig` 未传 `transformContext` | M2 |
 | 6 | 模型元数据写死 | `packages/ai/src/providers/env-runtime.ts:62-72`（`reasoning:false`、`contextWindow 128000`、`maxTokens 8192`） | M2 |
 | 7 | anthropic provider 是 disabled 桩 | `packages/ai/src/providers/anthropic.ts:8` | M3 |
-| 8 | REPL 无 slash 命令体系、无 diff 渲染、输出不折叠 | `apps/ohna-cli/src/render.ts` | M3 |
+| 8 | REPL 无 slash 命令体系、无 diff 渲染、输出不折叠 | `apps/ohna-cli/src/ui/render.ts` | M3 |
 | 9 | 无「改完自己跑验证」闭环 | 依赖 1 + 项目脚本知识 | M1/M3 |
 | 10 | 无 MCP / 子代理分工 | `apps/ohna-cli/package.json` 未声明 `@aiagent/mcp`（与 `docs/v1.2/04-cli-harness.md` 描述不符，属文档漂移） | M3 |
 
@@ -60,7 +60,7 @@ pi 工具位于 `packages/coding-agent/src/core/tools/`，共约 4100 行。核�
 | execute 签名 | `(toolCallId, params, signal, onUpdate, ctx)` | `(toolCallId, params, signal, onUpdate)` | 删掉第 5 个 `ExtensionContext` |
 | 中间层 | `ToolDefinition` + `wrapToolDefinition` | 无 extension 体系 | **不引入**；工具直接是 `AgentTool` |
 | 结果 | `{ content, details }` | `{ content, details, isError? }` | 失败走 `isError: true` + 文本 content，不向上抛裸异常 |
-| 渲染 | 工具自带 TUI renderer | 由 `apps/ohna-cli/src/render.ts` 统一渲染 | 工具只回文本与 details |
+| 渲染 | 工具自带 TUI renderer | 由 `apps/ohna-cli/src/ui/render.ts` 统一渲染 | 工具只回文本与 details |
 
 结论：**移植成本主要在「剥 TUI + 换 schema」，算法逻辑基本可原样保留**。
 
@@ -177,4 +177,4 @@ pnpm lint
 - ``（新建）：技术重点、实现流、取舍、验证、学习检查点。
 - `docs/LEARNING_AND_EVOLUTION_ROADMAP.md`：新增阶段产出与验收证据。
 - `ARCHITECTURE.md`：packages/apps 列表补 `packages/coding` 与依赖方向。
-- `apps/ohna-cli/src/args.ts` 的 `--help` 文案与 README（CLI 参数面变动时同步）。
+- `apps/ohna-cli/src/cli/args.ts` 的 `--help` 文案与 README（CLI 参数面变动时同步）。

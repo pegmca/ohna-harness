@@ -6,7 +6,7 @@
  */
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createTeamGateForwarder, createTeamToolset } from "../dist/team-wiring.js";
+import { createTeamGateForwarder, createTeamToolset } from "../dist/runtime/team-wiring.js";
 
 /** 构造一个最小可用的 beforeToolCall 上下文（转发器只透传，不读取内容）。 */
 function fakeContext(toolName = "write") {

@@ -5,8 +5,8 @@
  * 抽出后 repl 保持在线数上限内，且「同宽虚假 resize 事件」与「重绘防重入」两处易踩的
  * 幂等保护集中在一个文件里，便于单测 / 复查。
  */
-import { inputTopBar, paint } from "./theme.js";
-import { write } from "./render.js";
+import { inputTopBar, paint } from "../theme.js";
+import { write } from "../render.js";
 
 /** resize 重绘需要的宿主能力。 */
 export interface ResizeRedrawOptions {

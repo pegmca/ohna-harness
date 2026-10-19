@@ -3,7 +3,7 @@
  */
 import assert from "node:assert/strict";
 import test from "node:test";
-import { ESC_DOUBLE_WINDOW_MS, isDoubleEscape, splitLeadingEscapes } from "../dist/esc-gesture.js";
+import { ESC_DOUBLE_WINDOW_MS, isDoubleEscape, splitLeadingEscapes } from "../dist/ui/tui/esc-gesture.js";
 
 test("splitLeadingEscapes：单个 ESC 是独立 Esc", () => {
   assert.deepEqual(splitLeadingEscapes("\x1b"), { escapes: 1, remainder: "" });

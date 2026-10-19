@@ -9,8 +9,8 @@
 import type { ActiveModel } from "@aiagent/ai";
 import type { AgentMessage } from "@aiagent/agent";
 import * as path from "node:path";
-import type { UsageSnapshot, UsageTracker } from "./render.js";
-import { write } from "./render.js";
+import type { UsageSnapshot, UsageTracker } from "../ui/render.js";
+import { write } from "../ui/render.js";
 import {
   compactSessionHistory,
   filterFailedAssistants,

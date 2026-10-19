@@ -3,7 +3,7 @@
  */
 import assert from "node:assert/strict";
 import test from "node:test";
-import { diffLines, formatUnifiedDiff } from "../dist/diff.js";
+import { diffLines, formatUnifiedDiff } from "../dist/ui/diff.js";
 
 test("diffLines：新增、删除与上下文行", () => {
   const lines = diffLines("a\nb\nc", "a\nB\nc\nd");

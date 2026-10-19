@@ -3,7 +3,7 @@
  */
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createUsageTracker, formatCostLine } from "../dist/usage.js";
+import { createUsageTracker, formatCostLine } from "../dist/session/usage.js";
 
 /** 构造一条最小 Usage。 */
 function usage(overrides) {

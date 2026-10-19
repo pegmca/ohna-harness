@@ -12,7 +12,7 @@
  * 输出由 sink 接管进入对话模型，直写会在下一次整屏重绘时被清屏抹掉。
  */
 
-import { write } from "./render.js";
+import { write } from "../ui/render.js";
 
 /** 可识别的斜杠命令。 */
 export type SlashCommandName =

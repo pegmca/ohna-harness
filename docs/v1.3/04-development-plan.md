@@ -107,26 +107,26 @@ pnpm typecheck && pnpm architecture:check
 1. `packages/ai/src/providers/env-runtime.ts`：模型元数据可配（D4）
    - 支持 `AIAGENT_LLM_CONTEXT_WINDOW_<P>`、`AIAGENT_LLM_MAX_TOKENS_<P>`、`AIAGENT_LLM_REASONING_<P>`、`AIAGENT_LLM_COST_IN_<P>` / `COST_OUT_<P>`（$/百万 token），缺省沿用现值（不破坏现有 profile）。
    - **实现补充**：`packages/ai/src/utils/cost.ts` 的 `calculateUsageCost` 在 openai-completions 收尾时把 token × `model.cost` 写入 `usage.cost`——只有元数据没有换算，`/cost` 仍是 0。
-2. `packages/ai/src/model-selection.ts`（新）：`resolveActiveModelFromEnv` 从 `apps/ohna-cli/src/harness.ts` **下沉**（PROFILES 常量 + 遍历/选择逻辑原样迁移）；`apps/ohna-cli/src/harness.ts` 改为薄封装消费，公共行为不变。ohna-cli 与 serve 装配共用（核心包复用，见 03 §5 下沉说明）。
-3. `packages/coding/src/prompt.ts`（新）：`buildCodingSystemPrompt(cwd)` 从 `apps/ohna-cli/src/mode.ts` coding 分支**下沉**（编码提示词模板 + `loadProjectContext` 组装）；`apps/ohna-cli/src/mode.ts` 改为消费。
+2. `packages/ai/src/model-selection.ts`（新）：`resolveActiveModelFromEnv` 从 `apps/ohna-cli/src/cli/harness.ts` **下沉**（PROFILES 常量 + 遍历/选择逻辑原样迁移）；`apps/ohna-cli/src/cli/harness.ts` 改为薄封装消费，公共行为不变。ohna-cli 与 serve 装配共用（核心包复用，见 03 §5 下沉说明）。
+3. `packages/coding/src/prompt.ts`（新）：`buildCodingSystemPrompt(cwd)` 从 `apps/ohna-cli/src/runtime/mode.ts` coding 分支**下沉**（编码提示词模板 + `loadProjectContext` 组装）；`apps/ohna-cli/src/runtime/mode.ts` 改为消费。
    - **实现补充**：签名扩展为 `buildCodingSystemPrompt(cwd, { onContextError })`；包内不写 stderr，失败提示由 CLI 注入回调（serve 可静默或记日志）。
-4. `apps/ohna-cli/src/session-store.ts`（新）：JSONL 会话持久化
+4. `apps/ohna-cli/src/session/session-store.ts`（新）：JSONL 会话持久化
    - 落 `~/.ohna/sessions/<id>.jsonl`（复用 `@aiagent/ai` Message 形状）；`save/load/list`。
    - **会话级 compaction（跨 run 语义）**：`agentLoop` 复制上下文（`agent-loop.ts:126`），`transformContext` 产物只存在于 loop 内副本，`agent_end.messages` 只含增量——因此 run 结束/会话保存时由 harness 对全量 history 跑 `shouldCompact/compact`，把 `CompactionMessage` + 未压缩尾部写回 session JSONL（内核零改动），避免每 run 重复压缩与 JSONL 无界增长。
    - **实现补充**：压缩后重新估算；仍超窗时执行硬收敛（截断 Assistant / ToolResult 文本 → 按配对关系丢弃最旧消息），只有 `tokensAfter < tokensBefore` 才算压缩成功。文件格式首行 `type:"session"`、后续每行 `type:"message"`；临时文件 + rename 原子写；load 按 role 校验最小形状并跳过损坏行；id 白名单 `^[A-Za-z0-9_-]+$`；title 缺省取首条 user 文本前 40 字符；list 按 updatedAt 倒序。
-5. `apps/ohna-cli/src/session-runtime.ts` / `session-flow.ts`（实现时拆出，控制 harness ≤500 行）：
+5. `apps/ohna-cli/src/session/session-runtime.ts` / `session-flow.ts`（实现时拆出，控制 harness ≤500 行）：
    - `session-runtime`：`createLlmSummarizer` 复用 `streamSimple`；`withSummaryFallback` 为运行期提供兜底摘要；`compactSessionHistory` 在摘要失败时告警并返回未压缩序列（保存不受阻断）；停止原因类型与文案。
    - `session-flow`：`openSession`（resume/新建）、`persistSession`（压缩 + 落盘）、`replaceHistory`、`printResumeHint`。
-6. `apps/ohna-cli/src/harness.ts`：
+6. `apps/ohna-cli/src/cli/harness.ts`：
    - `createConfig` 传 `deadlineMs` + `transformContext`（`createCompactionTransform`，注入 summarizer 复用 `streamSimple` 做摘要）；
    - `shouldStopAfterTurn` 内查 deadline（时钟）+ maxTurns + **`--max-cost` 预算**（run 开始前检查一次会话累计 cost，之后每轮结束再检查；单轮内可能超出，不是严格 pre-commit）；
    - `runRepl` 每次 run 结束落盘 history；启动 `--resume <id>` 恢复；`/clear` 另开新会话保留旧盘。
    - **实现补充**：停止原因写入闭包槽，run 结束打印 `⏹ 已停止：达到最大回合数/截止时间/成本预算`；`--max-cost 0` 表示零预算，run 前即停止且不调用模型；只有本轮仍有 toolCall / toolResult 时才打印停止原因，文本回合自然结束不误报；单次模式同样建会话落盘；启动/退出打印会话 id 与 `--resume` 提示。
-7. `apps/ohna-cli/src/render.ts`：usage tracker 升级为**会话级累计**（`/cost` 展示累计 input/output/cost）。
+7. `apps/ohna-cli/src/ui/render.ts`：usage tracker 升级为**会话级累计**（`/cost` 展示累计 input/output/cost）。
    - **实现补充**：`UsageTracker` 增加 `snapshot()` / `restore()`；`agent_end` 文案改为「累计 token … 成本 …」；新增 `formatCostLine(tracker)` 供 `/cost`。
-8. `apps/ohna-cli/src/args.ts`（新）+ `index.ts`（薄入口）：新增 `--resume <id>`、`--max-turns <n>`、`--deadline-ms <n>`、`--max-cost <n>`。
+8. `apps/ohna-cli/src/cli/args.ts`（新）+ `index.ts`（薄入口）：新增 `--resume <id>`、`--max-turns <n>`、`--deadline-ms <n>`、`--max-cost <n>`。
    - **实现补充**：取值选项后紧跟 `--flag` 视为缺失，中文告警并忽略且不吞掉下一个 flag；正整数/非负数校验，非法值中文告警后忽略；`--help` 同步新参数、`/cost`、会话持久化与元数据 env。
-9. `apps/ohna-cli/src/welcome.ts`：标题改为 `ohna · 本地编码 Agent` / `ohna`，`/help` 增加 `/cost` 与持久化说明，`matchReplCommand` 增加 `cost`。
+9. `apps/ohna-cli/src/ui/welcome.ts`：标题改为 `ohna · 本地编码 Agent` / `ohna`，`/help` 增加 `/cost` 与持久化说明，`matchReplCommand` 增加 `cost`。
 10. 测试与验证入口：
     - `packages/ai/test/env-runtime.test.mjs`（元数据覆盖/默认/非法回退/profile 选择）；
     - `apps/ohna-cli/test/session-store.test.mjs`、`session-runtime.test.mjs`；
@@ -235,7 +235,7 @@ pnpm --filter @aiagent/ohna-web build
 5. anthropic provider（可选）：`packages/ai/src/providers/anthropic.ts` 直连或走 OpenRouter 兼容层。
 
 **`--web` 进程内托管（D8 主路径）**：
-`apps/ohna-cli/src/web-entry.ts`（新）：`ohna --web [dir]` 复用 `createOhnaServer`（`packages/serve`）在同一进程内起 HTTP/SSE，自动开浏览器；REPL 与浏览器共享同一会话/事件流（终端与浏览器双表面看同一个 agent）。实现要点：serve 装配暴露可注入的 `sessionStore` 与事件源，CLI 复用其会话管理；此步仅作「入口 + 复用」，不改 serve 内核。
+`apps/ohna-cli/src/cli/web-entry.ts`（新）：`ohna --web [dir]` 复用 `createOhnaServer`（`packages/serve`）在同一进程内起 HTTP/SSE，自动开浏览器；REPL 与浏览器共享同一会话/事件流（终端与浏览器双表面看同一个 agent）。实现要点：serve 装配暴露可注入的 `sessionStore` 与事件源，CLI 复用其会话管理；此步仅作「入口 + 复用」，不改 serve 内核。
 
 **ohna L3（长任务治理）**：
 `/resume` 恢复（session store）、compaction 挂载（复用 Phase 1 的会话级 compaction 语义，落在 serve 装配的会话持久化）、`/cost` 预算展示（复用 Phase 1 的会话级 tracker 思路）。
@@ -267,7 +267,7 @@ pnpm build && pnpm typecheck && pnpm architecture:check && pnpm lint
   路径），其它会话不进入终端；/exit → shutdown + close。
 - L3-3：serve `createRun` 载入历史后做 run 前会话级 compaction，摘要持久化为
   `messageType:"compaction"` 线性消息；硬收敛与 CLI **抽公共实现**到
-  `packages/agent/src/compaction-enforce.ts`（CLI 侧退化为 barrel，33 单测仍绿）。
+  `packages/agent/src/compaction-enforce.ts`（CLI 与 serve 直接消费同一实现，33 单测仍绿）。
 - **偏差（可选项未实现）**：C-M3-5 子代理（TeamController 只读 explore）与 anthropic provider
   直连均未实现，属计划标注的可选项；serve 句柄扩展另含 `subscribeConversation / cancelRun / listenWithRetry`
   （计划外，为 --web 与测试复用所必需）。

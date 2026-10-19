@@ -20,7 +20,7 @@
 | 阶段 | 内容 | 状态 |
 |---|---|---|
 | R | 机械改名：finance-* / ohna-* + bin `immersive`→`ohna` | **已实现**（04 Phase R，行为零变化） |
-| M0 | 会话外壳：欢迎头、多轮上下文、`/help` `/clear` `/exit`、EOF 关闭修复 | **已实现**（`apps/ohna-cli/src/welcome.ts`、`src/harness.ts`，原 apps/cli） |
+| M0 | 会话外壳：欢迎头、多轮上下文、`/help` `/clear` `/exit`、EOF 关闭修复 | **已实现**（`apps/ohna-cli/src/ui/welcome.ts`、`src/harness.ts`，原 apps/cli） |
 | M1 | 编码工具闭环：read / write / edit / bash / grep / find / ls + 权限策略 + 项目上下文注入 | **已实现（待人工端到端验收）** |
 | P0 | 安全加固：命令 head 归一、工作区边界、命令替换 / 内联脚本、悬空软链、`/private` 误伤、包装器与 fetch 组合 | **已实现**（04 Phase 0 多轮修复；最终状态 = **denylist 加固 + 确认闸门，非强 jail**；覆盖 `env -S`、转义引号、`nice/timeout/setsid/stdbuf`、fetch 管道 / 同路径落盘 / `-o` 受保护根、无空格重定向、`--force*`、`-tDIR`、子 shell 带参解释器，S-P1~S-P9 / S-C1~S-C16 全绿） |
 | M2 | 长任务治理：会话持久化与 `--resume`、compaction、预算与模型元数据 | **已实现**（04 Phase 1；`~/.ohna/sessions/*.jsonl` + 会话级 compaction 与硬收敛 + `--max-turns` / `--deadline-ms` / `--max-cost` / `/cost`；本地桩端到端见 `test/verify-ohna-m2.mjs`） |

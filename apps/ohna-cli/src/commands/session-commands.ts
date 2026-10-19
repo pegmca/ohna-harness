@@ -8,12 +8,12 @@
 import { listAvailableModelProfiles, resolveActiveModelFromEnv, type ActiveModel } from "@aiagent/ai";
 import type { AgentMessage } from "@aiagent/agent";
 import type { AgentTool } from "@aiagent/tools";
-import { compactSessionHistory } from "./session-runtime.js";
-import { exportSessionMarkdown } from "./session-export.js";
-import { persistSession, replaceHistory } from "./session-flow.js";
-import { createSessionStore } from "./session-store.js";
-import { resetFoldCache, write, type UsageTracker } from "./render.js";
-import type { RunSetup } from "./turn.js";
+import { compactSessionHistory } from "../session/session-runtime.js";
+import { exportSessionMarkdown } from "../session/session-export.js";
+import { persistSession, replaceHistory } from "../session/session-flow.js";
+import { createSessionStore } from "../session/session-store.js";
+import { resetFoldCache, write, type UsageTracker } from "../ui/render.js";
+import type { RunSetup } from "../runtime/turn.js";
 
 /** 本地会话存储（JSONL）的类型别名，避免在上下文里重复 ReturnType 推导。 */
 type SessionStore = ReturnType<typeof createSessionStore>;

@@ -7,7 +7,7 @@ import test from "node:test";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createUsageTracker, foldOutput, renderEvent, renderToolDiff } from "../dist/render.js";
+import { createUsageTracker, foldOutput, renderEvent, renderToolDiff } from "../dist/ui/render.js";
 
 /** 捕获 stdout 的工具函数。 */
 function captureStdout(run) {

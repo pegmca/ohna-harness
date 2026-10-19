@@ -17,9 +17,9 @@ import * as readline from "node:readline";
 import type { ActiveModel } from "@aiagent/ai";
 import type { AgentTool } from "@aiagent/tools";
 import type { AgentMessage } from "@aiagent/agent";
-import { createToolConfirmGate } from "./confirm.js";
+import { createToolConfirmGate } from "../permission/confirm.js";
 import { createFollowUpController } from "./follow-up.js";
-import { createPermissionSession } from "./permission-session.js";
+import { createPermissionSession } from "../permission/permission-session.js";
 import {
   formatCostLine,
   reprintRecentFolded,
@@ -27,18 +27,18 @@ import {
   toggleVerbose,
   type UsageTracker,
   write,
-} from "./render.js";
-import { setSpinnerEnabled } from "./spinner.js";
-import { createResizeRedraw } from "./resize-redraw.js";
-import { expandFileReferencesDetailed } from "./file-reference.js";
-import { handleDirectInput } from "./direct-command.js";
+} from "../ui/render.js";
+import { setSpinnerEnabled } from "../ui/spinner.js";
+import { createResizeRedraw } from "../ui/tui/resize-redraw.js";
+import { expandFileReferencesDetailed } from "../workspace/file-reference.js";
+import { handleDirectInput } from "../commands/direct-command.js";
 import {
   openSession,
   persistSession,
   printResumeHint,
   replaceHistory,
-} from "./session-flow.js";
-import { createSessionStore } from "./session-store.js";
+} from "../session/session-flow.js";
+import { createSessionStore } from "../session/session-store.js";
 import {
   clearSession,
   compactNow,
@@ -49,21 +49,18 @@ import {
   resumeSession,
   switchModel,
   type SessionCommandContext,
-} from "./session-commands.js";
-import { inputTopBar, inputBottomBar, paint, supportsAnsi } from "./theme.js";
-import { printReplCommands, renderWelcome } from "./welcome.js";
-import { createSlashDispatcher, printUnknownCommand, type SlashHandlers } from "./slash.js";
-import { TuiApp } from "./tui-app.js";
+} from "../commands/session-commands.js";
+import { inputTopBar, inputBottomBar, paint, supportsAnsi } from "../ui/theme.js";
+import { printReplCommands, renderWelcome } from "../ui/welcome.js";
+import { createSlashDispatcher, printUnknownCommand, type SlashHandlers } from "../commands/slash.js";
+import { TuiApp } from "../ui/tui/tui-app.js";
 import type { ReplContext } from "./repl-context.js";
 import {
   printStopReason,
   reachedCostBudget,
   runTurn,
   type RunSetup,
-} from "./turn.js";
-
-/** 装配上下文类型仍从 repl 导出，harness 等既有导入方无需感知拆分。 */
-export type { ReplContext } from "./repl-context.js";
+} from "../runtime/turn.js";
 
 /**
  * 交互式 REPL：维护跨轮 history 与会话文件，Ctrl-C 中断当前 run 而不退出会话。

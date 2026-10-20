@@ -218,7 +218,7 @@ Assistant 消息按“用户可读过程 → 回答正文 → 回答操作”组
 后续让 Codex 开发 Immersive UI 时，可以使用：
 
 ```text
-请先阅读 README.md、DESIGN.md、docs/IMMERSIVE_PRODUCT_DESIGN.md、docs/LEARNING_AND_EVOLUTION_ROADMAP.md 的相关阶段和 apps/finance-web 当前代码。
+请先阅读 README.md、DESIGN.md、docs/IMMERSIVE_PRODUCT_DESIGN.md、设计演进记录 的相关阶段和 apps/finance-web 当前代码。
 
 目标：实现/改进一个专业金融研究 Agent Chat 页面，不要做营销 landing page，也不要保留独立右侧调试栏。
 

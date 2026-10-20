@@ -17,3 +17,8 @@ output/
 apps/finance-web/test-results/
 apps/finance-web/playwright-report/
 packages/*/src/**/*.d.ts.map
+
+# 个人/第三方工具配置：不入库（含 superpowers skill，避免混入开源仓）
+.agents/
+.claude/
+.ccmanager.json

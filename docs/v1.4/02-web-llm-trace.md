@@ -8,7 +8,7 @@
 > 2. **观测面**：`packages/serve` RunManager 扩展两种能力——自身 run 自动发 `llm_call` 事件（托管模式同享），以及 CLI 本地 run 的**镜像观测入口** `observeRun`（不改执行权归属）。
 > 3. **CLI 接线**：默认 `ohna` 启动 = TUI repl 照常 + 进程内起 serve + 每次 run 把事件与 llm_call 镜像给 web；`--no-web` 降级为本地 JSONL 落盘。
 >
-> 执行纪律：沿用 v1.3/04 头部声明与 `LEARNING_AND_EVOLUTION_ROADMAP.md` §3 七步法——每阶段「窄切片 + 可验收」、跑 §10 验收总闸相关子集、同步本文状态表 + ``（新建）。
+> 执行纪律：沿用 v1.3/04 头部声明与 `设计演进记录` §3 七步法——每阶段「窄切片 + 可验收」、跑 §10 验收总闸相关子集、同步本文状态表 + ``（新建）。
 
 ---
 
@@ -233,7 +233,7 @@ pnpm --filter @aiagent/ohna-web build && pnpm --filter @aiagent/ohna-web test
    - `observeRun` 合成序列 → 同样断言（CLI 镜像路径）；
    - web dist 存在时 `GET /trace` 200。
 2. ``（新建）：学习注记——采集 wrapper 机制（onPayload/onResponse/do-event plugin 组合）、DTO 归属推演（types 收线格式 + trace 类型级依赖）、observeRun 与托管 run 的统一性论证、降级链（host 失败 / --no-web）、abort 语义取舍。
-3. 文档同步：本文 §6 状态表 + `docs/LEARNING_AND_EVOLUTION_ROADMAP.md` 阶段产出 + `AGENTS.md` 以下段落（落地后同步，不在启动前改）：
+3. 文档同步：本文 §6 状态表 + `设计演进记录` 阶段产出 + `AGENTS.md` 以下段落（落地后同步，不在启动前改）：
    - `apps/ohna-cli`：`cli/` 增加 `web-host.ts` 一句；`runtime/` 提 observation/llm-trace wrapper；默认启动语义（观测台 + `--no-web`）。
    - `packages/serve`：进程内句柄列表补 `observeRun / listRunsByConversation`；事件 kind 补 `llm_call`。
    - `packages/types` / `packages/trace` / `packages/agent`：导出面变化一句（LlmCallRecordDto / LlmCallTraceEvent / createLlmTraceStreamFn）。
@@ -382,4 +382,4 @@ pnpm --filter @aiagent/ohna-cli dev   # 手工：TUI + 浏览器 /trace 双端�
 | W2 | serve 观测面：RunManager `llm_call` 自动发射 + `observeRun` + runs 索引 | 已完成（serve 38/38；S1/S2 与 B2 差集回填已修） |
 | W3 | CLI 自动启动 Web + run 镜像 + `--no-web` 降级 | 已完成（ohna-cli 294/294；共享 counter + observeOnly 只读） |
 | W4 | ohna-web Trace 观测台（`/trace`） | 已完成（ohna-web 65/65 + build；S1-S4/N1-N7 已修） |
-| W5 | 验证脚本 `test/verify-ohna-web-trace.mjs` + notes + AGENTS.md 同步 | 已完成（脚本 4 断言通过；notes/AGENTS/ROADMAP 已同步） |
+| W5 | 验证脚本 `test/verify-ohna-web-trace.mjs` + 设计笔记 + AGENTS.md 同步 | 已完成（脚本 4 断言通过；设计笔记 已同步） |

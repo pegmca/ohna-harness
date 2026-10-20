@@ -5,10 +5,10 @@
 >
 > 核心判断：v1.4 对比文档中 B 类（同层能力差异）与 C 类（表现差异）差异，大部分共享同一个卡点——**ohna 的对话模型是"预合成 ANSI 字符串数组"（`contentLines: string[]`，`ui/tui/tui-app.ts:124`）+ 事件直接写渲染层（`ui/render.ts`）**。语义条目化是一切结构性优化的前置；渲染内核（行差分）是语义条目化的地基。因此顺序固定为 **C0 渲染内核 → C1 语义条目模型 → C2 命令注册表/输入路由 → C3 权限卡与 Toast → C4 长会话预算 → C5 主题 token**，测试基建（C6）随 C0/C1 同步铺设。
 >
-> 执行纪律（沿用 `docs/v1.3/04-development-plan.md` 头部声明与 `LEARNING_AND_EVOLUTION_ROADMAP.md` §3 七步法）：
+> 执行纪律（沿用 `docs/v1.3/04-development-plan.md` 头部声明与 `设计演进记录` §3 七步法）：
 > - 每阶段只做「窄切片 + 可验收」，禁止无验收的大爆炸重写。
 > - 每个阶段跑完本文 §11 验收总闸的**相关子集**再进入下一阶段。
-> - 文档同步：每完成一阶段，更新本文状态表 + ``（新建）+ `docs/LEARNING_AND_EVOLUTION_ROADMAP.md` 对应产出。
+> - 文档同步：每完成一阶段，更新本文状态表 + ``（新建）+ `设计演进记录` 对应产出。
 > - 归因：opencode 为 MIT（`opencode/LICENSE`，含 `packages/tui`），凡移植的源文件在文件头标注 `ported from opencode (<path>)`，取舍记录进 ``（先例：v1.3 对 pi-monorepo 的移植）。
 
 ---

@@ -284,10 +284,10 @@ pnpm architecture:check 全绿。确认四个能力（RAG / report / MCP / eval�
 - 全仓 grep 复核 packages/agent 的 llm-client.ts、llm/、intent-router.ts 零引用（阶段 2 已删）；
 - packages/trace 类型裁剪为 AssistantMessageEvent 派生 + run 生命周期事件；
 - 文档同步（同一 PR 内）：ARCHITECTURE.md、README.md、AGENTS.md（增加 packages/ai、
-  删除 approval/intent-router 相关表述）、notes/ 受影响条目（approval-persistence.md 标注
+  删除 approval/intent-router 相关表述）、设计笔记 受影响条目（approval-persistence.md 标注
   已移除、durable-agent-runs.md、trace-persistence.md、postgresql-usage.md、
   architecture-refactoring.md 等）+ 新增一篇 pi 化改造总览笔记、
-  docs/LEARNING_AND_EVOLUTION_ROADMAP.md 验收证据更新、docs/worktree/README.md 索引补 07、08。
+  设计演进记录 验收证据更新、docs/worktree/README.md 索引补 07、08。
 
 完成标准：
 1. 全仓 grep "approval|intent-router|llm-client" 仅命中历史文档的「已删除」说明；

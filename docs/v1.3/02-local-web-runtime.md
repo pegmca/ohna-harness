@@ -1,7 +1,7 @@
 # 02 · 本地 Web 运行时（Local Web Runtime）设计方案
 
 > 本文是 `docs/v1.3/README.md`（编码型 CLI 改造）的延伸：把「在终端里跑的编码 Agent CLI（M1）」升级为「跑在用户本机、接管本地目录、并启动一个本地 Web 服务，让人不在终端里对话也能干活」的本地 Agent 运行时——也就是 CodeBuddy CLI / Claude Code 那种**本地守护进程**模式。
-> 状态：**设计稿（未实现）**。落地切片遵循 `LEARNING_AND_EVOLUTION_ROADMAP.md` §3 七步法与 Definition of Done。
+> 状态：**设计稿（未实现）**。落地切片遵循 `设计演进记录` §3 七步法与 Definition of Done。
 > 工具能力底座（`packages/coding` 的 read/write/edit/bash/grep/find/ls + 沙箱策略）由 `01-coding-cli.md` 的 M1 负责，不在本文重复；本文只解决「本地 Web 运行时 / 守护进程」这一层。
 
 ## 0. 目标与定位（一句话）
@@ -155,7 +155,7 @@ L0 甚至不依赖 `packages/coding`——先验证「终端之外用浏览器�
 - 本文：`docs/v1.3/02-local-web-runtime.md`（新建）。
 - `ARCHITECTURE.md`：`apps` 列表补 `apps/local` 与依赖方向；说明第三个组合根与 SaaS 并存。
 - `docs/v1.3/README.md`：状态表补 L0–L3 阶段。
-- `LEARNING_AND_EVOLUTION_ROADMAP.md`：新增阶段产出与验收证据。
+- `设计演进记录`：新增阶段产出与验收证据。
 - ``（新建）：技术重点、实现流、取舍、验证、学习检查点。
 - `BUSINESS_DIRECTION_FINANCIAL_RESEARCH_AGENT.md`：若产品方向正式加入「本地优先」形态，补一段说明（视你的方向决策而定，本文不擅自改业务定位）。
 

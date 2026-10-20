@@ -13,7 +13,7 @@
 > - `07-cli-feature-parity.md` —— CLI 功能对齐 Claude Code：差距清单 + 编码建议 + 内核改动设计（K1 权限策略内核 / K2 排队与 steering 接线 / K3 子 agent 接线，批次 B1-B3，**已落地**；落地结果与已知偏差见 07 §6）
 >
 > 历史背景文档：`01-coding-cli.md`（CLI M1 移植细节，仍有效）、`02-local-web-runtime.md`（本地 Web 早期设计，**其 §3.2「复用 createApiServer」已被用户决策取代**，其余 JSONL/目录沙箱/UI 思路沿用）。
-> 落地切片遵循 `LEARNING_AND_EVOLUTION_ROADMAP.md` §3 七步法与 Definition of Done。
+> 落地切片遵循 `设计演进记录` §3 七步法与 Definition of Done。
 
 ## 一、状态
 
@@ -79,7 +79,7 @@
 3. **窄切片 + 可验收**：每个 Phase 自带 `05-verify-cases.md` 的验收用例与结构化解错，禁止无验收的大爆炸重写。
 4. **诚实失败**：未授权路径、危险命令、超时一律结构化报错（`isError` 回喂模型），不静默放行、不伪造结果。
 5. **无向后兼容约束**：开发验证阶段，改名/参数面/默认值可直接重构，不为旧行为保留别名。
-6. **文档同步**：每完成一个 Phase，同步 `` / ``、本文状态表与 `LEARNING_AND_EVOLUTION_ROADMAP.md` 阶段产出。
+6. **文档同步**：每完成一个 Phase，同步 `` / ``、本文状态表与 `设计演进记录` 阶段产出。
 
 ## 六、验收总闸（每个 Phase 都要跑相关子集）
 

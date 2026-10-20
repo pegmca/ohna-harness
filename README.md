@@ -1,14 +1,15 @@
-# AI Agent Learning Workspace
+# ohna-harness
 
-这个仓库用于快速学习 AI Agent 开发，并沉淀一个可展示的 Immersive 项目、Report Mode 研报生成 Workflow、PDF 导出能力、文档和复盘。
+TypeScript Agent 工程 monorepo：一套可复用的 Agent 内核（`packages/agent`）与两条产品线。
+
+- 产品 A · 金融 SaaS：`apps/finance-api` + `apps/finance-web`（Fastify + PostgreSQL + pgvector + RAG/Report）
+- 产品 B · ohna 编码 Agent：`apps/ohna-cli`（终端 TUI）+ `apps/ohna-api` + `apps/ohna-web`
 
 ## 推荐仓库结构
 
 ```text
 .
 ├── docs/
-│   ├── ROADMAP_1_MONTH.md
-│   ├── LEARNING_AND_EVOLUTION_ROADMAP.md
 │   ├── BUSINESS_DIRECTION_FINANCIAL_RESEARCH_AGENT.md
 │   └── IMMERSIVE_PRODUCT_DESIGN.md
 ├── apps/
@@ -37,12 +38,6 @@
 │   ├── security/
 │   └── trace/
 ├── datasets/
-├── notes/
-│   ├── function-calling-vs-react.md
-│   ├── rag-eval.md
-│   ├── mcp-notes.md
-│   ├── system-design.md
-│   └── interview-qa.md
 ├── package.json
 ├── pnpm-workspace.yaml
 ├── DESIGN.md
@@ -54,7 +49,7 @@
 
 本仓库已经初始化为 pnpm workspace monorepo：
 
-- `apps/finance-web`：产品 A 的 Vite + React + TypeScript Web 应用入口，负责承载 Immersive 产品界面，只通过 HTTP API 调用 Agent。
+- `apps/finance-web`：产品 A 的 Vite + React + TypeScript Web 应用入口，负责承载金融研究产品界面，只通过 HTTP API 调用 Agent。
 - `apps/finance-api`：产品 A 的 Fastify HTTP adapter，负责请求校验、异步 Run 生命周期、SSE 事件投影和结构化响应。
 - `apps/ohna-cli`：产品 B 的终端编码 Agent（bin `ohna`），恒为个人编码助手（金融研究能力归属产品 A），工具固定走编码工具集（`packages/coding`，作用域限定在当前工作目录）。M2 已支持会话持久化与 `--resume <id>`、上下文压缩、`--max-turns` / `--deadline-ms` / `--max-cost` 预算治理与 `/cost`；单轮模式同样落盘，可用 `ohna --resume <id>` 接续。M3 支持 slash 命令（`/model /cost /compact /tools /resume`）、写前 unified diff、输出折叠、`--mcp <config.json>` 接入外部 MCP 工具（输出经 `<untrusted_context>` 封装），以及 `ohna --web [dir]` 进程内托管（终端与浏览器共享同一会话，`--web-port` / `--no-open` 可选）。
 - `apps/ohna-api`：产品 B 的本地服务薄入口（bin `ohna-api`），只绑 `127.0.0.1`，复用 `packages/serve` 装配；支持 `[dir]` / `--port` / `--data-dir` / `--auto-approve` / `--no-open`，SIGINT/SIGTERM 会中断在途 run 并落 `interrupted`。
@@ -83,7 +78,7 @@
 设计文档拆分为两层：根目录 `DESIGN.md` 是 Kimi 风格、支持明暗主题的 Workbench 视觉系统，定义 design token、组件视觉语言和 AI 前端生成约束；`system.css` 是唯一 token / utility 参考实现；`docs/IMMERSIVE_PRODUCT_DESIGN.md` 承载金融研究 Agent 的产品体验、信息架构和页面模块。代码边界和 AI Coding 约束分别见 `ARCHITECTURE.md` 与 `docs/AI_CODING.md`。
 
 PostgreSQL 的本地连接、身份、Conversation/Message、Run/RunEvent、migration 规则、备份恢复
-和 pgvector 持久化规划见 [``]()。
+和 pgvector 持久化规划见 `ARCHITECTURE.md`。
 
 ### ohna L0 快速启动（本地服务）
 
@@ -272,7 +267,7 @@ pnpm --filter @aiagent/ai test
 - `safe`：`calculator`、`market_data_mock`、`filing_search_mock`、`financial_metric_mock` 可直接执行。
 - `blocked`：`sql_query_mock` 发现写 SQL 或 schema 变更关键词时直接阻断，返回 `permission_denied`。
 
-SQL readonly 第一版是启发式白名单：只允许 `SELECT` / `WITH` 开头的单条查询，并禁止 `insert`、`update`、`delete`、`drop`、`alter`、`truncate`、`create` 等写操作关键词。它适合学习阶段保护工具边界，但不能替代真实数据库只读账号、SQL parser 或服务端权限隔离。pi 化改造已删除人工审批门，`beforeToolCall` 仅作观测/block 挂载点。
+SQL readonly 第一版是启发式白名单：只允许 `SELECT` / `WITH` 开头的单条查询，并禁止 `insert`、`update`、`delete`、`drop`、`alter`、`truncate`、`create` 等写操作关键词。它适合早期保护工具边界，但不能替代真实数据库只读账号、SQL parser 或服务端权限隔离。pi 化改造已删除人工审批门，`beforeToolCall` 仅作观测/block 挂载点。
 
 源码按职责拆分在 `packages/tools/src`：`types.ts` 保存公共 contract，`registry.ts` 保存注册表，`executor.ts` 保存执行与 trace 写入，`default-registry.ts` 组合默认 mock tools，`tools/*.ts` 按工具名分别保存 schema 和实现。`index.ts` 只作为 package 入口导出公共 API。
 
@@ -280,7 +275,7 @@ SQL readonly 第一版是启发式白名单：只允许 `SELECT` / `WITH` 开头
 
 ## Security Hardening
 
-Week 4 的基础安全边界已加入不可信 context 隔离、组合式 prompt injection policy、请求级 tool allowlist、严格 SQL readonly gate 和统一 PII redactor。安全决策以 `security` trace event 记录 `decision` 与稳定 `reasonCode`；UI 只展示可理解状态，不展示检测规则正文。
+基础安全边界已加入不可信 context 隔离、组合式 prompt injection policy、请求级 tool allowlist、严格 SQL readonly gate 和统一 PII redactor。安全决策以 `security` trace event 记录 `decision` 与稳定 `reasonCode`；UI 只展示可理解状态，不展示检测规则正文。
 
 SQL gate 只允许单条 `SELECT/WITH` 并拒绝注释、危险关键词和常见绕过。部署时仍必须使用真正的数据库只读账号，移除写入、DDL、文件、扩展和跨库权限；代码校验不能替代数据库授权。完整信任边界、PII 保留策略和残余风险见 `docs/SECURITY_THREAT_MODEL.md`。
 
@@ -334,11 +329,11 @@ AIAGENT_MCP_ENABLED=true pnpm dev  # 可选 AIAGENT_MCP_COMMAND / AIAGENT_MCP_AR
 - `createCombinedAgentTools()`：内置 tools 与 MCP tools 在装配期合并为一个数组；MCP server 不可用时 fallback 到内置 tools。
 - MCP 工具输出回喂模型前经 `packages/security` 的 `<untrusted_context>` 二次封装。
 
-当前公告、指标和行情数据均为本地 mock；RAG 检索与 citation 生成会真实执行，但不持久化，也不包含远程部署、鉴权、多租户或长连接生产化治理。工具失败同时使用 MCP `isError` 和结构化 error envelope，不向 client 泄漏 raw exception。实现取舍与 MCP/REST 对比见 ``。
+当前公告、指标和行情数据均为本地 mock；RAG 检索与 citation 生成会真实执行，但不持久化，也不包含远程部署、鉴权、多租户或长连接生产化治理。工具失败同时使用 MCP `isError` 和结构化 error envelope，不向 client 泄漏 raw exception。
 
-## Week 2 RAG Package Foundation
+## RAG Package Foundation
 
-Week 2 新增三个 RAG 相关 package，当前已具备 Markdown/TXT 公告 ingestion 入口、RAG 基础边界、纯函数 chunk 策略、deterministic mock embedding、内存测试 adapter、PostgreSQL pgvector adapter、hybrid retrieval 和 deterministic heuristic rerank；暂不接入真实 PDF 解析、真实 embedding provider、Qdrant、cross-encoder、LLM rerank 或 Agent Chat：
+仓库内已具备 Markdown/TXT 公告 ingestion 入口、RAG 基础边界、纯函数 chunk 策略、deterministic mock embedding、内存测试 adapter、PostgreSQL pgvector adapter、hybrid retrieval 和 deterministic heuristic rerank；暂不接入真实 PDF 解析、真实 embedding provider、Qdrant、cross-encoder、LLM rerank 或 Agent Chat：
 
 - `@aiagent/parsing`：保存文档来源、document metadata、原始文本来源和 document parsing pipeline。`ingestDocument()` 支持 Markdown、TXT 与 PDF 解析，输出 `IngestedDocument` 和带 `heading`、`lineStart`、`lineEnd` 的 blocks；解析失败返回 `parse_failed` 结构化错误，不静默生成文档。
 - `@aiagent/rag`：保存 `RagDocument`、`RagChunk`、`EmbeddedChunk`、`Citation`、`RetrievalResult`、`RagAnswer`、embedding/vector store/retriever/reranker 抽象和结构化错误类型，并导出 `chunkText()`、`chunkDocumentBlocks()`、`chunkIngestedDocument()`、`createDeterministicMockEmbeddingClient()`、`createInMemoryVectorStore()`、`createHybridRetriever()` 和 `createHeuristicReranker()` 等入口。
@@ -385,9 +380,9 @@ pnpm build
 GitHub PR 会运行 `.github/workflows/ci.yml`，在独立 PostgreSQL service 上执行根级
 typecheck、test、build 与依赖架构检查；数据库集成测试不会连接开发数据库。
 
-## Week 2 Citation Answer And Data Sources
+## Citation Answer And Data Sources
 
-Week 2-013 已把 RAG ingestion、chunk、retrieval 和 citation answer 接入 HTTP API 与 Web 页面，形成最小可演示的 Data Sources 工作区：
+已将 RAG ingestion、chunk、retrieval 和 citation answer 接入 HTTP API 与 Web 页面，形成最小可演示的 Data Sources 工作区：
 
 - `packages/rag` 的 `createDataSourceRuntime()` 组合 `@aiagent/parsing` ingestion、heading-aware chunking、embedding、可注入 VectorStore、hybrid retriever 和 grounded answer policy；生产 composition 使用 PostgreSQL document repository 与 pgvector store，测试/eval 显式使用内存 adapter。
 - `apps/finance-api` 新增 `POST /api/data-sources/ingest`、`GET /api/data-sources/documents`、`GET /api/data-sources/chunks`、`POST /api/rag/search`、`POST /api/rag/answer`。Route handler 只做 zod 校验、调用 RAG runtime、DTO 映射和 `ApiResult` 结构化响应。
@@ -421,9 +416,9 @@ curl -X POST http://localhost:3001/api/rag/answer \
   -d '{"question":"公司资产质量如何？","topK":5}'
 ```
 
-## Week 2 RAG Eval And Report
+## RAG Eval And Report
 
-Week 2-014 完成 RAG eval 闭环：30 条 QA case、eval runner、四个指标、报告输出和失败案例分析。
+已完成 RAG eval 闭环：30 条 QA case、eval runner、四个指标、报告输出和失败案例分析。
 
 - **评测用例**：`packages/eval/src/cases.ts` 的 `RAG_EVAL_CASES` 包含 30 条 case，覆盖 4 份 demo 文档（平安银行年报、宁德时代三季报、招商银行资产质量公告、新能源汽车行业研究）。
 - **评测入口**：`pnpm --filter @aiagent/eval test` 会自动 ingest demo 文档、运行 runner、输出报告。
@@ -448,15 +443,11 @@ Week 2-014 完成 RAG eval 闭环：30 条 QA case、eval runner、四个指标�
 }
 ```
 
-- **说明文档**：详细指标解释、失败案例分析和优化建议见 ``。
-
-## Notes And Learning Logs
-
-`notes/` 是阶段技术学习笔记目录，用来记录每个阶段的技术重点、核心概念、实现脉络、关键权衡和学习检查点。实现任务如果在 task card、weekly plan 或 roadmap 中列出 `notes/*.md`，需要在同一任务里创建或更新对应文件。涉及 agent、tools、RAG、eval、workflow、report、trace 或公共 API 的功能改动，需要同步维护对应周的 note，让后续复习时能从“为什么这样设计”理解 Agent 项目。
+- **说明文档**：详细指标解释、失败案例分析和优化建议见 `docs/eval/`。
 
 ## Agent Loop
 
-`packages/agent` 导出 pi 形态的 `agentLoop` / `agentLoopContinue` 与 hook 体系（详见 ``）。早期版本的 `createAgent()`、Intent Router 与 report planner 特例路径已在 pi 化改造中删除，report 由 `generate_report` 工具承接（见 ``）。
+`packages/agent` 导出 pi 形态的 `agentLoop` / `agentLoopContinue` 与 hook 体系。早期版本的 `createAgent()`、Intent Router 与 report planner 特例路径已在 pi 化改造中删除，report 由 `generate_report` 工具承接。
 
 多轮 ReAct 循环：
 
@@ -478,10 +469,10 @@ pnpm --filter @aiagent/tools test
 
 ## Report Workflow Runtime
 
-Week 3-016 新增两个 package：
+新增两个 package：
 
-- `@aiagent/workflow`：通用节点执行器。每个节点必须声明 `inputSchema` 和 `outputSchema`，runtime 在节点执行前后用 zod 校验，节点异常、输入错误、输出错误和 max steps 超限都会转换成 `WorkflowErrorDto`。Week 3-017 为其增加 `decideNext` 能力，支持节点执行成功后跳转到指定节点，从而实现 verifier loop 等有限循环。
-- `@aiagent/report`：研报领域 workflow 节点实现。`runReportWorkflow(plan, options)` 从 `ReportPlanDto` 创建 workflow run，依次执行 Data Collector、Analyzer、Risk Checker、Citation Verifier、Report Writer 和 PDF Exporter；`renderResearchReportPdf()` 生成合法 PDF 二进制。pi 化阶段 5 起 report 降级为 loop 工具 `generate_report`（`createReportTool()`），模型自主触发，节点事件经 sink 写入 run_events（`workflow_node`/`pdf_export` 事件名不变）；PDF 由工具内 `publishArtifactPdf` saga 直接发布，不再有人工审批门。
+- `@aiagent/workflow`：通用节点执行器。每个节点必须声明 `inputSchema` 和 `outputSchema`，runtime 在节点执行前后用 zod 校验，节点异常、输入错误、输出错误和 max steps 超限都会转换成 `WorkflowErrorDto`。为其增加 `decideNext` 能力，支持节点执行成功后跳转到指定节点，从而实现 verifier loop 等有限循环。
+- `@aiagent/report`：研报领域 workflow 节点实现。`runReportWorkflow(plan, options)` 从 `ReportPlanDto` 创建 workflow run，依次执行 Data Collector、Analyzer、Risk Checker、Citation Verifier、Report Writer 和 PDF Exporter；`renderResearchReportPdf()` 生成合法 PDF 二进制。report 降级为 loop 工具 `generate_report`（`createReportTool()`），模型自主触发，节点事件经 sink 写入 run_events（`workflow_node`/`pdf_export` 事件名不变）；PDF 由工具内 `publishArtifactPdf` saga 直接发布，不再有人工审批门。
 
 Workflow DTO 放在 `packages/types`：`WorkflowRunDto`、`WorkflowNodeDto`、`WorkflowNodeStatusDto`、`WorkflowEdgeDto`、`WorkflowEventDto`、`WorkflowErrorDto`。Workflow、节点 attempt 与 Artifact metadata/预览由 PostgreSQL 持久化；PDF bytes 经 `ArtifactStorage` 原子写入专用目录。
 
@@ -495,7 +486,7 @@ Report Workflow 当前节点输出：
 - Report Writer：生成 Markdown 和最小 HTML 草稿；证据不足时保留“资料不足说明”，不编造结论。
 - PDF Exporter：由 `publishArtifactPdf` 生成真实 `application/pdf`，失败标为 `pdf_failed` 且可安全重试。
 
-### Week 3 Demo
+### Demo
 
 运行 `pnpm dev`，打开 Web 后开启 Report Mode、点击“生成研报”，或输入 `基于最近两年公告和财务数据，为 000001.SZ 生成研究简报 PDF`。
 
@@ -565,27 +556,10 @@ pnpm eval:update-baseline
 - `fail-002`：citation quote 与 retrieved chunk 不一致，无法 grounded 回溯；改进方向是 claim-to-chunk 映射和 Citation Verifier。
 - `fail-003`：证据不足导致 Report workflow 在 Verifier 后终止，缺少 writer/export 前置节点；改进方向是有限重试和结构化终止原因。
 
-机器报告、Markdown 逐条结果和 baseline diff 位于 `docs/eval/`。确定性检查适合 CI 和教学，但不能识别所有语义等价表达；真实模型或人工校准应作为后续补充，不能替代这些硬约束。
+机器报告、Markdown 逐条结果和 baseline diff 位于 `docs/eval/`。确定性检查适合 CI 和演示，但不能识别所有语义等价表达；真实模型或人工校准应作为后续补充，不能替代这些硬约束。
 
 根目录脚本会通过 workspace 执行各应用和 package 的对应命令。`pnpm dev` 会同时启动 `apps/finance-api` 和 `apps/finance-web`；web 的 Vite dev server 会把 `/api` 代理到 `http://localhost:3001`。如果 `5173` 被占用，Vite 会自动选择下一个可用端口。
 
-## 学习路线
+## 许可证
 
-原四周从零搭建路线已经完成。后续主路线改为边学习、边改造、边验证：
-
-- 当前路线：[Immersive 持续学习与演进路线](docs/LEARNING_AND_EVOLUTION_ROADMAP.md)
-- 历史路线：[1 个月 AI Agent 冲刺路线](docs/ROADMAP_1_MONTH.md)
-
-当前路线默认主要使用 AI Coding 完成代码实现。训练重点是从真实架构债务、产品摩擦和 eval 失败中选择问题，用官方资料补足原理，再通过窄范围端到端改造、测试、trace 和指标证明优化有效。
-
-最终交付物是当前仓库内的一个完整 monorepo 产品，而不是按学习阶段拆成多个项目。Web 产品放在 `apps/finance-web`，Agent/RAG/Tool/Workflow/Report/Eval/Trace 等能力沉淀到 `packages/*`。每周的页面会渐进累积：Immersive、Data Sources、Report Workflow、Citation Checker、Eval Report，最后在 Week 4 统一包装。
-
-Immersive 的主路径是金融研究 Chatbot：用户围绕公告、财报、行情和行业资料进行多轮问答。高级路径是 Report Mode：用户可以通过开关、按钮或自然语言请求触发 report skill，系统从普通对话升级到显式 Workflow，完成资料收集、分析、引用校验和 PDF 研报导出。
-
-建议每周至少保留：
-
-- 15-20 小时编码实现。
-- 4-6 小时阅读官方文档、源码和优秀项目。
-- 3-4 小时题整理、项目复盘和表达训练。
-
-每个核心 package 都要保留清晰的职责边界、核心代码、测试或验收方式。最终产品 README 要保留架构图、运行方式、评估结果和失败案例。
+本项目以 **MIT 许可证** 开源。第三方移植代码（pi、opencode 与 superpowers skill）的署名见 `THIRD-PARTY-NOTICES.md`。

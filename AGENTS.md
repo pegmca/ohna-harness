@@ -2,16 +2,15 @@
 
 ## Project Context
 
-This repository is an AI Agent learning workspace and product prototype for an immersive financial research agent.
+This repository is a TypeScript Agent engineering monorepo (`ohna-harness`) for an immersive financial research agent, with a reusable Agent kernel (`packages/agent`) and two product lines.
 
 Primary planning documents:
 
 - `README.md`
-- `docs/LEARNING_AND_EVOLUTION_ROADMAP.md`
-- `docs/ROADMAP_1_MONTH.md`
 - `docs/BUSINESS_DIRECTION_FINANCIAL_RESEARCH_AGENT.md`
+- `ARCHITECTURE.md`
 
-Before implementing a task, read the relevant roadmap stage, architecture/design documents, and the files in the affected package or app.
+Before implementing a task, read the relevant architecture/design documents and the files in the affected package or app.
 
 ## Repository Structure
 
@@ -44,7 +43,6 @@ Before implementing a task, read the relevant roadmap stage, architecture/design
 - `packages/types`: 跨边界线格式 / 持久化形状 DTO（api / conversation / run-v2 / local-fs / report / `llm-trace` 等）；`LlmCallRecordDto` 等 LLM 追踪 DTO 归此包，保持零 `@aiagent/*` 依赖。
 - `packages/serve`: ohna 服务端装配包（`createOhnaServer`）：JSONL stores（sessions / conversations / runs）+ run-v2 HTTP/SSE + 异步确认闸门（`confirm-gate.ts` / `routes/confirmations.ts`，K1 后复用 `@aiagent/agent` 的 permission 策略，自身只保留 SSE AskAdapter 与 Promise 挂起生命周期）+ 只读 `routes/fs.ts`（复用 `@aiagent/coding` 路径策略）+ 静态 fallback + 进程内句柄（`createConversation` / `listConversations` / `createRun` / `subscribeRun` / `subscribeConversation` / `cancelRun` / `observeRun` / `listRunsByConversation` / `isAutoApprove` / `listenWithRetry`）；run 事件 kind 增 `llm_call`（托管 run 自动发射 + CLI 镜像）；`observeOnly` 只读模式（默认 CLI 观测台不注册 `POST/DELETE /api/runs`、强制 `autoApprove:false`）；`runs/index.jsonl` 索引与 legacy 差集回填；`run 前会话级 compaction`（L3-3，摘要持久化为 `messageType:"compaction"`）在 `RunManager.createRun` 内生效；`ohna-api` 与 `ohna-cli --web` 共用。
 - `packages/term`: ohna CLI 的整屏 TUI 渲染基础包（零外部依赖）：`RawTerminal`（raw mode / bracketed paste / resize 监听 / 光标定位与清屏原语）+ `Screen`（节流 + 行差分重绘：首帧与 resize 走 `clearScreen()` 全量、其余帧只重写变化行并清除尾部多余行，`RenderFn` 仍返回整帧最终行，调用方零感知）+ `box` 边框组件、`visibleWidth` 显示宽工具与 `truncateToWidth` 按可见列截断（ANSI 不占列、CJK 计 2）。颜色只提供 ANSI 原语，语义调色板由 `apps/ohna-cli/src/ui/theme.ts` 负责（包边界：term 不内置业务色板、不反向依赖 app）。
-- `docs/LEARNING_AND_EVOLUTION_ROADMAP.md`: Ongoing learning stages, engineering outcomes, and acceptance evidence.
 
 Keep package boundaries explicit. Do not move runtime behavior into an app when it belongs in a package. `apps/ohna-api` / `apps/ohna-cli` / `apps/ohna-web` must not depend on `apps/finance-api` / `apps/finance-web`, nor on each other.
 
@@ -69,7 +67,7 @@ Keep package boundaries explicit. Do not move runtime behavior into an app when 
 - 拆分文件时保持公共 API 不变：原入口文件退化为 barrel re-export 或壳组件，导出符号一个不少、签名不动，导入方零修改。
 - 包内模块引用使用带 `.js` 后缀的 ESM 相对导入；共享 helper 抽到低层模块，保持依赖单向，避免循环依赖（纯 `import type` 的循环除外）。
 - React 组件文件只保留状态编排壳；纯展示子组件、纯函数工具、类型定义分别归入独立文件。
-- This repository is for learning. Add concise explanatory comments in Chinese for important abstractions, package boundaries, agent/model/tool control flow, structured error handling, timeout/retry behavior, and any non-obvious implementation tradeoff. Every function and method should have standard Chinese JSDoc, including `@param`, `@returns`, and `@template` when they add useful context. Prefer comments that explain why the code exists or how the learning concept works; do not comment trivial assignments or repeat what the code already says.
+- Add concise explanatory comments in Chinese for important abstractions, package boundaries, agent/model/tool control flow, structured error handling, timeout/retry behavior, and any non-obvious implementation tradeoff. Every function and method should have standard Chinese JSDoc, including `@param`, `@returns`, and `@template` when they add useful context. Prefer comments that explain why the code exists or how the learning concept works; do not comment trivial assignments or repeat what the code already says.
 
 ## Database Rules
 
@@ -81,7 +79,7 @@ Read `DESIGN.md` in the project root before changing UI.
 
 1. Use the design system stylesheet declared by `DESIGN.md` (`system.css`). This project uses Vite + React, so import it exactly once from the app's global CSS (`apps/finance-web/src/styles.css`).
 2. Use the tokens, utilities, component anatomy, spacing, typography, and states described in `DESIGN.md`; do not invent a separate visual style.
-3. For Immersive UI work, also read `docs/IMMERSIVE_PRODUCT_DESIGN.md` and the relevant stage in `docs/LEARNING_AND_EVOLUTION_ROADMAP.md`.
+3. For Immersive UI work, also read `docs/IMMERSIVE_PRODUCT_DESIGN.md`.
 4. The current product direction is Agent Chat: left conversation list, centered conversation timeline, bottom composer. `Run State`, tool calls, and trace details should be assistant-message-derived expandable content, not a permanent right sidebar.
 5. If existing components or styles conflict with `DESIGN.md`, explain the conflict and choose the option that keeps the interface most consistent with the design system.
 6. If `html/preview.html` exists, read it as a visual reference and match its structure, spacing, and component styling where it does not conflict with `DESIGN.md`.
@@ -112,11 +110,8 @@ Update related docs in the same task when the change affects any of these:
 - Directory structure or package responsibility.
 - Setup, scripts, environment variables, or validation commands.
 - Agent loop, tool schema, run event, RAG, workflow, report, or eval behavior.
-- Acceptance evidence or stage outcomes in `docs/LEARNING_AND_EVOLUTION_ROADMAP.md`.
 
 If no documentation update is needed, state that explicitly in the final response with the reason.
-
-For feature work, keep `notes/` usable as staged technical learning notes for understanding the Agent project. If the relevant roadmap stage names a `notes/*.md` deliverable, create or update that file in the same task. If the work changes core agent, tool, RAG, eval, workflow, report, trace, or public API behavior, also create or update the matching topic note in `notes/` and explain the technical focus, core concepts, implementation flow, tradeoffs, validation, and learning checkpoints.
 
 ## AI Coding Workflow
 

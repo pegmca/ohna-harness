@@ -175,8 +175,8 @@ pnpm typecheck && pnpm lint && pnpm architecture:check
 - [x] `ARCHITECTURE.md` — 包职责与数据流重写（新增 `packages/ai`、loop/持久化形态、删除 approval）。
 - [x] `README.md` — 架构描述、scripts 说明。
 - [x] `AGENTS.md` — Repository Structure 增加 `packages/ai`；删除/修订与 approval、intent-router 相关的规则表述；Coding Rules 中接口描述对齐新边界。
-- [x] `notes/` 受影响条目：`approval-persistence.md`（标注已移除并简述去向）、`durable-agent-runs.md`（线性消息 + run_events 新形态）、`trace-persistence.md`、`postgresql-usage.md`（新 schema）、`architecture-refactoring.md`（本次改造结论）、`agent-chat-composer.md`（若协议字段有变）；并新增一篇 pi 化改造总览笔记（技术焦点、关键取舍、验证方式、学习检查点）。
-- [x] `docs/LEARNING_AND_EVOLUTION_ROADMAP.md` — 对应阶段证据更新为本次改造的验收记录（命令 + 结果）。
+- [x] `设计笔记` 受影响条目：`approval-persistence.md`（标注已移除并简述去向）、`durable-agent-runs.md`（线性消息 + run_events 新形态）、`trace-persistence.md`、`postgresql-usage.md`（新 schema）、`architecture-refactoring.md`（本次改造结论）、`agent-chat-composer.md`（若协议字段有变）；并新增一篇 pi 化改造总览笔记（技术焦点、关键取舍、验证方式、学习检查点）。
+- [x] `设计演进记录` — 对应阶段证据更新为本次改造的验收记录（命令 + 结果）。
 - [x] `docs/worktree/README.md` — 索引补 07、08。
 
 **验收标准**：全仓 grep `approval|intent-router|llm-client` 仅命中历史文档的「已删除」说明；`pnpm typecheck && pnpm build && pnpm test && pnpm lint && pnpm architecture:check` 全绿；`pnpm dev` 全流程人工走查通过。

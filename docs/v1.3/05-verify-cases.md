@@ -163,7 +163,7 @@
 
 ## 8. 核心端到端验收（Definition of Done 总闸）
 
-> 每个阶段完成后，跑对应的端到端场景并保留证据（贴到 `LEARNING_AND_EVOLUTION_ROADMAP.md`）。
+> 每个阶段完成后，跑对应的端到端场景并保留证据（贴到 `设计演进记录`）。
 
 1. **编码闭环**：`pnpm --filter @aiagent/ohna-cli dev -- "在 test/ 下新增 ts 文件导出 add(a,b)，然后跑 pnpm --filter @aiagent/ohna-cli typecheck 直到通过"` → write → bash(typecheck) → 必要时 edit 自愈 → 结束，全程无人干预（配合 `--yes` 或逐次确认）。
 2. **本地守护**：`node apps/ohna-api/dist/index.js <dir>` → 浏览器自动打开 → 对话让 Agent 改一个变量 → 待确认卡片允许 → 文件树可见变更。

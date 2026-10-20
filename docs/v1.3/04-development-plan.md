@@ -3,7 +3,7 @@
 > 本文给出**依赖有序、可独立验收**的分阶段开发计划，每个阶段都有文件级交付清单 + 验收命令 + 完成判据。
 > 供另一个 codebuddy 会话**按序逐阶段实现**。拆解与目标架构见 `03-decomposition.md`，验收用例见 `05-verify-cases.md`。
 >
-> 执行纪律（沿用 `AGENTS.md` / `LEARNING_AND_EVOLUTION_ROADMAP.md` §3 七步法）：
+> 执行纪律（沿用 `AGENTS.md` / `设计演进记录` §3 七步法）：
 > - 每阶段只做「窄切片 + 可验收」，禁止无验收的大爆炸重写。
 > - 每个阶段跑完 §11 验证矩阵的**相关子集**再进入下一阶段。
 > - 文档同步：每完成一阶段，同步 `docs/v1.3/README.md` 状态表 + `` / ``。
@@ -299,4 +299,4 @@ pnpm lint                                   # 每阶段末必跑
 - ``（Phase 2/3/4/5）：serve 装配、JSONL 取舍、异步确认、文件树、`--web` 托管、SSE 简化。
 - `ARCHITECTURE.md`：补 `apps/finance-api`/`apps/finance-web`/`apps/ohna-cli`/`apps/ohna-api`/`apps/ohna-web` 与 `packages/serve` 依赖方向。
 - `AGENTS.md`：仓库结构一节同步新目录名。
-- `LEARNING_AND_EVOLUTION_ROADMAP.md`：新增阶段产出与验收证据。
+- `设计演进记录`：新增阶段产出与验收证据。

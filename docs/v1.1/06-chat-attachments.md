@@ -299,7 +299,7 @@ interface AttachmentStore {
 | 7 | 上传请求新增 `convId` | `apps/finance-api` schema + `@aiagent/types` DTO |
 | 8 | 多路召回编排 | `packages/rag`（`DataSourceRuntime` 或 orchestrator） |
 | 9 | 新增依赖：Redis 服务 + 官方 `redis` 客户端 | 基础设施 / `package.json` |
-| 10 | 文档与 notes 同步 | 本文件 + `README.md` + `notes/` + `docs/worktree/06` + `docs/v1.1/02-rag-production-reading.md` |
+| 10 | 文档与 设计笔记 同步 | 本文件 + `README.md` + `设计笔记` + `docs/worktree/06` + `docs/v1.1/02-rag-production-reading.md` |
 
 ---
 

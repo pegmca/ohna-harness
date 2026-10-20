@@ -175,7 +175,7 @@ serve `MUTATING_TOOLS`（confirm-gate.ts:68）；「会话记住 / 规则 / 模�
   run」改为「注入当前 run 继续跑」，行为对齐 Claude Code 的 queued 消息；
 - **`getSteeringMessages`**（agent/types.ts:153-154：下一轮 LLM 调用前注入）用于**运行中纠偏**
   （用户补充「改用 X 方案」，不中断 run 立即生效）；
-- 两个钩子的分工写进 `notes/`：follow-up =「排队等当前 run 收尾」，steering =「正在跑也要立即看到」；
+- 两个钩子的分工写进 `设计笔记`：follow-up =「排队等当前 run 收尾」，steering =「正在跑也要立即看到」；
 - CLI 回显：入队时 `» 已排队（#N）`；steering 注入时 `» 已注入当前运行`；
 - `runTurn` 的 history 并入逻辑不动（follow-up 消息由 loop 并入 agent_end.messages 增量）。
 - web-entry 的同构队列同步改造（web 模式浏览器 composer 的排队语义与本地一致）。
@@ -196,7 +196,7 @@ serve `MUTATING_TOOLS`（confirm-gate.ts:68）；「会话记住 / 规则 / 模�
 - 会话截断：session store 支持按 runId / sequence 截断重放（serve 的 JSONL 已可重放，
   CLI session-store 对齐该契约）；
 - 双击 Esc 菜单消费 journal + 截断：回代码、回会话、两者都回。
-- 落地前先在 `notes/` 写契约设计，不急于实现。
+- 落地前先在 `设计笔记` 写契约设计，不急于实现。
 
 ### K5 TodoWrite（可选，批次 B3 或远期）
 
@@ -243,7 +243,7 @@ serve `MUTATING_TOOLS`（confirm-gate.ts:68）；「会话记住 / 规则 / 模�
   （typecheck / architecture:check / build / test / lint + ohna-cli 专项测试 + verify 脚本）。
 - B1 人工清单追加：排队回显、Esc 中断、ctrl+o 展开、thinking 流、`/cost` 推理 token。
 - B2 双宿主一致性用例写入 `packages/agent` 测试（同一 policy 跑 CLI 适配器与 fake SSE 适配器）。
-- 文档同步义务（每批）：`notes/` 对应主题笔记（B1：`coding-cli.md` 补交互协议；B2 新增
+- 文档同步义务（每批）：`设计笔记` 对应主题笔记（B1：`coding-cli.md` 补交互协议；B2 新增
   `permission-policy.md`；B3 新增 `subagent-task.md`）；`docs/v1.3/README.md` 状态表；
   K1 / K3 触及公共 API 的，同步 AGENTS.md 的 Repository Structure 描述。
 

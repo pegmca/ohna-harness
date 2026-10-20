@@ -175,6 +175,6 @@ pnpm lint
 
 - `docs/v1.3/README.md`：状态表勾选已完成阶段。
 - ``（新建）：技术重点、实现流、取舍、验证、学习检查点。
-- `docs/LEARNING_AND_EVOLUTION_ROADMAP.md`：新增阶段产出与验收证据。
+- `设计演进记录`：新增阶段产出与验收证据。
 - `ARCHITECTURE.md`：packages/apps 列表补 `packages/coding` 与依赖方向。
 - `apps/ohna-cli/src/cli/args.ts` 的 `--help` 文案与 README（CLI 参数面变动时同步）。

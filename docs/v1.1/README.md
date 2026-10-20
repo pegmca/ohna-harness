@@ -13,7 +13,7 @@
 | `03-tools-mcp.md` | 工具生态、MCP 协议、A2A、sandboxing | 工具 / 协议 |
 | `04-eval-observability.md` | 评测、可观测性、成本工程 | 质量工程 |
 | `05-engineering-deployment.md` | 工程化、部署、安全、多租户 | 系统工程 |
-| `LEARNING_PATH.md` | 跨维度合并的**总学习路径与优先级** | 汇总 |
+| `设计演进记录` | 跨维度合并的**总学习路径与优先级** | 汇总 |
 
 每个文档结构统一：行业现状速览 → 本项目差距 → 改造方向（按优先级 P0/P1…）→ 学习路径 → 表达要点。
 
@@ -32,4 +32,4 @@
 
 - 精通 TypeScript，正在学 Python for Agent，通过 Pi Agent 学 Agent 架构。
 - 所有改造建议默认 **用 TS 实现**，避开 Python 短板（仅在必要时对比 Python 生态）。
-- 每个改造都应带测试 / eval / trace 证据，并同步更新 `notes/` 与 `ARCHITECTURE.md`（遵循 AGENTS.md 文档同步规则）。
+- 每个改造都应带测试 / eval / trace 证据，并同步更新 `设计笔记` 与 `ARCHITECTURE.md`（遵循 AGENTS.md 文档同步规则）。

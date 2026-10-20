@@ -58,5 +58,5 @@
 ## 五、文档同步影响
 
 - 本文与 `01`/`02`/`03` 三个分文档均为规划文档，不改动源码；`04-cli-harness.md` 的方案已落地，其源码改动（删 `MockModel`、抽 `createOpenAiCompatibleRuntime` 至 `packages/ai`、新增 `apps/ohna-cli`、数据工具真实化）已按 AGENTS.md 同步至 `ARCHITECTURE.md`、``，并按用户要求产出话术至 `docs/v1.2/interview/`（`de-mock.md`、`cli-shared-core.md`、索引 `README.md`）。
-- 后续落地任何切片时，须按 AGENTS.md 同步：`notes/`（新增 `real-provider.md`、`mock-real-boundary.md`、`cost-guardrail.md`、`eval-judge.md` 等）、`ARCHITECTURE.md`（mock/real 边界、成本护栏、多实例前提与进程内状态清单）、`docs/decisions/`（fan-out 选型、恢复续跑语义 ADR）、以及各维度 v1.1 文档的 P 项勾选。
-- 建议本轮在 `notes/` 新增 `` 承载跨维度工程思想学习笔记。
+- 后续落地任何切片时，须按 AGENTS.md 同步：`设计笔记`（新增 `real-provider.md`、`mock-real-boundary.md`、`cost-guardrail.md`、`eval-judge.md` 等）、`ARCHITECTURE.md`（mock/real 边界、成本护栏、多实例前提与进程内状态清单）、`docs/decisions/`（fan-out 选型、恢复续跑语义 ADR）、以及各维度 v1.1 文档的 P 项勾选。
+- 建议本轮在 `设计笔记` 新增 `` 承载跨维度工程思想学习笔记。

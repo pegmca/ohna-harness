@@ -15,17 +15,12 @@
  */
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
-import { spawn } from "node:child_process";
 import * as readline from "node:readline";
 import type { AgentEvent } from "@aiagent/agent";
 import { listAvailableModelProfiles, resolveActiveModelFromEnv } from "@aiagent/ai";
 import { createCodingToolRegistry } from "@aiagent/coding";
-import {
-  createOhnaServer,
-  listenWithRetry,
-  type OhnaServer,
-} from "@aiagent/serve";
 import type { RunStreamEventDtoV2 } from "@aiagent/types";
+import { hostOhnaWeb, openBrowser } from "./web-host.js";
 import { printProviderError } from "./provider-error.js";
 import { loadMcpTools } from "../runtime/mcp-config.js";
 import { formatPermissionStatus } from "../permission/permission-mode.js";
@@ -58,23 +53,6 @@ const AGENT_EVENT_FRAME_TYPES: ReadonlySet<string> = new Set([
 
 /** run-v2 的终态 run_status 取值（与 run-stream-client 的 TERMINAL_STATUSES 一致）。 */
 const TERMINAL_RUN_STATUSES: ReadonlySet<string> = new Set(["completed", "failed", "cancelled", "interrupted"]);
-
-/** 跨平台打开浏览器；失败只提示 URL。与 ohna-api 的实现保持同一行为。 */
-function openBrowser(url: string): void {
-  const command =
-    process.platform === "darwin"
-      ? { file: "open", args: [url] }
-      : process.platform === "win32"
-        ? { file: "cmd", args: ["/c", "start", "", url] }
-        : { file: "xdg-open", args: [url] };
-  try {
-    const child = spawn(command.file, command.args, { stdio: "ignore", detached: true });
-    child.on("error", () => process.stdout.write(`无法自动打开浏览器，请手动访问：${url}\n`));
-    child.unref();
-  } catch {
-    process.stdout.write(`无法自动打开浏览器，请手动访问：${url}\n`);
-  }
-}
 
 /**
  * `--web` 托管主流程：装配 serve → 监听 → 建/选会话 → 终端 REPL 与浏览器共享事件流。
@@ -110,21 +88,28 @@ export async function runWeb(options: CliOptions): Promise<void> {
     mcpServerNames = mcp.serverNames;
   }
 
-  const server: OhnaServer = await createOhnaServer({
+  // 装配进程内 serve（与默认模式的观测台共用同一段装配，见 web-host.ts）。
+  const hosted = await hostOhnaWeb({
     workspaceRoot,
-    model: active.model,
-    apiKey: active.apiKey,
+    active,
     tools,
     autoApprove: options.yes,
+    // --web 是托管模式：执行权在 serve，写端点必须保留。
+    observeOnly: false,
+    port: options.webPort,
+    conversationTitle: "终端会话",
   });
-
-  const listening = await listenWithRetry(server, options.webPort);
-
+  if (!hosted) {
+    process.stderr.write("托管模式启动失败，已退出。\n");
+    process.exitCode = 1;
+    await mcp?.close();
+    return;
+  }
+  const { server, url } = hosted;
   // 终端与浏览器共享同一会话：conversation 由 serve 的 sessionStore 持有，
   // 浏览器 GET /api/conversations 能看到它；/resume 可切换到浏览器创建的会话。
-  const conversation = await server.createConversation("终端会话");
-  let conversationId = conversation.conversationId;
-  let conversationTitle = conversation.title;
+  let conversationId = hosted.conversationId;
+  let conversationTitle = "终端会话";
 
   const tracker = createUsageTracker();
   const renderOptions: RenderOptions = {
@@ -155,16 +140,16 @@ export async function runWeb(options: CliOptions): Promise<void> {
       "ohna --web · 进程内托管已启动",
       `  工作目录：${workspaceRoot}`,
       `  模型：${active.model.id}（${active.model.provider}）`,
-      `  地址：${listening.url}`,
+      `  地址：${url}`,
       `  会话：${conversationId}（终端与浏览器共享同一会话）`,
       `  确认方式：${options.yes ? "已自动批准写/执行（--yes）" : "写/执行需在终端或浏览器确认"}`,
       "",
     ].join("\n"),
   );
   if (options.open) {
-    openBrowser(listening.url);
+    openBrowser(url);
   } else {
-    process.stdout.write(`已跳过自动打开浏览器（--no-open），请手动访问：${listening.url}\n`);
+    process.stdout.write(`已跳过自动打开浏览器（--no-open），请手动访问：${url}\n`);
   }
   process.stdout.write("\n  /help 查看命令；输入问题开始对话（浏览器可见同一会话）。\n\n");
 
@@ -435,7 +420,7 @@ export async function runWeb(options: CliOptions): Promise<void> {
   await server.shutdown();
   await server.close();
   await mcp?.close();
-  process.stdout.write(`\n会话已保留：${conversationId}（标题：${conversationTitle}）\n浏览器可继续访问 ${listening.url} 查看历史。\n`);
+  process.stdout.write(`\n会话已保留：${conversationId}（标题：${conversationTitle}）\n浏览器可继续访问 ${url} 查看历史。\n`);
 }
 
 /**

@@ -10,8 +10,12 @@
  * 等关键事件落盘，断线重连后由「已落盘事件 + 会话消息列表」恢复终态。
  */
 import { promises as fs } from "node:fs";
+import * as path from "node:path";
 import type {
+  RunMetaDtoV2,
+  RunModeDtoV2,
   RunSnapshotDtoV2,
+  RunSourceDtoV2,
   RunStatusDtoV2,
   RunStreamEventDtoV2,
   RunEventTypeDto
@@ -31,8 +35,8 @@ export interface RunMeta {
   requestId: string;
   conversationId: string;
   modelId: string;
-  mode: "auto" | "report";
-  source: "composer" | "report_button";
+  mode: RunModeDtoV2;
+  source: RunSourceDtoV2;
   userMessageId: string;
   createdAt: string;
 }
@@ -41,6 +45,20 @@ export interface RunMeta {
 interface RunMetaLine extends RunMeta {
   type: "run_meta";
 }
+
+/**
+ * `runs/index.jsonl` 的索引行：只放「会话 → run」的定位字段。
+ *
+ * 为什么需要索引：`runs/` 下每个 run 一个文件，按会话列 run 需要遍历整个目录；
+ * 追加式索引让 `GET /api/conversations/:id/runs` 只读一个文件。状态是易变字段，
+ * 不进索引——由 RunManager 传入 statusResolver 合并（内存态优先）。
+ */
+interface RunIndexLine extends Omit<RunMeta, "userMessageId"> {
+  type: "run_index";
+}
+
+/** 索引文件名（不是 runId，用固定名字区分）。 */
+const INDEX_FILE_NAME = "index.jsonl";
 
 /** 终态状态集合。 */
 const TERMINAL_STATUSES: ReadonlySet<string> = new Set(["completed", "failed", "cancelled", "interrupted"]);
@@ -121,6 +139,30 @@ function toRunEvent(value: unknown): RunStreamEventDtoV2 | null {
 }
 
 /**
+ * 收窄 run 模式，未知值回退 auto（历史文件没有 observe）。
+ *
+ * @param value 原始字段值。
+ * @returns 合法的模式值。
+ */
+function toRunMode(value: unknown): RunModeDtoV2 {
+  if (value === "report") return "report";
+  if (value === "observe") return "observe";
+  return "auto";
+}
+
+/**
+ * 收窄 run 触发入口，未知值回退 composer。
+ *
+ * @param value 原始字段值。
+ * @returns 合法的来源值。
+ */
+function toRunSource(value: unknown): RunSourceDtoV2 {
+  if (value === "report_button") return "report_button";
+  if (value === "cli") return "cli";
+  return "composer";
+}
+
+/**
  * 把任意解析值收窄为 RunMetaLine。
  *
  * @param value JSONL 行值。
@@ -136,16 +178,70 @@ function toRunMeta(value: unknown): RunMetaLine | null {
     requestId: typeof record.requestId === "string" ? record.requestId : "",
     conversationId: typeof record.conversationId === "string" ? record.conversationId : "",
     modelId: typeof record.modelId === "string" ? record.modelId : "",
-    mode: record.mode === "report" ? "report" : "auto",
-    source: record.source === "report_button" ? "report_button" : "composer",
+    mode: toRunMode(record.mode),
+    source: toRunSource(record.source),
     userMessageId: typeof record.userMessageId === "string" ? record.userMessageId : "",
     createdAt: typeof record.createdAt === "string" ? record.createdAt : new Date().toISOString()
+  };
+}
+
+/**
+ * 把任意解析值收窄为索引行（`runs/index.jsonl` 的一行）。
+ *
+ * @param value JSONL 行值。
+ * @returns 索引行或 null。
+ */
+function toRunIndex(value: unknown): RunIndexLine | null {
+  if (typeof value !== "object" || value === null) return null;
+  const record = value as Record<string, unknown>;
+  if (record.type !== "run_index" || typeof record.runId !== "string") return null;
+  return {
+    type: "run_index",
+    runId: record.runId,
+    requestId: typeof record.requestId === "string" ? record.requestId : "",
+    conversationId: typeof record.conversationId === "string" ? record.conversationId : "",
+    modelId: typeof record.modelId === "string" ? record.modelId : "",
+    mode: toRunMode(record.mode),
+    source: toRunSource(record.source),
+    createdAt: typeof record.createdAt === "string" ? record.createdAt : new Date().toISOString()
+  };
+}
+
+/**
+ * 由 run_meta 构造索引行（create 与 legacy 回填共用，保证两条路径字段一致）。
+ *
+ * @param meta run 元数据。
+ * @returns 索引行。
+ */
+function toIndexLine(meta: RunMeta): RunIndexLine {
+  return {
+    type: "run_index",
+    runId: meta.runId,
+    requestId: meta.requestId,
+    conversationId: meta.conversationId,
+    modelId: meta.modelId,
+    mode: meta.mode,
+    source: meta.source,
+    createdAt: meta.createdAt
   };
 }
 
 /** 本地 Run 事件存储。 */
 export class LocalRunStore {
   private readonly queues = new Map<string, Promise<void>>();
+  /**
+   * 索引文件的**独立**串行队列。
+   *
+   * 为什么不复用 per-run 的 `queues`：索引是全局单文件，按 runId 分队列会让多个 run
+   * 并发 append 同一文件，行序不可控。独立队列把所有索引写入串成一条链。
+   */
+  private indexTail: Promise<void> = Promise.resolve();
+  /** 已进索引的 runId（懒加载；避免每次 create 都全文扫描索引）。 */
+  private indexedRunIds: Set<string> | undefined;
+  /** 索引懒加载的共享 Promise（并发 create 只读一次）。 */
+  private indexLoad: Promise<Set<string>> | undefined;
+  /** legacy 回填的共享 Promise（进程内只扫一次；并发 list 共享同一结果）。 */
+  private backfill: Promise<void> | undefined;
   /** 内存态终态缓存：正常路径由 run_status 事件持久化，这里只加速进程内查询。 */
   private readonly statusCache = new Map<string, RunStatusDtoV2>();
 
@@ -155,7 +251,10 @@ export class LocalRunStore {
   constructor(private readonly dir: string) {}
 
   /**
-   * 创建 run 文件（首行元数据）。同 runId 已存在时不重复写。
+   * 创建 run 文件（首行元数据）并确保索引里有该 run。
+   *
+   * 同 runId 已存在时不重写 run 文件，但会补写缺失的索引行——旧数据目录（索引引入前）
+   * 与「索引写失败但 run 文件成功」两种情况下，侧栏都不会漏 run。
    *
    * @param meta run 元数据。
    */
@@ -164,9 +263,53 @@ export class LocalRunStore {
     const line: RunMetaLine = { type: "run_meta", ...meta };
     await this.enqueue(meta.runId, async () => {
       await ensureDir(this.dir);
-      if (await fileExists(filePath)) return;
-      await appendJsonLine(filePath, line);
+      if (!(await fileExists(filePath))) await appendJsonLine(filePath, line);
+      await this.appendIndexIfMissing(meta);
     });
+  }
+
+  /**
+   * 按会话列出 run 摘要（观测台 runs 侧栏）。
+   *
+   * 状态是易变字段、不进索引：优先用 `resolveStatus`（RunManager 传入内存态活跃
+   * run 的快照状态），缺失时回读该 run 的事件文件推导，再退回 interrupted
+   * （与 getRun 的「重启后仍在 running 视为 interrupted」语义一致）。
+   *
+   * @param conversationId 会话 id。
+   * @param resolveStatus 内存态状态解析器（可选）。
+   * @returns 按创建时间倒序的 run 摘要列表。
+   */
+  async listRunsByConversation(
+    conversationId: string,
+    resolveStatus: (runId: string) => RunStatusDtoV2 | undefined = () => undefined
+  ): Promise<RunMetaDtoV2[]> {
+    // 旧数据目录没有索引：先回填，否则侧栏会是空的（进程内只扫一次）。
+    await this.ensureIndexBackfilled();
+    const rows = await readJsonlLines(path.join(this.dir, INDEX_FILE_NAME));
+    // 同 runId 重复写入时后者覆盖（append-only 索引天然允许重复行）。
+    const byRunId = new Map<string, RunIndexLine>();
+    for (const row of rows) {
+      const index = toRunIndex(row);
+      if (!index || index.conversationId !== conversationId) continue;
+      byRunId.set(index.runId, index);
+    }
+
+    const metas: RunMetaDtoV2[] = [];
+    for (const index of byRunId.values()) {
+      const status =
+        resolveStatus(index.runId) ?? (await this.getRun(index.runId))?.status ?? "interrupted";
+      metas.push({
+        runId: index.runId,
+        requestId: index.requestId,
+        conversationId: index.conversationId,
+        modelId: index.modelId,
+        mode: index.mode,
+        source: index.source,
+        status,
+        createdAt: index.createdAt
+      });
+    }
+    return metas.sort((left, right) => right.createdAt.localeCompare(left.createdAt));
   }
 
   /**
@@ -295,10 +438,120 @@ export class LocalRunStore {
   }
 
   /**
-   * 等待所有排队写入完成。
+   * 等待所有排队写入（run 文件 + 索引）完成。
    */
   async close(): Promise<void> {
-    await Promise.all([...this.queues.values()].map((task) => task.catch(() => undefined)));
+    await Promise.all([
+      ...[...this.queues.values()].map((task) => task.catch(() => undefined)),
+      this.indexTail.catch(() => undefined)
+    ]);
+  }
+
+  /**
+   * 索引回填（进程内一次）：按目录差集补齐缺失的 `run_index` 行。
+   *
+   * 为什么按差集而不是「索引为空才回填」：create 路径会先写一行索引，
+   * 之后 list 再看到「索引非空」就跳过扫描，legacy run 会永久漏掉（先 create 再 list 的常态顺序）。
+   */
+  private async ensureIndexBackfilled(): Promise<void> {
+    if (!this.backfill) this.backfill = this.backfillIndex();
+    await this.backfill;
+  }
+
+  /**
+   * 回填实现：索引已有 runId 与目录内 run 文件做差集，只补缺失项。
+   *
+   * @returns 回填完成的 Promise。
+   */
+  private async backfillIndex(): Promise<void> {
+    // TODO(W4 联调 / 计划 §8-7)：目前逐文件 readJsonlLines 只为取首行 run_meta，
+    // 大数据目录下应改为「读取首行即停」的流式读；先与 N5 一起评估再优化。
+    const indexPath = path.join(this.dir, INDEX_FILE_NAME);
+    const existing = await readJsonlLines(indexPath);
+    const existingIds = new Set<string>();
+    for (const row of existing) {
+      const index = toRunIndex(row);
+      if (index) existingIds.add(index.runId);
+    }
+
+    let entries: string[];
+    try {
+      entries = await fs.readdir(this.dir);
+    } catch {
+      // 目录还不存在：没有可回填的数据。
+      this.indexedRunIds = existingIds;
+      return;
+    }
+
+    const missing: RunMetaLine[] = [];
+    for (const entry of entries) {
+      if (entry === INDEX_FILE_NAME || !entry.endsWith(".jsonl")) continue;
+      const rows = await readJsonlLines(path.join(this.dir, entry));
+      const meta = toRunMeta(rows[0]);
+      // 只补索引里没有的：已索引的 run 保持既有行（append-only，不重写历史）。
+      if (meta && !existingIds.has(meta.runId)) missing.push(meta);
+    }
+
+    for (const meta of missing) existingIds.add(meta.runId);
+    this.indexedRunIds = existingIds;
+    if (missing.length === 0) return;
+
+    await this.enqueueIndex(async () => {
+      await ensureDir(this.dir);
+      for (const meta of missing) await appendJsonLine(indexPath, toIndexLine(meta));
+    });
+  }
+
+  /**
+   * 索引里没有该 run 时补写一行（幂等）。
+   *
+   * 先触发回填：create 常常先于任何 list 发生，若不先补齐 legacy 项，
+   * 这里写下的第一行索引会让后续 list 误判「索引已完整」。
+   *
+   * @param meta run 元数据。
+   */
+  private async appendIndexIfMissing(meta: RunMeta): Promise<void> {
+    await this.ensureIndexBackfilled();
+    const ids = await this.ensureIndexLoaded();
+    if (ids.has(meta.runId)) return;
+    await this.enqueueIndex(async () => {
+      await ensureDir(this.dir);
+      await appendJsonLine(path.join(this.dir, INDEX_FILE_NAME), toIndexLine(meta));
+      ids.add(meta.runId);
+    });
+  }
+
+  /**
+   * 懒加载索引里的 runId 集合（并发调用共享同一次读取）。
+   *
+   * @returns 已索引的 runId 集合。
+   */
+  private async ensureIndexLoaded(): Promise<Set<string>> {
+    if (this.indexedRunIds) return this.indexedRunIds;
+    if (!this.indexLoad) {
+      this.indexLoad = (async () => {
+        const rows = await readJsonlLines(path.join(this.dir, INDEX_FILE_NAME));
+        const ids = new Set<string>();
+        for (const row of rows) {
+          const index = toRunIndex(row);
+          if (index) ids.add(index.runId);
+        }
+        return ids;
+      })();
+    }
+    this.indexedRunIds = await this.indexLoad;
+    return this.indexedRunIds;
+  }
+
+  /**
+   * 串行化索引文件写入（全局单链，避免多 run 并发 append 交错）。
+   *
+   * @param task 写入逻辑。
+   */
+  private async enqueueIndex(task: () => Promise<void>): Promise<void> {
+    const current = this.indexTail.then(task);
+    this.indexTail = current.catch(() => undefined);
+    await current;
   }
 
   /**

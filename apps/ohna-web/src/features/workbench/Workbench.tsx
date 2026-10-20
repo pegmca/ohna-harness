@@ -5,6 +5,7 @@ import type {
 } from "@aiagent/types";
 import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
+import { WorkbenchNav } from "../../app/workbench-nav";
 import { cancelRun, createAndStreamRun, replayRunEvents, type RunTerminalDto } from "../../shared/api/run-stream-client";
 import { fetchLocalMode, type LocalModeInfo } from "../../shared/mode";
 import { FileTreePanel } from "../files/FileTreePanel";
@@ -709,6 +710,7 @@ export function Workbench() {
           latestRunStatus={latestRunStatus}
           localMode={localMode}
           onMenuClick={() => setIsSidebarOpen(true)}
+          nav={<WorkbenchNav active="chat" />}
         />
 
         <ConfirmationCards cards={confirmationCards} uiState={confirmationUi} onDecide={(card, decision) => void handleDecide(card, decision)} />
@@ -727,6 +729,7 @@ export function Workbench() {
           onOpenRunDetail={setSelectedRunDetail}
           onRetryMessage={(message) => void retryFailedMessage(message)}
           onUsePrompt={setInput}
+          showCliHint={activeConversation?.title.startsWith("CLI ·") ?? false}
         />
 
         <ChatComposer

@@ -6,6 +6,7 @@
  * 既有导入方（harness）无需修改。
  */
 import type { ConfirmHook } from "../permission/confirm.js";
+import type { TurnObserver } from "../runtime/observation.js";
 
 /** REPL 的装配上下文：MCP / Team 来源标注与闸门回填。 */
 export interface ReplContext {
@@ -15,6 +16,13 @@ export interface ReplContext {
   mcpServerNames?: readonly string[];
   /** Team 编排工具名（/tools 据此标注「（Team）」）。 */
   teamToolNames?: ReadonlySet<string>;
+  /**
+   * 本轮 run 的观测启动器（W3）：每轮 run 前调用 `start` 拿到观测句柄，
+   * 由 runTurn 把 loop 事件与 llm_call 记录镜像出去。缺省表示纯本地、不观测。
+   */
+  observation?: { start: TurnObserver["start"] };
+  /** 观测台地址（欢迎头展示）；`--no-web` 或启动失败时不设置。 */
+  traceUrl?: string;
   /**
    * 权限闸门就绪回调（K3 时序）：team controller 先于 REPL 创建，但闸门必须在 REPL /
    * 单次模式内部根据 TTY 与 readline 实例构造。组合根通过该回调把「就绪后的闸门」

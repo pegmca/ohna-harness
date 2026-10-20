@@ -21,10 +21,11 @@ import { buildCodingSystemPrompt, createCodingToolRegistry } from "@aiagent/codi
 import type {
   ConversationDto,
   ModelCatalogDto,
+  RunMetaDtoV2,
   RunSnapshotDtoV2,
   RunStreamEventDtoV2
 } from "@aiagent/types";
-import type { CreateRunResult } from "./run/types.js";
+import type { CreateRunResult, ObserveRunInput, ObservedRun } from "./run/types.js";
 import Fastify, { type FastifyInstance } from "fastify";
 import { createAsyncConfirmGate, type ConfirmationDecision, type ConfirmationRequestedPayload } from "./confirm-gate.js";
 import { registerErrorHandler } from "./errors.js";
@@ -53,6 +54,11 @@ export interface OhnaServerOptions {
   tools?: AgentTool[];
   /** 跳过写/执行确认（`--auto-approve`）；缺省 false。 */
   autoApprove?: boolean;
+  /**
+   * 只读观测模式（S2）：true 时**不注册** run 创建/取消与确认写路由，并强制 autoApprove=false。
+   * 默认模式的 CLI（本地执行 + 镜像观测）用 true；`--web` 托管模式用 false。
+   */
+  observeOnly?: boolean;
   /** 确认等待上限（毫秒）；缺省 5 分钟，测试可注入短超时。 */
   confirmTimeoutMs?: number;
   /** 前端构建产物目录；缺省 `apps/ohna-web/dist`。 */
@@ -102,6 +108,15 @@ export interface OhnaServer {
   ): () => void;
   /** 取消 run（等价 DELETE /api/runs/:id，供 Ctrl-C 中断在途 run）。 */
   cancelRun(runId: string): Promise<RunSnapshotDtoV2 | null>;
+  /** 当前是否处于自动批准模式（只读观测模式下恒为 false）。 */
+  isAutoApprove(): boolean;
+  /**
+   * 启动观测型 run（docs/v1.4 的 D1）：CLI 本地执行、serve 只承接事件。
+   * 与 createRun 并存——执行权归属不同，存储 / SSE / sequence 语义相同。
+   */
+  observeRun(input: ObserveRunInput): Promise<ObservedRun>;
+  /** 按会话列 run 摘要（等价 GET /api/conversations/:id/runs）。 */
+  listRunsByConversation(conversationId: string): Promise<RunMetaDtoV2[]>;
   readonly port: number | undefined;
   readonly url: string | undefined;
 }
@@ -146,7 +161,8 @@ export async function createOhnaServer(options: OhnaServerOptions): Promise<Ohna
   } = {};
 
   const confirmGate = createAsyncConfirmGate({
-    autoApprove: options.autoApprove ?? false,
+    // 只读观测模式下强行关闭自动批准：该进程根本不该执行工具（S2）。
+    autoApprove: options.observeOnly ? false : options.autoApprove ?? false,
     ...(options.confirmTimeoutMs !== undefined ? { timeoutMs: options.confirmTimeoutMs } : {}),
     emit: async (runId, payload) => {
       if (!emitHolder.emit) throw new Error("确认事件通道尚未就绪。");
@@ -184,7 +200,8 @@ export async function createOhnaServer(options: OhnaServerOptions): Promise<Ohna
     runStore,
     runManager,
     pid: process.pid,
-    isShuttingDown: () => closing
+    isShuttingDown: () => closing,
+    observeOnly: options.observeOnly === true
   });
   registerStaticFallback(app, {
     staticDir: options.staticDir ?? defaultStaticDir(),
@@ -254,6 +271,18 @@ export async function createOhnaServer(options: OhnaServerOptions): Promise<Ohna
       return runManager.cancel(runId);
     },
 
+    isAutoApprove() {
+      return runManager.isAutoApprove();
+    },
+
+    observeRun(input) {
+      return runManager.observeRun(input);
+    },
+
+    listRunsByConversation(conversationId) {
+      return runManager.listRunsByConversation(conversationId);
+    },
+
     get port() {
       return state.port;
     },
@@ -306,6 +335,12 @@ export async function listenWithRetry(
 }
 
 export type { RunManager } from "./run-manager.js";
+export type {
+  CreateRunResult,
+  LlmCallPushEvent,
+  ObserveRunInput,
+  ObservedRun,
+} from "./run/types.js";
 export {
   createAsyncConfirmGate,
   summarizeToolCall,

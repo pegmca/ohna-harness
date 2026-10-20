@@ -50,6 +50,11 @@ export type {
 // 对外仍从 @aiagent/agent 拿到 AgentTool，命名与 pi 对齐。
 export type { AgentTool, AgentToolResult, AgentToolUpdateCallback, ToolExecutionMode } from "./types.js";
 
+// W1 观测采集层（docs/v1.4/02-web-llm-trace.md）：调用方包一层 streamFn 即可把每次 LLM
+// 调用变成 LlmCallRecordDto，agent-loop 本体零改动；sink 决定记录去向（SSE 事件 / 本地 JSONL）。
+export { createLlmTraceStreamFn, isTracedStreamFn, markTracedStreamFn } from "./llm-trace.js";
+export type { LlmTraceSink } from "./llm-trace.js";
+
 // ---- v1.1 控制流增强（docs/v1.1/01-control-flow-multagent.md）----
 // P1 系统化 Context Engineering：分层上下文装配器 + token 预算分级。
 export {

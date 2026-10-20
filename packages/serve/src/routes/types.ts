@@ -20,4 +20,10 @@ export interface RouteDeps {
   pid: number;
   /** 关闭中标志：新 run / 写操作返回 503。 */
   isShuttingDown: () => boolean;
+  /**
+   * 只读观测模式（S2）：默认 `ohna` 的进程内 serve 只承接 CLI 镜像事件，
+   * 因此不注册 `POST /api/runs` / `DELETE /api/runs/:id` / 确认写路由——执行权只在 CLI 本地，
+   * 浏览器不能借观测台发起或取消 run。GET 端点全部保留。
+   */
+  observeOnly?: boolean;
 }

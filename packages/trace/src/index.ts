@@ -6,7 +6,11 @@
  * - 不导入 @aiagent/agent / @aiagent/ai，避免与模型/循环层循环依赖；
  * - loop 事件 payload 用 unknown，由消费侧按 AgentEvent 断言；
  * -  capability 扩展事件保留最小字段，方便 run_events 直接序列化。
+ * - `llm_call` 的 payload 是 `@aiagent/types` 的线格式 DTO（SSE 落盘/web 反序列化共用），
+ *   因此本包对 @aiagent/types 只有 **类型级** 依赖（`import type`，运行时零符号），
+ *   仍保持「运行时零 @aiagent 依赖」的红线。
  */
+import type { LlmCallRecordDto } from "@aiagent/types";
 
 /** run_events 生命周期与 loop 事件类型枚举。 */
 export type RunEventType =
@@ -26,7 +30,8 @@ export type RunEventType =
   | "workflow_node"
   | "pdf_export"
   | "mcp_tool_discovered"
-  | "cost_summary";
+  | "cost_summary"
+  | "llm_call";
 
 /** 所有运行事件共有的 envelope 字段。 */
 interface RunEventBase {
@@ -368,6 +373,18 @@ export interface TraceCost {
   total?: number;
 }
 
+/**
+ * 单次 LLM 请求/响应观测事件（ohna 观测扩展）。
+ *
+ * payload 直接是 `@aiagent/types` 的线格式记录：serve 落盘 / SSE / ohna-web 反序列化
+ * 三方共用同一形状，因此这里不做二次投影。可持久化（非瞬态），由采集层
+ * `createLlmTraceStreamFn` 在每次 stream 调用结束后产出。
+ */
+export interface LlmCallTraceEvent extends RunEventBase {
+  type: "llm_call";
+  payload: LlmCallRecordDto;
+}
+
 /** Run 事件联合类型；消费侧按 type 收窄。 */
 export type RunEvent =
   | AgentStartEvent
@@ -386,7 +403,8 @@ export type RunEvent =
   | WorkflowNodeEvent
   | PdfExportEvent
   | McpToolDiscoveredEvent
-  | CostSummaryEvent;
+  | CostSummaryEvent
+  | LlmCallTraceEvent;
 
 const MAX_TRACE_STRING_LENGTH = 500;
 

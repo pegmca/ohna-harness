@@ -33,6 +33,8 @@ export interface WelcomeOptions {
   mcpServers?: readonly string[];
   /** 工作目录（TTY 边框面板展示）；缺省 process.cwd()。 */
   cwd?: string;
+  /** 观测台地址（W3）：默认模式启动的进程内 Web trace 页。 */
+  traceUrl?: string;
 }
 
 const RULE = "─".repeat(60);
@@ -99,6 +101,9 @@ function renderPlainWelcome(
   if (options?.mcpServers && options.mcpServers.length > 0) {
     lines.push("  MCP    " + options.mcpServers.join(" · "));
   }
+  if (options?.traceUrl) {
+    lines.push("  观测台 " + options.traceUrl + "/trace（LLM 请求/响应全程 trace）");
+  }
   lines.push(
     RULE,
     "  多轮对话已就绪：上下文在本会话内累积，每轮结束自动保存到 ~/.ohna/sessions。",
@@ -137,6 +142,9 @@ function renderTtyWelcome(
   }
   if (options?.mcpServers && options.mcpServers.length > 0) {
     info.push(`MCP       ${options.mcpServers.join(" · ")}`);
+  }
+  if (options?.traceUrl) {
+    info.push(`观测台    ${options.traceUrl}/trace`);
   }
   // 键位提示从 keymap 单一表生成（C2），不再在欢迎头硬编码按键文案。
   info.push(

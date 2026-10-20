@@ -27,6 +27,12 @@ export interface CliOptions {
   webPort: number;
   /** --no-open：--web 模式不自动打开浏览器。 */
   open: boolean;
+  /**
+   * --no-web：关闭默认模式下的进程内观测台（docs/v1.4/02）。
+   * 默认 false = 启动 TUI repl 的同时起 serve 观测台；关闭后 llm_call 记录落本地
+   * `~/.ohna/traces/<sessionId>.jsonl`，CLI 交互行为完全不变。
+   */
+  noWeb: boolean;
   /** --mcp <config.json>：外部 MCP server 配置文件路径。 */
   mcpConfig?: string;
   /** 团队编排是否开启（默认 true；--no-team 关闭 TeamCreate / SendMessage）。 */
@@ -153,6 +159,8 @@ export function parseArgs(
   let help = false;
   let web = false;
   let open = true;
+  // 观测台默认开启（D1）：默认模式仍是本地 repl 执行，serve 只做镜像观测。
+  let noWeb = false;
   // 团队编排默认开启：--no-team 是唯一关闭开关（不提供 --team，避免两套真值来源）。
   let team = true;
   const positional: string[] = [];
@@ -173,6 +181,23 @@ export function parseArgs(
     }
     if (arg === "--no-open") {
       open = false;
+      continue;
+    }
+    if (arg === "--no-web") {
+      noWeb = true;
+      continue;
+    }
+    // 布尔开关也允许显式取值写法（`--no-web=false`）。默认已是 false，
+    // 这里的关键是**不要把它降级成位置参数**（否则会被拼进 prompt）。
+    if (arg.startsWith("--no-web=")) {
+      const value = arg.slice("--no-web=".length).toLowerCase();
+      if (value === "false" || value === "0" || value === "no") {
+        noWeb = false;
+      } else if (value === "true" || value === "1" || value === "yes") {
+        noWeb = true;
+      } else {
+        warn(`参数 --no-web 只接受 true/false，已忽略："${value}"。\n`);
+      }
       continue;
     }
     if (arg === "--no-team") {
@@ -227,6 +252,7 @@ export function parseArgs(
     webDir,
     webPort: parsePositiveInt(parsed.webPort, "--web-port", warn) ?? DEFAULT_WEB_PORT,
     open,
+    noWeb,
     mcpConfig: parsed.mcpConfig,
     team,
   };
@@ -240,7 +266,7 @@ export function parseArgs(
 export function printHelp(write: (text: string) => void = (text) => process.stdout.write(text)): void {
   const text = [
     "用法：",
-    "  ohna                          启动交互式 REPL（多轮上下文保留）",
+    "  ohna                          启动交互式 REPL（本地执行 + 观测台，多轮上下文保留）",
     "  ohna \"你的问题\"             单次提问后退出",
     "  ohna --prompt \"你的问题\"     单次提问后退出（等价写法）",
     "  ohna --model deepseek         选择指定 profile 的真实模型",
@@ -268,6 +294,11 @@ export function printHelp(write: (text: string) => void = (text) => process.stdo
     "  ohna --web [dir]              进程内托管本地 Web UI（终端与浏览器看同一会话；暂不注册 Team 工具）",
     "  ohna --web --web-port <n>     指定托管端口（默认 4173，占用自动 +1）",
     "  ohna --web --no-open          不自动打开浏览器",
+    "",
+    "观测台（默认开启）：",
+    "  默认模式 = 本地 repl 执行 + 进程内 Web 观测台（只读 trace，执行权仍在本地）",
+    "  ohna --web-port <n>           指定观测台端口（默认 4173，占用自动 +1）",
+    "  ohna --no-web                 关闭观测台；llm_call 记录改落 ~/.ohna/traces/<sessionId>.jsonl",
     "",
     "说明：",
     "  工作区为当前目录：路径越界与危险命令会被拒绝，不传 --yes 时写/执行需终端确认。",

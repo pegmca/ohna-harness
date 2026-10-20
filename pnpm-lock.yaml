@@ -289,6 +289,9 @@ importers:
       '@aiagent/tools':
         specifier: workspace:*
         version: link:../tools
+      '@aiagent/types':
+        specifier: workspace:*
+        version: link:../types
       zod:
         specifier: ^4.4.3
         version: 4.4.3
@@ -500,7 +503,11 @@ importers:
         specifier: ^4.4.3
         version: 4.4.3
 
-  packages/trace: {}
+  packages/trace:
+    dependencies:
+      '@aiagent/types':
+        specifier: workspace:*
+        version: link:../types
 
   packages/types: {}
 

@@ -16,11 +16,14 @@ import {
   type AgentLoopConfig,
   type AgentMessage,
   agentLoop,
+  createLlmTraceStreamFn,
   defaultConvertToLlm
 } from "@aiagent/agent";
+import { streamSimple } from "@aiagent/ai";
 import type { Model } from "@aiagent/ai";
 import type {
   RunEventTypeDto,
+  RunMetaDtoV2,
   RunSnapshotDtoV2,
   RunStatusDtoV2,
   RunStreamEventDtoV2
@@ -39,6 +42,7 @@ import {
   extractCompactionSummary,
 } from "./run/compaction.js";
 import { persistRunMessage } from "./run/persist.js";
+import { startObservedRun } from "./run/observe.js";
 import { isPersistableRunEvent } from "./store/index.js";
 import { cloneSnapshot, delay, toRunErrorPayload } from "./run/helpers.js";
 import { linearMessageToAgentMessage } from "./run/message-mapping.js";
@@ -47,6 +51,8 @@ import type {
   ActiveRun,
   CreateRunInput,
   CreateRunResult,
+  ObserveRunInput,
+  ObservedRun,
   RunErrorPayload,
   RunManagerOptions
 } from "./run/types.js";
@@ -54,6 +60,8 @@ import type {
 export type {
   CreateRunInput,
   CreateRunResult,
+  ObserveRunInput,
+  ObservedRun,
   RunManagerOptions
 } from "./run/types.js";
 export { isTerminalStatus } from "./run/helpers.js";
@@ -252,6 +260,46 @@ export class RunManager {
   }
 
   /**
+   * 启动一次**观测型** run：执行权仍在 CLI 本地（D1），serve 只承接事件。
+   *
+   * 与 createRun 的区别：不载入历史、不落用户消息、不跑 loop；run_meta 记
+   * `mode:"observe" / source:"cli"`，终态由调用方 `end()` 显式给出。
+   *
+   * @param input 会话 id / 请求 id / 标题。
+   * @returns 观测句柄（push 事件、end 收尾）。
+   */
+  async observeRun(input: ObserveRunInput): Promise<ObservedRun> {
+    return await startObservedRun(
+      {
+        modelId: this.model.id,
+        workspaceRoot: this.options.workspaceRoot,
+        runStore: this.options.runStore,
+        sessionStore: this.options.sessionStore,
+        messageStore: this.options.messageStore,
+        active: this.active,
+        conversationSubscribers: this.conversationSubscribers,
+        emitFrame: (run, type, payload) => this.emitFrame(run, type, payload),
+        finishStatus: (run, status, error) => this.finishStatus(run, status, error),
+        forceTerminal: (run, status, error) => this.forceTerminal(run, status, error)
+      },
+      input
+    );
+  }
+
+  /**
+   * 按会话列出 run 摘要（观测台 runs 侧栏）。
+   *
+   * @param conversationId 会话 id。
+   * @returns run 摘要列表（创建时间倒序）；状态优先取内存态活跃 run。
+   */
+  async listRunsByConversation(conversationId: string): Promise<RunMetaDtoV2[]> {
+    return await this.options.runStore.listRunsByConversation(
+      conversationId,
+      (runId) => this.active.get(runId)?.snapshot.status
+    );
+  }
+
+  /**
    * 读取快照：内存中的活跃 run 优先，否则从 JSONL 重建。
    *
    * @param runId run id。
@@ -326,6 +374,7 @@ export class RunManager {
     conversationId: string,
     messages: AgentMessage[]
   ): Promise<{ messages: AgentMessage[]; compaction: { compacted: boolean; tokensBefore: number; tokensAfter: number } }> {
+    // 压缩摘要请求发生在 runId 分配前、不挂 trace（见计划 §8-7 开放项）。
     const summarizer =
       this.summarizer ??
       (this.summarizer = createServeSummarizer({
@@ -373,6 +422,9 @@ export class RunManager {
     const run = this.active.get(runId);
     if (!run) return await this.options.runStore.getRun(runId);
     if (run.terminal) return cloneSnapshot(run.snapshot);
+    // 观测型 run 的执行权在 CLI 本地（D1）：serve 侧 abort 只作用于一个空 controller，
+    // 既不会停下 CLI 的 loop，又会白等 5s 超时，因此直接返回当前快照（no-op）。
+    if (run.snapshot.mode === "observe") return cloneSnapshot(run.snapshot);
 
     // 先释放挂起的确认（deny），否则 loop 会一直等 beforeToolCall，abort 也唤醒不了它。
     this.confirmGate?.cancelRun(runId);
@@ -393,6 +445,12 @@ export class RunManager {
     await Promise.all(
       running.map(async (run) => {
         this.confirmGate?.cancelRun(run.snapshot.runId);
+        // 观测型 run 的执行权在 CLI 本地（与 cancel 守卫同源）：abort 停不下那边的 loop，
+        // 等待 done 只会白等 5s，因此直接落 interrupted。
+        if (run.snapshot.mode === "observe") {
+          await this.finishStatus(run, "interrupted");
+          return;
+        }
         run.controller.abort();
         await Promise.race([run.done, delay(5_000)]);
         if (!run.terminal) await this.finishStatus(run, "interrupted");
@@ -429,8 +487,18 @@ export class RunManager {
     };
     const userMessage: AgentMessage = { role: "user", content: prompt, timestamp: Date.now() };
 
+    // 每次 run 独立包一层采集：callIndex 是 run 内序号，wrapper 的闭包计数器不能跨 run 共享。
+    // sink 是同步契约——emitFrame 在第一个 await 之前同步分配 sequence，因此 llm_call
+    // 与紧随其后的 agent 事件不会乱序；异步失败一律吞掉（观测不得打断 run）。
+    const tracedStreamFn = createLlmTraceStreamFn(
+      this.options.streamFn ?? streamSimple,
+      (record) => {
+        void this.emitTypedFrame(run, "llm_call", record).catch(() => undefined);
+      }
+    );
+
     try {
-      const stream = agentLoop([userMessage], context, config, run.controller.signal, this.options.streamFn);
+      const stream = agentLoop([userMessage], context, config, run.controller.signal, tracedStreamFn);
       for await (const event of stream) {
         // 取消超时兜底可能已把 run 标记终态；剩余事件只消费不落盘/不广播。
         if (!run.terminal) await this.handleAgentEvent(run, event);
@@ -471,7 +539,7 @@ export class RunManager {
         return;
       }
       if (event.error) {
-        await this.emitAgentEvent(run, event);
+        await this.emitTypedFrame(run, event.type, event);
         await this.finishStatus(run, "failed", {
           code: event.error.code,
           message: event.error.message,
@@ -480,7 +548,7 @@ export class RunManager {
         });
         return;
       }
-      await this.emitAgentEvent(run, event);
+      await this.emitTypedFrame(run, event.type, event);
       await this.finishStatus(run, "completed");
       return;
     }
@@ -488,17 +556,25 @@ export class RunManager {
     if (event.type === "message_end") {
       await persistRunMessage(this.options, run, event.message);
     }
-    await this.emitAgentEvent(run, event);
+    await this.emitTypedFrame(run, event.type, event);
   }
 
   /**
-   * 把 loop 事件包装成 canonical envelope。
+   * 把任意类型的负载包装成 canonical envelope 并入队。
+   *
+   * 与 `emitFrame` 的分层：这里只负责「事件类型 → 线协议类型」的窄化，
+   * 托管 run 的 loop 事件与采集层的 `llm_call` 记录走同一条路径。
    *
    * @param run 活跃 run。
-   * @param event loop 事件。
+   * @param type 事件类型。
+   * @param payload 事件负载。
    */
-  private async emitAgentEvent(run: ActiveRun, event: AgentEvent): Promise<void> {
-    await this.emitFrame(run, event.type as RunEventTypeDto, event);
+  private async emitTypedFrame(
+    run: ActiveRun,
+    type: RunEventTypeDto,
+    payload: unknown
+  ): Promise<void> {
+    await this.emitFrame(run, type, payload);
   }
 
   /**

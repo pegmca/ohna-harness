@@ -11,3 +11,4 @@ export * from "./documents.js";
 export * from "./rag.js";
 export * from "./eval.js";
 export * from "./models.js";
+export * from "./llm-trace.js";

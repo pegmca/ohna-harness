@@ -2,10 +2,12 @@
  * RunManager 的公共输入/依赖与内部活跃状态类型。
  */
 import type { StreamFn } from "@aiagent/agent";
+import type { AgentEvent } from "@aiagent/agent";
 import type { Model } from "@aiagent/ai";
 import type { AgentTool } from "@aiagent/tools";
 import type {
   AgentRunAcceptedDto,
+  LlmCallRecordDto,
   RunSnapshotDtoV2,
   RunStreamEventDtoV2
 } from "@aiagent/types";
@@ -51,6 +53,44 @@ export interface CreateRunInput {
 export interface CreateRunResult {
   accepted: AgentRunAcceptedDto;
   snapshot: RunSnapshotDtoV2;
+}
+
+/**
+ * 观测型 run 的补充事件：LLM 采集记录（`llm_call`）。
+ * AgentEvent 联合里没有该 kind（它由采集层产出，不属于 loop 内核）。
+ */
+export interface LlmCallPushEvent {
+  type: "llm_call";
+  payload: LlmCallRecordDto;
+}
+
+/** observeRun 的输入：CLI 本地执行、serve 只承接事件。 */
+export interface ObserveRunInput {
+  /** 目标会话 id；不存在时按 title 自动创建。 */
+  conversationId: string;
+  /** 请求标识（CLI 侧通常是 `<sessionId>:<turnIndex>`），缺省自动生成。 */
+  requestId?: string;
+  /** 会话缺失时的标题。 */
+  title?: string;
+}
+
+/**
+ * 观测型 run 句柄：CLI 把本地 agentLoop 的事件灌进来，serve 负责存储 / SSE / sequence。
+ *
+ * 语义约定：`push` / `end` 不抛错（观测不能打断 CLI）；执行权始终在 CLI 本地，
+ * serve 不持有 AbortController 的决策权（cancel 对观测型 run 无意义）。
+ */
+export interface ObservedRun {
+  runId: string;
+  /** 推送一条 loop 事件或 llm_call 记录；run 已终态时静默忽略。 */
+  push(event: AgentEvent | LlmCallPushEvent): void;
+  /**
+   * 合成 run_status 终态并释放内存态（幂等）。
+   *
+   * @param result.failed 本轮是否失败（映射为 failed / completed）。
+   * @param result.error 失败时的结构化错误（透传给 run_status.payload.error）。
+   */
+  end(result?: { failed?: boolean; error?: RunErrorPayload }): void;
 }
 
 /** RunManager 依赖。 */

@@ -188,6 +188,61 @@ export async function replayRunEvents(
 }
 
 /**
+ * 跟随一个**已存在** run 的事件流（观测台用）：首帧起 replay 已落盘事件，随后接实时帧；
+ * 断线按 `afterSequence` 续传，终态 `run_status` 到达后 resolve。
+ *
+ * 与 `replayRunEvents` 的差别：后者只做一次「读完即结束」的历史回放（用于刷新恢复），
+ * 本函数带续传与终态判定，供 `/trace` 页跟随运行中的 run。二者共用同一 SSE 端点，
+ * 不新增传输协议（计划 D9）。
+ *
+ * @param runId Run 标识。
+ * @param options 取消信号、起始游标与事件回调。
+ * @returns 终态到达或重连耗尽后 resolve。
+ */
+export async function followRunEvents(
+  runId: string,
+  options: { signal?: AbortSignal; afterSequence?: number; onEvent?: (event: RunStreamEventDtoV2) => void } = {}
+): Promise<void> {
+  let lastSequence = options.afterSequence ?? 0;
+  const maxReconnects = 3;
+  for (let attempt = 0; attempt <= maxReconnects; attempt += 1) {
+    const query = lastSequence > 0 ? `?afterSequence=${lastSequence}` : "";
+    try {
+      const response = await fetch(`/api/runs/${encodeURIComponent(runId)}/events${query}`, {
+        headers: {
+          accept: "text/event-stream",
+          ...(lastSequence > 0 ? { "last-event-id": String(lastSequence) } : {})
+        },
+        signal: options.signal
+      });
+      if (!response.ok || !response.body) return;
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      while (true) {
+        const chunk = await reader.read();
+        buffer += decoder.decode(chunk.value, { stream: !chunk.done });
+        const frames = buffer.split("\n\n");
+        buffer = frames.pop() ?? "";
+        for (const frame of frames) {
+          const parsed = parseRunEventFrame(frame);
+          if (!parsed) continue;
+          lastSequence = Math.max(lastSequence, parsed.sequence);
+          options.onEvent?.(parsed);
+          if (terminalOf(parsed)) return;
+        }
+        if (chunk.done) break;
+      }
+      // 流被服务端关闭但未见终态：进入下一轮续传。
+      if (options.signal?.aborted) return;
+    } catch {
+      // 网络中断 / 用户离开：中断即结束，其余情况续传。
+      if (options.signal?.aborted) return;
+    }
+  }
+}
+
+/**
  * 从 envelope 提取终态摘要：agent_end / run_error / run_status 终值都是终止信号。
  *
  * @param event canonical run event envelope。

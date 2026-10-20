@@ -21,8 +21,18 @@ import {
 } from "../session/session-flow.js";
 import { createSessionStore, type SessionStore } from "../session/session-store.js";
 import { printStopReason, reachedCostBudget, runTurn, type RunSetup } from "../runtime/turn.js";
+import {
+  createFileTurnObserver,
+  createObservationRef,
+  createServerTurnObserver,
+  createTracedStreamFn,
+  type TraceCounter,
+  type TurnObserver,
+} from "../runtime/observation.js";
+import { flushTraceWrites } from "../runtime/llm-trace-file.js";
 import { runRepl } from "../input/repl.js";
 import type { ReplContext } from "../input/repl-context.js";
+import { hostOhnaWeb, type HostResult } from "./web-host.js";
 import { runWeb } from "./web-entry.js";
 import type { CliOptions } from "./args.js";
 import { printProviderError } from "./provider-error.js";
@@ -53,6 +63,7 @@ export function resolveActiveModel(modelFlag?: string): ActiveModel | null {
  * @param tracker 会话级用量累计器。
  * @param store 会话存储。
  * @param onGateReady 权限闸门就绪回调（K3：回填 team controller 的可变 gate 引用）。
+ * @param observer 观测启动器（W3）：为本次 run 开一条镜像 run。
  */
 async function runSingleTurn(
   prompt: string,
@@ -62,6 +73,7 @@ async function runSingleTurn(
   tracker: UsageTracker,
   store: SessionStore,
   onGateReady?: (gate: ConfirmHook) => void,
+  observer?: TurnObserver,
 ): Promise<void> {
   const controller = new AbortController();
   // 单次模式无 readline，需显式把进程 SIGINT 接到 AbortController（与 REPL 对齐），
@@ -117,6 +129,10 @@ async function runSingleTurn(
       setup,
       tracker,
       beforeToolCall,
+      undefined,
+      undefined,
+      // 单次模式同样镜像观测（runIndex 恒为 1：一次进程只有一轮 run）。
+      observer?.start(prompt, { sessionId: session.id, runIndex: 1 }),
     );
     await persistSession(store, session.id, result.history, {
       model: active.model,
@@ -146,7 +162,11 @@ export async function runCli(options: CliOptions): Promise<void> {
 
   // --web：进程内托管（D8 主路径），工具装配与会话语义都在 web-entry 内完成。
   // K3/B3：--web 本批次不接 team（serve 侧仍用其既有确认闸门，子代理策略继承留待后续批次）。
+  // 与默认模式互斥：单入口分发保证同进程只会走一条；--no-web 在托管模式下无意义。
   if (options.web) {
+    if (options.noWeb) {
+      process.stderr.write("提示：--web 是托管模式（执行与观测同一套 serve），--no-web 在此模式下不生效。\n");
+    }
     await runWeb(options);
     return;
   }
@@ -174,6 +194,20 @@ export async function runCli(options: CliOptions): Promise<void> {
   }
 
   /**
+   * W3 观测引用：TeamController 先于任何 run 创建，子代理的 streamFn 通过该可变引用
+   * 实时读取「当前 run 的观测句柄」，因此子代理 LLM 调用与 supervisor 落在同一条 run 里。
+   * callIndex 必须由两条链共享同一个 counter（S1），每轮 run 开始时归零。
+   */
+  const observationRef = createObservationRef();
+  const traceCounter: TraceCounter = { value: 0 };
+
+  /**
+   * 唯一的采集 streamFn：Team 子代理与主线程共用同一个实例（同一 counter、同一 wrapper 缓存），
+   * 避免两处各自包一层导致同 run 出现两条 callIndex:1。
+   */
+  const tracedStreamFn = createTracedStreamFn(() => observationRef.current, traceCounter);
+
+  /**
    * K3 策略继承（可变引用时序）：team controller 必须先于 REPL 创建（工具表要并入），
    * 但真正的权限闸门依赖 REPL/单次模式的 readline/TUI 实例，只能后建。因此这里先给
    * 子代理一个转发闭包，等宿主构造完闸门后通过 `onGateReady` 回填 `gateRef`——此后
@@ -185,6 +219,8 @@ export async function runCli(options: CliOptions): Promise<void> {
     codingTools,
     defaultModel: active.model,
     getGate: () => gateRef,
+    // 与主线程共用采集层：子代理每次 LLM 调用同样产出 llm_call（W3-6）。
+    streamFn: tracedStreamFn,
   });
   tools.push(...team.tools);
   if (team.teamToolNames.size > 0) {
@@ -211,17 +247,77 @@ export async function runCli(options: CliOptions): Promise<void> {
       }),
       resumeId: options.resume,
       mcpToolNames: mcpContext.mcpToolNames,
+      // 已带采集标记的 streamFn：runTurn 不会再包第二层（S1）。
+      streamFn: tracedStreamFn,
     };
 
-    if (options.prompt !== undefined) {
-      await runSingleTurn(options.prompt, active, tools, setup, tracker, createSessionStore(), (gate) => {
-        gateRef = gate;
-      });
-    } else {
-      await runRepl(active, tools, setup, tracker, mcpContext);
+    // W3/D10 观测装配：默认起进程内观测台（执行权仍在本地）；--no-web 或启动失败时
+    // 降级为本地 JSONL——两条链路共用同一个采集层，只是 sink 不同。
+    // observeOnly=true：默认模式的 serve 只做只读观测，不注册写 run / 确认写端点（S2）。
+    const hosted = options.noWeb
+      ? undefined
+      : await hostOhnaWeb({
+          workspaceRoot: cwd,
+          active,
+          tools,
+          autoApprove: false,
+          observeOnly: true,
+          port: options.webPort,
+          conversationTitle: `CLI · ${(options.resume ?? cwd).slice(0, 8)}`,
+        });
+    const observer: TurnObserver =
+      hosted !== undefined
+        ? createServerTurnObserver({
+            server: hosted.server,
+            conversationId: hosted.conversationId,
+            ref: observationRef,
+            counter: traceCounter,
+          })
+        : createFileTurnObserver({ ref: observationRef, counter: traceCounter });
+    mcpContext.observation = { start: observer.start };
+    if (hosted) mcpContext.traceUrl = hosted.url;
+
+    try {
+      if (options.prompt !== undefined) {
+        await runSingleTurn(
+          options.prompt,
+          active,
+          tools,
+          setup,
+          tracker,
+          createSessionStore(),
+          (gate) => {
+            gateRef = gate;
+          },
+          observer,
+        );
+      } else {
+        await runRepl(active, tools, setup, tracker, mcpContext);
+      }
+    } finally {
+      // 观测台随 CLI 生命周期结束：中断在途镜像 run 并关闭 store 写入队列。
+      await shutdownHost(hosted);
+      // N1：--no-web 的 JSONL 写入是 fire-and-forget，退出前必须等最后一条落盘
+      // （单次 `--prompt` 尤其明显：进程可能在 append 完成前就结束）。
+      await flushTraceWrites();
     }
   } finally {
     // MCP stdio 子进程的管道会保持事件循环存活：退出前必须关闭，否则 REPL 结束后进程无法退出。
     await mcp?.close();
+  }
+}
+
+/**
+ * 关闭观测台（未启动时为空操作）。
+ *
+ * @param hosted 观测台装配结果。
+ */
+async function shutdownHost(hosted: HostResult | undefined): Promise<void> {
+  if (!hosted) return;
+  try {
+    await hosted.server.shutdown();
+    await hosted.server.close();
+  } catch {
+    // 退出路径上的关闭失败不值得影响进程退出码。
   }
 }

@@ -25,6 +25,10 @@ function asRecord(body: unknown): Record<string, unknown> | null {
  * @param deps 装配上下文。
  */
 export function registerConfirmationRoutes(app: FastifyInstance, deps: RouteDeps): void {
+  // S2：只读观测模式不注册确认写端点——镜像 run 的工具执行发生在 CLI 本地，
+  // 浏览器没有可放行的副作用（避免观测台成为隐式审批入口）。
+  if (deps.observeOnly) return;
+
   app.post<{ Params: { runId: string; toolCallId: string } }>(
     "/api/runs/:runId/confirmations/:toolCallId",
     async (request, reply): Promise<ApiResult<{ toolCallId: string; decision: "allow" | "deny" }>> => {

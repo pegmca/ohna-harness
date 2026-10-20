@@ -77,6 +77,8 @@ export async function runRepl(
   // /model 可在会话内切换 profile：当前模型放在可变绑定中，后续 run 与压缩都用它。
   let currentModel: ActiveModel = active;
   let controller: AbortController | null = null;
+  /** 本会话第几轮 run（观测 requestId 的 `<sessionId>:<turnIndex>` 后缀，W3-9）。 */
+  let turnIndex = 0;
   /** readline 是否已关闭（Ctrl-D / EOF / /exit）；关闭后不得再 prompt。 */
   let closed = false;
   /** readline 底层接口是否已调用 close，避免重复关闭。 */
@@ -164,7 +166,12 @@ export async function runRepl(
   renderWelcome(
     { id: currentModel.model.id, provider: currentModel.model.provider },
     tools.map((tool) => tool.name),
-    { sessionId, cwd: setup.cwd, mcpServers: context?.mcpServerNames },
+    {
+      sessionId,
+      cwd: setup.cwd,
+      mcpServers: context?.mcpServerNames,
+      ...(context?.traceUrl ? { traceUrl: context.traceUrl } : {}),
+    },
   );
 
   if (tuiHandle) {
@@ -340,6 +347,11 @@ export async function runRepl(
 
       // 每个用户输入开一个新 run，AbortController 贯穿整条 agentLoop 调用链（含工具执行）。
       controller = new AbortController();
+      // 观测（W3）：每轮先开一条镜像 run（无观测时为 undefined，行为与改造前一致）。
+      const observation = context?.observation?.start(text, {
+        sessionId,
+        runIndex: (turnIndex += 1),
+      });
       try {
         const result = await runTurn(
           history,
@@ -353,6 +365,7 @@ export async function runRepl(
           beforeToolCall,
           () => followUps.getSteeringMessages(),
           () => followUps.getFollowUpMessages(),
+          observation,
         );
         // 用新引用替换 history，保证后续轮次能看到完整上下文。
         replaceHistory(history, result.history);

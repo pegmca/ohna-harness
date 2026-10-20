@@ -110,3 +110,32 @@ test("--no-team 关闭团队编排；缺省保持开启（F-4）", () => {
   assert.equal(disabled.options.prompt, "做一个任务", "--no-team 是开关，不吞位置参数");
   assert.deepEqual(disabled.warnings, []);
 });
+
+test("TC-W3-01: --no-web 关闭默认观测台；缺省开启且不吞位置参数", () => {
+  const defaults = parse([]);
+  assert.equal(defaults.options.noWeb, false, "观测台默认开启（D1）");
+  assert.equal(defaults.options.web, false, "默认模式不是 --web 托管");
+
+  const disabled = parse(["--no-web", "做一个任务"]);
+  assert.equal(disabled.options.noWeb, true);
+  assert.equal(disabled.options.prompt, "做一个任务", "--no-web 是开关，不吞位置参数");
+  assert.deepEqual(disabled.warnings, []);
+
+  // 显式取值写法：既不能被当成位置参数拼进 prompt，也要能关掉。
+  const explicitOff = parse(["--no-web=false", "做一个任务"]);
+  assert.equal(explicitOff.options.noWeb, false);
+  assert.equal(explicitOff.options.prompt, "做一个任务", "--no-web=false 不进入 prompt");
+  assert.deepEqual(explicitOff.warnings, []);
+
+  const explicitOn = parse(["--no-web=true"]);
+  assert.equal(explicitOn.options.noWeb, true);
+
+  const invalid = parse(["--no-web=maybe"]);
+  assert.equal(invalid.options.noWeb, false, "非法取值按缺省处理");
+  assert.equal(invalid.warnings.length, 1);
+
+  // --web 与默认模式互斥：两者同时出现时仍走托管分支（单入口分发）。
+  const both = parse(["--web", "--no-web"]);
+  assert.equal(both.options.web, true);
+  assert.equal(both.options.noWeb, true, "解析层不做吞并，由 harness 提示无效");
+});

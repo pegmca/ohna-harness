@@ -11,7 +11,7 @@ import {
   User,
   Wrench
 } from "lucide-react";
-import { type FormEvent, useEffect, useRef, useState } from "react";
+import { type FormEvent, type ReactNode, useEffect, useRef, useState } from "react";
 import { formatRunStatus, formatTime } from "./format";
 import { projectLiveRun } from "./live-run-projection";
 import { JsonDetails, RunDetails, StatusBadge } from "./run-details";
@@ -33,6 +33,8 @@ interface ChatHeaderProps {
   /** 本地模式信息（W-7：头部展示「本地运行 · 工作目录」）；null 表示健康检查未通过。 */
   localMode: LocalModeInfo | null;
   onMenuClick: () => void;
+  /** 主导航插槽（对话 / Trace 切换）；由页面注入，header 只负责排版。 */
+  nav?: ReactNode;
 }
 
 /**
@@ -60,6 +62,7 @@ export function ChatHeader(props: ChatHeaderProps) {
       </div>
 
       <div className="header-actions">
+        {props.nav}
         <StatusBadge tone={props.isSubmitting ? "info" : props.latestRunStatus === "failed" ? "danger" : "success"}>
           {props.isSubmitting ? "running" : formatRunStatus(props.latestRunStatus)}
         </StatusBadge>
@@ -79,6 +82,8 @@ interface ChatTimelineProps {
   onOpenRunDetail: (detail: SelectedRunDetail) => void;
   onRetryMessage: (message: UiMessage) => void;
   onUsePrompt: (prompt: string) => void;
+  /** 当前会话是 CLI 镜像会话（标题以 `CLI ·` 开头）时，空态提示改用 Trace 观测台（N5）。 */
+  showCliHint?: boolean;
 }
 
 /**
@@ -146,6 +151,9 @@ export function ChatTimeline(props: ChatTimelineProps) {
           <span className="empty-brand-logo" aria-hidden="true"><span className="brand-mark empty-brand-mark" /></span>
           <h2>从一个编码任务开始</h2>
           <p>Agent 直接读写当前工作目录；写与执行操作会先弹出待确认卡片。</p>
+          {props.showCliHint ? (
+            <p className="muted-row">CLI 会话（默认 `ohna`）只镜像 run 事件、不写入对话消息，请到 Trace 观测台查看。</p>
+          ) : null}
           <StarterPrompts disabled={props.isSubmitting} onUsePrompt={props.onUsePrompt} />
         </div>
       </section>

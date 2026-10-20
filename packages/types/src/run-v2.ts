@@ -16,6 +16,15 @@ export type RunStatusDtoV2 =
   | "cancelled"
   | "interrupted";
 
+/**
+ * run 模式：auto/report 是托管执行（服务端跑 agentLoop），
+ * observe 是 CLI 镜像观测（执行权在 CLI 本地，serve 只承接事件）。
+ */
+export type RunModeDtoV2 = "auto" | "report" | "observe";
+
+/** run 触发入口：composer/report_button 来自 Web，cli 来自 CLI 镜像观测。 */
+export type RunSourceDtoV2 = "composer" | "report_button" | "cli";
+
 /** run_events.event_type 枚举：loop 事件对齐 pi AgentEvent，retrieval/workflow_node/pdf_export 为能力事件，run_status/run_error 为服务端生命周期补充。 */
 export type RunEventTypeDto =
   | "agent_start"
@@ -36,7 +45,12 @@ export type RunEventTypeDto =
   | "confirmation_requested"
   | "run_status"
   | "run_error"
-  | "cost_summary";
+  | "cost_summary"
+  /**
+   * 编码 Agent 本地扩展（ohna 观测台）：一次 LLM 请求/响应的完整记录，
+   * payload 为 `LlmCallRecordDto`（见 llm-trace.ts）。可持久化，非瞬态。
+   */
+  | "llm_call";
 
 /**
  * SSE 与 run_events 共用的 canonical 事件 envelope。
@@ -65,8 +79,8 @@ export interface RunSnapshotDtoV2 {
   conversationId: string;
   userMessageId: string;
   modelId: string;
-  mode: "auto" | "report";
-  source: "composer" | "report_button";
+  mode: RunModeDtoV2;
+  source: RunSourceDtoV2;
   status: RunStatusDtoV2;
   /** 已持久化的最大事件序号（崩溃恢复与 SSE 续传高水位）。 */
   lastEventSequence: number;
@@ -92,6 +106,23 @@ export interface RunSnapshotDtoV2 {
     /** 检查点写入时间。 */
     createdAt: string;
   };
+}
+
+/**
+ * 会话下的 run 摘要（观测台 runs 侧栏）。
+ *
+ * 与快照的区别：只保留列表需要的定位字段 + 当前状态，不含 error/检查点等详情。
+ * 状态由服务端「内存态活跃 run 优先、否则回读 run 事件文件」解析。
+ */
+export interface RunMetaDtoV2 {
+  runId: string;
+  requestId: string;
+  conversationId: string;
+  modelId: string;
+  mode: RunModeDtoV2;
+  source: RunSourceDtoV2;
+  status: RunStatusDtoV2;
+  createdAt: string;
 }
 
 /** 创建研究 Run 的请求；显式模式与触发入口分离，避免 UI 泄漏 Agent 路由细节。 */

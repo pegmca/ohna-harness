@@ -15,6 +15,7 @@ import {
   createTeamController,
   type BeforeToolCallContext,
   type BeforeToolCallResult,
+  type StreamFn,
 } from "@aiagent/agent";
 import type { ConfirmHook } from "../permission/confirm.js";
 
@@ -50,6 +51,11 @@ export interface TeamToolsetOptions {
   defaultModel: Model<Api>;
   /** 读取当前权限闸门（可变引用；未就绪时转发器 fail-closed）。 */
   getGate: () => ConfirmHook | undefined;
+  /**
+   * 子代理共用的 streamFn（W3-6）：组合根注入带 LLM 采集的版本，子代理调用同样产生
+   * `llm_call` 记录；缺省由 controller 用 `streamSimple`。
+   */
+  streamFn?: StreamFn;
 }
 
 /** 装配结果：待并入 supervisor 工具表的工具与来源标注集合。 */
@@ -72,6 +78,7 @@ export function createTeamToolset(options: TeamToolsetOptions): TeamToolset {
     availableTools: [...options.codingTools],
     defaultModel: options.defaultModel,
     beforeToolCall: createTeamGateForwarder(options.getGate),
+    ...(options.streamFn ? { streamFn: options.streamFn } : {}),
   });
   return {
     tools: controller.tools,

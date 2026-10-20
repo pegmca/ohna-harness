@@ -1,7 +1,7 @@
 /**
  * 语义分组树（Phase C1b）。
  *
- * ported from opencode `packages/tui/src/routes/session/grouping/tree.ts` (MIT)。
+ * 参考自 opencode `packages/tui/src/routes/session/grouping/tree.ts` (MIT)。
  * 原实现服务于 opencode 的 session 树；这里去掉 Solid/客户端类型，只保留
  * 「相邻同 kind 合并 + 后代叶子计数 + 对象身份保留」的纯数据结构。
  *

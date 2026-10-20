@@ -1,5 +1,5 @@
 /**
- * 路径解析工具（ported from pi (badlogic/packages/coding-agent)，MIT，Copyright (c) 2025 Mario Zechner）。
+ * 路径解析工具（参考自 pi (badlogic/packages/coding-agent)，MIT，Copyright (c) 2025 Mario Zechner）。
  *
  * 相对 paths.ts 的定位：paths.ts 只做纯字符串归一化，本模块负责「带文件系统探测」的容错解析。
  * 保留了 pi 的 macOS 变体回退：截图 AM/PM 空格、NFD 分解、弯引号——用户粘贴路径时最常踩的坑。

@@ -1,8 +1,8 @@
 /**
  * ls 工具：列出目录内容（只读，无任何写副作用）。
  *
- * ported from pi (badlogic/packages/coding-agent/src/core/tools/ls.ts)，MIT License，
- * Copyright (c) 2025 Mario Zechner。
+ * 参考自 pi (badlogic/packages/coding-agent/src/core/tools/ls.ts)，MIT License，
+ * 依 MIT License（Copyright (c) 2025 Mario Zechner）致谢 pi 原作者。
  * 移植改造：typebox → zod v4；剥离 pi-tui 渲染与 ExtensionContext；
  * 新增 assertPathWithinRoot / isDeniedPath 只读沙箱校验；隐藏文件改为可开关（默认不显示）。
  */

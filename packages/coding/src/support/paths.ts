@@ -1,5 +1,5 @@
 /**
- * 路径归一化基元（ported from pi (badlogic/packages/coding-agent)，MIT，Copyright (c) 2025 Mario Zechner）。
+ * 路径归一化基元（参考自 pi (badlogic/packages/coding-agent)，MIT，Copyright (c) 2025 Mario Zechner）。
  *
  * 原文件为 pi 的 utils/paths.ts，这里只保留编码工具真正需要的部分：
  * 去掉了依赖子进程的云同步标记等无关能力，保持零外部依赖（仅 node 标准库），

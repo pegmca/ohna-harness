@@ -1,5 +1,5 @@
 /**
- * bash 输出累加器（ported from pi (badlogic/packages/coding-agent)，MIT，Copyright (c) 2025 Mario Zechner）。
+ * bash 输出累加器（参考自 pi (badlogic/packages/coding-agent)，MIT，Copyright (c) 2025 Mario Zechner）。
  *
  * 设计要点：命令输出可能非常大（构建日志、测试全量输出），但回喂模型的只需要「尾部若干行」。
  * 所以这里用有界内存滚动保留解码后的尾部文本用于展示 / 回喂，一旦超阈值就把**完整原始字节**

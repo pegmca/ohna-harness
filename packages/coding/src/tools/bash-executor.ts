@@ -2,7 +2,7 @@
  * bash 编排层：把「一条命令」翻译成一次受控的子进程执行，并负责收尾与错误定型。
  * 进程原语（shell 解析 / kill 进程树 / 退出等待 / 输出清洗）在 ./bash-process.ts。
  *
- * ported from pi (badlogic/packages/coding-agent)，MIT License，Copyright (c) 2025 Mario Zechner：
+ * 参考自 pi (badlogic/packages/coding-agent)，MIT License，Copyright (c) 2025 Mario Zechner：
  * - src/core/tools/bash.ts 的 createLocalBashOperations
  * - src/core/bash-executor.ts 的 executeBashWithOperations
  *

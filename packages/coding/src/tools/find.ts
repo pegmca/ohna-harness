@@ -1,8 +1,8 @@
 /**
  * find 工具：按 glob 模式查找文件/目录（只读，无任何写副作用）。
  *
- * ported from pi (badlogic/packages/coding-agent/src/core/tools/find.ts)，MIT License，
- * Copyright (c) 2025 Mario Zechner。
+ * 参考自 pi (badlogic/packages/coding-agent/src/core/tools/find.ts)，MIT License，
+ * 依 MIT License（Copyright (c) 2025 Mario Zechner）致谢 pi 原作者。
  * 移植改造：typebox → zod v4；剥离 pi-tui 渲染与 ExtensionContext；
  * 不依赖 fd 二进制（pi 用 ensureTool 下载），改为 Node 原生 readdir 递归 + 自实现 glob → 正则，
  * 保证零安装可跑；新增 assertPathWithinRoot / isDeniedPath 只读沙箱校验。

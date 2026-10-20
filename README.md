@@ -562,4 +562,4 @@ pnpm eval:update-baseline
 
 ## 许可证
 
-本项目以 **MIT 许可证** 开源。第三方移植代码（pi、opencode 与 superpowers skill）的署名见 `THIRD-PARTY-NOTICES.md`。
+本项目以 **MIT 许可证** 开源。在设计与实现过程中参考了若干公开项目的思路，并依其许可证致谢，详见 `THIRD-PARTY-NOTICES.md`。

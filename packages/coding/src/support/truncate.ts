@@ -1,5 +1,5 @@
 /**
- * 工具输出截断公共能力（ported from pi (badlogic/packages/coding-agent)，MIT，Copyright (c) 2025 Mario Zechner）。
+ * 工具输出截断公共能力（参考自 pi (badlogic/packages/coding-agent)，MIT，Copyright (c) 2025 Mario Zechner）。
  *
  * 两个相互独立的限制——先触发哪个就按哪个截断：
  * - 行数上限（默认 2000 行）

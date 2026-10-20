@@ -1,7 +1,7 @@
 /**
  * 条目分类规则（Phase C1b）。
  *
- * ported from opencode `packages/tui/src/routes/session/grouping/session.ts` 的
+ * 参考自 opencode `packages/tui/src/routes/session/grouping/session.ts` 的
  * `partPath` 与 `activity-summary.ts` 的 `activitySummary` / `busyLabel`（MIT）。
  *
  * 适配差异：

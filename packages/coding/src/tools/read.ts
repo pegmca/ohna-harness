@@ -1,8 +1,8 @@
 /**
  * read 工具：读取文件内容（只读，无任何写副作用）。
  *
- * ported from pi (badlogic/packages/coding-agent/src/core/tools/read.ts)，MIT License，
- * Copyright (c) 2025 Mario Zechner。
+ * 参考自 pi (badlogic/packages/coding-agent/src/core/tools/read.ts)，MIT License，
+ * 依 MIT License（Copyright (c) 2025 Mario Zechner）致谢 pi 原作者。
  * 移植改造：typebox → zod v4；剥离 pi-tui 渲染、图像读取、keybinding hints 与 ExtensionContext；
  * 新增 assertPathWithinRoot / isDeniedPath 只读沙箱校验；输出带行号前缀，便于模型引用行号。
  */

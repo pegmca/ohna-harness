@@ -12,7 +12,7 @@
 > - `06-cli-theme.md` —— CLI 终端样式改造（复刻 Claude Code 风格，已落地：门控裁决 + spinner 单写者协议 + **整屏 TUI 输入区**（v3，取代原「打印式顶线」降级方案，根治 resize 重绘风暴））
 > - `07-cli-feature-parity.md` —— CLI 功能对齐 Claude Code：差距清单 + 编码建议 + 内核改动设计（K1 权限策略内核 / K2 排队与 steering 接线 / K3 子 agent 接线，批次 B1-B3，**已落地**；落地结果与已知偏差见 07 §6）
 >
-> 历史背景文档：`01-coding-cli.md`（CLI M1 移植细节，仍有效）、`02-local-web-runtime.md`（本地 Web 早期设计，**其 §3.2「复用 createApiServer」已被用户决策取代**，其余 JSONL/目录沙箱/UI 思路沿用）。
+> 历史背景文档：`01-coding-cli.md`（CLI M1 参考细节，仍有效）、`02-local-web-runtime.md`（本地 Web 早期设计，**其 §3.2「复用 createApiServer」已被用户决策取代**，其余 JSONL/目录沙箱/UI 思路沿用）。
 > 落地切片遵循 `设计演进记录` §3 七步法与 Definition of Done。
 
 ## 一、状态
@@ -66,11 +66,11 @@
 
 > 每个阶段的可复现验收见 `05-verify-cases.md`。
 
-## 四、移植来源与许可
+## 四、参考来源与许可
 
 - 来源：`https://github.com/badlogic/pi-mono`（pi monorepo，`packages/coding-agent`），**MIT License**（`LICENSE`，Copyright (c) 2025 Mario Zechner）。
-- 可移植：工具核心算法与结果截断策略；需改造：typebox → zod、剥离 pi-tui 渲染与 extension context、去掉 `ToolDefinition` 中间层。
-- 归因要求：移植文件保留来源标注（文件头注明 ported from pi），并在 `` 记录移植取舍。
+- 可参考复用：工具核心算法与结果截断策略；需改造：typebox → zod、剥离 pi-tui 渲染与 extension context、去掉 `ToolDefinition` 中间层。
+- 归因要求：参考实现的文件保留来源标注（文件头注明 ported from pi），并在 `` 记录参考取舍。
 
 ## 五、执行原则
 

@@ -1,5 +1,5 @@
 /**
- * 纯文本渲染工具（ported from pi (badlogic/packages/coding-agent)，MIT，Copyright (c) 2025 Mario Zechner）。
+ * 纯文本渲染工具（参考自 pi (badlogic/packages/coding-agent)，MIT，Copyright (c) 2025 Mario Zechner）。
  *
  * pi 的 render-utils.ts 混杂了 pi-tui 的 hyperlink / 终端图像回退 / ANSI 处理。
  * aiagent 的工具只回纯文本，渲染统一由组合根负责，因此这里只保留四个与终端无关的工具函数。

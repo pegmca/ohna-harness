@@ -1,7 +1,7 @@
 # 01 · CLI 编码 Agent 实施方案（M1 / M2 / M3）
 
 > 本文是 `docs/v1.3/README.md` 的落地细节：把 `apps/ohna-cli` 从金融问答 REPL 改造成编码 Agent CLI。
-> 移植来源：`https://github.com/badlogic/pi-mono` 的 `packages/coding-agent/src/core/tools/*`（pi，MIT）。
+> 参考来源：`https://github.com/badlogic/pi-mono` 的 `packages/coding-agent/src/core/tools/*`（pi，MIT）。
 > 状态：M0（会话外壳）**已实现**；M1（编码工具闭环）**已实现**；M2（长任务治理）**已实现**；
 > M3（体验对齐）**规划中，按序推进**。
 
@@ -34,7 +34,7 @@
 | 9 | 无「改完自己跑验证」闭环 | 依赖 1 + 项目脚本知识 | M1/M3 |
 | 10 | 无 MCP / 子代理分工 | `apps/ohna-cli/package.json` 未声明 `@aiagent/mcp`（与 `docs/v1.2/04-cli-harness.md` 描述不符，属文档漂移） | M3 |
 
-## 2. 移植映射表（pi → aiagent）
+## 2. 参考映射表（pi → aiagent）
 
 pi 工具位于 `packages/coding-agent/src/core/tools/`，共约 4100 行。核心算法可直接搬，依赖需替换。
 
@@ -62,7 +62,7 @@ pi 工具位于 `packages/coding-agent/src/core/tools/`，共约 4100 行。核�
 | 结果 | `{ content, details }` | `{ content, details, isError? }` | 失败走 `isError: true` + 文本 content，不向上抛裸异常 |
 | 渲染 | 工具自带 TUI renderer | 由 `apps/ohna-cli/src/ui/render.ts` 统一渲染 | 工具只回文本与 details |
 
-结论：**移植成本主要在「剥 TUI + 换 schema」，算法逻辑基本可原样保留**。
+结论：**参考实现成本主要在「剥 TUI + 换 schema」，算法逻辑基本可原样保留**。
 
 ## 3. 包与目录设计
 
@@ -82,7 +82,7 @@ packages/coding/
 
 - **为什么不进 `packages/tools`**：那是金融工具域（AGENTS.md 要求包边界清晰），编码工具独立成包，`apps/ohna-cli` 组合根固定装配它。
 - 单文件 >500 行时按内聚拆分（项目纪律），例如 `edit.ts` 若超限可拆出匹配/替换策略。
-- 每个移植文件头部注明「ported from pi (MIT)」，归因与改动点写进 ``。
+- 每个参考实现的文件头部注明「ported from pi (MIT)」，归因与改动点写进 ``。
 
 ## 4. M1：编码工具闭环（能真实改代码、跑测试、自己修）
 
@@ -90,7 +90,7 @@ packages/coding/
 
 ### 4.1 交付清单
 
-1. 新建 `packages/coding`，按第 2/3 节移植 7 个工具 + 支撑模块。
+1. 新建 `packages/coding`，按第 2/3 节参考实现 7 个工具 + 支撑模块。
 2. `packages/coding/src/policy/`：`path-policy.ts`、`command-policy.ts`。
    - 路径：所有读写必须落在 `cwd` 内（realpath 对比），拒绝 `.env`、`*.pem`、`.git/*`、`node_modules`。
    - 命令：`rm -rf /`、`sudo`、`curl|sh`、`git push --force`、`mkfs`、写 `/etc` 等 → 结构化拒绝。

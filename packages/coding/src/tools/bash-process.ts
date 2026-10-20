@@ -2,7 +2,7 @@
  * bash 子进程原语：shell 解析、进程树 kill、退出等待、输出清洗。
  * 这些是与「工具语义」无关的一层，单独成文件以便 bash-executor.ts 只保留编排逻辑。
  *
- * ported from pi (badlogic/packages/coding-agent)，MIT License，Copyright (c) 2025 Mario Zechner：
+ * 参考自 pi (badlogic/packages/coding-agent)，MIT License，Copyright (c) 2025 Mario Zechner：
  * - src/utils/shell.ts 的 getShellConfig / killProcessTree / sanitizeBinaryOutput
  * - src/utils/child-process.ts 的 waitForChildProcess
  *

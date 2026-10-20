@@ -7,8 +7,8 @@
  * 3. 输出按「行数 / 字节」双上限头尾截断，超限时把完整输出落临时文件、只回传路径；
  * 4. 非 0 退出码以结构化错误抛出，且错误文本里带上已产生的输出，便于模型自愈。
  *
- * ported from pi (badlogic/packages/coding-agent/src/core/tools/bash.ts)，MIT License，
- * Copyright (c) 2025 Mario Zechner。
+ * 参考自 pi (badlogic/packages/coding-agent/src/core/tools/bash.ts)，MIT License，
+ * 依 MIT License（Copyright (c) 2025 Mario Zechner）致谢 pi 原作者。
  * 移植改造：typebox → zod v4；剥离 pi-tui / theme / keybinding-hints 渲染与 ExtensionContext；
  * 危险命令判定抽到 ../policy/command-policy.js，工具层只负责执行与报错。
  */

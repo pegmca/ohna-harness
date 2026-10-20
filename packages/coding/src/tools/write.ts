@@ -1,8 +1,8 @@
 /**
  * write 工具：整文件写入（不存在则创建，存在则覆盖），自动创建父目录。
  *
- * ported from pi (badlogic/packages/coding-agent/src/core/tools/write.ts)，MIT License，
- * Copyright (c) 2025 Mario Zechner。
+ * 参考自 pi (badlogic/packages/coding-agent/src/core/tools/write.ts)，MIT License，
+ * 依 MIT License（Copyright (c) 2025 Mario Zechner）致谢 pi 原作者。
  * 改动点：
  * - 剥离 pi-tui 的语法高亮渲染与 extension 体系，工具只回文本与结构化 details；
  * - typebox schema → zod（与 packages/tools 的 defineAgentTool 对齐）；

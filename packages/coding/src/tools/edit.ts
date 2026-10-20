@@ -1,8 +1,8 @@
 /**
  * edit 工具：对单个文件做精确字符串替换（唯一匹配）。
  *
- * ported from pi (badlogic/packages/coding-agent/src/core/tools/edit.ts)，MIT License，
- * Copyright (c) 2025 Mario Zechner。
+ * 参考自 pi (badlogic/packages/coding-agent/src/core/tools/edit.ts)，MIT License，
+ * 依 MIT License（Copyright (c) 2025 Mario Zechner）致谢 pi 原作者。
  * 改动点：
  * - 剥离 pi-tui 的 renderDiff 与 extension 体系，输出只回文本 + 结构化 details；
  * - typebox schema → zod；edits[] 数组形态收敛为单组 oldText/newText（M1 只做精确替换）；

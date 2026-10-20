@@ -36,7 +36,7 @@
 3. **代码注释里有 3 处「技术表达叙事」字样**（`packages/agent/src/team/presets.ts:53`、`team/slo.ts:5`、`packages/trace/src/index.ts:285`），
    另有 **7 处源码注释引用 `notes/*.md`**（如 `packages/agent/src/permission/policy.ts:68`）。
    → 迁走 `notes/` 后这些注释会变成**死链接**，必须改写（详见 §3.3）。
-4. **源码含第三方移植声明**：`apps/ohna-cli/src/ui/tui/*` 多处 `ported from opencode ... (MIT)`，`docs/v1.3/README.md` 声明 pi（MIT，Copyright 2025 Mario Zechner）。
+4. **源码含第三方参考声明**：`apps/ohna-cli/src/ui/tui/*` 与 `packages/coding/src/**` 多处注释说明设计参考了 pi / opencode（MIT）；均为自主实现，仅依 MIT 许可证致谢，并非逐字移植。
    → 开源前**必须补 LICENSE 与 THIRD-PARTY-NOTICES**，否则法律上不可发布。
 5. **个人绝对路径 `<HOME>/...`** 出现在 18 个文件（含 `.vscode/launch.json` 与 13 个文档）。
    → 非学习类，但属于隐私泄露面，应一并清洗为相对/示例路径。
@@ -140,8 +140,8 @@ notes/      ❌ 整体移出
 
 | 文件 | 内容 |
 |---|---|
-| `LICENSE` | 主许可证（建议 MIT，与已移植的 pi / opencode 代码兼容；或 Apache-2.0 若顾虑专利） |
-| `THIRD-PARTY-NOTICES.md` | pi（MIT © 2025 Mario Zechner）、opencode（MIT © 2025 opencode）、superpowers（MIT，若入库）的署名与原文 |
+| `LICENSE` | 主许可证（建议 MIT；或 Apache-2.0 若顾虑专利） |
+| `THIRD-PARTY-NOTICES.md` | 设计参考了 pi / opencode（均 MIT）并依许可证致谢；superpowers 未随仓发布时的说明 |
 | `.github/ISSUE_TEMPLATE/`、`PULL_REQUEST_TEMPLATE.md` | 可选，但显著提升开源观感 |
 | `CONTRIBUTING.md` | 可选 |
 

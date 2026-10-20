@@ -1,7 +1,7 @@
 /**
  * Toast 队列（Phase C3 · D8「合成槽」）。
  *
- * ported from opencode `packages/tui/src/ui/toast.tsx`（MIT，Copyright (c) 2025 opencode）。
+ * 参考自 opencode `packages/tui/src/ui/toast.tsx`（MIT，Copyright (c) 2025 opencode）。
  * 取舍：opencode 用 SolidJS store + 绝对定位浮层 + 鼠标 hover 暂停；ohna 是全帧同步测量的
  * 整屏模型（D8），没有浮层 / zIndex / 鼠标，因此这里只移植**队列语义与可暂停计时器**：
  * - 显示中且未暂停且无排队 → 新 toast 直接替换（避免瞬时提示排队延迟）；

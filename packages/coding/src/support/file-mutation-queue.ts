@@ -1,5 +1,5 @@
 /**
- * 文件写串行化队列（ported from pi (badlogic/packages/coding-agent)，MIT，Copyright (c) 2025 Mario Zechner）。
+ * 文件写串行化队列（参考自 pi (badlogic/packages/coding-agent)，MIT，Copyright (c) 2025 Mario Zechner）。
  *
  * Agent 在一轮里可能并行下发多个写同一文件的动作（例如 write 后又 edit）。若不加串行化，
  * 「读旧内容 → 改 → 写回」的竞态会静默丢更新。这里按**realpath**做键串行化：

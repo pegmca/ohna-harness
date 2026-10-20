@@ -8,8 +8,6 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { WorkbenchNav } from "../../app/workbench-nav";
 import { cancelRun, createAndStreamRun, replayRunEvents, type RunTerminalDto } from "../../shared/api/run-stream-client";
 import { fetchLocalMode, type LocalModeInfo } from "../../shared/mode";
-import { FileTreePanel } from "../files/FileTreePanel";
-import { isFileMutatingTool, notifyFilesChanged } from "../files/refresh-bus";
 import {
   deriveConfirmationCards,
   submitConfirmation,
@@ -126,10 +124,7 @@ export function Workbench() {
     });
     if (event.type === "tool_execution_end") {
       const payload = (event.payload ?? {}) as { toolCallId?: string; toolName?: string };
-      // 写类工具落地后通知文件树自动刷新；同时解除该卡片的提交中状态。
-      if (payload.toolName && isFileMutatingTool(payload.toolName)) {
-        notifyFilesChanged(payload.toolName);
-      }
+      // 写类工具落地后解除该卡片的提交中状态。
       if (payload.toolCallId) {
         setConfirmationUi((current) => {
           if (!(payload.toolCallId! in current)) return current;
@@ -683,7 +678,6 @@ export function Workbench() {
   return (
     <main className={[
       "agent-app-shell",
-      localMode ? "has-files-panel" : "",
       selectedRunDetail ? "has-detail-panel" : ""
     ].filter(Boolean).join(" ")}>
       <ConversationSidebar
@@ -700,8 +694,6 @@ export function Workbench() {
         onRetry={() => void loadConversationPage()}
         onSelectConversation={handleSelectConversation}
       />
-
-      {localMode ? <FileTreePanel workspaceRoot={localMode.workspaceRoot} /> : null}
 
       <section className="chat-main" aria-label="Agent Chat 主区域">
         <ChatHeader

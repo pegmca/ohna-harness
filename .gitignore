@@ -22,3 +22,4 @@ packages/*/src/**/*.d.ts.map
 .agents/
 .claude/
 .ccmanager.json
+.workbuddy/

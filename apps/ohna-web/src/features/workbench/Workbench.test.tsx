@@ -3,7 +3,6 @@ import type { RunSnapshotDtoV2, RunStreamEventDtoV2 } from "@aiagent/types";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Workbench } from "./Workbench";
-import { onFilesChanged } from "../files/refresh-bus";
 
 vi.mock("../../shared/api/run-stream-client", () => ({
   createAndStreamRun: vi.fn(),
@@ -714,7 +713,7 @@ describe("Workbench confirmation cards (W-4)", () => {
   });
 });
 
-describe("Workbench replay restore (W-9) and file tree refresh (W-8)", () => {
+describe("Workbench replay restore (W-9)", () => {
   it("restores a pending confirmation card via SSE replay when the last history user message carries a runId", async () => {
     const { replayRunEvents } = await import("../../shared/api/run-stream-client");
     // 不再测 no-op：捕获 replay 回调，可控注入 confirmation_requested。
@@ -766,45 +765,6 @@ describe("Workbench replay restore (W-9) and file tree refresh (W-8)", () => {
     await waitFor(() => expect(posts).toHaveLength(1));
     expect(posts[0].url).toContain("/api/runs/run-replay/confirmations/call-replay");
     expect(posts[0].body).toEqual({ decision: "allow" });
-  });
-
-  it("notifies the file refresh bus only for file-mutating tool_execution_end events", async () => {
-    const changed: string[] = [];
-    const unsubscribe = onFilesChanged((toolName) => changed.push(toolName));
-    const { createAndStreamRun } = await import("../../shared/api/run-stream-client");
-    vi.mocked(createAndStreamRun).mockImplementation(async (_request, options) => {
-      await options?.onAccepted?.(accepted("run-files"));
-      options?.onEvent?.(streamEvent(1, "tool_execution_end", {
-        toolCallId: "call-fw",
-        toolName: "write",
-        isError: false
-      }));
-      options?.onEvent?.(streamEvent(2, "tool_execution_end", {
-        toolCallId: "call-fr",
-        toolName: "read",
-        isError: false
-      }));
-      return { ok: true, requestId: "terminal", data: { status: "completed", requestId: "terminal" } };
-    });
-    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
-      const url = String(input);
-      if (url.startsWith("/api/conversations?")) return ok({ items: [conversation("c1", "已有会话")] });
-      if (url.includes("/messages")) return ok({ items: [] });
-      throw new Error(`Unexpected fetch: ${url}`);
-    }));
-
-    try {
-      render(<MemoryRouter><Workbench /></MemoryRouter>);
-      await screen.findByRole("heading", { name: "已有会话" });
-      const textbox = screen.getByRole("textbox");
-      fireEvent.change(textbox, { target: { value: "写一个文件" } });
-      fireEvent.submit(textbox.closest("form")!);
-
-      // write 触发联动，read 不触发。
-      await waitFor(() => expect(changed).toEqual(["write"]));
-    } finally {
-      unsubscribe();
-    }
   });
 });
 

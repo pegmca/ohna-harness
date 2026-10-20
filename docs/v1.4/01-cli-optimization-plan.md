@@ -9,7 +9,7 @@
 > - 每阶段只做「窄切片 + 可验收」，禁止无验收的大爆炸重写。
 > - 每个阶段跑完本文 §11 验收总闸的**相关子集**再进入下一阶段。
 > - 文档同步：每完成一阶段，更新本文状态表 + ``（新建）+ `设计演进记录` 对应产出。
-> - 归因：opencode 为 MIT（`opencode/LICENSE`，含 `packages/tui`），凡参考实现的源文件在文件头注明 `ported from opencode (<path>)`，取舍记录进 ``（先例：v1.3 对 pi-monorepo 的参考实现）。
+> - 归因：opencode 为 MIT（`opencode/LICENSE`，含 `packages/tui`），凡参考实现的源文件在文件头注明 `参考自 opencode (<path>)`，取舍记录进 ``（先例：v1.3 对 pi-monorepo 的参考实现）。
 
 ---
 
@@ -105,7 +105,7 @@ pnpm typecheck
 2. `apps/ohna-cli/src/ui/stream/reducer.ts`（新）：`StreamReducer` 消费与现 `renderEvent` 同源的事件流（event + tracker），产出/修补 entry 序列。吸收 render.ts 的时序状态：流式 `tool_execution_start` 置 running、`end` 置 done；`assistant` 条目在 streaming 期间只 patch `text`；`message_end` stopReason=error → status=error。**移除**：`assistantDotPrinted`（隐式在 assistant 条目）、`recentFolded`（折叠改为组模型查询）、`verbose`（移入 state.verbosity）。
 3. `apps/ohna-cli/src/ui/stream/print.ts`（新）：非 TTY 打印 presenter——现 render.ts 的 `write()` 行为（含 `foldOutput` 1200 字符/40 行截断、40 行 diff 折叠）**原样迁移**为 entry → 行的降级格式化。非 TTY 行为零变化。
 4. `apps/ohna-cli/src/ui/render.ts`：退化为 re-export 壳（`renderEvent` 等入口签名不动，内部转调 reducer + 参数指定 presenter），`repl.ts` 等调用方零修改或最少修改。开发验证阶段允许直接替换内部实现（D4）。
-5. `apps/ohna-cli/src/ui/tui/grouping.ts`（新，参考实现）：opencode `routes/session/grouping/tree.ts` 的纯分组树（111 行，MIT，文件头标注 ported from opencode）——相邻同 kind 合并 + `size`（后代叶子数）+ `mergeGroups/splitGroups` 保留对象身份便于差分。
+5. `apps/ohna-cli/src/ui/tui/grouping.ts`（新，参考实现）：opencode `routes/session/grouping/tree.ts` 的纯分组树（111 行，MIT，文件头标注 参考自 opencode）——相邻同 kind 合并 + `size`（后代叶子数）+ `mergeGroups/splitGroups` 保留对象身份便于差分。
 6. `apps/ohna-cli/src/ui/tui/classifier.ts`（新，参考分类规则）：`entryPath(entry, verbosity): GroupKind[]`，参考 opencode `grouping/session.ts` 的 `partPath`，按 ohna 工具表适配：
    - `read / grep / find / ls` → `["exploration"]`；`bash / write / edit` → `["activity"]`（ohna 无 instructions 合成消息，**起步三类：reasoning / exploration / activity**，medium/high 生效；low 档所有非文本条目统一 `["activity"]` 前缀，整轮折叠为一行）。
    - `activitySummary` 参考 `activity-summary.ts`（`:61-95`）：只计**已完成**条目（运行中走 busyLabel，如 "Running bash…"），格式 `${n} ${label}` 连接："3 commands, 1 edit, 2 thoughts, 4 reads"。
@@ -302,7 +302,7 @@ pnpm typecheck
 | 权限卡内 diff 预览（≤120 列 unified；>120 列侧侧分栏为远期） | `routes/session/permission.tsx` | C3（分栏远期） |
 | 键位/命令单一注册表模式（默认键描述表 / 共享 dispatch / palette-slash-keymap 单命名空间） | `packages/tui/src/config/keybind.ts` + `context/keymap.tsx` | C2 |
 
-- 归因要求：参考实现的文件头标注 `ported from opencode <路径> (MIT)`，取舍记录进 ``。
+- 归因要求：参考实现的文件头标注 `参考自 opencode <路径> (MIT)`，取舍记录进 ``。
 
 ---
 

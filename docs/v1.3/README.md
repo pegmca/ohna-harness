@@ -70,7 +70,7 @@
 
 - 来源：`https://github.com/badlogic/pi-mono`（pi monorepo，`packages/coding-agent`），**MIT License**（`LICENSE`，Copyright (c) 2025 Mario Zechner）。
 - 可参考复用：工具核心算法与结果截断策略；需改造：typebox → zod、剥离 pi-tui 渲染与 extension context、去掉 `ToolDefinition` 中间层。
-- 归因要求：参考实现的文件保留来源标注（文件头注明 ported from pi），并在 `` 记录参考取舍。
+- 归因要求：参考实现的文件保留来源标注（文件头注明 参考自 pi），并在 `` 记录参考取舍。
 
 ## 五、执行原则
 

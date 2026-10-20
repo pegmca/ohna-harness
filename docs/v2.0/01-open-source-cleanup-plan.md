@@ -37,7 +37,7 @@
    另有 **7 处源码注释引用 `notes/*.md`**（如 `packages/agent/src/permission/policy.ts:68`）。
    → 迁走 `notes/` 后这些注释会变成**死链接**，必须改写（详见 §3.3）。
 4. **源码含第三方参考声明**：`apps/ohna-cli/src/ui/tui/*` 与 `packages/coding/src/**` 多处注释说明设计参考了 pi / opencode（MIT）；均为自主实现，仅依 MIT 许可证致谢，并非逐字移植。
-   → 开源前**必须补 LICENSE 与 THIRD-PARTY-NOTICES**，否则法律上不可发布。
+   → 开源前**必须补 LICENSE**，否则法律上不可发布。
 5. **个人绝对路径 `<HOME>/...`** 出现在 18 个文件（含 `.vscode/launch.json` 与 13 个文档）。
    → 非学习类，但属于隐私泄露面，应一并清洗为相对/示例路径。
 6. **`.env.example:44` 暴露自托管 LLM 的真实公网 IP** `http://43.130.49.34:8787/v1`。
@@ -141,7 +141,7 @@ notes/      ❌ 整体移出
 | 文件 | 内容 |
 |---|---|
 | `LICENSE` | 主许可证（建议 MIT；或 Apache-2.0 若顾虑专利） |
-| `THIRD-PARTY-NOTICES.md` | 设计参考了 pi / opencode（均 MIT）并依许可证致谢；superpowers 未随仓发布时的说明 |
+| ~~`THIRD-PARTY-NOTICES.md`~~ | 原方案计划新增的第三方致谢文件；最终未随仓发布 |
 | `.github/ISSUE_TEMPLATE/`、`PULL_REQUEST_TEMPLATE.md` | 可选，但显著提升开源观感 |
 | `CONTRIBUTING.md` | 可选 |
 
@@ -372,7 +372,7 @@ TypeScript Agent 工程 monorepo：一套可复用的 Agent 内核（`packages/a
 | 5 | **试跑后校验** | §6 验收清单第 1~5 条 + 人工 grep 抽检保留文档 | 正则误伤风险 |
 | 6 | 校验通过后，**对正式工作区执行同命令** | 同样 §3.2 命令 | 中（不可逆，先有步骤 0 备份） |
 | 7 | **人工改写** | §3.6 的 3 类残留 + §2.3 源码 10 处 + §2.4 隐私路径 | 低（可 review） |
-| 8 | 新增 `LICENSE` / `THIRD-PARTY-NOTICES.md` | MIT + pi / opencode 署名 | 无 |
+| 8 | 新增 `LICENSE`（未随仓发布 `THIRD-PARTY-NOTICES.md`） | MIT | 无 |
 | 9 | 重写 `README.md` / `AGENTS.md` | §4.1 / §4.2 | 无 |
 | 10 | 修复交叉引用 | §4.3 | 无 |
 | 11 | **最终校验** | §6 全部条 | — |
@@ -412,7 +412,7 @@ grep -rn 'LEARNING_AND_EVOLUTION_ROADMAP\|ROADMAP_1_MONTH\|LEARNING_PATH' \
 
 # 6) 保留文档完整性与新增文件
 git ls-files docs | wc -l                    # 预期 53 → 约 45
-ls LICENSE THIRD-PARTY-NOTICES.md            # 必须存在
+ls LICENSE                                     # 必须存在
 
 # 7) 工程校验
 pnpm install && pnpm build && pnpm typecheck && pnpm test && pnpm architecture:check
@@ -436,7 +436,7 @@ pnpm install && pnpm build && pnpm typecheck && pnpm test && pnpm architecture:c
 | 删除原仓库不可逆 | 丢失 4 个 `stage5/*` 分支与历史 PR 引用 | 步骤 0 的 mirror 备份；删除前导出 PR 列表存档 |
 | `notes/` 迁出后源码注释死链 | 文档指向不存在的路径 | §2.3 的 7 处改写必须做完 |
 | 无 LICENSE 即公开 | 法律上默认「保留所有权利」 | 步骤 7 为**强制项**，不可跳过 |
-| 第三方代码声明缺失 | pi / opencode MIT 代码未署名 | `THIRD-PARTY-NOTICES.md` 强制项 |
+| 第三方代码声明缺失 | pi / opencode MIT 代码未署名 | 源码注释已含参考致谢，无需独立声明文件 |
 | 强制 push / 重写历史 | 若有人已 fork 会冲突 | 新建仓库而非原地重写，天然规避 |
 | `filter-repo` 要求干净工作区 | 步骤 2 未清理会报错 | 步骤 2 显式处理脏工作区 |
 | `pip3 install` 被 PEP 668 拦截 | 装不上工具，卡住整个流程 | 改用 `python3 -m venv`（已实测可行） |

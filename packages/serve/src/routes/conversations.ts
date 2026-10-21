@@ -6,7 +6,7 @@
  */
 import type {
   ApiResult,
-  ConversationDto,
+  WorkspaceConversationDto,
   CursorPageDto,
   LinearMessageDto
 } from "@aiagent/types";
@@ -24,7 +24,7 @@ import type { RouteDeps } from "./types.js";
  * @param meta 会话元数据。
  * @returns 会话 DTO。
  */
-export function toConversationDto(meta: SessionMeta): ConversationDto {
+export function toConversationDto(meta: SessionMeta): WorkspaceConversationDto {
   return {
     conversationId: meta.id,
     title: meta.title,
@@ -32,6 +32,8 @@ export function toConversationDto(meta: SessionMeta): ConversationDto {
     createdAt: meta.createdAt,
     updatedAt: meta.updatedAt,
     lastMessageAt: meta.updatedAt,
+    // 工作区根目录已随会话落盘；DTO 必填透出，供 web 侧栏按工作区分组（D1）。
+    workspaceRoot: meta.workspaceRoot,
     ...(meta.status === "archived" ? { archivedAt: meta.archivedAt ?? meta.updatedAt } : {})
   };
 }
@@ -56,7 +58,7 @@ function asRecord(body: unknown): Record<string, unknown> | null {
  */
 export function registerConversationRoutes(app: FastifyInstance, deps: RouteDeps): void {
   /** 创建会话；标题缺省为「新会话」。 */
-  app.post("/api/conversations", async (request, reply): Promise<ApiResult<ConversationDto>> => {
+  app.post("/api/conversations", async (request, reply): Promise<ApiResult<WorkspaceConversationDto>> => {
     const requestId = createRequestId();
     if (deps.isShuttingDown()) {
       return failure(reply, requestId, 503, "internal_error", "服务正在关闭，暂时无法创建会话。");
@@ -73,12 +75,21 @@ export function registerConversationRoutes(app: FastifyInstance, deps: RouteDeps
     return { ok: true, requestId, data: toConversationDto(meta) };
   });
 
-  /** 列出 active 会话；本地规模直接返回全部，nextCursor 缺省。 */
-  app.get<{ Querystring: { cursor?: string; limit?: string } }>(
+  /**
+   * 列出 active 会话；本地规模直接返回全部，nextCursor 缺省。
+   *
+   * 可选 `workspaceRoot` 查询参数按工作区过滤：web 的 composer 只应看到本工作区的会话
+   * （跨工作区会话是只读的，见 03 D2），而侧栏需要全部会话做分组展示，因此过滤是显式可选、
+   * 而非默认行为。
+   */
+  app.get<{ Querystring: { cursor?: string; limit?: string; workspaceRoot?: string } }>(
     "/api/conversations",
-    async (_request): Promise<ApiResult<CursorPageDto<ConversationDto>>> => {
+    async (request): Promise<ApiResult<CursorPageDto<WorkspaceConversationDto>>> => {
       const requestId = createRequestId();
-      const items = (await deps.sessionStore.list()).map(toConversationDto);
+      const workspaceFilter = request.query.workspaceRoot;
+      const items = (await deps.sessionStore.list())
+        .filter((meta) => workspaceFilter === undefined || meta.workspaceRoot === workspaceFilter)
+        .map(toConversationDto);
       return { ok: true, requestId, data: { items } };
     }
   );
@@ -86,7 +97,7 @@ export function registerConversationRoutes(app: FastifyInstance, deps: RouteDeps
   /** 修改标题或归档。 */
   app.patch<{ Params: { conversationId: string } }>(
     "/api/conversations/:conversationId",
-    async (request, reply): Promise<ApiResult<ConversationDto>> => {
+    async (request, reply): Promise<ApiResult<WorkspaceConversationDto>> => {
       const requestId = createRequestId();
       if (deps.isShuttingDown()) {
         return failure(reply, requestId, 503, "internal_error", "服务正在关闭，暂时无法修改会话。");

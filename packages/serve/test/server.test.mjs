@@ -137,6 +137,25 @@ test("health / identity / models / conversations / 静态占位页", async () =>
 
     const list = (await server.app.inject({ method: "GET", url: "/api/conversations" })).json();
     assert.equal(list.data.items.length, 1);
+    // TC-L1-01：DTO 必填透出产生该会话的工作区根目录（web 侧栏按它分组）。
+    assert.equal(list.data.items[0].workspaceRoot, workspaceRoot);
+    assert.equal(conversation.workspaceRoot, workspaceRoot);
+
+    // 工作区过滤：本工作区命中、其他工作区返回空（web composer 选会话用，侧栏仍取全量）。
+    const sameWorkspace = (
+      await server.app.inject({
+        method: "GET",
+        url: `/api/conversations?workspaceRoot=${encodeURIComponent(workspaceRoot)}`
+      })
+    ).json();
+    assert.equal(sameWorkspace.data.items.length, 1);
+    const otherWorkspace = (
+      await server.app.inject({
+        method: "GET",
+        url: `/api/conversations?workspaceRoot=${encodeURIComponent(`${workspaceRoot}-other`)}`
+      })
+    ).json();
+    assert.equal(otherWorkspace.data.items.length, 0);
 
     const renamed = (
       await server.app.inject({

@@ -75,6 +75,47 @@ test("session store: create/list/get/touch/update + 损坏行跳过", async () =
   }
 });
 
+test("session store: workspaceRoot 必填透出，缺字段/空串的坏行被跳过", async () => {
+  const dir = await tempDir();
+  try {
+    const store = new LocalSessionStore(path.join(dir, "sessions"));
+    // 正常写入带 workspaceRoot 的会话，DTO 透出该字段。
+    const created = await store.create({ title: "带工作区的会话", workspaceRoot: "/work/a" });
+    assert.equal(created.workspaceRoot, "/work/a");
+    const toDto = (await import("../dist/routes/conversations.js")).toConversationDto;
+    const dto = toDto(created);
+    assert.equal(dto.workspaceRoot, "/work/a");
+
+    // 直接往索引追加：缺 workspaceRoot 与空串 workspaceRoot 两行坏数据（阻断性升级，无空串兜底）。
+    await fs.appendFile(path.join(dir, "sessions", "index.jsonl"), JSON.stringify({
+      type: "session",
+      id: "no-ws",
+      title: "缺工作区",
+      createdAt: new Date(2026, 0, 1).toISOString(),
+      updatedAt: new Date(2026, 0, 1).toISOString(),
+      status: "active"
+    }) + "\n", "utf8");
+    await fs.appendFile(path.join(dir, "sessions", "index.jsonl"), JSON.stringify({
+      type: "session",
+      id: "empty-ws",
+      title: "空工作区",
+      createdAt: new Date(2026, 0, 1).toISOString(),
+      updatedAt: new Date(2026, 0, 1).toISOString(),
+      workspaceRoot: "",
+      status: "active"
+    }) + "\n", "utf8");
+
+    const all = await store.list({ includeArchived: true });
+    const ids = all.map((item) => item.id);
+    assert.ok(ids.includes(created.id), "正常会话仍可读");
+    assert.equal(ids.includes("no-ws"), false, "缺 workspaceRoot 的坏行应被跳过");
+    assert.equal(ids.includes("empty-ws"), false, "空串 workspaceRoot 的坏行应被跳过");
+    await store.close();
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("message store: sequence 从 1 递增、游标分页、损坏行跳过", async () => {
   const dir = await tempDir();
   try {

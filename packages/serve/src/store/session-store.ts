@@ -68,6 +68,9 @@ function toSessionLine(value: unknown): SessionLine | null {
   const record = value as Record<string, unknown>;
   if (record.type !== "session") return null;
   if (typeof record.id !== "string" || !isValidStoreId(record.id)) return null;
+  // 阻断性升级：workspaceRoot 必填，缺字段或空串的行视为坏行跳过，不做空串兜底（02 之前的旧会话
+  // 数据无此字段，按坏行处理而非默认归组）。
+  if (typeof record.workspaceRoot !== "string" || record.workspaceRoot.trim() === "") return null;
   const status = record.status === "archived" ? "archived" : "active";
   return {
     type: "session",
@@ -75,7 +78,7 @@ function toSessionLine(value: unknown): SessionLine | null {
     title: typeof record.title === "string" && record.title.trim() ? record.title : "新会话",
     createdAt: typeof record.createdAt === "string" ? record.createdAt : nowIso(),
     updatedAt: typeof record.updatedAt === "string" ? record.updatedAt : nowIso(),
-    workspaceRoot: typeof record.workspaceRoot === "string" ? record.workspaceRoot : "",
+    workspaceRoot: record.workspaceRoot,
     status,
     ...(status === "archived" && typeof record.archivedAt === "string" ? { archivedAt: record.archivedAt } : {})
   };

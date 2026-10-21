@@ -19,7 +19,7 @@ import type { Model } from "@aiagent/ai";
 import type { AgentTool } from "@aiagent/tools";
 import { buildCodingSystemPrompt, createCodingToolRegistry } from "@aiagent/coding";
 import type {
-  ConversationDto,
+  WorkspaceConversationDto,
   ModelCatalogDto,
   RunMetaDtoV2,
   RunSnapshotDtoV2,
@@ -85,9 +85,9 @@ export interface OhnaServer {
     decision: ConfirmationDecision
   ): ReturnType<RunManager["resolveConfirmation"]>;
   /** 创建会话（进程内入口复用，等价 POST /api/conversations）。 */
-  createConversation(title?: string): Promise<ConversationDto>;
+  createConversation(title?: string): Promise<WorkspaceConversationDto>;
   /** 列出 active 会话（进程内入口复用，等价 GET /api/conversations）。 */
-  listConversations(): Promise<ConversationDto[]>;
+  listConversations(): Promise<WorkspaceConversationDto[]>;
   /**
    * 创建并启动一次 run（进程内入口复用，等价 POST /api/runs）。
    * requestId 缺省时自动生成；mode/source 缺省取 composer 语义（auto / composer）。

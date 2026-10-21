@@ -20,6 +20,8 @@ interface ComposerControlsProps {
   error: string | undefined;
   input: string;
   isSubmitting: boolean;
+  /** 跨工作区只读：会话属于其他工作区时禁用输入与发送（消息存储共享但 agent 上下文是实例本地的）。 */
+  readOnly?: boolean;
   models: ModelOptionDto[];
   modelCatalogStatus: "loading" | "ready" | "failed";
   modelCatalogError?: string;
@@ -44,7 +46,8 @@ export function ComposerControls(props: ComposerControlsProps) {
   const [ideaOpen, setIdeaOpen] = useState(false);
   const [modelOpen, setModelOpen] = useState(false);
   const selectedModel = props.models.find((model) => model.id === props.selectedModelId);
-  const canSend = props.input.trim().length > 0
+  const canSend = !props.readOnly
+    && props.input.trim().length > 0
     && props.modelCatalogStatus === "ready"
     && Boolean(props.selectedModelId);
 
@@ -70,11 +73,14 @@ export function ComposerControls(props: ComposerControlsProps) {
 
   return (
     <form className="chat-composer" onSubmit={props.onSubmit}>
+      {props.readOnly ? (
+        <div className="composer-error" role="status">该会话属于其他工作区，请在对应目录的 ohna 会话中继续。</div>
+      ) : null}
       {props.error ? <div className="composer-error" role="status">{props.error}</div> : null}
       <div className="composer-box">
         <textarea
           className="composer-textarea"
-          disabled={props.isSubmitting}
+          disabled={props.isSubmitting || props.readOnly}
           onChange={(event) => props.onInputChange(event.target.value)}
           onKeyDown={handleKeyDown}
           placeholder="描述一个编码任务…"

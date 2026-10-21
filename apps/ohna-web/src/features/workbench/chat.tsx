@@ -404,6 +404,8 @@ interface ChatComposerProps {
   error: string | undefined;
   input: string;
   isSubmitting: boolean;
+  /** 跨工作区只读：会话属于其他工作区时禁用输入与发送。 */
+  readOnly?: boolean;
   models: ModelOptionDto[];
   modelCatalogStatus: "loading" | "ready" | "failed";
   modelCatalogError?: string;
@@ -425,6 +427,8 @@ interface ChatComposerProps {
 export function ChatComposer(props: ChatComposerProps) {
   return <ComposerControls {...props} prompts={demoPrompts} />;
 }
+
+export type { ChatComposerProps };
 
 /**
  * 展示示例任务，空状态和 composer 复用同一组真实请求入口。

@@ -1,6 +1,6 @@
 import type {
   ApiResult,
-  ConversationDto,
+  WorkspaceConversationDto,
   CreateConversationRequestDto,
   CursorPageDto,
   LinearMessageDto,
@@ -9,20 +9,29 @@ import type {
 } from "@aiagent/types";
 import { parseApiResult } from "./http-client";
 
-/** @param cursor 可选游标。 @param signal 取消信号。 @returns 会话页。 */
+/**
+ * 列出会话（按最近更新倒序）。
+ *
+ * @param cursor 可选游标。
+ * @param signal 取消信号。
+ * @param workspaceRoot 可选工作区过滤；缺省返回全部工作区会话（侧栏分组展示用）。
+ * @returns 会话页。
+ */
 export async function listConversations(
   cursor?: string,
-  signal?: AbortSignal
-): Promise<ApiResult<CursorPageDto<ConversationDto>>> {
+  signal?: AbortSignal,
+  workspaceRoot?: string
+): Promise<ApiResult<CursorPageDto<WorkspaceConversationDto>>> {
   const query = new URLSearchParams({ limit: "30" });
   if (cursor) query.set("cursor", cursor);
+  if (workspaceRoot) query.set("workspaceRoot", workspaceRoot);
   return parseApiResult(await fetch(`/api/conversations?${query}`, { signal }));
 }
 
 /** @param input 创建输入。 @returns 新会话。 */
 export async function createConversation(
   input: CreateConversationRequestDto
-): Promise<ApiResult<ConversationDto>> {
+): Promise<ApiResult<WorkspaceConversationDto>> {
   return parseApiResult(await fetch("/api/conversations", {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -56,7 +65,7 @@ export async function getRunSnapshot(
 export async function updateConversation(
   conversationId: string,
   input: UpdateConversationRequestDto
-): Promise<ApiResult<ConversationDto>> {
+): Promise<ApiResult<WorkspaceConversationDto>> {
   return parseApiResult(await fetch(`/api/conversations/${encodeURIComponent(conversationId)}`, {
     method: "PATCH",
     headers: { "content-type": "application/json" },

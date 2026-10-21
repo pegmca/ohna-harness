@@ -1,6 +1,6 @@
 import type {
   ApiError,
-  ConversationDto,
+  WorkspaceConversationDto,
   LinearMessageDto,
   RunStatusDtoV2,
   RunStreamEventDtoV2
@@ -250,7 +250,7 @@ export function textOfBlocks(blocks: UiContentBlock[]): string {
 }
 
 /** @param current 已加载会话。 @param incoming 新页。 @returns 按 ID 去重的列表。 */
-export function mergeConversations(current: ConversationDto[], incoming: ConversationDto[]): ConversationDto[] {
+export function mergeConversations(current: WorkspaceConversationDto[], incoming: WorkspaceConversationDto[]): WorkspaceConversationDto[] {
   const seen = new Set(current.map((item) => item.conversationId));
   return [...current, ...incoming.filter((item) => !seen.has(item.conversationId))];
 }

@@ -529,6 +529,57 @@ textarea:disabled {
     border-color var(--md-motion-base) var(--md-ease);
 }
 
+/* 工作区分组：组头展示目录 basename + 数量，点击折叠组内会话（D1）。 */
+.conversation-group {
+  display: grid;
+  gap: 2px;
+}
+
+.conversation-group-header {
+  display: flex;
+  align-items: center;
+  gap: var(--md-space-2);
+  width: 100%;
+  margin-top: var(--md-space-3);
+  padding: var(--md-space-1) var(--md-space-2);
+  border: 0;
+  border-radius: var(--md-radius-md);
+  background: transparent;
+  color: var(--md-color-text-secondary);
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.conversation-group-header:hover {
+  background: var(--md-color-elevated);
+  color: var(--md-color-text-primary);
+}
+
+.conversation-group-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversation-group-count {
+  flex: 0 0 auto;
+  color: var(--md-color-text-muted);
+  font-weight: 500;
+}
+
+.group-chevron {
+  flex: 0 0 auto;
+  transition: transform var(--md-motion-base) var(--md-ease);
+}
+
+.group-chevron.is-collapsed {
+  transform: rotate(-90deg);
+}
+
 .conversation-select {
   display: grid;
   min-width: 0;
@@ -2594,4 +2645,305 @@ textarea:disabled {
   border: 1px dashed var(--md-color-border);
   border-radius: var(--md-radius-md);
   padding: var(--md-space-3);
+}
+
+/* ---------- Trace 右侧抽屉（03 L2） ---------- */
+
+/*
+ * 抽屉与 RunDetailPanel 共用同一列：打开时 agent-app-shell 追加 has-trace-panel，
+ * 列宽与 has-detail-panel 同构（导航 + 主内容最低宽度后再分配剩余空间）。
+ */
+.agent-app-shell.has-trace-panel {
+  grid-template-columns: 280px minmax(640px, 1fr) clamp(420px, calc(100vw - 920px), 860px);
+}
+
+.trace-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--md-space-1);
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.trace-drawer {
+  position: relative;
+  z-index: 12;
+  display: grid;
+  min-width: 0;
+  height: 100vh;
+  grid-template-rows: auto minmax(0, 1fr);
+  border-left: 1px solid var(--md-color-border-subtle);
+  background: var(--md-color-surface);
+  overflow: hidden;
+  animation: trace-drawer-in var(--md-motion-slow) var(--md-ease);
+}
+
+@keyframes trace-drawer-in {
+  from { opacity: 0; transform: translateX(24px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+.trace-drawer-header {
+  display: flex;
+  min-height: 72px;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--md-space-3);
+  border-bottom: 1px solid var(--md-color-border-subtle);
+  padding: var(--md-space-4) var(--md-space-5);
+}
+
+.trace-drawer-title {
+  min-width: 0;
+}
+
+.trace-drawer-title h2 {
+  margin: var(--md-space-1) 0 0;
+  overflow: hidden;
+  color: var(--md-color-text-primary);
+  font-size: 1rem;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.trace-drawer-body {
+  display: grid;
+  min-height: 0;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  gap: var(--md-space-3);
+  padding: var(--md-space-4) var(--md-space-5);
+  overflow: hidden;
+}
+
+.trace-run-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--md-space-2);
+}
+
+.trace-run-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--md-space-2);
+  border: 1px solid var(--md-color-border-subtle);
+  border-radius: var(--md-radius-md);
+  background: var(--md-color-canvas);
+  padding: var(--md-space-1) var(--md-space-2);
+  color: var(--md-color-text-primary);
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.trace-run-chip:hover,
+.trace-run-chip.is-active {
+  border-color: var(--md-color-primary);
+  background: var(--md-color-primary-soft);
+}
+
+.trace-run-chip-time {
+  color: var(--md-color-text-muted);
+  font-size: 0.75rem;
+}
+
+.trace-drawer-run-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--md-space-2);
+  color: var(--md-color-text-muted);
+  font-family: var(--md-font-mono);
+  font-size: 0.6875rem;
+}
+
+.trace-drawer-scroll {
+  min-height: 0;
+  overflow: auto;
+}
+
+@media (min-width: 901px) and (max-width: 1439px) {
+  .agent-app-shell.has-trace-panel { grid-template-columns: 280px minmax(0, 1fr); }
+  .trace-drawer {
+    position: fixed;
+    inset: 0 0 0 auto;
+    width: min(92vw, 720px);
+    box-shadow: var(--md-shadow-lg);
+  }
+}
+
+@media (max-width: 900px) {
+  .agent-app-shell.has-trace-panel { grid-template-columns: minmax(0, 1fr); }
+  /* 移动端：全屏 overlay（沿用 sidebar drawer 先例）。 */
+  .trace-drawer {
+    position: fixed;
+    inset: 0;
+    z-index: 40;
+    width: 100%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .trace-drawer { animation: none; }
+}
+
+/* ---------- 设置页（03 L3） ---------- */
+
+.settings-page {
+  display: grid;
+  min-height: 100vh;
+  grid-template-rows: auto minmax(0, 1fr);
+  background: var(--md-color-canvas);
+}
+
+.settings-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--md-space-4);
+  border-bottom: 1px solid var(--md-color-border-subtle);
+  padding: var(--md-space-4) var(--md-space-6);
+}
+
+.settings-title {
+  margin: var(--md-space-1) 0 0;
+  color: var(--md-color-text-primary);
+  font-size: 1.25rem;
+  font-weight: 650;
+}
+
+.settings-subtitle {
+  margin: var(--md-space-1) 0 0;
+  color: var(--md-color-text-muted);
+  font-size: 0.8125rem;
+}
+
+.settings-layout {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+  min-height: 0;
+}
+
+.settings-nav {
+  display: grid;
+  align-content: start;
+  gap: var(--md-space-1);
+  border-right: 1px solid var(--md-color-border-subtle);
+  padding: var(--md-space-4) var(--md-space-3);
+}
+
+.settings-nav-item {
+  display: grid;
+  gap: 2px;
+  border-radius: var(--md-radius-md);
+  padding: var(--md-space-2) var(--md-space-3);
+  color: var(--md-color-text-primary);
+  text-decoration: none;
+}
+
+.settings-nav-item:hover {
+  background: var(--md-color-elevated);
+}
+
+.settings-nav-item small {
+  color: var(--md-color-text-muted);
+  font-size: 0.75rem;
+}
+
+.settings-content {
+  display: grid;
+  align-content: start;
+  gap: var(--md-space-4);
+  width: min(100%, 860px);
+  padding: var(--md-space-6);
+  overflow: auto;
+  scroll-behavior: smooth;
+}
+
+.settings-section {
+  display: grid;
+  gap: var(--md-space-4);
+  scroll-margin-top: var(--md-space-4);
+}
+
+.settings-section-header h2 {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 650;
+}
+
+.settings-section-header p {
+  margin: var(--md-space-1) 0 0;
+  color: var(--md-color-text-muted);
+  font-size: 0.8125rem;
+}
+
+.settings-subsection {
+  display: grid;
+  gap: var(--md-space-2);
+}
+
+.settings-subsection h3 {
+  margin: 0;
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.settings-facts {
+  border-top: 1px solid var(--md-color-border-subtle);
+}
+
+.settings-inline {
+  display: grid;
+  gap: var(--md-space-1);
+}
+
+.settings-font-options {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.settings-model-list {
+  display: grid;
+  gap: var(--md-space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.settings-model-row {
+  display: grid;
+  gap: var(--md-space-2);
+  border: 1px solid var(--md-color-border-subtle);
+  border-radius: var(--md-radius-lg);
+  padding: var(--md-space-3);
+}
+
+.settings-model-title {
+  display: flex;
+  align-items: center;
+  gap: var(--md-space-2);
+}
+
+.settings-model-row p {
+  margin: 0;
+}
+
+.settings-model-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--md-space-2);
+}
+
+@media (max-width: 900px) {
+  .settings-layout { grid-template-columns: minmax(0, 1fr); }
+  .settings-nav {
+    display: flex;
+    overflow-x: auto;
+    border-right: 0;
+    border-bottom: 1px solid var(--md-color-border-subtle);
+  }
+  .settings-nav-item small { display: none; }
+  .settings-font-options { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .settings-content { padding: var(--md-space-4); }
 }

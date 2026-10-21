@@ -3,7 +3,7 @@
 > **口径**：opencode v2.0.32（`https://github.com/sst/opencode`）对比 ohna 当前实现（v1.3 收尾状态）。
 > 本文**只记录差异**，不含实施方案、里程碑与排期。
 >
-> 配套实施计划：`01-cli-optimization-plan.md` —— 将本文 §二/§三 的 B/C 类差异整理为依赖有序、可独立验收的 CLI/TUI 改造阶段（C0 渲染内核 → C1 语义条目模型 → C2 命令注册表/输入路由 → C3 权限卡与 Toast → C4 长会话预算 → C5 主题 token），含文件级交付清单与验收判据；`02-web-llm-trace.md` —— CLI 启动同步拉起 Web 观测台 + LLM 请求/响应全程追踪（W1 采集层 → W2 serve 观测面 → W3 CLI 接线 → W4 web Trace 页），含 `LlmCallRecordDto` 契约与 `observeRun` 镜像语义。
+> 配套实施计划：`01-cli-optimization-plan.md` —— 将本文 §二/§三 的 B/C 类差异整理为依赖有序、可独立验收的 CLI/TUI 改造阶段（C0 渲染内核 → C1 语义条目模型 → C2 命令注册表/输入路由 → C3 权限卡与 Toast → C4 长会话预算 → C5 主题 token），含文件级交付清单与验收判据；`02-web-llm-trace.md` —— CLI 启动同步拉起 Web 观测台 + LLM 请求/响应全程追踪（W1 采集层 → W2 serve 观测面 → W3 CLI 接线 → W4 web Trace 页），含 `LlmCallRecordDto` 契约与 `observeRun` 镜像语义；`03-web-layout-alignment.md` —— ohna-web 布局对齐（L1 会话按工作区分组 → L2 Trace 右侧抽屉 → L3 设置页 → L4 验证同步），调研对标 dsh web 与 CodeBuddy Remote Control（L1–L4 已全部完成，实施记录与验收结果见该文 §8/§9）。
 >
 > 范围：整体架构 + CLI/TUI 表现。产品定位、团队规模、发布方式不在对比范围内。
 

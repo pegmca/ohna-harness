@@ -1,11 +1,12 @@
 import type {
   ApiResult,
-  ConversationDto,
+  WorkspaceConversationDto,
   RunStreamEventDtoV2
 } from "@aiagent/types";
 import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { WorkbenchNav } from "../../app/workbench-nav";
+import { TraceToggle, WorkbenchNav } from "../../app/workbench-nav";
+import { TraceDrawer } from "../trace/TraceDrawer";
 import { cancelRun, createAndStreamRun, replayRunEvents, type RunTerminalDto } from "../../shared/api/run-stream-client";
 import { fetchLocalMode, type LocalModeInfo } from "../../shared/mode";
 import {
@@ -47,7 +48,7 @@ import { useComposerState } from "./use-composer-state";
 export function Workbench() {
   const location = useLocation();
   const navigate = useNavigate();
-  const [conversations, setConversations] = useState<ConversationDto[]>([]);
+  const [conversations, setConversations] = useState<WorkspaceConversationDto[]>([]);
   const [activeConversationId, setActiveConversationId] = useState(
     () => new URLSearchParams(location.search).get("conversation") ?? ""
   );
@@ -62,6 +63,8 @@ export function Workbench() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [composerError, setComposerError] = useState<string | undefined>();
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  // Trace 抽屉（D3）：初始收起、不读 URL——刷新即回到对话视图。
+  const [isTraceOpen, setIsTraceOpen] = useState(false);
   const [localMode, setLocalMode] = useState<LocalModeInfo | null>(null);
   const [selectedRunDetail, setSelectedRunDetail] = useState<SelectedRunDetail>();
   const [_activeRunId, setActiveRunId] = useState<string>();
@@ -89,12 +92,80 @@ export function Workbench() {
   const latestRunStatus = [...messages].reverse().find((message) => message.runStatus)?.runStatus;
   const confirmationCards = deriveConfirmationCards(confirmationEvents);
 
+  // 跨工作区会话只读（D2）：当前实例工作区与会话产生工作区不一致时，composer 禁用，
+  // 防止把消息发进错误工作区的 agent 上下文（消息存储共享，但 agent 上下文是实例本地的）。
+  const crossWorkspaceReadOnly = Boolean(
+    localMode?.workspaceRoot
+    && activeConversation?.workspaceRoot
+    && localMode.workspaceRoot !== activeConversation.workspaceRoot
+  );
+
+  /**
+   * 本工作区会话（DTO 镜像，只比 `conversations` 多出跨工作区的"新鲜"条目）。
+   *
+   * `conversations` 是侧栏的全量列表，分页追加时会混入其他工作区的会话（append 页不含
+   * active 过滤），因此 composer 的目标会话查找不能直接用它——否则在深页里选中跨工作区
+   * 会话会把消息发出去。打开 Trace 抽屉时额外拉一次本工作区列表（`?workspaceRoot=`）合并进来。
+   */
+  const [workspaceConversations, setWorkspaceConversations] = useState<WorkspaceConversationDto[]>([]);
+
+  /**
+   * 把一个本工作区会话合并进 composer 的候选列表（创建成功后调用）。
+   *
+   * @param conversation 服务端返回的会话 DTO。
+   * @returns void。
+   */
+  function appendWorkspaceConversation(conversation: WorkspaceConversationDto): void {
+    setWorkspaceConversations((current) => mergeConversations(current, [conversation]));
+  }
+
+  /**
+   * 切换 Trace 抽屉。右侧位互斥（L2-3 / TC-L2-04）：Trace 抽屉与 RunDetailPanel 都是
+   * 「右侧排查位」，打开其一即收起另一个，避免两套面板抢同一列。
+   *
+   * @returns void。
+   */
+  function toggleTrace(): void {
+    setIsTraceOpen((current) => {
+      if (!current) setSelectedRunDetail(undefined);
+      return !current;
+    });
+  }
+
+  /**
+   * 打开某条 assistant 消息的运行详情；同时收起 Trace 抽屉（互斥的另一半）。
+   *
+   * @param detail 选中的消息与分区。
+   * @returns void。
+   */
+  function openRunDetail(detail: SelectedRunDetail): void {
+    setIsTraceOpen(false);
+    setSelectedRunDetail(detail);
+  }
+
   useEffect(() => {
     const controller = new AbortController();
     void loadConversationPage(undefined, false, controller.signal);
     void fetchLocalMode(controller.signal).then((mode) => setLocalMode(mode));
     return () => controller.abort();
   }, []);
+
+  // 本工作区会话（composer 目标查找用）：拿到当前实例工作区后拉一次，之后由 createConversation 追加。
+  useEffect(() => {
+    const workspaceRoot = localMode?.workspaceRoot;
+    if (!workspaceRoot) return;
+    const controller = new AbortController();
+    void (async () => {
+      try {
+        const result = await listConversations(undefined, controller.signal, workspaceRoot);
+        if (controller.signal.aborted || !result.ok) return;
+        setWorkspaceConversations((current) => mergeConversations(current, result.data.items));
+      } catch {
+        // 失败不影响主流程：兜底查找仍可用侧栏列表 + workspaceRoot 判定。
+      }
+    })();
+    return () => controller.abort();
+  }, [localMode?.workspaceRoot]);
 
   useEffect(() => {
     if (!activeConversationId) {
@@ -172,6 +243,9 @@ export function Workbench() {
 
   /**
    * 加载会话分页；服务端列表是历史唯一事实源，追加时按 ID 去重。
+   *
+   * 侧栏展示全部工作区的会话（03 D1 分组），因此这里的列表是**全量**；composer 选会话时
+   * 另外按本工作区过滤（见 submitAgentMessage 的 append 分支），避免把消息发进跨工作区会话。
    *
    * @param cursor 可选游标。
    * @param append 是否追加。
@@ -296,6 +370,7 @@ export function Workbench() {
    */
   async function handleSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
+    if (crossWorkspaceReadOnly) return;
     await submitMessage(input);
   }
 
@@ -449,12 +524,22 @@ export function Workbench() {
   ): Promise<void> {
     const trimmed = message.trim();
     const submittedModelId = retryContext?.modelId ?? composer.selectedModelId;
-    if (!trimmed || isSubmitting || !submittedModelId) {
+    // 跨工作区会话只读（D2）：即使 UI 已被禁用，这里也再兜一层，绝不把消息发进其他工作区的会话。
+    if (!trimmed || isSubmitting || !submittedModelId || crossWorkspaceReadOnly) {
       return;
     }
-    let conversation = conversations.find(
-      (item) => item.conversationId === activeConversationIdRef.current
+    // 优先在本工作区候选里找（跨工作区会话不在其中，因此不会被选中发送）。
+    const currentId = activeConversationIdRef.current;
+    let conversation: WorkspaceConversationDto | undefined = workspaceConversations.find(
+      (item) => item.conversationId === currentId
     );
+    if (!conversation && localMode?.workspaceRoot) {
+      const sidebarMatch = conversations.find((item) => item.conversationId === currentId);
+      if (sidebarMatch && sidebarMatch.workspaceRoot === localMode.workspaceRoot) conversation = sidebarMatch;
+    } else if (!conversation && !localMode) {
+      // 健康检查尚未返回（或本地服务不可用）时退回侧栏列表；此时 crossWorkspaceReadOnly 为 false。
+      conversation = conversations.find((item) => item.conversationId === currentId);
+    }
     if (!conversation) {
       const created = await createConversation({ title: createConversationTitle(trimmed) });
       if (!created.ok) {
@@ -463,6 +548,7 @@ export function Workbench() {
       }
       conversation = created.data;
       setConversations((current) => [created.data, ...current]);
+      appendWorkspaceConversation(created.data);
       selectConversation(created.data.conversationId, false, true);
     }
 
@@ -678,7 +764,8 @@ export function Workbench() {
   return (
     <main className={[
       "agent-app-shell",
-      selectedRunDetail ? "has-detail-panel" : ""
+      selectedRunDetail ? "has-detail-panel" : "",
+      isTraceOpen ? "has-trace-panel" : ""
     ].filter(Boolean).join(" ")}>
       <ConversationSidebar
         activeConversationId={activeConversation?.conversationId}
@@ -702,7 +789,12 @@ export function Workbench() {
           latestRunStatus={latestRunStatus}
           localMode={localMode}
           onMenuClick={() => setIsSidebarOpen(true)}
-          nav={<WorkbenchNav active="chat" />}
+          nav={(
+            <nav className="app-nav" aria-label="主导航">
+              <WorkbenchNav active="chat" />
+              <TraceToggle isOpen={isTraceOpen} onToggle={toggleTrace} />
+            </nav>
+          )}
         />
 
         <ConfirmationCards cards={confirmationCards} uiState={confirmationUi} onDecide={(card, decision) => void handleDecide(card, decision)} />
@@ -718,7 +810,7 @@ export function Workbench() {
             if (!activeConversationId) return;
             void loadMessagePage(activeConversationId, messageCursor, true);
           }}
-          onOpenRunDetail={setSelectedRunDetail}
+          onOpenRunDetail={openRunDetail}
           onRetryMessage={(message) => void retryFailedMessage(message)}
           onUsePrompt={setInput}
           showCliHint={activeConversation?.title.startsWith("CLI ·") ?? false}
@@ -728,6 +820,7 @@ export function Workbench() {
           error={composerError}
           input={input}
           isSubmitting={isSubmitting}
+          readOnly={crossWorkspaceReadOnly}
           models={composer.models}
           modelCatalogStatus={composer.modelCatalogStatus}
           modelCatalogError={composer.modelCatalogError}
@@ -740,9 +833,16 @@ export function Workbench() {
           selectedModelId={composer.selectedModelId}
         />
       </section>
+      {/* 右侧排查位互斥（L2-3）：Trace 抽屉与运行详情共用同一列，打开一个即收起另一个。 */}
       <RunDetailPanel
         detail={selectedRunDetail}
         onClose={() => setSelectedRunDetail(undefined)}
+      />
+      <TraceDrawer
+        conversationId={activeConversation?.conversationId}
+        conversationTitle={activeConversation?.title ?? "未选择会话"}
+        isOpen={isTraceOpen}
+        onClose={() => setIsTraceOpen(false)}
       />
     </main>
   );

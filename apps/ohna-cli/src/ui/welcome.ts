@@ -33,7 +33,7 @@ export interface WelcomeOptions {
   mcpServers?: readonly string[];
   /** 工作目录（TTY 边框面板展示）；缺省 process.cwd()。 */
   cwd?: string;
-  /** 观测台地址（W3）：默认模式启动的进程内 Web trace 页。 */
+  /** 观测台地址（W3）：默认模式启动的进程内 Web 工作台（Trace 为其对话页右侧抽屉，03 L2）。 */
   traceUrl?: string;
 }
 
@@ -102,7 +102,8 @@ function renderPlainWelcome(
     lines.push("  MCP    " + options.mcpServers.join(" · "));
   }
   if (options?.traceUrl) {
-    lines.push("  观测台 " + options.traceUrl + "/trace（LLM 请求/响应全程 trace）");
+    // Trace 已从独立页降级为 chat 页右侧抽屉（docs/v1.4/03 L2/D6）：入口是工作台，不再是 /trace。
+    lines.push("  观测台 " + options.traceUrl + "（对话页右上「Trace」展开 LLM 请求/响应 trace）");
   }
   lines.push(
     RULE,
@@ -144,7 +145,7 @@ function renderTtyWelcome(
     info.push(`MCP       ${options.mcpServers.join(" · ")}`);
   }
   if (options?.traceUrl) {
-    info.push(`观测台    ${options.traceUrl}/trace`);
+    info.push(`观测台    ${options.traceUrl}（对话页「Trace」抽屉）`);
   }
   // 键位提示从 keymap 单一表生成（C2），不再在欢迎头硬编码按键文案。
   info.push(

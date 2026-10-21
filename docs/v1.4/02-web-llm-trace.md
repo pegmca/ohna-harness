@@ -181,7 +181,7 @@ pnpm --filter @aiagent/serve test && pnpm typecheck && pnpm architecture:check
 5. `apps/ohna-cli/src/input/repl.ts` + `repl-context.ts`：`ReplContext` += `observation?: { start: TurnObserver }`；每次 `runTurn` 前 `observe(...)`（requestId = `<sessionId>:<turnIndex>`）。
 6. `apps/ohna-cli/src/runtime/team-wiring.ts`：把**包装后**的 streamFn 传 `TeamControllerOptions.streamFn`（子代理 LLM 调用同享采集，`team/controller.ts:313` 消费同一函数）。
 7. `apps/ohna-cli/src/runtime/llm-trace-file.ts`（新，`--no-web` 降级 sink）：append-only 写 `~/.ohna/traces/<sessionId>.jsonl`（每行一条 `LlmCallRecordDto`）；目录不存在则建；写失败静默降级（不阻塞）。
-8. UI：welcome banner 追加一行 `Trace: http://127.0.0.1:<port>/trace`；TUI 状态行右段可选加 `web` 标识；host 失败走 toast（复用 C3 toast）。
+8. UI：welcome banner 追加一行 `观测台 http://127.0.0.1:<port>`（**03 L2 起 Trace 为 chat 页右侧抽屉，不再有 `/trace` 页**，提示文案同步为「对话页右上「Trace」抽屉」）；TUI 状态行右段可选加 `web` 标识；host 失败走 toast（复用 C3 toast）。
 9. 回看行为：`/resume` 切换 session 时保持同一 conversation（trace 页在 run 摘要中显示 requestId 内嵌的 `${sessionId}:${turnIndex}` 以区分会话），不新开会话（开放项：每 session 一个 conversation）。
 10. 测试：`test/verify-ohna-web-trace.mjs`（根 test/ 目录，见 W5）；CLI 单测补：args `--no-web` 解析、turn observer 注入路径（mock observedRun 收到 message/tool/llm_call 帧）。
 
@@ -198,7 +198,9 @@ test/verify-ohna-m3.mjs      # 既有回归
 
 ---
 
-## Phase W4 · ohna-web Trace 观测台（`/trace` 页）
+## Phase W4 · ohna-web Trace 观测台（`/trace` 页 → 03 起改为 chat 页右侧抽屉）
+
+> **后续变更（docs/v1.4/03）**：W4 交付的三栏 `/trace` 页已按 03 L2 降级为 chat 页右侧 `TraceDrawer`，`TracePage.tsx` 与 `/trace` 路由**直接删除**；`TraceStream` / `LlmCallBlock` / `trace-projection` / `trace-client` 与数据管线原样保留，数据编排抽到 `use-trace-stream.ts`。下文 W4 记录保留为历史交付说明。
 
 **目标**：浏览器一侧完成 R2——列 runs、回放/实放事件流、`llm_call` 一等公民展示（请求参数 + 响应参数 + 复制）。
 
@@ -220,7 +222,7 @@ test/verify-ohna-m3.mjs      # 既有回归
 pnpm --filter @aiagent/ohna-web build && pnpm --filter @aiagent/ohna-web test
 ```
 
-手工：CLI 跑任务 → 打开 `http://127.0.0.1:<port>/trace` → 选中当前 run → 任一 `llm_call` ≤2 次点击内展开看到完整 providerPayload 与响应 message/usage；刷新后（终态 run）通过 replay 恢复完整 trace。
+手工：CLI 跑任务 → 打开 `http://127.0.0.1:<port>` → 对话页右上点「Trace」展开右侧抽屉 → 选中当前 run → 任一 `llm_call` ≤2 次点击内展开看到完整 providerPayload 与响应 message/usage；刷新后抽屉默认收起，再次展开通过 replay 恢复完整 trace（03 L2 起）。
 
 **完成判据**：`llm_call` 在时间线是一等可见块；无 console 报错；chat 主页对 CLI 会话不出现空时间线误导（提示文案到位）。
 
@@ -231,7 +233,7 @@ pnpm --filter @aiagent/ohna-web build && pnpm --filter @aiagent/ohna-web test
 1. `test/verify-ohna-web-trace.mjs`（根 test/，人工调试入口合规）：
    - 起 serve（stub streamFn：push done 事件 + 注入假 providerPayload 观察路径）→ `createRun` → 断言事件流含 `llm_call`（payload.request.providerPayload 与 response.message/usage 完整、durationMs>0）；
    - `observeRun` 合成序列 → 同样断言（CLI 镜像路径）；
-   - web dist 存在时 `GET /trace` 200。
+   - web dist 存在时 `GET /trace` 200（03 起该路径回落到 Workbench；布局对齐的专项验证见 `test/verify-ohna-web-layout.mjs`）。
 2. ``（新建）：学习注记——采集 wrapper 机制（onPayload/onResponse/do-event plugin 组合）、DTO 归属推演（types 收线格式 + trace 类型级依赖）、observeRun 与托管 run 的统一性论证、降级链（host 失败 / --no-web）、abort 语义取舍。
 3. 文档同步：本文 §6 状态表 + `设计演进记录` 阶段产出 + `AGENTS.md` 以下段落（落地后同步，不在启动前改）：
    - `apps/ohna-cli`：`cli/` 增加 `web-host.ts` 一句；`runtime/` 提 observation/llm-trace wrapper；默认启动语义（观测台 + `--no-web`）。
@@ -381,5 +383,5 @@ pnpm --filter @aiagent/ohna-cli dev   # 手工：TUI + 浏览器 /trace 双端�
 | W1 | LLM 采集层：`LlmCallRecordDto` + `createLlmTraceStreamFn` | 已完成（agent 101/101；reviewer 两轮通过） |
 | W2 | serve 观测面：RunManager `llm_call` 自动发射 + `observeRun` + runs 索引 | 已完成（serve 38/38；S1/S2 与 B2 差集回填已修） |
 | W3 | CLI 自动启动 Web + run 镜像 + `--no-web` 降级 | 已完成（ohna-cli 294/294；共享 counter + observeOnly 只读） |
-| W4 | ohna-web Trace 观测台（`/trace`） | 已完成（ohna-web 65/65 + build；S1-S4/N1-N7 已修） |
+| W4 | ohna-web Trace 观测台（`/trace`） | 已完成（ohna-web 65/65 + build；S1-S4/N1-N7 已修）；**后经 03 L2 改造**：降级为 chat 页右侧 `TraceDrawer`，`/trace` 路由与 `TracePage` 已删除，数据管线原样保留（ohna-web 90/90） |
 | W5 | 验证脚本 `test/verify-ohna-web-trace.mjs` + 设计笔记 + AGENTS.md 同步 | 已完成（脚本 4 断言通过；设计笔记 已同步） |

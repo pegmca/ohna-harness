@@ -12,6 +12,7 @@ import { compactSessionHistory } from "../session/session-runtime.js";
 import { exportSessionMarkdown } from "../session/session-export.js";
 import {
   ensureFullHistory,
+  PENDING_SESSION_ID,
   persistSession,
   replaceHistory,
 } from "../session/session-flow.js";
@@ -275,7 +276,12 @@ async function forkSession(ctx: SessionCommandContext, targetId: string): Promis
 }
 
 /**
- * /clear：清空上下文并另开新会话（旧会话文件保留）。
+ * /clear：清空上下文并进入「待创建」态（不落盘新会话）。
+ *
+ * 与「未发消息建会话」同源（BUG 空会话落盘）：会话落盘的唯一触发点是「首条真实 message 发送」。
+ * 因此 `/clear` 只清空内存历史、重置用量，并把 sessionId 置为 pending 占位（PENDING_SESSION_ID），
+ * 旧会话文件原样保留；直到下一条真实消息发送时才由 persistSession 物化新会话 id。
+ * 这样 `/clear` 后直接 `/exit`（未再发消息）不会产生空会话，连续 `/clear` 也不会产生多条空会话。
  *
  * @param ctx 会话命令上下文。
  */
@@ -285,11 +291,11 @@ export async function clearSession(ctx: SessionCommandContext): Promise<void> {
   ctx.tracker.restore({ input: 0, output: 0, total: 0, cost: 0 });
   // C1：折叠全文缓存已删除；仍重置 presenter，清空上个会话的条目与思考块状态。
   resetPresentation();
-  const meta = await ctx.store.create({ workspaceRoot: ctx.setup.cwd });
-  ctx.setSessionId(meta.id);
+  // 进入待创建态：不立即 store.create，避免 `/clear` 空会话落盘。首条消息才物化真实 id。
+  ctx.setSessionId(PENDING_SESSION_ID);
   ctx.setTitle(undefined);
   ctx.onSessionSwitched?.();
-  write(`已清空上下文并开启新会话：${meta.id}（旧会话 ${previousId} 保留在磁盘）\n`);
+  write(`已清空上下文并进入新会话（旧会话 ${previousId} 保留在磁盘，发送首条消息后新会话才落盘）\n`);
 }
 
 /**

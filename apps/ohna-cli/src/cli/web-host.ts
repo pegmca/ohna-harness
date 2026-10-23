@@ -44,6 +44,12 @@ export interface HostOptions {
 export interface HostResult {
   server: OhnaServer;
   url: string;
+  /**
+   * 观测台会话 id。托管模式下为「待创建」占位（空串）：会话落盘的唯一触发点是
+   * 「首条真实 message 发送」，因此装配阶段不再 eager 建会话；`--web` 入口在首条消息
+   * 到达时才 `server.createConversation`。默认模式（observeOnly）仍需要一条镜像会话，
+   * 由调用方显式创建后写入。
+   */
   conversationId: string;
 }
 
@@ -83,7 +89,14 @@ export async function hostOhnaWeb(options: HostOptions): Promise<HostResult | un
       ...(options.dataDir ? { dataDir: options.dataDir } : {}),
     });
     const listening = await listenWithRetry(server, options.port);
-    const conversation = await server.createConversation(options.conversationTitle);
+    // 会话创建策略按模式区分（BUG 空会话落盘）：
+    // - 托管模式（--web，observeOnly=false）：不 eager 建会话，返回空占位 id，
+    //   由 web-entry 在首条真实消息到达时懒创建。
+    // - 默认观测模式（observeOnly=true）：serve 只做 CLI 本地会话的镜像观测，
+    //   需要一条与进程同生共死的镜像会话承接 run 事件，仍在此 eager 创建。
+    const conversation = options.observeOnly === true
+      ? await server.createConversation(options.conversationTitle)
+      : { conversationId: "" as string } as { conversationId: string };
     return { server, url: listening.url, conversationId: conversation.conversationId };
   } catch (error) {
     hosting = false;

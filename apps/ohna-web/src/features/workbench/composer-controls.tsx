@@ -20,10 +20,10 @@ interface ComposerControlsProps {
   error: string | undefined;
   input: string;
   isSubmitting: boolean;
-  /** 跨工作区只读：会话属于其他工作区时禁用输入与发送（消息存储共享但 agent 上下文是实例本地的）。 */
-  readOnly?: boolean;
   models: ModelOptionDto[];
   modelCatalogStatus: "loading" | "ready" | "failed";
+  /** 提交按钮的 form 属性：让主区左下角的设置按钮与发送键同处底行（FR-001）。 */
+  formId?: string;
   modelCatalogError?: string;
   onInputChange: (value: string) => void;
   onRetryModels: () => void;
@@ -46,8 +46,7 @@ export function ComposerControls(props: ComposerControlsProps) {
   const [ideaOpen, setIdeaOpen] = useState(false);
   const [modelOpen, setModelOpen] = useState(false);
   const selectedModel = props.models.find((model) => model.id === props.selectedModelId);
-  const canSend = !props.readOnly
-    && props.input.trim().length > 0
+  const canSend = props.input.trim().length > 0
     && props.modelCatalogStatus === "ready"
     && Boolean(props.selectedModelId);
 
@@ -72,15 +71,12 @@ export function ComposerControls(props: ComposerControlsProps) {
   }
 
   return (
-    <form className="chat-composer" onSubmit={props.onSubmit}>
-      {props.readOnly ? (
-        <div className="composer-error" role="status">该会话属于其他工作区，请在对应目录的 ohna 会话中继续。</div>
-      ) : null}
+    <form className="chat-composer" id={props.formId} onSubmit={props.onSubmit}>
       {props.error ? <div className="composer-error" role="status">{props.error}</div> : null}
       <div className="composer-box">
         <textarea
           className="composer-textarea"
-          disabled={props.isSubmitting || props.readOnly}
+          disabled={props.isSubmitting}
           onChange={(event) => props.onInputChange(event.target.value)}
           onKeyDown={handleKeyDown}
           placeholder="描述一个编码任务…"
@@ -167,8 +163,17 @@ export function ComposerControls(props: ComposerControlsProps) {
               aria-label={props.isSubmitting ? "停止生成" : "发送"}
               className="send-button"
               disabled={!props.isSubmitting && !canSend}
-              onClick={props.isSubmitting ? props.onStop : undefined}
-              type={props.isSubmitting ? "button" : "submit"}
+              form={props.formId}
+              onClick={props.isSubmitting
+                ? (event) => {
+                  // 停止态不能走表单提交（会再次发送同一输入），先取消默认提交再交给 onStop。
+                  event.preventDefault();
+                  props.onStop();
+                }
+                : undefined}
+              // 带 form 属性后按钮不再隐式继承所属表单，因此停/发两态都显式指定 submit；
+              // 停止态由 onClick 接管（先 preventDefault 再 onStop），不会误提交。
+              type="submit"
             >
               {props.isSubmitting ? <Square className="icon-size" /> : <ArrowUp className="icon-size" />}
             </button>

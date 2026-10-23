@@ -67,6 +67,7 @@ function renderSidebar() {
       onClose={vi.fn()}
       onLoadMore={vi.fn()}
       onNewConversation={vi.fn()}
+      onOpenSettings={vi.fn()}
       onRetry={vi.fn()}
       onSelectConversation={onSelectConversation}
     />

@@ -93,6 +93,18 @@ export interface ObservedRun {
   end(result?: { failed?: boolean; error?: RunErrorPayload }): void;
 }
 
+/**
+ * 一次 run 的会话级工作区上下文（BUG-002 方案 2）。
+ *
+ * systemPrompt 文案中已内嵌 cwd，AgentContext 本身不再需要单独 workspaceRoot；
+ * tools 是本次 run 实际注入 agentLoop 的编码工具集。
+ */
+export interface ResolvedWorkspaceContext {
+  workspaceRoot: string;
+  systemPrompt: string;
+  tools: AgentTool[];
+}
+
 /** RunManager 依赖。 */
 export interface RunManagerOptions {
   workspaceRoot: string;
@@ -104,6 +116,12 @@ export interface RunManagerOptions {
   runStore: LocalRunStore;
   sessionStore: LocalSessionStore;
   streamFn?: StreamFn;
+  /**
+   * 按会话解析工作区上下文（BUG-002 方案 2）：返回该会话应使用的
+   * workspaceRoot / systemPrompt / tools。缺省时回退到构造时的
+   * workspaceRoot / systemPrompt / tools（单工作区语义，保持向后兼容）。
+   */
+  resolveWorkspace?: (conversationId: string) => Promise<ResolvedWorkspaceContext>;
   /** 异步确认闸门；缺省时所有工具直接执行（测试 / 只读装配）。 */
   confirmGate?: AsyncConfirmGate;
   /**
@@ -115,4 +133,10 @@ export interface RunManagerOptions {
     previousSummary?: string,
     signal?: AbortSignal
   ) => Promise<string>;
+  /**
+   * 语义会话标题生成器（BUG-002）；缺省由 model + apiKey + streamFn 构造
+   * （createTitleGenerator）。失败应返回 undefined，调用方降级为截断标题。
+   * 测试可注入桩以避免真实标题调用。
+   */
+  titleGenerator?: (text: string, signal?: AbortSignal) => Promise<string | undefined>;
 }

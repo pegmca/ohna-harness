@@ -1,15 +1,17 @@
 /**
- * TC-L3-01 / TC-L3-02 / TC-L3-03 · 设置页回归。
+ * TC-L3-01 / TC-L3-02 / TC-L3-03 / TC-FR-001 · 设置弹窗回归（原 `SettingsPage.test.tsx` 迁移）。
  *
- * - 五分区锚点导航 + 内容区渲染；
- * - 主题 / 字号写入 localStorage，并由 `applyInitialTheme` 在挂载前恢复；
- * - 只读边界：设置页只发出 `GET /api/health` 与 `GET /api/models`，不产生任何写请求。
+ * FR-001 把设置从独立路由页改为 chat 页左下角入口触发的就地弹窗，因此这里除保留
+ * 「分区渲染 / 外观持久化 / 只读边界」三组原断言外，还补齐弹窗语义：
+ * - 打开渲染、关闭按钮 / 遮罩 / ESC 三种关闭方式；
+ * - 关闭即卸载内容（健康探针随之中止，再次打开才重新请求）；
+ * - 打开时焦点移入对话框、关闭后归还给触发按钮。
  */
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
+import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { applyInitialTheme, FONT_SCALE_OPTIONS, ThemeProvider } from "../../app/theme";
-import { SettingsPage } from "./SettingsPage";
+import { SettingsDialog } from "./SettingsDialog";
 
 /**
  * 构造 health 响应。
@@ -50,11 +52,28 @@ function modelsResponse(): Response {
 }
 
 /**
- * 渲染设置页（带 ThemeProvider，与 main.tsx 装配一致）。
+ * 模拟左侧角落的设置入口 + 弹窗组合：触发按钮保留在页面上，用于验证焦点归还与开关。
  *
+ * @param props.isInitiallyOpen 初始是否展开（默认展开，多数用例直接断言内容）。
+ * @returns 组合组件。
+ */
+function SettingsHarness(props: { isInitiallyOpen?: boolean }) {
+  const [isOpen, setIsOpen] = useState(props.isInitiallyOpen ?? true);
+  return (
+    <>
+      <button onClick={() => setIsOpen(true)} type="button">设置</button>
+      <SettingsDialog isOpen={isOpen} onClose={() => setIsOpen(false)} />
+    </>
+  );
+}
+
+/**
+ * 渲染弹窗（带 ThemeProvider，与 main.tsx 装配一致）。
+ *
+ * @param options.isInitiallyOpen 初始是否展开。
  * @returns 渲染结果与 fetch mock。
  */
-function renderSettings() {
+function renderDialog(options: { isInitiallyOpen?: boolean } = {}) {
   const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
     const url = String(input);
     if (url.startsWith("/api/health")) return healthResponse();
@@ -62,7 +81,11 @@ function renderSettings() {
     throw new Error(`Unexpected fetch: ${url}`);
   });
   vi.stubGlobal("fetch", fetchMock);
-  const result = render(<MemoryRouter><ThemeProvider><SettingsPage /></ThemeProvider></MemoryRouter>);
+  const result = render(
+    <ThemeProvider>
+      <SettingsHarness isInitiallyOpen={options.isInitiallyOpen} />
+    </ThemeProvider>
+  );
   return { ...result, fetchMock };
 }
 
@@ -74,9 +97,10 @@ beforeEach(() => {
 // jsdom 的 window 属性是全局 stub，清空会把 localStorage 一起移除；fetch 由各用例自行 stub 覆盖。
 afterEach(() => cleanup());
 
-describe("SettingsPage（L3）", () => {
-  it("TC-L3-01: 五分区导航与内容区渲染", async () => {
-    renderSettings();
+describe("SettingsDialog（L3 / FR-001）", () => {
+  it("TC-L3-01: 弹窗内五分区导航与内容区渲染", async () => {
+    renderDialog();
+    expect(screen.getByRole("dialog", { name: "设置" })).toBeTruthy();
     const nav = screen.getByRole("navigation", { name: "设置分区" });
     const links = nav.querySelectorAll("a");
     expect([...links].map((link) => link.textContent)).toEqual([
@@ -107,14 +131,78 @@ describe("SettingsPage（L3）", () => {
     expect(screen.getByText("版本与运行环境信息。")).toBeTruthy();
   });
 
-  it("顶部展示适用范围说明行", () => {
-    renderSettings();
+  it("弹窗头部展示标题与适用范围说明", () => {
+    renderDialog();
     expect(screen.getByRole("heading", { level: 1, name: "设置" })).toBeTruthy();
     expect(screen.getByText("适用于当前 ohna 进程 · 由启动参数决定")).toBeTruthy();
   });
 
+  it("TC-FR-001: 未打开时不渲染任何弹窗内容", () => {
+    renderDialog({ isInitiallyOpen: false });
+    expect(screen.queryByRole("dialog")).toBeNull();
+    // 关闭态不渲染分区导航 —— 设置不再是常驻页面。
+    expect(screen.queryByRole("navigation", { name: "设置分区" })).toBeNull();
+    expect(screen.getByRole("button", { name: "设置" })).toBeTruthy();
+  });
+
+  it("TC-FR-001: 点击左下角入口打开、关闭按钮关闭", async () => {
+    const { fetchMock } = renderDialog({ isInitiallyOpen: false });
+    expect(screen.queryByRole("dialog")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "设置" }));
+    expect(screen.getByRole("dialog", { name: "设置" })).toBeTruthy();
+    expect(await screen.findByText("已连接")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "关闭设置" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    // 关闭后弹窗内容卸载，不会继续渲染结果。
+    expect(screen.queryByText("已连接")).toBeNull();
+    expect(fetchMock).toHaveBeenCalled();
+  });
+
+  it("TC-FR-001: ESC 与点击遮罩都能关闭弹窗", () => {
+    renderDialog();
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.queryByRole("dialog")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "设置" }));
+    const dialog = screen.getByRole("dialog", { name: "设置" });
+    const backdrop = dialog.parentElement as HTMLElement;
+    expect(backdrop.className).toContain("settings-dialog-backdrop");
+    fireEvent.mouseDown(backdrop);
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("TC-FR-001: 关闭时卸载内容，健康探针随之中止，再次打开重新请求", async () => {
+    const { fetchMock } = renderDialog();
+    await screen.findByText("已连接");
+    const healthCallsAfterOpen = fetchMock.mock.calls.filter(([input]) => String(input).startsWith("/api/health")).length;
+    expect(healthCallsAfterOpen).toBe(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "关闭设置" }));
+    expect(screen.queryByText("已连接")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "设置" }));
+    await waitFor(() => expect(
+      fetchMock.mock.calls.filter(([input]) => String(input).startsWith("/api/health")).length
+    ).toBe(2));
+  });
+
+  it("TC-FR-001: 打开时焦点进入对话框，关闭后归还给入口按钮", () => {
+    renderDialog({ isInitiallyOpen: false });
+    const entry = screen.getByRole("button", { name: "设置" });
+    entry.focus();
+    fireEvent.click(entry);
+    // 焦点落到 dialog 容器（role=dialog, tabIndex=-1），屏幕阅读器先读标题。
+    expect(document.activeElement).toBe(screen.getByRole("dialog", { name: "设置" }));
+
+    fireEvent.click(screen.getByRole("button", { name: "关闭设置" }));
+    expect(document.activeElement).toBe(entry);
+  });
+
+});
+
+describe("SettingsDialog 外观与只读边界（L3）", () => {
   it("TC-L3-02: 主题切换写入 localStorage 并立即生效", () => {
-    renderSettings();
+    renderDialog();
     const dark = screen.getByRole("radio", { name: /深色/ });
     fireEvent.click(dark);
     expect(globalThis.localStorage.getItem("ohna.theme")).toBe("dark");
@@ -124,7 +212,7 @@ describe("SettingsPage（L3）", () => {
   });
 
   it("TC-L3-02: 字号切换写入 localStorage、缩放根字号", () => {
-    renderSettings();
+    renderDialog();
     const large = screen.getByRole("radio", { name: /^大/ });
     fireEvent.click(large);
     expect(globalThis.localStorage.getItem("ohna.ui.fontSize")).toBe("large");
@@ -147,12 +235,12 @@ describe("SettingsPage（L3）", () => {
 
   it("TC-L3-02: 四档字号元数据完整（小 / 标准 / 大 / 特大）", () => {
     expect(FONT_SCALE_OPTIONS.map((option) => option.label)).toEqual(["小", "标准", "大", "特大"]);
-    renderSettings();
+    renderDialog();
     expect(screen.getAllByRole("radio", { name: /^标准/ })).toHaveLength(1);
   });
 
   it("TC-L3-03: 只读边界——只发 GET /api/health 与 GET /api/models，无任何写请求", async () => {
-    const { fetchMock } = renderSettings();
+    const { fetchMock } = renderDialog();
     await waitFor(() => expect(screen.getByText("/work/ws-a")).toBeTruthy());
     await screen.findByText("Mock Agent");
 
@@ -168,14 +256,14 @@ describe("SettingsPage（L3）", () => {
     fireEvent.click(screen.getByRole("radio", { name: /深色/ }));
     fireEvent.click(screen.getByRole("radio", { name: /^大/ }));
     expect(fetchMock.mock.calls.length).toBe(before);
-    // 页面上没有可用于提交服务端配置的输入控件。
+    // 弹窗里没有可用于提交服务端配置的输入控件。
     expect(screen.queryAllByRole("textbox")).toHaveLength(0);
-    expect(document.querySelectorAll("form")).toHaveLength(0);
+    expect(screen.getByRole("dialog").querySelectorAll("form")).toHaveLength(0);
   });
 
   it("本地服务不可用时各分区降级为可读提示", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response("", { status: 502 })));
-    render(<MemoryRouter><ThemeProvider><SettingsPage /></ThemeProvider></MemoryRouter>);
+    render(<ThemeProvider><SettingsHarness /></ThemeProvider>);
     expect(await screen.findByText(/未检测到本地 ohna 服务/)).toBeTruthy();
     expect(screen.getByText("本地服务不可用，无法读取当前权限模式。")).toBeTruthy();
   });

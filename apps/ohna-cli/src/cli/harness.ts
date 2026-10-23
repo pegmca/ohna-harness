@@ -15,6 +15,7 @@ import { createUsageTracker, type UsageTracker } from "../ui/render.js";
 import { createLlmSummarizer } from "../session/session-runtime.js";
 import {
   ensureFullHistory,
+  materializeSession,
   openSession,
   persistSession,
   printResumeHint,
@@ -106,17 +107,20 @@ async function runSingleTurn(
     // K3：闸门在此才构造（单次模式无 readline 实例），立即回填给 team controller。
     onGateReady?.(beforeToolCall);
 
+    // 待创建会话在首条消息时物化（单次模式必然发送消息）：观测 / runTurn 需要真实会话 id。
+    const sessionId = await materializeSession(store, session.id, setup.cwd);
+
     // 零预算 / 恢复后已超预算：不调用模型，仍然把当前会话落盘，保证 --resume 可继续。
     if (reachedCostBudget(tracker, setup.maxCost)) {
       printStopReason("max_cost");
-      await persistSession(store, session.id, session.messages, {
+      await persistSession(store, sessionId, session.messages, {
         model: active.model,
         summarizer: setup.summarizer,
         title,
         workspaceRoot: setup.cwd,
         usage: tracker,
       });
-      printResumeHint(session.id);
+      printResumeHint(sessionId);
       return;
     }
 
@@ -132,16 +136,16 @@ async function runSingleTurn(
       undefined,
       undefined,
       // 单次模式同样镜像观测（runIndex 恒为 1：一次进程只有一轮 run）。
-      observer?.start(prompt, { sessionId: session.id, runIndex: 1 }),
+      observer?.start(prompt, { sessionId, runIndex: 1 }),
     );
-    await persistSession(store, session.id, result.history, {
+    await persistSession(store, sessionId, result.history, {
       model: active.model,
       summarizer: setup.summarizer,
       title,
       workspaceRoot: setup.cwd,
       usage: tracker,
     });
-    printResumeHint(session.id);
+    printResumeHint(sessionId);
     // provider 错误已由 renderEvent 打印；单次模式用非零退出码让脚本/CI 能感知失败。
     if (result.failed) process.exitCode = 1;
   } finally {

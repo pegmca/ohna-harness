@@ -7,6 +7,7 @@ import {
   X
 } from "lucide-react";
 import type { ReactNode } from "react";
+import { JsonViewer } from "../json-viewer/index.js";
 import { formatApiError } from "./format";
 import type { RunDetailSection, SelectedRunDetail, UiToolCallBlock } from "./types";
 
@@ -130,6 +131,8 @@ export function ToolCallsList(props: { tools: UiToolCallBlock[] }) {
 
 /**
  * 以折叠方式展示 JSON，防止长 request payload 撑破对话区。
+ * 外层 `<details>` 管整块开合，展开体交给统一的 `JsonViewer`（BUG-003：节点级折叠 + 高亮），
+ * 公共签名保持不变，chat.tsx / run-details.tsx 的既有调用点无需改动。
  *
  * @param props 组件属性。
  * @returns JSON 折叠块。
@@ -141,7 +144,7 @@ export function JsonDetails(props: { title: string; value: unknown }) {
         <Braces className="icon-size" />
         {props.title}
       </summary>
-      <pre>{JSON.stringify(props.value, null, 2)}</pre>
+      <JsonViewer value={props.value} />
     </details>
   );
 }

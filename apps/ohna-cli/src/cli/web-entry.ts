@@ -108,6 +108,7 @@ export async function runWeb(options: CliOptions): Promise<void> {
   const { server, url } = hosted;
   // 终端与浏览器共享同一会话：conversation 由 serve 的 sessionStore 持有，
   // 浏览器 GET /api/conversations 能看到它；/resume 可切换到浏览器创建的会话。
+  // 空串 = 「待创建」态：托管模式不再 eager 建会话，首条真实消息发送时才懒创建（BUG 空会话落盘）。
   let conversationId = hosted.conversationId;
   let conversationTitle = "终端会话";
 
@@ -124,16 +125,41 @@ export async function runWeb(options: CliOptions): Promise<void> {
   // 命中该集合时在赋值后立即 resolve，避免 REPL 挂在等待终态上（幂等 resolve 安全）。
   const terminalRunIds = new Set<string>();
 
-  // 会话级订阅先于 REPL 建立：浏览器在同一会话发的 run 也实时渲染到终端（C-M3-6）。
-  let unsubscribe = server.subscribeConversation(conversationId, (event) => {
-    if (event.type === "run_status") {
-      const status = (event.payload as { status?: string } | null)?.status;
-      if (status && TERMINAL_RUN_STATUSES.has(status)) terminalRunIds.add(event.runId);
-    }
-    renderFrame(event, tracker, renderOptions, activeRun, () => {
-      activeRun?.finish();
+  /** 退订当前会话；无订阅时为 noop。 */
+  let unsubscribe = (): void => {};
+
+  /**
+   * 订阅指定会话：退订旧会话、订阅新会话（/resume / 懒创建 / clear 共用）。
+   *
+   * @param nextId 目标会话 id。
+   */
+  const subscribeConversation = (nextId: string): void => {
+    unsubscribe();
+    unsubscribe = server.subscribeConversation(nextId, (event) => {
+      if (event.type === "run_status") {
+        const status = (event.payload as { status?: string } | null)?.status;
+        if (status && TERMINAL_RUN_STATUSES.has(status)) terminalRunIds.add(event.runId);
+      }
+      renderFrame(event, tracker, renderOptions, activeRun, () => activeRun?.finish());
     });
-  });
+  };
+
+  /**
+   * 确保当前会话已创建（懒创建 + 订阅）。
+   *
+   * 托管模式启动时 `conversationId` 是「待创建」空串；首条真实消息发送前调用此函数，
+   * 物化会话并建立会话级订阅。已物化时是幂等 noop。
+   *
+   * @returns 物化后的会话 id。
+   */
+  const ensureConversation = async (): Promise<string> => {
+    if (conversationId) return conversationId;
+    const fresh = await server.createConversation(conversationTitle);
+    conversationId = fresh.conversationId;
+    conversationTitle = fresh.title;
+    subscribeConversation(conversationId);
+    return conversationId;
+  };
 
   process.stdout.write(
     [
@@ -141,7 +167,7 @@ export async function runWeb(options: CliOptions): Promise<void> {
       `  工作目录：${workspaceRoot}`,
       `  模型：${active.model.id}（${active.model.provider}）`,
       `  地址：${url}`,
-      `  会话：${conversationId}（终端与浏览器共享同一会话）`,
+      `  会话：（首条消息发送时创建，终端与浏览器共享）`,
       `  确认方式：${options.yes ? "已自动批准写/执行（--yes）" : "写/执行需在终端或浏览器确认"}`,
       "",
     ].join("\n"),
@@ -307,10 +333,13 @@ export async function runWeb(options: CliOptions): Promise<void> {
       },
       clear: async () => {
         const previousId = conversationId;
-        const fresh = await server.createConversation();
-        await switchConversation(fresh.conversationId, fresh.title);
+        // BUG-003（web）：/clear 不再 eager createConversation，避免「未发消息即建空会话」落盘。
+        // 退订旧会话、回到「待创建」空串占位态，首条真实消息发送时才由 ensureConversation 物化。
+        unsubscribe();
+        conversationId = "";
+        conversationTitle = "终端会话";
         process.stdout.write(
-          `已另开新会话：${fresh.conversationId}（旧会话 ${previousId} 保留在 serve 会话存储）\n`,
+          `已清空上下文，首条消息发送时新建会话（旧会话 ${previousId} 保留在 serve 会话存储）\n`,
         );
       },
       exit: () => {
@@ -340,9 +369,13 @@ export async function runWeb(options: CliOptions): Promise<void> {
         return;
       }
 
+      // 首条真实消息的落盘触发点：conversationId 仍为空串（待创建）时先物化会话，
+      // 确保 run 真正绑定到一个已落盘的 conversation（BUG-003 web 侧懒创建）。
+      const resolvedId = await ensureConversation();
+
       // 终端输入与浏览器 composer 走同一条 run-v2 路径：同一会话、同一事件流。
       const { accepted } = await server.createRun({
-        conversationId,
+        conversationId: resolvedId,
         message: text,
         mode: "auto",
         source: "composer",

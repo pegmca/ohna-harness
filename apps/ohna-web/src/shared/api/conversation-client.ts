@@ -14,7 +14,9 @@ import { parseApiResult } from "./http-client";
  *
  * @param cursor 可选游标。
  * @param signal 取消信号。
- * @param workspaceRoot 可选工作区过滤；缺省返回全部工作区会话（侧栏分组展示用）。
+ * @param workspaceRoot 可选工作区过滤；缺省返回全部工作区会话。web 工作台只走缺省形态
+ *   （侧栏分组列表同时是 composer 的会话源，跨工作区会话可直接续写），按工作区过滤的入参
+ *   保留给脚本 / 调试调用。
  * @returns 会话页。
  */
 export async function listConversations(
@@ -71,4 +73,26 @@ export async function updateConversation(
     headers: { "content-type": "application/json" },
     body: JSON.stringify(input)
   }));
+}
+
+/**
+ * 语义化生成会话标题（BUG-002）：异步调用服务端 LLM 把首条消息压成短标题并落盘。
+ * 尽力而为——失败时服务端返回现有标题，前端据此保留截断标题。
+ *
+ * @param conversationId 会话 ID。
+ * @param text 首条用户消息。
+ * @returns 更新后会话；语义标题未生成时返回现有截断标题。
+ */
+export async function generateConversationTitle(
+  conversationId: string,
+  text: string
+): Promise<ApiResult<WorkspaceConversationDto>> {
+  return parseApiResult(await fetch(
+    `/api/conversations/${encodeURIComponent(conversationId)}/generate-title`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text })
+    }
+  ));
 }

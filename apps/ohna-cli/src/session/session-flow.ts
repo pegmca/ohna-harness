@@ -26,9 +26,22 @@ import type { SessionStore } from "./session-store.js";
  */
 export const RESUME_TAIL_MESSAGES = 80;
 
+/** 「待创建」会话的占位 id：空串表示尚未落盘，首条真实消息时才真正创建。 */
+export const PENDING_SESSION_ID = "";
+
+/**
+ * 判断会话 id 是否为「待创建」占位（空串）。
+ *
+ * @param sessionId 会话 id。
+ * @returns 是否待创建。
+ */
+export function isPendingSession(sessionId: string): boolean {
+  return sessionId === PENDING_SESSION_ID;
+}
+
 /** 打开/恢复会话的结果。 */
 export interface OpenedSession {
-  /** 会话 id（同时是文件名）。 */
+  /** 会话 id（同时是文件名）；`pending=true` 时是尚未落盘的占位空串。 */
   id: string;
   /** 会话标题；新建会话为 undefined，待首条用户输入固定。 */
   title?: string;
@@ -43,6 +56,13 @@ export interface OpenedSession {
    * 否则 `save` 会用后缀覆盖整个 JSONL，永久截断更早消息。
    */
   hasMore: boolean;
+  /**
+   * 是否为「待创建」会话：尚未在磁盘上落盘，id 是占位空串。
+   *
+   * 会话落盘的唯一触发点是「首条真实 message 发送」；新建与 `/clear` 都进入此态，
+   * 直到第一条消息到达才真正 {@link store.create}。空会话不应出现在磁盘 / 侧栏列表。
+   */
+  pending: boolean;
 }
 
 /**
@@ -74,6 +94,7 @@ export async function openSession(
           usage: record.meta.usage,
           // 尾读的 hasMore 必须透传：调用点据此决定何时补载完整历史。
           hasMore: record.hasMore,
+          pending: false,
         };
       }
       process.stderr.write(`未找到会话 "${resumeId}"，已改为新建会话。\n`);
@@ -83,9 +104,10 @@ export async function openSession(
       );
     }
   }
-  const meta = await store.create({ workspaceRoot: cwd });
-  // 新建会话不预设标题：首条用户输入到达时才固定，避免把「新会话」写成永久标题。
-  return { id: meta.id, title: undefined, messages: [], usage: undefined, hasMore: false };
+  // 新建会话进入「待创建」态（pending）：不落盘，id 为占位空串。
+  // 首条真实消息发送时才真正 store.create（见 persistSession 的 pending 分支），
+  // 避免「未发消息即建空会话」落到磁盘 / 侧栏（BUG 空会话落盘）。
+  return { id: "", title: undefined, messages: [], usage: undefined, hasMore: false, pending: true };
 }
 
 /**
@@ -168,24 +190,29 @@ export interface PersistSessionContext {
  * 会话级压缩 + 落盘。
  *
  * 先对全量 history 跑 shouldCompact/compact（跨 run 语义），再把结果写回 JSONL；
- * 压缩失败只告警、不阻断保存（保存未压缩版本）。返回压缩后的 history 供内存同步替换。
+ * 压缩失败只告警、不阻断保存（保存未压缩版本）。返回压缩后的 history 供内存同步替换，
+ * 以及可能被「待创建」会话物化后的真实会话 id（见 {@link PersistSessionResult.sessionId}）。
  *
  * C4 数据安全：`save` 是覆盖式写。若 history 来自 `loadSessionTail`（`hasMore=true`），
  * 调用方必须先 `ensureFullHistory` 补全，否则尾部后缀会覆盖掉磁盘上的更早消息；
  * 本函数不隐式全量读取，以保持 tail 首帧优化。
  *
+ * 待创建（pending）会话：当 `sessionId` 是 {@link PENDING_SESSION_ID}（空串）时，
+ * 首条真实消息落盘前先 `store.create` 物化出一个真实 id；返回的 `sessionId` 必须由
+ * 调用方写回会话绑定，后续轮次才能继续落盘到同一会话（否则每轮都会新建）。
+ *
  * @param store 会话存储。
- * @param sessionId 当前会话 id。
+ * @param sessionId 当前会话 id（可能是 pending 占位空串）。
  * @param history 全量 history。
  * @param context 压缩与保存所需的模型 / 标题 / 用量。
- * @returns 可能被压缩替换的 history。
+ * @returns 压缩后的 history 与物化后的会话 id。
  */
 export async function persistSession(
   store: SessionStore,
   sessionId: string,
   history: AgentMessage[],
   context: PersistSessionContext,
-): Promise<AgentMessage[]> {
+): Promise<PersistSessionResult> {
   // 先过滤 error/aborted assistant：它们既无有效内容，也不应跨进程恢复后再次发给模型。
   const savable = filterFailedAssistants(history);
   const compaction = await compactSessionHistory(savable, {
@@ -203,8 +230,14 @@ export async function persistSession(
         "\n",
     );
   }
+  // 待创建会话在首条消息落盘前物化真实 id；此后 sessionId 恒为真实 id。
+  let resolvedId = sessionId;
+  if (isPendingSession(sessionId)) {
+    const created = await store.create({ workspaceRoot: context.workspaceRoot });
+    resolvedId = created.id;
+  }
   try {
-    await store.save(sessionId, compaction.messages, {
+    await store.save(resolvedId, compaction.messages, {
       title: context.title,
       workspaceRoot: context.workspaceRoot,
       usage: context.usage.snapshot(),
@@ -214,7 +247,15 @@ export async function persistSession(
       `会话保存失败：${error instanceof Error ? error.message : String(error)}\n`,
     );
   }
-  return compaction.messages;
+  return { history: compaction.messages, sessionId: resolvedId };
+}
+
+/** `persistSession` 的返回：压缩后的 history + 物化后的会话 id。 */
+export interface PersistSessionResult {
+  /** 压缩后的 history（供内存同步替换）。 */
+  history: AgentMessage[];
+  /** 物化后的会话 id（pending 会话会在此被分配真实 id）。 */
+  sessionId: string;
 }
 
 /**
@@ -229,12 +270,34 @@ export function replaceHistory(target: AgentMessage[], next: AgentMessage[]): vo
 }
 
 /**
+ * 物化「待创建」会话：若 `sessionId` 是 pending 占位空串，则 `store.create` 分配真实 id；
+ * 否则原样返回。用于首条真实消息发送前（观测 / runTurn 需要真实会话 id 作为文件名与
+ * 观测 requestId 后缀），把「待创建态」就地升级为已落盘会话。
+ *
+ * @param store 会话存储。
+ * @param sessionId 当前会话 id（可能是 pending 占位空串）。
+ * @param workspaceRoot 工作区根目录（新会话元数据）。
+ * @returns 物化后的真实会话 id。
+ */
+export async function materializeSession(
+  store: SessionStore,
+  sessionId: string,
+  workspaceRoot: string,
+): Promise<string> {
+  if (!isPendingSession(sessionId)) return sessionId;
+  const created = await store.create({ workspaceRoot });
+  return created.id;
+}
+
+/**
  * 打印会话 id 与恢复命令。
  *
- * 恢复命令只需带上会话 id。
+ * 恢复命令只需带上会话 id。待创建（pending）会话（未发送任何真实消息即退出）不落盘，
+ * 因此不打印恢复提示，避免提示一个不存在的空会话 id。
  *
- * @param sessionId 会话 id。
+ * @param sessionId 会话 id（可能是 pending 占位空串）。
  */
 export function printResumeHint(sessionId: string): void {
+  if (isPendingSession(sessionId)) return;
   process.stdout.write(`\n会话已保存：${sessionId}\n恢复：ohna --resume ${sessionId}\n`);
 }

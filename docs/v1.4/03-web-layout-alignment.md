@@ -88,13 +88,14 @@
 ## 1. 架构决策（本轮拍板，实现时不再逐项讨论）
 
 - **D1 · 分组是展示层，不改存储**：`ConversationDto` += `workspaceRoot: string`（**必填**，serve conversations 路由的 DTO 映射透出 `SessionMeta.workspaceRoot`）。web 侧栏按 `workspaceRoot` 分组，组头显示目录 basename（hover 展示全路径），组内按 `lastMessageAt` 倒序。**不做** serve 端 group-by 端点（数据量本地级，客户端分组足够）。
-- **D2 · 跨工作区会话只读**：当前实例 workspaceRoot（来自 `/api/health`）与会话 `workspaceRoot` 不一致时，composer 禁用并提示「该会话属于其他工作区（<root>），请在对应目录的 ohna 会话中继续」——防止把消息发进错误工作区的 agent 上下文（消息存储共享但 agent 上下文是实例本地的）。CLI observe 会话沿用现有 `showCliHint`。分组头可点击折叠（记忆在组件 state，不持久化）。
+- **D2 · ~~跨工作区会话只读~~（已被 docs/v1.4/04 BUG-002 supersede，2026-10-21 留档，勿按原文实现）**：原文为「当前实例 workspaceRoot（来自 `/api/health`）与会话 `workspaceRoot` 不一致时，composer 禁用并提示『该会话属于其他工作区（<root>），请在对应目录的 ohna 会话中继续』——防止把消息发进错误工作区的 agent 上下文（消息存储共享但 agent 上下文是实例本地的）」。
+  **现行语义**：跨工作区会话**可直接续写**。服务端 `RunManagerOptions.resolveWorkspace` 在 `createRun` 时按会话持久化的 `workspaceRoot` 动态装配编码工具与系统提示词（解析失败静默回退实例工作区，不阻断 run）；前端因此删除 `crossWorkspaceReadOnly` 守卫、composer 的 `readOnly` 入参与只读提示条，也不再按 `?workspaceRoot=` 拉本工作区会话列表——`submitAgentMessage` 直接用侧栏全量 `conversations` 查找目标会话。CLI observe 会话沿用现有 `showCliHint`。分组头可点击折叠（记忆在组件 state，不持久化）。
 - **D3 · Trace 抽屉化，数据逻辑抽 hook**：
   - 新增 `features/trace/use-trace-stream.ts`：把 TracePage 内的会话列表加载 / run 列表加载 / 事件 replay-follow 续传 / 终态兜底逻辑抽成 hook，返回 `{conversations, runs, activeRun, rows, …, actions}`；
   - `TraceDrawer`（新组件）：挂在 Workbench 右侧，默认收起；chat 头部加「Trace」切换按钮；展开时 `agent-app-shell` 追加 `has-trace-panel` 列（复用 `has-detail-panel` 的四列网格模式，二者互斥时让位规则见 L2）；
   - 抽屉内数据**跟随当前会话**（不重复做会话选择），run 列表来自 `GET /api/conversations/:id/runs`；
   - `/trace` 路由**直接删除**，`TracePage.tsx` 组件退役删除（阻断性升级，无深链重定向）；「Trace」入口改为 Workbench 内的抽屉切换按钮。
-- **D4 · 设置页 = 本地只读信息 + UI 偏好**：路由 `/settings`，`WorkbenchNav` 增「设置」tab。布局对齐 CodeBuddy：左侧分区锚点导航 + 右侧内容区。分区清单（本地版务实裁剪，全部无写端点）：
+- **D4 · 设置 = 本地只读信息 + UI 偏好**（docs/v1.4/05 FR-001 修订，2026-10-22）：~~路由 `/settings` + `WorkbenchNav` 增「设置」tab~~ → **chat 主区左下角入口 + 就地弹窗**（`SettingsDialog`，无独立路由）。布局仍对齐 CodeBuddy：左侧分区锚点导航 + 右侧内容区，只是内容从整页收进居中 `role="dialog"`。分区清单（本地版务实裁剪，全部无写端点）：
   1. **连接状态**（只读）：serve 端口/URL、workspaceRoot、dataDir 提示、observeOnly/autoApprove（来自 `/api/health` 与 `fetchLocalMode`）；
   2. **外观**：界面主题（接 `theme.tsx` 现有三态）、界面字号（`document.documentElement.style.fontSize` 缩放，localStorage `ohna.ui.fontSize`）；
   3. **模型**（只读）：复用 composer 的 `/api/models` 目录展示（名称/provider/能力），注明「模型由启动 ohna 时的 CLI 参数决定」；
@@ -108,7 +109,7 @@
 
 ## Phase L1 · 会话侧栏按工作区分组
 
-**目标**：侧栏会话按 workspaceRoot 分组展示，跨工作区会话只读保护。验收后 CLI 在任意目录起的会话都能在同一个 web 里按目录归位。
+**目标**：侧栏会话按 workspaceRoot 分组展示，~~跨工作区会话只读保护~~ → **跨工作区会话可直接续写**（D2 已被 docs/v1.4/04 BUG-002 supersede）。验收后 CLI 在任意目录起的会话都能在同一个 web 里按目录归位，并可在当前 web 实例中直接继续对话。
 
 **交付清单（文件级）**：
 
@@ -119,11 +120,11 @@
    - 按 `workspaceRoot` 分组（`useMemo` 客户端 group-by；组内按 `lastMessageAt` 倒序，组间按组内最新时间倒序）；
    - 组头：目录 basename + 相对时间徽标（可选），title 属性挂全路径；
    - 组头点击折叠/展开（组件 state）。
-5. `apps/ohna-web/src/features/workbench/Workbench.tsx`：D2 只读保护——`localMode.workspaceRoot !== activeConversation.workspaceRoot` 时 composer 禁用 + 提示行（复用 `composerError` 展示位或新增只读提示条，实施时取侵入最小者）。
+5. `apps/ohna-web/src/features/workbench/Workbench.tsx`：~~D2 只读保护——`localMode.workspaceRoot !== activeConversation.workspaceRoot` 时 composer 禁用 + 提示行~~ → **已删除**（BUG-002）：composer 不再有 `readOnly` 入参，跨工作区会话直接可输入、可 `submitAgentMessage`。
 6. 测试：
    - `packages/serve/test/`（现有 conversation 测试文件内补用例）：DTO 含 workspaceRoot、缺字段行被跳过；
    - `apps/ohna-web/src/features/workbench/sidebar`（vitest）：多工作区 fixture → 分组渲染顺序、折叠交互；
-   - `Workbench.test.tsx`：跨工作区会话 composer 禁用与提示。
+   - `apps/ohna-web/src/features/workbench/Workbench.cross-workspace.test.tsx`（原 `Workbench.readonly.test.tsx`，BUG-002 后改名改写）：跨工作区会话 textarea 未禁用、无只读提示、可直接发送，且不再发出带 `?workspaceRoot=` 的列表请求。
 
 **验收**：
 
@@ -177,14 +178,16 @@ pnpm --filter @aiagent/ohna-web test && pnpm --filter @aiagent/ohna-web build
 
 ---
 
-## Phase L3 · 设置页
+## Phase L3 · 设置（就地弹窗）
 
 **目标**：web 有设置入口，布局对齐 CodeBuddy（分区导航 + 内容区），本地只读信息 + UI 偏好本地持久化。
 
-**交付清单（文件级）**：
+> **FR-001 修订（2026-10-22）**：入口从「顶部导航设置 tab + 独立 `/settings` 路由页」改为「chat 主区左下角按钮 + 就地弹窗」。下方交付清单为初版记录，现行形态以 §FR-001 修订说明与 `05-feature-requests.md` 为准。
 
-1. `apps/ohna-web/src/app/router.tsx`：`/settings` 路由；`workbench-nav.tsx` += 「设置」tab。
-2. `apps/ohna-web/src/features/settings/SettingsPage.tsx`（新）：页面壳——左分区锚点导航（连接状态/外观/模型/权限/关于）+ 右内容区；顶部标题 + 说明行（「适用于当前 ohna 进程 · 由启动参数决定」）。
+**交付清单（文件级，初版）**：
+
+1. ~~`apps/ohna-web/src/app/router.tsx`：`/settings` 路由；`workbench-nav.tsx` += 「设置」tab。~~（FR-001 已删除）
+2. ~~`apps/ohna-web/src/features/settings/SettingsPage.tsx`（新）：页面壳~~ → `SettingsDialog.tsx`（FR-001）：左分区锚点导航（连接状态/外观/模型/权限/关于）+ 右内容区；标题 + 说明行（「适用于当前 ohna 进程 · 由启动参数决定」）。
 3. `apps/ohna-web/src/features/settings/`（按分区拆纯展示子组件，壳组件只做编排）：
    - `ConnectionSection.tsx`：`fetchLocalMode` + health 数据展示（URL/workspaceRoot/observeOnly/autoApprove/dataDir 提示）；
    - `AppearanceSection.tsx`：主题三态切换（接 `useTheme`）；界面字号（小/标准/大/特大 → 根字号缩放，localStorage `ohna.ui.fontSize`，`applyInitialTheme` 同款挂载前恢复防闪烁）；
@@ -200,7 +203,17 @@ pnpm --filter @aiagent/ohna-web test && pnpm --filter @aiagent/ohna-web build
 pnpm --filter @aiagent/ohna-web test && pnpm --filter @aiagent/ohna-web build
 ```
 
-**完成判据**：`/settings` 五个分区可导航，主题/字号改后刷新保持；不出现任何可写服务端配置的控件；对话页与 Trace 抽屉在字号调整后无布局破损（手工抽查）。
+**完成判据**：五个分区可导航，主题/字号改后刷新保持；不出现任何可写服务端配置的控件；对话页与 Trace 抽屉在字号调整后无布局破损（手工抽查）。
+
+### FR-001 修订记录（2026-10-22）
+
+设置改为**主区左下角按钮 + 就地弹窗**，不再有独立路由页：
+
+- 新增 `features/settings/SettingsDialog.tsx`：居中 `role="dialog"`（`aria-modal`），遮罩 / 右上角关闭 / ESC / 遮罩点击均可关闭；打开时焦点移入面板、关闭后归还触发按钮、Tab 在面板内循环；`isOpen=false` 时整体不渲染，分区组件与 `useSettingsHealth` 随之卸载（探针 `AbortController` 随之中止）。
+- 新增 `features/workbench/chat-main.tsx`：把原 `chat-main` 网格抽成 `ChatMain` 组件，并在 composer 同一底行右侧放置 `.settings-entry-button`（`aria-haspopup="dialog"`）。底行 `grid-template-columns: minmax(0, 1fr) max-content`，composer 限宽 `min(100%, 1028px)`，保证 860px 内容光轴居中、按钮落在左下角且不遮挡消息。
+- 删除 `/settings` 路由（`router.tsx` 只剩 `*` → Workbench）、`WorkbenchNav` 的「设置」tab（组件不再自带 `<nav>`，由 chat 头部统一包 `工作台导航` landmark）、`SettingsPage.tsx`。
+- 测试：`router.test.ts`（断言不再注册 `/settings`）、`SettingsDialog.test.tsx`（15 例：分区渲染 / 开关 / 三种关闭 / 卸载中止探针 / 焦点归还 / 只读边界）、`Workbench.settings.test.tsx`（左下角入口开弹窗 + 导航无设置 tab）。
+- CSS：`.chat-main-footer` / `.settings-entry-button` / `.settings-dialog*`；原 `.settings-page` / `.settings-header` / `.settings-layout` 全屏页样式退役。
 
 ---
 
@@ -208,7 +221,7 @@ pnpm --filter @aiagent/ohna-web test && pnpm --filter @aiagent/ohna-web build
 
 1. `test/verify-ohna-web-layout.mjs`（根 test/，人工调试入口合规）：
    - 两个临时工作区目录各起一个 serve stub（注入不同 workspaceRoot 的会话）→ 断言 `GET /api/conversations` 返回的 DTO 携带各自 workspaceRoot；
-   - web dist 存在时 `GET /settings` 200、`GET /trace` 回落 200（路由已删，命中 `*` → Workbench）。
+   - web dist 存在时 `GET /settings`、`GET /trace` 均回落 200（路由已删，命中 `*` → Workbench）。
 2. 文档同步：本文 §状态表 + `docs/v1.4/README.md` 配套计划句 += 本文 + `AGENTS.md` `apps/ohna-web` 段（Trace 抽屉 / 设置页 / 会话分组一句，落地后同步，不在启动前改）。
 
 ---
@@ -220,15 +233,16 @@ pnpm --filter @aiagent/ohna-web test && pnpm --filter @aiagent/ohna-web build
 | TC-L1-01 | L1 | DTO 透出 | `GET /api/conversations` 每项含 `workspaceRoot`；缺字段行被跳过 |
 | TC-L1-02 | L1 | 分组渲染 | 两个工作区 fixture → 两个组、组内倒序 |
 | TC-L1-03 | L1 | 折叠交互 | 组头点击折叠/展开，仅影响该组 |
-| TC-L1-04 | L1 | 跨工作区只读 | 激活会话 workspaceRoot ≠ 当前实例 → composer 禁用 + 提示；同工作区不受影响 |
+| TC-L1-04 | L1 | 跨工作区续写（原「跨工作区只读」，BUG-002 supersede） | 激活会话 workspaceRoot ≠ 当前实例 → composer 可输入、无只读提示、可直接发送；同工作区不受影响；不再发出带 `?workspaceRoot=` 的列表请求 |
 | TC-L2-01 | L2 | hook 数据编排 | run 加载 / replay 恢复 / follow 续传 / terminalFallback / 切换会话竞态丢弃 |
 | TC-L2-02 | L2 | 抽屉渲染 | run 列表 + 事件行 + LlmCallBlock 展开 + 空态文案 |
 | TC-L2-03 | L2 | 路由删除 | `/trace` 路由已移除，访问回落到 Workbench |
 | TC-L2-04 | L2 | 右侧位互斥 | 打开 Trace 收起 RunDetailPanel，反之亦然 |
-| TC-L3-01 | L3 | 分区导航 | 五分区锚点导航 + 内容区渲染 |
+| TC-L3-01 | L3 | 分区导航 | 五分区锚点导航 + 内容区渲染（弹窗内） |
 | TC-L3-02 | L3 | 外观持久化 | 主题/字号写入 localStorage 并在挂载前恢复 |
-| TC-L3-03 | L3 | 只读边界 | 设置页无任何写配置请求发出（断言 fetch 调用集合） |
-| TC-L4-01 | L4 | 端到端 | 两工作区 stub → DTO 字段正确；`/settings` 200 |
+| TC-L3-03 | L3 | 只读边界 | 设置弹窗无任何写配置请求发出（断言 fetch 调用集合） |
+| TC-FR-001 | FR-001 | 弹窗形态 | 左下角入口开弹窗；关闭按钮 / 遮罩 / ESC 均可关闭；关闭即卸载内容中止探针；焦点开入关出；导航无设置 tab；路由无 `/settings` |
+| TC-L4-01 | L4 | 端到端 | 两工作区 stub → DTO 字段正确；`/settings`、`/trace` 兜底 200 |
 
 ---
 
@@ -249,7 +263,7 @@ pnpm --filter @aiagent/ohna-web test && pnpm --filter @aiagent/ohna-web build
 
 - **不动中间时间线**：`chat.tsx` 时间线渲染、`live-run-projection`、确认卡片逻辑零 diff（R2）。
 - **不做服务端分组/聚合端点**：分组在客户端 `useMemo` 完成（D1）。
-- **不做跨实例写操作**：跨工作区会话只读，不做「远程接管其他实例」（D2，与 02 的「CLI 镜像只读」语义一致）。
+- **不做跨实例写操作**：~~跨工作区会话只读~~ → 跨工作区会话可在当前实例续写（D2 已由 BUG-002 supersede），但仍不做「远程接管另一个 serve 进程」（不向其他实例发请求，也不切实例的 `dataDir` / 端口）。
 - **不做设置写端点**：模型、权限、CLI 参数均在进程侧，web 设置只读 + UI 偏好本地化（D4）。
 - **不恢复文件树 / 不新增 Terminal 面板**：刚移除的全量文件树不回退；dsh 式侧栏 Terminal 属工作台扩展，开放项。
 - **不删 `/api/local/fs`**：后端只读能力保留（与文件树解耦）。
@@ -306,9 +320,9 @@ pnpm --filter @aiagent/ohna-cli dev   # 手工：两个目录各起一次 CLI �
 
 | 阶段 | 内容 | 状态 |
 |---|---|---|
-| L1 | 会话侧栏按工作区分组 + 跨工作区只读 | ✅ 已完成（2026-10-21） |
+| L1 | 会话侧栏按工作区分组 + ~~跨工作区只读~~ → 跨工作区续写（BUG-002 supersede） | ✅ 已完成（2026-10-21；只读守卫于 BUG-002 修复时移除） |
 | L2 | Trace 右侧抽屉（hook 抽取 + `/trace` 删除） | ✅ 已完成（2026-10-21） |
-| L3 | 设置页（分区导航 + 只读信息 + UI 偏好） | ✅ 已完成（2026-10-21） |
+| L3 | 设置（分区导航 + 只读信息 + UI 偏好）；FR-001 后为左下角入口 + 就地弹窗，无独立路由 | ✅ 已完成（2026-10-21；2026-10-22 按 FR-001 修订） |
 | L4 | 验证脚本 + 文档同步 | ✅ 已完成（2026-10-21） |
 | L5 | 后续修复（实施中发现，见 §9） | ✅ 已完成（2026-10-21） |
 
@@ -324,7 +338,7 @@ pnpm --filter @aiagent/ohna-cli dev   # 手工：两个目录各起一次 CLI �
 | L1 | `packages/serve/src/routes/conversations.ts` | DTO 映射透出 `workspaceRoot`；**新增可选 `?workspaceRoot=` 过滤**（见 §9.2-②） |
 | L1 | `packages/serve/src/store/session-store.ts` | `workspaceRoot` 必填校验，缺字段/空串按坏行跳过（删空串兜底） |
 | L1 | `apps/ohna-web/src/features/workbench/sidebar.tsx` | `groupConversationsByWorkspace` 纯函数 + 组头折叠（`aria-label="工作区 <名>（N 个会话）"`，title 挂全路径） |
-| L1 | `apps/ohna-web/src/features/workbench/{Workbench,chat,composer-controls}.tsx` | 跨工作区只读：提示条 + textarea/发送双禁用 + `submitAgentMessage` 兜底拦截 |
+| L1 | `apps/ohna-web/src/features/workbench/{Workbench,chat,composer-controls}.tsx` | ~~跨工作区只读：提示条 + textarea/发送双禁用 + `submitAgentMessage` 兜底拦截~~ → **BUG-002 已全部移除**（`crossWorkspaceReadOnly` / `readOnly` 入参 / 只读提示条 / `?workspaceRoot=` 列表请求）；现为跨工作区直接续写。相关测试改名 `Workbench.cross-workspace.test.tsx` |
 | L2 | `apps/ohna-web/src/features/trace/use-trace-stream.ts`（新） | 会话 → run 列表 → replay/follow → 刷新 → terminalFallback；`enabled` 参数支持抽屉收起零请求；代次号丢弃迟到响应 |
 | L2 | `apps/ohna-web/src/features/trace/TraceDrawer.tsx`（新） | 抽屉壳 + run 选择条 + `TraceStream` 复用；空态「本会话还没有运行记录。」 |
 | L2 | `apps/ohna-web/src/features/trace/{TracePage.tsx,TracePage.test.tsx}` | **已删除**（用例迁移到 `use-trace-stream.test.tsx` / `TraceDrawer.test.tsx`，fixture 抽到 `trace-fixtures.ts`） |
@@ -332,6 +346,9 @@ pnpm --filter @aiagent/ohna-cli dev   # 手工：两个目录各起一次 CLI �
 | L2 | `apps/ohna-web/src/features/workbench/Workbench.tsx` | `isTraceOpen`（不读 URL）+ `has-trace-panel` + 与 `RunDetailPanel` 双向互斥 |
 | L3 | `apps/ohna-web/src/app/theme.tsx` | 扩展为 UI 偏好（主题 + 字号 `ohna.ui.fontSize`），保留 `ohna.theme` key 与 `useTheme` 别名 |
 | L3 | `apps/ohna-web/src/features/settings/*`（新） | `SettingsPage` 壳 + `ConnectionSection` / `AppearanceSection` / `ModelsSection` / `PermissionSection` / `AboutSection` + `settings-primitives` / `settings-health` |
+| FR-001 | `apps/ohna-web/src/features/settings/{SettingsDialog.tsx,SettingsDialog.test.tsx}`（新） | 就地弹窗壳（focus 移入/归还、Tab 环、ESC/遮罩/按钮三种关闭、`isOpen=false` 不渲染）；接替 `SettingsPage.tsx` + `SettingsPage.test.tsx`（已删除） |
+| FR-001 | `apps/ohna-web/src/features/workbench/{chat-main.tsx,Workbench.settings.test.tsx}`（新） | `ChatMain`：`chat-main` 网格 + 与 composer 同底行的左下角 `.settings-entry-button`；`composer-controls` 增 `formId`（发送键 `form` 关联，停止态改为 `type="submit"` + `preventDefault`） |
+| FR-001 | `apps/ohna-web/src/app/{router,workbench-nav}.tsx` | 删除 `/settings` 路由（只剩 `*` → Workbench）与「设置」tab；`WorkbenchNav` 退化为 tab 片段（不再自带 `<nav>`），chat 头部统一包 `工作台导航` landmark |
 | L3 | `apps/ohna-web/vite.config.ts` + `src/vite-env.d.ts` | `__OHNA_WEB_VERSION__` 构建期注入（关于分区版本号，不新增端点） |
 | L3 | `apps/ohna-web/{test/setup.ts,tsconfig.json}` | 该 jsdom 构建缺 `localStorage` / `matchMedia`，补齐测试垫片；声明 vitest globals |
 | L4 | `test/verify-ohna-web-layout.mjs`（新） | 双工作区共享 dataDir 的 DTO / 分组 / 过滤断言 + `/settings` 200 + `/trace` 回落 200 + 构建产物无 TracePage chunk |
@@ -340,7 +357,8 @@ pnpm --filter @aiagent/ohna-cli dev   # 手工：两个目录各起一次 CLI �
 ### 9.2 实施中的决策与修正
 
 1. **`ConversationDto` 不加必填字段**：直接加字段会让产品 A（`apps/finance-api` / `finance-web`）编译失败，而该产品线「保持不动、独立演进」且没有「工作区」概念。改为新增 `WorkspaceConversationDto extends ConversationDto`，ohna 侧（serve 路由 + ohna-web）全部切到子类型；金融侧零改动。03 原决策「`ConversationDto += workspaceRoot` 必填」从这一角度作废，其余（无空串兜底）保持不变。
-2. **新增 `?workspaceRoot=` 过滤而非纯前端守卫**：只读保护只靠 UI 时仍存在一条真实漏洞——侧栏 `loadConversationPage` 的**分页追加**不走 `listConversations` 的首屏过滤，深页里会混入其他工作区会话，`submitAgentMessage` 找不到会话时会**自动新建一条并发消息**。现在 composer 通过 `?workspaceRoot=` 维护本工作区候选列表，跨工作区会话根本不在候选里；`submitAgentMessage` 仍保留 `crossWorkspaceReadOnly` 兜底。
+2. **新增 `?workspaceRoot=` 过滤而非纯前端守卫**（**已被 BUG-002 supersede**，保留历史理由）：当时只读保护只靠 UI 存在一条漏洞——侧栏 `loadConversationPage` 的**分页追加**不走 `listConversations` 的首屏过滤，深页里会混入其他工作区会话，`submitAgentMessage` 找不到会话时会**自动新建一条并发消息**。彼时 composer 通过 `?workspaceRoot=` 维护本工作区候选列表，跨工作区会话不在候选里，`submitAgentMessage` 另有 `crossWorkspaceReadOnly` 兜底。
+   **现行做法**：只读语义整体取消后，这条漏洞的前提（「会话不该出现在候选里」）不复存在——web 不再发 `?workspaceRoot=` 列表请求，`workspaceConversations` state、`appendWorkspaceConversation` 与该 effect 一并删除；`submitAgentMessage` 直接在侧栏全量 `conversations` 中查找目标会话（侧栏即唯一事实源：会话要么从侧栏选中，要么新建后 prepend）。服务端 `?workspaceRoot=` 过滤端点保留（CLI / 脚本仍可用），只是 web 不再消费。
 3. **hook 契约扩了一点**：`useTraceStream` 额外返回 `activeRunMeta`（抽屉头部展示 mode/source/modelId/requestId）与 `enabled` 入参；D3 约定的五个字段全部保留。
 4. **run 选择条取代 run 列表**：抽屉宽度有限，run 列表改为横向 chip（状态徽标 + 相对时间，title 挂完整 runId），点击切换；`TraceStream` 与 `LlmCallBlock` 零改动。
 5. **互斥实现**：`toggleTrace()` 打开抽屉时清空 `selectedRunDetail`，`openRunDetail()` 打开详情时清空 `isTraceOpen`；二者都映射到 `agent-app-shell` 的列位 class，故同一时刻最多一个右侧面板。
@@ -358,10 +376,10 @@ pnpm build                                   # ✅ 全仓通过
 node test/verify-ohna-web-layout.mjs         # ✅ 7 条断言全过
 ```
 
-对照 §2 用例清单：TC-L1-01 ✅（serve 测试 + 验证脚本）、TC-L1-02 ✅（`groupConversationsByWorkspace`）、TC-L1-03 ✅（`sidebar.test.tsx`）、TC-L1-04 ✅（`Workbench.readonly.test.tsx` + 过滤数据侧）、TC-L2-01 ✅（`use-trace-stream.test.tsx` 9 例）、TC-L2-02 ✅（`TraceDrawer.test.tsx` 8 例）、TC-L2-03 ✅（`router.test.ts` + 构建产物）、TC-L2-04 ✅（`Workbench.trace.test.tsx`）、TC-L3-01/02/03 ✅（`SettingsPage.test.tsx` 8 例）、TC-L4-01 ✅（验证脚本）。
+对照 §2 用例清单：TC-L1-01 ✅（serve 测试 + 验证脚本）、TC-L1-02 ✅（`groupConversationsByWorkspace`）、TC-L1-03 ✅（`sidebar.test.tsx`）、TC-L1-04 ✅（**BUG-002 后改写为跨工作区续写断言**：`Workbench.cross-workspace.test.tsx`，原 `Workbench.readonly.test.tsx`）、TC-L2-01 ✅（`use-trace-stream.test.tsx` 9 例）、TC-L2-02 ✅（`TraceDrawer.test.tsx` 8 例）、TC-L2-03 ✅（`router.test.ts` + 构建产物）、TC-L2-04 ✅（`Workbench.trace.test.tsx`）、TC-L3-01/02/03 ✅（`SettingsPage.test.tsx` 8 例 → FR-001 后迁移为 `SettingsDialog.test.tsx` 15 例 + `Workbench.settings.test.tsx` 2 例）、TC-FR-001 ✅（同上，2026-10-22）、TC-L4-01 ✅（验证脚本）。
 
 ### 9.4 遗留与风险
 
 - L2 完成判据中的「刷新后 replay 恢复完整事件」「字号调整后手工抽查布局」属人工走查项，本次只跑了自动化验收；
-- 侧栏分页追加仍可能把跨工作区会话混入**侧栏全量列表**（这是有意为之：侧栏要展示全部工作区），但已不影响 composer 的会话归属；
+- ~~侧栏分页追加仍可能把跨工作区会话混入侧栏全量列表，但已不影响 composer 的会话归属~~：BUG-002 后侧栏全量列表**就是** composer 的候选源（跨工作区会话本就允许续写），此项不再是风险；
 - `apps/ohna-api/` 去留仍未决（§5-7）。

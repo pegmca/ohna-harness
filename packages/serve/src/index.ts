@@ -25,7 +25,12 @@ import type {
   RunSnapshotDtoV2,
   RunStreamEventDtoV2
 } from "@aiagent/types";
-import type { CreateRunResult, ObserveRunInput, ObservedRun } from "./run/types.js";
+import type {
+  CreateRunResult,
+  ObserveRunInput,
+  ObservedRun,
+  ResolvedWorkspaceContext
+} from "./run/types.js";
 import Fastify, { type FastifyInstance } from "fastify";
 import { createAsyncConfirmGate, type ConfirmationDecision, type ConfirmationRequestedPayload } from "./confirm-gate.js";
 import { registerErrorHandler } from "./errors.js";
@@ -88,6 +93,14 @@ export interface OhnaServer {
   createConversation(title?: string): Promise<WorkspaceConversationDto>;
   /** 列出 active 会话（进程内入口复用，等价 GET /api/conversations）。 */
   listConversations(): Promise<WorkspaceConversationDto[]>;
+  /**
+   * 语义化生成会话标题（进程内入口复用，等价 POST /api/conversations/:id/generate-title）。
+   * 失败返回 undefined，由调用方降级为截断标题。
+   */
+  generateConversationTitle(
+    conversationId: string,
+    text: string
+  ): Promise<WorkspaceConversationDto | undefined>;
   /**
    * 创建并启动一次 run（进程内入口复用，等价 POST /api/runs）。
    * requestId 缺省时自动生成；mode/source 缺省取 composer 语义（auto / composer）。
@@ -154,6 +167,43 @@ export async function createOhnaServer(options: OhnaServerOptions): Promise<Ohna
       onContextError: () => undefined
     }));
 
+  // 主工作区工具集：必须复用注入的 tools，否则会丢 MCP 工具并破坏测试注入（tools: []）。
+  const tools = options.tools ?? createCodingToolRegistry(workspaceRoot);
+
+  // BUG-002 方案 2：按会话持久化的 workspaceRoot 动态装配上下文，支持跨工作区会话续写。
+  // 按绝对路径缓存 Promise：并发创建同一工作区的 run 共享同一次装配，避免重复读上下文。
+  const workspaceContextCache = new Map<string, Promise<ResolvedWorkspaceContext>>();
+  // 种子 = 主工作区：复用已注入的 systemPrompt / tools（单工作区语义与 MCP/测试注入零变化）。
+  workspaceContextCache.set(workspaceRoot, Promise.resolve({ workspaceRoot, systemPrompt, tools }));
+
+  /**
+   * 按会话解析工作区上下文：命中缓存直接复用，未命中则按会话根装配编码上下文。
+   *
+   * 边界：跨工作区根只装配 `createCodingToolRegistry(root)` + 编码系统提示词，不携带
+   * 主实例的 MCP 工具；写/执行仍由既有 confirm-gate 确认闸门把关，这是可接受的取舍。
+   *
+   * @param conversationId 会话 id。
+   * @returns 该会话应使用的上下文（含绝对路径 workspaceRoot）。
+   */
+  const resolveWorkspace = async (conversationId: string): Promise<ResolvedWorkspaceContext> => {
+    let root = workspaceRoot;
+    const meta = await sessionStore.get(conversationId);
+    if (meta?.workspaceRoot) root = path.resolve(meta.workspaceRoot);
+
+    const cached = workspaceContextCache.get(root);
+    if (cached) return cached;
+
+    const context = buildCodingSystemPrompt(root, {
+      onContextError: () => undefined
+    }).then((prompt): ResolvedWorkspaceContext => ({
+      workspaceRoot: root,
+      systemPrompt: prompt,
+      tools: createCodingToolRegistry(root)
+    }));
+    workspaceContextCache.set(root, context);
+    return context;
+  };
+
   // 闸门的 emit 需要 RunManager（分配 sequence 后落盘 + 广播），而 RunManager 又需要闸门。
   // 用运行期持有者打破构造期循环：emit 只在工具真正请求确认时才被调用。
   const emitHolder: {
@@ -175,11 +225,12 @@ export async function createOhnaServer(options: OhnaServerOptions): Promise<Ohna
     model: options.model,
     apiKey: options.apiKey,
     systemPrompt,
-    tools: options.tools ?? createCodingToolRegistry(workspaceRoot),
+    tools,
     messageStore,
     runStore,
     sessionStore,
     confirmGate,
+    resolveWorkspace,
     ...(options.streamFn ? { streamFn: options.streamFn } : {})
   });
   emitHolder.emit = (runId, payload) =>
@@ -247,6 +298,15 @@ export async function createOhnaServer(options: OhnaServerOptions): Promise<Ohna
     async listConversations() {
       const metas = await sessionStore.list();
       return metas.map(toConversationDto);
+    },
+
+    async generateConversationTitle(conversationId, text) {
+      const meta = await sessionStore.get(conversationId);
+      if (!meta) return undefined;
+      const title = await runManager.generateTitle(text);
+      if (!title) return undefined;
+      const updated = await sessionStore.update(meta.id, { title });
+      return toConversationDto(updated ?? meta);
     },
 
     createRun(input) {
@@ -340,6 +400,7 @@ export type {
   LlmCallPushEvent,
   ObserveRunInput,
   ObservedRun,
+  ResolvedWorkspaceContext,
 } from "./run/types.js";
 export {
   createAsyncConfirmGate,
@@ -352,6 +413,7 @@ export {
   type ResolveConfirmationResult
 } from "./confirm-gate.js";
 export { createSingleModelCatalog } from "./routes/models.js";
+export { createTitleGenerator, type TitleGeneratorOptions } from "./run/title.js";
 export {
   LocalMessageStore,
   LocalRunStore,

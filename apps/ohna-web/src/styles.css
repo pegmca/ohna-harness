@@ -633,8 +633,7 @@ textarea:disabled {
 .message-text,
 .run-identifiers,
 .detail-row span,
-.trace-row span,
-.json-details pre {
+.trace-row span {
   overflow-wrap: anywhere;
 }
 
@@ -660,7 +659,6 @@ textarea:disabled {
 
 .sidebar-footer {
   position: relative;
-  border-top: 1px solid var(--md-color-border-subtle);
   padding-top: var(--md-space-4);
 }
 
@@ -700,6 +698,20 @@ textarea:disabled {
   border-color: var(--md-color-border);
   background: var(--md-color-elevated);
   color: var(--md-color-text-primary);
+}
+
+.profile-trigger:focus-visible {
+  outline: 2px solid var(--md-color-primary);
+  outline-offset: 2px;
+}
+
+/*
+ * 「设置」入口（05 FR-001）：复用 `.profile-trigger` 的视觉，但只显示图标、
+ * 按内容宽度自适应，避免像头像入口那样横向铺满侧栏。
+ */
+.settings-entry-trigger {
+  width: auto;
+  padding: var(--md-space-2);
 }
 
 .profile-avatar {
@@ -1220,14 +1232,33 @@ textarea:disabled {
   width: fit-content;
 }
 
-.chat-composer {
+/* ---------- chat 主区底行：composer（05 FR-001） ---------- */
+
+/*
+ * 底行是 `chat-main` 的最后一行，只放 composer（「设置」入口已移至左侧会话栏底部）。
+ * 用 grid 而不是 `position: fixed`：composer 与底行同处，不会浮在滚动的消息之上。
+ */
+.chat-main-footer {
   display: grid;
   gap: var(--md-space-3);
-  border-top: 1px solid var(--md-color-border-subtle);
-  background: color-mix(in srgb, var(--md-color-canvas) 94%, black);
   padding: var(--md-space-4) var(--md-space-6);
 }
 
+/*
+ * composer 不再承担边框/背景/内边距（已上移到 `.chat-main-footer`），只负责纵向堆叠。
+ * 宽度上限 `1028px`，水平居中；内层内容列再限宽 `860px` 保持光轴。
+ */
+.chat-composer {
+  display: grid;
+  width: min(100%, 1028px);
+  gap: var(--md-space-3);
+  border: 0;
+  background: transparent;
+  padding: 0;
+  margin-inline: auto;
+}
+
+/* 内容列居中并限宽。 */
 .chat-composer > * {
   width: min(100%, 860px);
   margin-inline: auto;
@@ -1895,20 +1926,11 @@ textarea:disabled {
   font-size: 0.75rem;
 }
 
-.json-details pre {
-  max-width: 100%;
-  max-height: 280px;
-  overflow: auto;
-  border: 1px solid var(--md-color-border-subtle);
-  border-radius: var(--md-radius-md);
-  background: color-mix(in srgb, var(--md-color-canvas) 82%, black);
-  padding: var(--md-space-3);
-  color: var(--md-color-text-secondary);
-  font-family: var(--md-font-mono);
-  font-size: var(--md-text-code-size);
-  line-height: 1.5;
-  white-space: pre-wrap;
-}
+/*
+ * 展开体由统一的 JsonViewer 渲染（BUG-003），只保留视觉语言唯一的实现（见文件末尾 `.json-viewer`）。
+ * 旧的 `.json-details pre`（深色底 + padding + 280px 限高）已删除：留着会和阅读器的 canvas 底
+ * 形成两套 JSON 视觉，后续维护者容易误用。
+ */
 
 .status-badge {
   display: inline-flex;
@@ -2052,7 +2074,8 @@ textarea:disabled {
     padding: var(--md-space-4);
   }
 
-  .chat-composer {
+  .chat-main-footer {
+    gap: var(--md-space-1);
     padding: var(--md-space-3) var(--md-space-4);
   }
 
@@ -2523,21 +2546,10 @@ textarea:disabled {
   font-size: 0.6875rem;
 }
 
-.trace-json {
-  max-height: 320px;
-  margin: 0;
-  overflow: auto;
-  border: 1px solid var(--md-color-border-subtle);
-  border-radius: var(--md-radius-md);
-  background: var(--md-color-canvas);
-  padding: var(--md-space-3);
-  color: var(--md-color-text-secondary);
-  font-family: var(--md-font-mono);
-  font-size: 0.6875rem;
-  line-height: 1.5;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
+/*
+ * 旧的 `.trace-json`（`<pre>` + JSON.stringify 平铺）已随 BUG-003 移除：trace 各处的 JSON 展示
+ * 统一走 `.json-viewer`（限高 320px / overflow-auto / 等宽字体 / 长串可换行，视觉等价）。
+ */
 
 .trace-json-actions {
   display: flex;
@@ -2640,11 +2652,227 @@ textarea:disabled {
   font-size: 0.6875rem;
 }
 
-.trace-json-hint {
+/* 「已折叠渲染；完整内容请用复制 JSON」提示随跨阈值降级一起移除，预算提示见 .json-viewer-budget。 */
+
+/* ---------- 统一 JSON 阅读器（BUG-003） ---------- */
+
+/*
+ * 这是全应用唯一的 JSON 视觉层（替代旧的 `.trace-json` / `.json-details pre`）：等宽字体、
+ * 限高 + overflow-auto、长字符串可换行。折叠箭头直接复用 .details-chevron，不引入第二套箭头样式。
+ */
+.json-viewer {
+  display: grid;
+  gap: var(--md-space-1);
+  min-width: 0;
+  max-height: 320px;
+  overflow: auto;
+  border: 1px solid var(--md-color-border-subtle);
+  border-radius: var(--md-radius-md);
+  background: var(--md-color-canvas);
+  padding: var(--md-space-2) var(--md-space-3);
+  font-family: var(--md-font-mono);
+  font-size: 0.6875rem;
+  line-height: 1.6;
+}
+
+.json-viewer-toolbar {
+  display: flex;
+  position: sticky;
+  top: 0;
+  justify-content: flex-end;
+  gap: var(--md-space-2);
+  background: var(--md-color-canvas);
+  padding-bottom: var(--md-space-1);
+}
+
+.json-viewer-action {
+  border: 1px solid var(--md-color-border-subtle);
+  border-radius: var(--md-radius-sm);
+  background: transparent;
+  padding: 0 var(--md-space-2);
+  color: var(--md-color-text-muted);
+  font: inherit;
+  font-size: 0.625rem;
+  cursor: pointer;
+}
+
+.json-viewer-action:hover {
+  border-color: var(--md-color-border);
+  color: var(--md-color-text-secondary);
+}
+
+.json-viewer-tree {
+  display: grid;
+  gap: 1px;
+}
+
+.json-viewer-row {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  gap: var(--md-space-1);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* 悬停只提升键名对比度，不改布局尺寸（避免抖动）。 */
+.json-viewer-row:hover .json-viewer-key {
+  color: var(--md-color-primary);
+}
+
+/* 缩进按行自身深度计算（--json-viewer-depth 由组件写入），深层节点不堆嵌套容器。 */
+.json-viewer-indent {
+  width: calc(var(--json-viewer-depth, 0) * var(--md-space-4));
+  flex: none;
+  align-self: stretch;
+  border-left: 1px solid var(--md-color-border-subtle);
+}
+
+.json-viewer-toggle {
+  display: inline-flex;
+  width: 14px;
+  height: 16px;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  cursor: pointer;
+}
+
+.json-viewer-toggle .details-chevron {
+  width: 14px;
+  height: 14px;
+  transform: rotate(-90deg);
+}
+
+.json-viewer-toggle .details-chevron.is-open {
+  transform: rotate(0);
+}
+
+.json-viewer-toggle:focus-visible,
+.json-viewer-action:focus-visible,
+.json-viewer-summary:focus-visible,
+.json-viewer-more:focus-visible {
+  outline: 2px solid var(--md-color-primary);
+  outline-offset: 1px;
+  border-radius: var(--md-radius-sm);
+}
+
+/* 叶子节点没有箭头：占位保证键名纵向对齐。 */
+.json-viewer-toggle-spacer {
+  display: inline-block;
+  width: 14px;
+  flex: none;
+}
+
+/* 键名后留一个空格（分隔键与值，替代 JSON 文本里的 ": "），颜色取主色作语法高亮。 */
+.json-viewer-key {
+  color: var(--md-color-primary);
+}
+
+.json-viewer-key::after {
+  content: ": ";
+  color: var(--md-color-text-muted);
+}
+
+.json-viewer-index {
+  color: var(--md-color-text-muted);
+}
+
+.json-viewer-string {
+  color: var(--md-color-text-secondary);
+}
+
+.json-viewer-number {
+  color: var(--md-color-warning);
+}
+
+.json-viewer-boolean {
+  color: var(--md-color-info);
+}
+
+.json-viewer-null {
+  color: var(--md-color-text-muted);
+  font-style: italic;
+}
+
+/* undefined / BigInt / 函数 / Symbol / 非纯数据对象：标注为降级文本，与真实 JSON 值区分。 */
+.json-viewer-unsupported {
+  border-bottom: 1px dashed var(--md-color-border);
+  color: var(--md-color-text-muted);
+}
+
+.json-viewer-bracket {
+  color: var(--md-color-text-muted);
+}
+
+.json-viewer-summary {
+  display: inline-flex;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.json-viewer-count {
+  color: var(--md-color-text-muted);
+  font-style: italic;
+}
+
+.json-viewer-summary:hover .json-viewer-count {
+  color: var(--md-color-text-secondary);
+}
+
+.json-viewer-more {
+  border: 0;
+  background: transparent;
+  padding: 0 var(--md-space-1);
+  color: var(--md-color-primary);
+  font: inherit;
+  font-size: 0.625rem;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.json-viewer-budget {
   margin: 0;
   border: 1px dashed var(--md-color-border);
   border-radius: var(--md-radius-md);
-  padding: var(--md-space-3);
+  padding: var(--md-space-2);
+  color: var(--md-color-text-muted);
+  font-size: 0.6875rem;
+}
+
+.json-viewer-budget-summary {
+  margin: 0;
+  color: var(--md-color-text-muted);
+}
+
+/*
+ * 「全部展开」的批量预算截断提示：贴在工具栏里、按钮右侧。
+ * 工具栏是 flex-end 对齐，这里用 margin-right:auto 推到最左侧，并把长文本收成一行省略，
+ * 避免提示把工具栏撑高（它是辅助信息，不是主操作）。
+ */
+.json-viewer-budget-note {
+  margin-right: auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--md-color-text-muted);
+  font-size: 0.625rem;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* 在外层 <details>（.json-details）里再套阅读器时不再重复边框，避免双层框。 */
+.json-details .json-viewer {
+  max-height: 280px;
+  margin-top: var(--md-space-2);
+  border: 0;
+  padding: 0;
 }
 
 /* ---------- Trace 右侧抽屉（03 L2） ---------- */
@@ -2788,22 +3016,58 @@ textarea:disabled {
   .trace-drawer { animation: none; }
 }
 
-/* ---------- 设置页（03 L3） ---------- */
+/* ---------- 设置弹窗（03 L3 / 05 FR-001：原位弹窗，不再是独立路由页） ---------- */
 
-.settings-page {
+.settings-dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
   display: grid;
-  min-height: 100vh;
-  grid-template-rows: auto minmax(0, 1fr);
-  background: var(--md-color-canvas);
+  place-items: center;
+  background: var(--md-color-overlay);
+  padding: var(--md-space-4);
+  animation: settings-dialog-fade var(--md-motion-fast) var(--md-ease);
 }
 
-.settings-header {
+.settings-dialog {
+  display: grid;
+  width: min(960px, 100%);
+  max-height: min(86vh, 860px);
+  grid-template-rows: auto minmax(0, 1fr);
+  padding: 0;
+  overflow: hidden;
+  animation: settings-dialog-in var(--md-motion-slow) var(--md-ease);
+}
+
+.settings-dialog:focus-visible {
+  outline: 2px solid var(--md-color-primary);
+  outline-offset: 2px;
+}
+
+@keyframes settings-dialog-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes settings-dialog-in {
+  from { opacity: 0; transform: translateY(12px) scale(0.99); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.settings-dialog-header {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: var(--md-space-4);
   border-bottom: 1px solid var(--md-color-border-subtle);
-  padding: var(--md-space-4) var(--md-space-6);
+  padding: var(--md-space-4) var(--md-space-5);
+}
+
+.settings-dialog-title-group .md-label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--md-space-1);
+  margin: 0;
 }
 
 .settings-title {
@@ -2819,10 +3083,11 @@ textarea:disabled {
   font-size: 0.8125rem;
 }
 
-.settings-layout {
+.settings-dialog-layout {
   display: grid;
   grid-template-columns: 220px minmax(0, 1fr);
   min-height: 0;
+  overflow: hidden;
 }
 
 .settings-nav {
@@ -2831,6 +3096,7 @@ textarea:disabled {
   gap: var(--md-space-1);
   border-right: 1px solid var(--md-color-border-subtle);
   padding: var(--md-space-4) var(--md-space-3);
+  overflow: auto;
 }
 
 .settings-nav-item {
@@ -2855,8 +3121,7 @@ textarea:disabled {
   display: grid;
   align-content: start;
   gap: var(--md-space-4);
-  width: min(100%, 860px);
-  padding: var(--md-space-6);
+  padding: var(--md-space-5);
   overflow: auto;
   scroll-behavior: smooth;
 }
@@ -2936,7 +3201,18 @@ textarea:disabled {
 }
 
 @media (max-width: 900px) {
-  .settings-layout { grid-template-columns: minmax(0, 1fr); }
+  .settings-dialog-backdrop { padding: 0; }
+
+  /* 移动端：弹窗占满视口（沿用 sidebar drawer / Trace 抽屉的全屏先例）。 */
+  .settings-dialog {
+    width: 100%;
+    max-height: 100vh;
+    height: 100vh;
+    border: 0;
+    border-radius: 0;
+  }
+
+  .settings-dialog-layout { grid-template-columns: minmax(0, 1fr); }
   .settings-nav {
     display: flex;
     overflow-x: auto;
@@ -2944,6 +3220,11 @@ textarea:disabled {
     border-bottom: 1px solid var(--md-color-border-subtle);
   }
   .settings-nav-item small { display: none; }
-  .settings-font-options { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .settings-content { padding: var(--md-space-4); }
+  .settings-font-options { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .settings-dialog,
+  .settings-dialog-backdrop { animation: none; }
 }

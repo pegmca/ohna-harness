@@ -3,9 +3,10 @@ import type {
   WorkspaceConversationDto,
   RunStreamEventDtoV2
 } from "@aiagent/types";
-import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { TraceToggle, WorkbenchNav } from "../../app/workbench-nav";
+import { SettingsDialog } from "../settings/SettingsDialog";
 import { TraceDrawer } from "../trace/TraceDrawer";
 import { cancelRun, createAndStreamRun, replayRunEvents, type RunTerminalDto } from "../../shared/api/run-stream-client";
 import { fetchLocalMode, type LocalModeInfo } from "../../shared/mode";
@@ -18,12 +19,15 @@ import {
 import { ConfirmationCards, type ConfirmationCardUiState } from "./confirmation-cards";
 import {
   createConversation,
+  generateConversationTitle,
   listConversationMessages,
   listConversations,
   updateConversation as updateConversationApi
 } from "../../shared/api/conversation-client";
 import { ChatComposer, ChatHeader, ChatTimeline } from "./chat";
+import { ChatMain } from "./chat-main";
 import {
+  applyFailure,
   createConversationTitle,
   createUiId,
   formatApiError,
@@ -37,6 +41,9 @@ import { RunDetailPanel } from "./run-details";
 import { ConversationSidebar } from "./sidebar";
 import type { RetryRunContext, SelectedRunDetail, UiMessage } from "./types";
 import { useComposerState } from "./use-composer-state";
+
+/** composer 表单 id：主区左下角设置按钮与发送键同处底行（FR-001）。 */
+const COMPOSER_FORM_ID = "chat-composer-form";
 
 /**
  * 渲染 ohna 本地工作台：左会话列表 + 文件树 + 中央时间线 + composer + 待确认卡片。
@@ -65,6 +72,8 @@ export function Workbench() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   // Trace 抽屉（D3）：初始收起、不读 URL——刷新即回到对话视图。
   const [isTraceOpen, setIsTraceOpen] = useState(false);
+  // 设置弹窗（FR-001）：就地弹窗、不读 URL；关闭即卸载内容，健康探针随之中止。
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [localMode, setLocalMode] = useState<LocalModeInfo | null>(null);
   const [selectedRunDetail, setSelectedRunDetail] = useState<SelectedRunDetail>();
   const [_activeRunId, setActiveRunId] = useState<string>();
@@ -80,8 +89,6 @@ export function Workbench() {
   const messageRequestController = useRef<AbortController | undefined>(undefined);
   const messageRequestGeneration = useRef(0);
   const skipInitialHistoryConversationId = useRef<string | undefined>(undefined);
-  // 记录因会话自动创建而改写标题的占位"新会话"，发送首条消息时据此决定是否改写标题。
-  const autoCreatedConversationIdRef = useRef<string | null>(null);
   // 刷新恢复（W-9）的 SSE replay 控制器：切换会话 / 组件卸载时中断。
   const replayController = useRef<AbortController | undefined>(undefined);
 
@@ -92,32 +99,11 @@ export function Workbench() {
   const latestRunStatus = [...messages].reverse().find((message) => message.runStatus)?.runStatus;
   const confirmationCards = deriveConfirmationCards(confirmationEvents);
 
-  // 跨工作区会话只读（D2）：当前实例工作区与会话产生工作区不一致时，composer 禁用，
-  // 防止把消息发进错误工作区的 agent 上下文（消息存储共享，但 agent 上下文是实例本地的）。
-  const crossWorkspaceReadOnly = Boolean(
-    localMode?.workspaceRoot
-    && activeConversation?.workspaceRoot
-    && localMode.workspaceRoot !== activeConversation.workspaceRoot
-  );
-
   /**
-   * 本工作区会话（DTO 镜像，只比 `conversations` 多出跨工作区的"新鲜"条目）。
-   *
-   * `conversations` 是侧栏的全量列表，分页追加时会混入其他工作区的会话（append 页不含
-   * active 过滤），因此 composer 的目标会话查找不能直接用它——否则在深页里选中跨工作区
-   * 会话会把消息发出去。打开 Trace 抽屉时额外拉一次本工作区列表（`?workspaceRoot=`）合并进来。
+   * 关闭设置弹窗。必须是稳定引用（`useCallback`）：`useDialogFocus` 依赖 onClose，
+   * 每次渲染换新函数会让监听重绑，并在弹窗仍打开时重跑「焦点归还」清理。
    */
-  const [workspaceConversations, setWorkspaceConversations] = useState<WorkspaceConversationDto[]>([]);
-
-  /**
-   * 把一个本工作区会话合并进 composer 的候选列表（创建成功后调用）。
-   *
-   * @param conversation 服务端返回的会话 DTO。
-   * @returns void。
-   */
-  function appendWorkspaceConversation(conversation: WorkspaceConversationDto): void {
-    setWorkspaceConversations((current) => mergeConversations(current, [conversation]));
-  }
+  const closeSettings = useCallback(() => setIsSettingsOpen(false), []);
 
   /**
    * 切换 Trace 抽屉。右侧位互斥（L2-3 / TC-L2-04）：Trace 抽屉与 RunDetailPanel 都是
@@ -149,23 +135,6 @@ export function Workbench() {
     void fetchLocalMode(controller.signal).then((mode) => setLocalMode(mode));
     return () => controller.abort();
   }, []);
-
-  // 本工作区会话（composer 目标查找用）：拿到当前实例工作区后拉一次，之后由 createConversation 追加。
-  useEffect(() => {
-    const workspaceRoot = localMode?.workspaceRoot;
-    if (!workspaceRoot) return;
-    const controller = new AbortController();
-    void (async () => {
-      try {
-        const result = await listConversations(undefined, controller.signal, workspaceRoot);
-        if (controller.signal.aborted || !result.ok) return;
-        setWorkspaceConversations((current) => mergeConversations(current, result.data.items));
-      } catch {
-        // 失败不影响主流程：兜底查找仍可用侧栏列表 + workspaceRoot 判定。
-      }
-    })();
-    return () => controller.abort();
-  }, [localMode?.workspaceRoot]);
 
   useEffect(() => {
     if (!activeConversationId) {
@@ -244,8 +213,8 @@ export function Workbench() {
   /**
    * 加载会话分页；服务端列表是历史唯一事实源，追加时按 ID 去重。
    *
-   * 侧栏展示全部工作区的会话（03 D1 分组），因此这里的列表是**全量**；composer 选会话时
-   * 另外按本工作区过滤（见 submitAgentMessage 的 append 分支），避免把消息发进跨工作区会话。
+   * 侧栏展示全部工作区的会话（03 D1 分组），因此这里的列表是**全量**；它同时也是 composer
+   * 的目标会话查找源——服务端已按会话 workspaceRoot 装配 agent 上下文，前端不再按工作区过滤。
    *
    * @param cursor 可选游标。
    * @param append 是否追加。
@@ -370,7 +339,6 @@ export function Workbench() {
    */
   async function handleSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
-    if (crossWorkspaceReadOnly) return;
     await submitMessage(input);
   }
 
@@ -394,19 +362,40 @@ export function Workbench() {
   }
 
   /**
-   * 创建新的浏览器本地会话，并切换到该会话。
+   * 重置当前视图到「待创建」的新会话草稿态（BUG-001 web）。
+   *
+   * 不落盘任何会话：activeConversationId 置空串表示「尚无活跃会话」，首条真实消息发送时
+   * 才由 submitAgentMessage 的懒创建分支调用 createConversation。此处的状态重置需与
+   * selectConversation 保持一致（清空消息 / 游标 / 确认卡片 / replay，并重置 skip 占位），
+   * 保证从一个已选会话切到新会话时不会残留上一会话的历史与派生状态。
    *
    * @returns void。
    */
-  async function handleNewConversation(): Promise<void> {
-    const result = await createConversation({ title: "新会话" });
-    if (!result.ok) {
-      setConversationError(formatApiError(result.error));
-      setConversationState("error");
-      return;
-    }
-    setConversations((current) => [result.data, ...current]);
-    selectConversation(result.data.conversationId, false, true);
+  function resetToDraft(): void {
+    messageRequestController.current?.abort();
+    messageRequestGeneration.current += 1;
+    replayController.current?.abort();
+    setConfirmationEvents([]);
+    setConfirmationUi({});
+    activeConversationIdRef.current = "";
+    skipInitialHistoryConversationId.current = undefined;
+    setMessages([]);
+    setMessageCursor(undefined);
+    setMessageState("ready");
+    setActiveConversationId("");
+    navigate("/", { replace: true });
+  }
+
+  /**
+   * 打开一个「空的新会话」编辑态，不立即调用 createConversation 落盘（BUG-001 web）。
+   *
+   * 点击侧栏「New Chat」仅清空当前会话上下文并回到可输入的草稿态（header 显示「新会话」、
+   * composer 可用）；真正落盘推迟到首条真实消息发送时（submitAgentMessage 懒创建）。
+   *
+   * @returns void。
+   */
+  function handleNewConversation(): void {
+    resetToDraft();
     setInput("");
     setComposerError(undefined);
     setIsSidebarOpen(false);
@@ -490,6 +479,35 @@ export function Workbench() {
   }
 
   /**
+   * 首条消息懒创建会话后，异步把标题升级为语义标题（BUG-002 的第二步）。
+   *
+   * 截断标题在 `createConversation({ title: createConversationTitle(...) })` 创建时已落盘并
+   * 同步进侧栏，因此这里只负责「语义升级」：异步请求服务端语义标题并改写侧栏。全程
+   * fire-and-forget，绝不阻塞消息发送；失败静默保留创建时的截断标题（服务端返回现有标题
+   * 或前端 catch 后不动）。
+   *
+   * 该函数只在「首条消息懒创建会话」的当次提交被调用一次（见 submitAgentMessage 的
+   * isNewConversation 守卫）；既有会话 / 多轮消息 / 重试都不会再触发，避免把已生成的
+   * 语义标题覆盖为最新一条消息的截断值，并产生多余的 LLM 调用。
+   *
+   * @param conversationId 会话 id。
+   * @param firstMessage 首条用户消息。
+   * @returns 无返回值。
+   */
+  function ensureConversationTitle(conversationId: string, firstMessage: string): void {
+    const truncated = createConversationTitle(firstMessage);
+    void generateConversationTitle(conversationId, firstMessage).then((result) => {
+      // 服务端语义标题成功且与截断值不同才改写侧栏；失败时返回现有截断标题，这里保持不变。
+      if (result.ok && result.data.title !== truncated) {
+        setConversations((current) =>
+          current.map((item) => item.conversationId === conversationId ? result.data : item));
+      }
+    }).catch(() => {
+      // 语义标题生成失败静默降级，保留创建时的截断标题。
+    });
+  }
+
+  /**
    * 使用失败消息保存的输入快照创建新 Run，避免幂等键命中原失败终态。
    *
    * @param message 带重试上下文的失败 assistant 消息。
@@ -524,22 +542,17 @@ export function Workbench() {
   ): Promise<void> {
     const trimmed = message.trim();
     const submittedModelId = retryContext?.modelId ?? composer.selectedModelId;
-    // 跨工作区会话只读（D2）：即使 UI 已被禁用，这里也再兜一层，绝不把消息发进其他工作区的会话。
-    if (!trimmed || isSubmitting || !submittedModelId || crossWorkspaceReadOnly) {
+    if (!trimmed || isSubmitting || !submittedModelId) {
       return;
     }
-    // 优先在本工作区候选里找（跨工作区会话不在其中，因此不会被选中发送）。
+    // 目标会话唯一查找（BUG-002）：服务端已按会话 workspaceRoot 装配 agent 上下文，
+    // 前端不再区分工作区，active 会话必然在侧栏 conversations 里（侧栏选中或新建后 prepend）。
     const currentId = activeConversationIdRef.current;
-    let conversation: WorkspaceConversationDto | undefined = workspaceConversations.find(
+    let conversation: WorkspaceConversationDto | undefined = conversations.find(
       (item) => item.conversationId === currentId
     );
-    if (!conversation && localMode?.workspaceRoot) {
-      const sidebarMatch = conversations.find((item) => item.conversationId === currentId);
-      if (sidebarMatch && sidebarMatch.workspaceRoot === localMode.workspaceRoot) conversation = sidebarMatch;
-    } else if (!conversation && !localMode) {
-      // 健康检查尚未返回（或本地服务不可用）时退回侧栏列表；此时 crossWorkspaceReadOnly 为 false。
-      conversation = conversations.find((item) => item.conversationId === currentId);
-    }
+    // 本次提交是否懒创建了新会话：只有这种情况才算「首条消息」，需要触发一次语义标题升级。
+    let isNewConversation = false;
     if (!conversation) {
       const created = await createConversation({ title: createConversationTitle(trimmed) });
       if (!created.ok) {
@@ -548,22 +561,16 @@ export function Workbench() {
       }
       conversation = created.data;
       setConversations((current) => [created.data, ...current]);
-      appendWorkspaceConversation(created.data);
       selectConversation(created.data.conversationId, false, true);
+      isNewConversation = true;
     }
 
     const submittedConversationId = conversation.conversationId;
-    // 自动创建的占位"新会话"在首条消息发送时改写成任务摘要；改名是尽力而为，失败不阻塞发送。
-    if (submittedConversationId === autoCreatedConversationIdRef.current && conversation.title === "新会话") {
-      const title = createConversationTitle(trimmed);
-      autoCreatedConversationIdRef.current = null;
-      conversation = { ...conversation, title };
-      void updateConversationApi(submittedConversationId, { title }).then((result) => {
-        if (result.ok) setConversations((current) =>
-          current.map((item) => item.conversationId === submittedConversationId ? result.data : item));
-      }).catch(() => {
-        // 改名失败不影响消息发送。
-      });
+    // BUG-002：仅在「首条消息懒创建会话」时触发一次语义标题升级。既有会话的标题在创建时
+    // 已建立，多轮消息 / 重试会再次命中此分支（conversation 已在侧栏）——若在此触发，会把
+    // 已生成的语义标题覆盖为最新消息的截断值，并产生多余的 LLM 调用，因此必须跳过。
+    if (isNewConversation) {
+      ensureConversationTitle(submittedConversationId, trimmed);
     }
 
     const pendingMessageId = createUiId("assistant");
@@ -600,13 +607,6 @@ export function Workbench() {
       ...(current.some((item) => item.id === clientMessageId) ? [] : [userMessage]),
       pendingMessage
     ]);
-    if (conversation.title === "新会话") {
-      const title = createConversationTitle(trimmed);
-      void updateConversationApi(submittedConversationId, { title }).then((result) => {
-        if (result.ok) setConversations((current) =>
-          current.map((item) => item.conversationId === submittedConversationId ? result.data : item));
-      });
-    }
     setComposerError(undefined);
     setIsSubmitting(true);
     // 新 run 开始：重置确认卡片流，旧 run 的已决卡片不再展示。
@@ -662,17 +662,13 @@ export function Workbench() {
 
       if (!result.ok) {
         const cancelledRun = result.error.code === "request_cancelled";
-        replaceMessage(submittedConversationId, pendingMessageId, {
-          content: finalText || formatApiError(result.error),
-          blocks: finalBlocks,
-          status: cancelledRun ? "cancelled" : "failed",
-          ok: false,
-          runStatus: cancelledRun ? "cancelled" : "failed",
-          error: result.error,
-          liveEvents: undefined
-        });
+        // BUG-001 错误落点唯一化：失败态的字段组合（正文 / error / status / runStatus）由
+        // format.ts 的 applyFailure 单点构造并单测，避免后续调用点各自拼出正文与 error-block
+        // 重复展示同一错误。replaceMessage 只合并传入字段，因此 retryContext 会保留。
+        replaceMessage(submittedConversationId, pendingMessageId, applyFailure(result.error, finalBlocks, cancelledRun));
+        // 取消是用户主动行为：status 已表达 cancelled，不再额外弹 composer 提示。
         if (!cancelledRun) {
-          setComposerError("请求失败，已把结构化错误写入当前 assistant 消息。");
+          setComposerError("请求失败，错误详情见下方消息。");
         }
         return;
       }
@@ -777,62 +773,69 @@ export function Workbench() {
         onArchiveConversation={(conversationId) => void handleArchiveConversation(conversationId)}
         onClose={() => setIsSidebarOpen(false)}
         onLoadMore={() => void loadConversationPage(conversationCursor, true)}
-        onNewConversation={() => void handleNewConversation()}
+        onNewConversation={handleNewConversation}
+        onOpenSettings={() => setIsSettingsOpen(true)}
         onRetry={() => void loadConversationPage()}
         onSelectConversation={handleSelectConversation}
       />
 
-      <section className="chat-main" aria-label="Agent Chat 主区域">
-        <ChatHeader
-          conversationTitle={activeConversation?.title ?? "新会话"}
-          isSubmitting={isSubmitting}
-          latestRunStatus={latestRunStatus}
-          localMode={localMode}
-          onMenuClick={() => setIsSidebarOpen(true)}
-          nav={(
-            <nav className="app-nav" aria-label="主导航">
-              <WorkbenchNav active="chat" />
-              <TraceToggle isOpen={isTraceOpen} onToggle={toggleTrace} />
-            </nav>
-          )}
-        />
-
-        <ConfirmationCards cards={confirmationCards} uiState={confirmationUi} onDecide={(card, decision) => void handleDecide(card, decision)} />
-
-        <ChatTimeline
-          conversationId={activeConversationId}
-          isSubmitting={isSubmitting}
-          error={messageError}
-          hasMore={Boolean(messageCursor)}
-          isLoading={messageState === "loading"}
-          messages={messages}
-          onLoadMore={() => {
-            if (!activeConversationId) return;
-            void loadMessagePage(activeConversationId, messageCursor, true);
-          }}
-          onOpenRunDetail={openRunDetail}
-          onRetryMessage={(message) => void retryFailedMessage(message)}
-          onUsePrompt={setInput}
-          showCliHint={activeConversation?.title.startsWith("CLI ·") ?? false}
-        />
-
-        <ChatComposer
-          error={composerError}
-          input={input}
-          isSubmitting={isSubmitting}
-          readOnly={crossWorkspaceReadOnly}
-          models={composer.models}
-          modelCatalogStatus={composer.modelCatalogStatus}
-          modelCatalogError={composer.modelCatalogError}
-          onInputChange={setInput}
-          onRetryModels={composer.retryModels}
-          onSelectModel={composer.selectModel}
-          onStop={() => void handleStop()}
-          onSubmit={handleSubmit}
-          onUsePrompt={setInput}
-          selectedModelId={composer.selectedModelId}
-        />
-      </section>
+      <ChatMain
+        header={(
+          <ChatHeader
+            conversationTitle={activeConversation?.title ?? "新会话"}
+            isSubmitting={isSubmitting}
+            latestRunStatus={latestRunStatus}
+            localMode={localMode}
+            onMenuClick={() => setIsSidebarOpen(true)}
+            nav={(
+              <nav className="app-nav" aria-label="工作台导航">
+                <WorkbenchNav />
+                <TraceToggle isOpen={isTraceOpen} onToggle={toggleTrace} />
+              </nav>
+            )}
+          />
+        )}
+        confirmations={(
+          <ConfirmationCards cards={confirmationCards} uiState={confirmationUi} onDecide={(card, decision) => void handleDecide(card, decision)} />
+        )}
+        timeline={(
+          <ChatTimeline
+            conversationId={activeConversationId}
+            isSubmitting={isSubmitting}
+            error={messageError}
+            hasMore={Boolean(messageCursor)}
+            isLoading={messageState === "loading"}
+            messages={messages}
+            onLoadMore={() => {
+              if (!activeConversationId) return;
+              void loadMessagePage(activeConversationId, messageCursor, true);
+            }}
+            onOpenRunDetail={openRunDetail}
+            onRetryMessage={(message) => void retryFailedMessage(message)}
+            onUsePrompt={setInput}
+            showCliHint={activeConversation?.title.startsWith("CLI ·") ?? false}
+          />
+        )}
+        composer={(
+          <ChatComposer
+            error={composerError}
+            formId={COMPOSER_FORM_ID}
+            input={input}
+            isSubmitting={isSubmitting}
+            models={composer.models}
+            modelCatalogStatus={composer.modelCatalogStatus}
+            modelCatalogError={composer.modelCatalogError}
+            onInputChange={setInput}
+            onRetryModels={composer.retryModels}
+            onSelectModel={composer.selectModel}
+            onStop={() => void handleStop()}
+            onSubmit={handleSubmit}
+            onUsePrompt={setInput}
+            selectedModelId={composer.selectedModelId}
+          />
+        )}
+        composerFormId={COMPOSER_FORM_ID}
+      />
       {/* 右侧排查位互斥（L2-3）：Trace 抽屉与运行详情共用同一列，打开一个即收起另一个。 */}
       <RunDetailPanel
         detail={selectedRunDetail}
@@ -844,6 +847,8 @@ export function Workbench() {
         isOpen={isTraceOpen}
         onClose={() => setIsTraceOpen(false)}
       />
+      {/* 设置弹窗：`App` 的 ThemeProvider 在外层，主题/字号偏好上下文可直接复用。 */}
+      <SettingsDialog isOpen={isSettingsOpen} onClose={closeSettings} />
     </main>
   );
 }

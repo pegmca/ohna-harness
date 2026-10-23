@@ -25,6 +25,7 @@ import { expandFileReferencesDetailed } from "../workspace/file-reference.js";
 import { handleDirectInput } from "../commands/direct-command.js";
 import {
   ensureFullHistory,
+  materializeSession,
   openSession,
   persistSession,
   printResumeHint,
@@ -279,6 +280,20 @@ export async function runRepl(
       followUps.clear();
       closeInput();
     },
+    // BUG「/clear 后 logo 消失」：会话切换（/clear、/resume、fork）后重打欢迎头。
+    // 用最新的 sessionId（可能是 pending 空串）重新渲染 logo + 信息行。
+    onRenderWelcome: () => {
+      renderWelcome(
+        { id: currentModel.model.id, provider: currentModel.model.provider },
+        tools.map((tool) => tool.name),
+        {
+          sessionId: sessionId || undefined,
+          cwd: setup.cwd,
+          mcpServers: context?.mcpServerNames,
+          ...(context?.traceUrl ? { traceUrl: context.traceUrl } : {}),
+        },
+      );
+    },
   });
 
   /**
@@ -324,19 +339,22 @@ export async function runRepl(
         sessionTitle = text.replace(/\s+/g, " ").slice(0, 40);
       }
 
+      // 待创建会话在首条真实消息发送时物化：观测 / runTurn 需要真实会话 id（trace 文件名
+      // 与观测 requestId 后缀），不能继续用空串占位。物化即落盘一条空会话，随后 persist 才补消息。
+      sessionId = await materializeSession(store, sessionId, setup.cwd);
+
       // run 前检查预算：--max-cost 0 即零预算，不调用模型；恢复会话已超预算同样立即停。
       if (reachedCostBudget(tracker, setup.maxCost)) {
         printStopReason("max_cost");
-        replaceHistory(
-          history,
-          await persistSession(store, sessionId, history, {
-            model: currentModel.model,
-            summarizer: setup.summarizer,
-            title: sessionTitle,
-            workspaceRoot: setup.cwd,
-            usage: tracker,
-          }),
-        );
+        const persisted = await persistSession(store, sessionId, history, {
+          model: currentModel.model,
+          summarizer: setup.summarizer,
+          title: sessionTitle,
+          workspaceRoot: setup.cwd,
+          usage: tracker,
+        });
+        sessionId = persisted.sessionId;
+        replaceHistory(history, persisted.history);
         return;
       }
 
@@ -374,16 +392,15 @@ export async function runRepl(
       } finally {
         controller = null;
         // 每轮结束都做「会话级压缩 + 落盘」；失败只告警，不阻断会话继续。
-        replaceHistory(
-          history,
-          await persistSession(store, sessionId, history, {
-            model: currentModel.model,
-            summarizer: setup.summarizer,
-            title: sessionTitle,
-            workspaceRoot: setup.cwd,
-            usage: tracker,
-          }),
-        );
+        const persisted = await persistSession(store, sessionId, history, {
+          model: currentModel.model,
+          summarizer: setup.summarizer,
+          title: sessionTitle,
+          workspaceRoot: setup.cwd,
+          usage: tracker,
+        });
+        sessionId = persisted.sessionId;
+        replaceHistory(history, persisted.history);
       }
     } finally {
       running = false;

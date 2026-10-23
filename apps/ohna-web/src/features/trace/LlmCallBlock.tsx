@@ -6,11 +6,14 @@
  * - 请求与响应拆 tab，是因为排查时的提问不同（「我发了什么」vs「模型回了什么」）；
  * - 每个 tab 自带复制 JSON，直接粘到 issue / 本地脚本复现，不引入导出机制（计划 §8 开放项）；
  * - **序列化只在展开态发生并 memo**：live 期间 message_update 会逐帧重渲染整棵树，
- *   已展开的 MB 级记录不能每帧重新 stringify（S1）。
+ *   已展开的 MB 级记录不能每帧重新 stringify（S1）；
+ * - 展示侧走统一的 `JsonViewer`（节点级折叠 + 高亮 + 惰性渲染），整段字符串只剩「复制 / 体量」两个用途；
+ *   因此不再需要「超过 1MB 就不渲染」的兜底，安全上限交给了 JsonViewer 的节点预算。
  */
 import type { LlmCallRecordDto } from "@aiagent/types";
 import { AlertTriangle, ChevronDown, Copy, RotateCw } from "lucide-react";
 import { type KeyboardEvent, useMemo, useState } from "react";
+import { JsonViewer } from "../json-viewer/index.js";
 
 type TabKey = "request" | "response" | "raw";
 type RequestTabKey = "payload" | "unified";
@@ -24,9 +27,6 @@ const REQUEST_TABS = [
   ["payload", "Provider Payload"],
   ["unified", "统一 messages + tools"]
 ] as const;
-
-/** 超过该体量只在展开区给提示，避免把整段 JSON 塞进 DOM 拖死浏览器。 */
-const LARGE_JSON_THRESHOLD = 1_000_000;
 
 /**
  * 把任意值格式化为可复制的 JSON 文本。
@@ -119,9 +119,8 @@ export function LlmCallBlock(props: { record: LlmCallRecordDto; idSuffix?: strin
     return requestTab === "payload" ? record.request.providerPayload : unifiedRequest;
   }, [tab, requestTab, record, response, unifiedRequest]);
 
-  // 折叠态保持「零序列化」：只有展开时才付出 stringify 成本。
+  // 折叠态保持「零序列化」：只有展开时才付出 stringify 成本（S1）。
   const jsonText = useMemo(() => (open ? toJsonText(activeValue) : ""), [open, activeValue]);
-  const tooLarge = jsonText.length > LARGE_JSON_THRESHOLD;
 
   /**
    * 左右方向键切换主 tab（WAI-ARIA tab 交互，N6）。
@@ -247,13 +246,7 @@ export function LlmCallBlock(props: { record: LlmCallRecordDto; idSuffix?: strin
               </div>
             ) : null}
 
-            {tooLarge ? (
-              <p className="muted-row trace-json-hint">
-                记录体量 {(jsonText.length / 1024).toFixed(0)} KB，已折叠渲染；完整内容请用「复制 JSON」。
-              </p>
-            ) : (
-              <pre className="trace-json">{jsonText}</pre>
-            )}
+            <JsonViewer className="trace-json-viewer" value={activeValue} />
           </div>
 
           <div className="trace-json-actions">

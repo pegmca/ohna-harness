@@ -262,6 +262,44 @@ export function mergeMessages(current: UiMessage[], incoming: UiMessage[]): UiMe
 }
 
 /**
+ * 失败终态补丁的唯一构造点（BUG-001「错误落点唯一化」不变量）。
+ *
+ * 失败信息必须如实且只展示一次，因此按「本次 run 是否已产生残留文本」两态处理：
+ * - 有残留文本（流式输出到一半失败）：正文保留残留文本，结构化错误只经气泡 error-block
+ *   渲染。不把格式化错误拼进正文——否则「半截回答 + 错误」会混成一段无法复制的怪文本，
+ *   且 error-block 会让同一句话连出两遍。
+ * - 无残留文本（创建 / 传输即失败，live 事件为空）：正文直接承载格式化错误，
+ *   同时把 error 置为 undefined，避免气泡里同一错误在正文与 error-block 重复展示。
+ *
+ * 该函数只返回需要 patch 的字段，调用方仍需保留 retryContext 等未触及字段
+ * （Workbench 的 replaceMessage 按字段合并）。
+ *
+ * @param error 结构化 API 错误（run_error / snapshot.error）。
+ * @param blocks 本次 run 已投影出的内容块（失败时通常为空或仅残留）。
+ * @param cancelled 是否用户主动取消（取消时状态为 cancelled 且不弹 composer 提示）。
+ * @returns UiMessage 失败态补丁。
+ */
+export function applyFailure(
+  error: ApiError,
+  blocks: UiContentBlock[],
+  cancelled: boolean
+): Pick<UiMessage, "content" | "blocks" | "status" | "ok" | "runStatus" | "error" | "liveEvents"> {
+  const residualText = textOfBlocks(blocks);
+  const hasResidualText = residualText.trim().length > 0;
+  const status = cancelled ? "cancelled" : "failed";
+
+  return {
+    content: hasResidualText ? residualText : formatApiError(error),
+    blocks,
+    status,
+    ok: false,
+    runStatus: status,
+    error: hasResidualText ? error : undefined,
+    liveEvents: undefined
+  };
+}
+
+/**
  * 生成浏览器本地 id，避免依赖服务端持久化能力。
  *
  * @param prefix id 前缀。

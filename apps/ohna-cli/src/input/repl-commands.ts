@@ -77,6 +77,14 @@ export interface ReplCommandsOptions {
   cycleVerbosity(arg: string): void;
   /** `/exit`：清空待处理队列并关闭输入。 */
   onExit(): void;
+  /**
+   * 会话切换后重渲染欢迎头（logo + 信息行）。
+   *
+   * BUG「/clear 后 logo 消失」：`resetPresentation` 只清空对话流条目、不重打欢迎头，
+   * 因此 `/clear`、`/resume`、fork 切会话后顶部 logo 会消失。由 repl 注入此回调，
+   * 在 `onSessionSwitched` 里用新会话 id 重新调用 `renderWelcome`。
+   */
+  onRenderWelcome?: () => void;
 }
 
 /**
@@ -140,6 +148,8 @@ export function createReplCommands(options: ReplCommandsOptions): SlashDispatche
       permissionSession.reset();
       // M2：切会话后清空 TUI 视图状态（expanded / 滚动 / toast），避免旧会话残留。
       options.tui?.resetView();
+      // BUG「/clear 后 logo 消失」：会话切换后重打欢迎头（logo + 信息行）。
+      options.onRenderWelcome?.();
     },
   };
 

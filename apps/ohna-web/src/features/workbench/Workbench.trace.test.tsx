@@ -1,7 +1,7 @@
 /**
  * TC-L2-03 / TC-L2-04 · Trace 抽屉与 Workbench 集成。
  *
- * - `/trace` 路由已删除：访问该深链回落到 Workbench（router 只剩 `/settings` + `*`）；
+ * - `/trace` 路由已删除：访问该深链回落到 Workbench（router 只剩 `*` 兜底，`/settings` 亦已删除）；
  * - chat 头部 Trace 开关可展开/收起抽屉，抽屉默认收起且不读 URL（刷新后回到对话视图）；
  * - 右侧排查位互斥：打开 Trace 收起 RunDetailPanel，反之亦然。
  */

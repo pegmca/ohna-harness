@@ -1,10 +1,11 @@
 /**
- * TC-L1-04 · 跨工作区会话只读（D2）。
+ * BUG-002 · 跨工作区会话可在 web 侧继续对话（D2 只读限制已移除）。
  *
- * 当 `localMode.workspaceRoot` 与会话 `workspaceRoot` 不一致时，composer 禁用并展示只读提示；
- * 同工作区会话不受影响。
+ * 服务端（packages/serve 的 RunManagerOptions.resolveWorkspace）已按会话 workspaceRoot 动态装配
+ * agent 上下文，因此前端不再比较 `GET /api/health` 的实例工作区与会话 workspaceRoot：
+ * composer 不再禁用、不再渲染「该会话属于其他工作区」提示，也不再按 `?workspaceRoot=` 额外拉列表。
  */
-import { cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Workbench } from "./Workbench";
@@ -112,8 +113,46 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-describe("Workbench 跨工作区只读", () => {
-  it("会话属于其他工作区时 composer 禁用并提示", async () => {
+describe("Workbench 跨工作区会话", () => {
+  it("会话属于其他工作区时 composer 仍可输入，且不再出现只读提示", async () => {
+    const other = conversation("c-other", "其他工作区会话", "/work/b");
+    const requests: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      requests.push(url);
+      if (url.startsWith("/api/health")) return healthLocal();
+      if (url.startsWith("/api/conversations?")) return okList([other]);
+      if (url.includes("/c-other/messages")) return okHistory("c-other", "其他工作区历史消息");
+      throw new Error(`Unexpected fetch: ${url}`);
+    }));
+
+    render(<MemoryRouter initialEntries={["/?conversation=c-other"]}><Workbench /></MemoryRouter>);
+    await screen.findByText("其他工作区历史消息");
+    await waitFor(() => expect(requests.some((url) => url.startsWith("/api/health"))).toBe(true));
+
+    const textarea = screen.getByPlaceholderText("描述一个编码任务…") as HTMLTextAreaElement;
+    expect(textarea.disabled).toBe(false);
+    expect(screen.queryByText(/该会话属于其他工作区/)).toBeNull();
+    // 列表查询只保留侧栏全量拉取，不再按 ?workspaceRoot= 追加本工作区会话。
+    expect(requests.filter((url) => url.startsWith("/api/conversations?"))).toEqual(["/api/conversations?limit=30"]);
+  });
+
+  it("跨工作区会话可以直接发送消息（不再被只读守卫拦下）", async () => {
+    const { createAndStreamRun } = await import("../../shared/api/run-stream-client");
+    const runs: Array<{ conversationId: string; message: string }> = [];
+    vi.mocked(createAndStreamRun).mockImplementation(async (request, options) => {
+      runs.push(request);
+      await options?.onAccepted?.({
+        runId: "run-cross",
+        requestId: "request_run-cross",
+        conversationId: "c-other",
+        modelId: "mock",
+        status: "queued",
+        eventsUrl: "/events",
+        snapshotUrl: "/snapshot"
+      });
+      return { ok: true, requestId: "terminal", data: { status: "completed", requestId: "terminal" } };
+    });
     const other = conversation("c-other", "其他工作区会话", "/work/b");
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
@@ -125,12 +164,17 @@ describe("Workbench 跨工作区只读", () => {
 
     render(<MemoryRouter initialEntries={["/?conversation=c-other"]}><Workbench /></MemoryRouter>);
     await screen.findByText("其他工作区历史消息");
-    expect(await screen.findByText(/该会话属于其他工作区/)).toBeTruthy();
-    const textarea = screen.getByPlaceholderText("描述一个编码任务…") as HTMLTextAreaElement;
-    expect(textarea.disabled).toBe(true);
+    const textbox = screen.getByRole("textbox") as HTMLTextAreaElement;
+    fireEvent.change(textbox, { target: { value: "在 /work/b 继续干活" } });
+    await act(async () => {
+      fireEvent.submit(textbox.closest("form")!);
+    });
+
+    await waitFor(() => expect(runs).toHaveLength(1));
+    expect(runs[0]).toMatchObject({ conversationId: "c-other", message: "在 /work/b 继续干活" });
   });
 
-  it("同工作区会话不触发只读提示", async () => {
+  it("同工作区会话同样没有只读提示", async () => {
     const same = conversation("c-same", "本工作区会话", "/work/a");
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
@@ -143,5 +187,6 @@ describe("Workbench 跨工作区只读", () => {
     render(<MemoryRouter initialEntries={["/?conversation=c-same"]}><Workbench /></MemoryRouter>);
     await screen.findByText("本工作区历史消息");
     expect(screen.queryByText(/该会话属于其他工作区/)).toBeNull();
+    expect((screen.getByPlaceholderText("描述一个编码任务…") as HTMLTextAreaElement).disabled).toBe(false);
   });
 });

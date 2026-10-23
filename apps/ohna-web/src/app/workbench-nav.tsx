@@ -1,29 +1,24 @@
 /**
- * 顶部主导航：「对话」与「设置」两个 tab，外加 chat 页的 Trace 抽屉开关。
+ * 顶部主导航：「对话」tab，外加 chat 页的 Trace 抽屉开关。
  *
- * 背景（03 D6）：Trace 原先是独立路由 `/trace` 的三栏观测页，现已降级为 chat 页右侧抽屉，
- * 因此导航里不再有 Trace tab；chat 页用 {@link TraceToggle} 就地开关抽屉（D5：不发明第二套
- * tab 样式，沿用 `app-nav-tab`）。
+ * 背景（03 D6 / 05 FR-001）：导航只承载「视图切换」。Trace 原先是独立路由 `/trace` 的
+ * 三栏观测页，已降级为 chat 页右侧抽屉；设置也由 `/settings` 路由改为 chat 页左下角入口
+ * 触发的就地弹窗——两者都不再占用 tab（D5：不发明第二套 tab 样式，临时开关沿用 `app-nav-tab`）。
  */
 import { Activity } from "lucide-react";
 import { NavLink } from "react-router-dom";
 
 /**
- * 渲染主导航。
+ * 渲染主导航 tab（目前只有「对话」）。只产出 tab 片段、不自带 `<nav>`：
+ * chat 头部把它与 `TraceToggle` 放进同一个 `工作台导航` 容器，避免嵌套两个 landmark。
  *
- * @param props.active 当前高亮项。
- * @returns 导航条。
+ * @returns 导航 tab 片段。
  */
-export function WorkbenchNav(props: { active: "chat" | "settings" }) {
+export function WorkbenchNav() {
   return (
-    <nav className="app-nav" aria-label="主导航">
-      <NavLink className={`app-nav-tab ${props.active === "chat" ? "is-active" : ""}`} end to="/">
-        对话
-      </NavLink>
-      <NavLink className={`app-nav-tab ${props.active === "settings" ? "is-active" : ""}`} to="/settings">
-        设置
-      </NavLink>
-    </nav>
+    <NavLink className="app-nav-tab is-active" end to="/">
+      对话
+    </NavLink>
   );
 }
 

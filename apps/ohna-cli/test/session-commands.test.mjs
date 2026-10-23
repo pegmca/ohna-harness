@@ -313,17 +313,21 @@ test("/mcp：未接入时给出明确提示；已接入时列出 server 与工�
   assert.match(takeOutput(), /未接入 MCP server/);
 });
 
-test("/clear：清空 history 并创建新会话", async () => {
+test("/clear：清空 history 并进入待创建态（不 eager 落盘新会话）", async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "ohna-clear-"));
   try {
     const { ctx, store, getSessionId } = makeContext(dir);
     ctx.history.push({ role: "user", content: "hi", timestamp: 1 });
     takeOutput();
     await clearSession(ctx);
-    assert.equal(ctx.history.length, 0);
+    assert.equal(ctx.history.length, 0, "history 应被清空");
     assert.match(takeOutput(), /已清空上下文/);
-    assert.notEqual(getSessionId(), "current");
-    assert.ok(await store.load(getSessionId()));
+    // BUG 空会话落盘：/clear 后 sessionId 应回到 pending 占位空串，而非立即分配新 id。
+    assert.equal(getSessionId(), "", "会话应回到「待创建」占位空串");
+    assert.equal(ctx.getTitle(), undefined, "标题应回到「新会话」占位");
+    // 首条真实消息发送前不得落盘：store 目录仍为空，无任何空会话出现。
+    const metas = await store.list();
+    assert.equal(metas.length, 0, "不得产生落盘会话（空会话不应出现在磁盘/侧栏）");
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

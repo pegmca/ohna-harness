@@ -10,9 +10,10 @@
  * 1. TC-L4-01 / TC-L1-01：`GET /api/conversations` 每项 DTO 携带各自的 `workspaceRoot`，
  *    且 `?workspaceRoot=` 过滤只返回该工作区的会话（composer 选会话用）；
  * 2. 静态托管：`apps/ohna-web/dist` 存在时
- *    - `GET /settings` → 200（L3 设置页路由，SPA 回落）；
+ *    - `GET /settings` → 200（FR-001 后设置路由已删除，命中 `*` 兜底回到 Workbench）；
  *    - `GET /trace` → 200（路由已删除，命中 `*` 兜底回到 Workbench，不做重定向）；
- *    - dist 资产里不再有独立的 TracePage chunk（L2 阻断性删除的构建级证据）。
+ *    - dist 资产里不再有独立的 TracePage / SettingsPage chunk（L2 阻断性删除、FR-001 弹窗化），
+ *      且 Workbench chunk 内含 `settings-dialog` 与 `settings-entry-button`（构建级证据）。
  *
  * 运行：
  *   pnpm --filter @aiagent/serve build
@@ -188,7 +189,7 @@ async function main() {
       const html = await response.text();
       assert.ok(html.includes("<div id=\"root\">"), `${routePath} 应返回 web 入口 HTML`);
     }
-    pass("TC-L4-01: GET /settings → 200（设置页路由）");
+    pass("TC-L4-01 / TC-FR-001: GET /settings → 200 回落 Workbench（独立设置路由已删除，设置改为就地弹窗）");
     pass("TC-L2-03: GET /trace → 200 回落 Workbench（独立 Trace 路由已删除，无重定向）");
 
     const assets = await fs.readdir(path.join(webDist, "assets"));
@@ -197,11 +198,23 @@ async function main() {
       false,
       "构建产物中不应再有独立 TracePage chunk（L2 删除）"
     );
-    assert.ok(
+    // FR-001：设置不再是 lazy 路由页，随 Workbench 一起打进同一个 chunk。
+    assert.equal(
       assets.some((name) => /SettingsPage/i.test(name)),
-      "构建产物应包含 SettingsPage chunk（L3 lazy route）"
+      false,
+      "构建产物中不应再有独立 SettingsPage chunk（FR-001：设置改为就地弹窗）"
     );
-    pass("TC-L2-03 / TC-L3-01（构建级）: 无 TracePage chunk，存在 SettingsPage chunk");
+    assert.ok(
+      assets.some((name) => /Workbench/i.test(name)),
+      "构建产物应包含 Workbench chunk（唯一路由入口）"
+    );
+    const workbenchChunk = assets.find((name) => /Workbench.*\.js$/i.test(name));
+    const workbenchSource = await fs.readFile(path.join(webDist, "assets", workbenchChunk), "utf8");
+    assert.ok(
+      workbenchSource.includes("settings-dialog") && workbenchSource.includes("settings-entry-button"),
+      "Workbench chunk 应内含设置弹窗与左下角入口（FR-001）"
+    );
+    pass("TC-L2-03 / TC-FR-001（构建级）: 无 TracePage / SettingsPage chunk，Workbench chunk 含设置弹窗与入口");
   } finally {
     for (const cleanup of cleanups.reverse()) {
       await cleanup().catch(() => undefined);

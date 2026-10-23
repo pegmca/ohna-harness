@@ -41,6 +41,7 @@ import {
   dropBeforeLastCompaction,
   extractCompactionSummary,
 } from "./run/compaction.js";
+import { createTitleGenerator } from "./run/title.js";
 import { persistRunMessage } from "./run/persist.js";
 import { startObservedRun } from "./run/observe.js";
 import { isPersistableRunEvent } from "./store/index.js";
@@ -53,6 +54,7 @@ import type {
   CreateRunResult,
   ObserveRunInput,
   ObservedRun,
+  ResolvedWorkspaceContext,
   RunErrorPayload,
   RunManagerOptions
 } from "./run/types.js";
@@ -62,6 +64,7 @@ export type {
   CreateRunResult,
   ObserveRunInput,
   ObservedRun,
+  ResolvedWorkspaceContext,
   RunManagerOptions
 } from "./run/types.js";
 export { isTerminalStatus } from "./run/helpers.js";
@@ -77,6 +80,8 @@ export class RunManager {
   private readonly conversationSubscribers = new Map<string, Set<(event: RunStreamEventDtoV2) => void>>();
   /** run 前压缩的摘要器；懒构造，测试可通过 options.summarizer 注入。 */
   private summarizer: RunManagerOptions["summarizer"];
+  /** 语义标题生成器；懒构造，测试可通过 options.titleGenerator 注入。 */
+  private titleGenerator: RunManagerOptions["titleGenerator"];
   /**
    * @param options 模型、工具、store、确认闸门与可选 streamFn（测试注入）。
    */
@@ -84,6 +89,7 @@ export class RunManager {
     this.model = options.model;
     this.confirmGate = options.confirmGate;
     this.summarizer = options.summarizer;
+    this.titleGenerator = options.titleGenerator;
     this.confirmations = new RunConfirmations(
       options.confirmGate,
       (runId) => this.active.get(runId),
@@ -137,6 +143,28 @@ export class RunManager {
    */
   pendingConfirmationCount(runId: string): number {
     return this.confirmations.pendingCount(runId);
+  }
+
+  /**
+   * 为一段文本生成语义会话标题（BUG-002）。
+   *
+   * 标题生成是会话体验增强而非功能前提：LLM 调用失败（异常 / 空返回 / error / aborted /
+   * 超时）一律返回 undefined，由调用方降级为 `deriveTitle` 截断标题，绝不阻断消息发送。
+   * 生成器懒构造一次复用同一 model + apiKey + streamFn，与 compaction 摘要器共享凭据。
+   *
+   * @param text 首条用户消息。
+   * @param signal 可选取消信号（测试 / 关闭时传入）。
+   * @returns 语义标题；失败时 undefined。
+   */
+  async generateTitle(text: string, signal?: AbortSignal): Promise<string | undefined> {
+    const generator =
+      this.titleGenerator ??
+      (this.titleGenerator = createTitleGenerator({
+        model: this.model,
+        apiKey: this.options.apiKey,
+        ...(this.options.streamFn ? { streamFn: this.options.streamFn } : {})
+      }));
+    return generator(text, signal);
   }
 
   /**
@@ -227,9 +255,13 @@ export class RunManager {
       for (const listener of conversationListeners) run.subscribers.add(listener);
     }
 
+    // BUG-002 方案 2：按会话持久化的 workspaceRoot 动态装配上下文（编码工具 + 系统提示词）。
+    // 解析失败回退 undefined（execute 内退回构造时的单工作区语义），不阻断本次 run。
+    const workspace = await this.resolveWorkspaceContext(input.conversationId);
+
     // 兜底捕获 execute 逃逸的异常（通常是落盘/广播二次失败，如磁盘写满）：
     // 必须转成结构化错误并强制内存终态，避免 run 永远 running + unhandled rejection。
-    void this.execute(run, history, message)
+    void this.execute(run, history, message, workspace)
       .catch(async (error: unknown) => {
         if (run.terminal) return;
         const payload = toRunErrorPayload(error, run.requestId);
@@ -464,17 +496,44 @@ export class RunManager {
   }
 
   /**
+   * 解析本次 run 的会话级工作区上下文（BUG-002 方案 2）。
+   *
+   * 未注入 resolver 时返回 undefined，表示回退构造时的单工作区语义；
+   * resolver 抛错同样回退 undefined，会话元数据读取或提示词装配失败都不能阻断 run。
+   *
+   * @param conversationId 会话 id。
+   * @returns 会话上下文，或 undefined（回退单工作区）。
+   */
+  private async resolveWorkspaceContext(
+    conversationId: string
+  ): Promise<ResolvedWorkspaceContext | undefined> {
+    if (!this.options.resolveWorkspace) return undefined;
+    try {
+      return await this.options.resolveWorkspace(conversationId);
+    } catch {
+      // 解析失败静默回退：跨工作区续写是增强能力，不是 run 的前置条件。
+      return undefined;
+    }
+  }
+
+  /**
    * 执行 loop 并消费事件流。
    *
    * @param run 活跃 run 状态。
    * @param history 本轮之前的历史消息。
    * @param prompt 本轮用户输入。
+   * @param workspace 会话级工作区上下文；undefined 时退回构造时的单工作区语义。
    */
-  private async execute(run: ActiveRun, history: AgentMessage[], prompt: string): Promise<void> {
+  private async execute(
+    run: ActiveRun,
+    history: AgentMessage[],
+    prompt: string,
+    workspace?: ResolvedWorkspaceContext
+  ): Promise<void> {
     const context: AgentContext = {
-      systemPrompt: this.options.systemPrompt,
+      systemPrompt: workspace?.systemPrompt ?? this.options.systemPrompt,
       messages: history,
-      tools: this.options.tools
+      tools: workspace?.tools ?? this.options.tools
     };
     const runId = run.snapshot.runId;
     const confirmHook = this.confirmGate?.createHook(runId);

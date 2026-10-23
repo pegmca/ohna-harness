@@ -5,7 +5,8 @@
  * 观测台要的是**按事件顺序平铺**的完整执行轨迹（含每次 LLM 请求），语义不同。
  */
 import { AlertTriangle, ChevronDown, Wrench } from "lucide-react";
-import { LlmCallBlock, toJsonText } from "./LlmCallBlock";
+import { JsonViewer } from "../json-viewer/index.js";
+import { LlmCallBlock } from "./LlmCallBlock";
 import type { TraceRow } from "./trace-projection";
 
 /**
@@ -55,12 +56,12 @@ export function TraceStream(props: { rows: TraceRow[]; isLoading: boolean }) {
                 <div className="trace-tool-body">
                   <div>
                     <p className="md-label">参数</p>
-                    <pre className="trace-json">{toJsonText(row.args ?? null)}</pre>
+                    <JsonViewer className="trace-json-viewer" value={row.args ?? null} />
                   </div>
                   {row.done ? (
                     <div>
                       <p className="md-label">结果</p>
-                      <pre className="trace-json">{toJsonText(row.result ?? null)}</pre>
+                      <JsonViewer className="trace-json-viewer" value={row.result ?? null} />
                     </div>
                   ) : null}
                 </div>

@@ -123,6 +123,37 @@ export function registerConversationRoutes(app: FastifyInstance, deps: RouteDeps
     }
   );
 
+  /**
+   * 语义化生成会话标题（BUG-002）：前端在「首条消息发送后」异步调用，用 LLM 把首条
+   * 用户消息压成短标题并落盘。尽力而为、失败静默降级——返回 `title: undefined` 表示
+   * 未生成（保留现有截断标题），绝不返回 5xx 阻断消息发送。
+   */
+  app.post<{ Params: { conversationId: string } }>(
+    "/api/conversations/:conversationId/generate-title",
+    async (request, reply): Promise<ApiResult<WorkspaceConversationDto>> => {
+      const requestId = createRequestId();
+      if (deps.isShuttingDown()) {
+        return failure(reply, requestId, 503, "internal_error", "服务正在关闭，暂时无法生成标题。");
+      }
+      const existing = await deps.sessionStore.get(request.params.conversationId);
+      if (!existing) {
+        return failure(reply, requestId, 404, "not_found", "会话不存在。");
+      }
+      const body = asRecord(request.body);
+      const rawText = body?.text;
+      if (typeof rawText !== "string" || rawText.trim() === "") {
+        return failure(reply, requestId, 400, "validation_failed", "缺少标题生成的用户消息文本。");
+      }
+      const title = await deps.runManager.generateTitle(rawText);
+      if (!title) {
+        // 未生成：返回现有标题（不落盘），前端据此保留截断标题。
+        return { ok: true, requestId, data: toConversationDto(existing) };
+      }
+      const updated = await deps.sessionStore.update(existing.id, { title });
+      return { ok: true, requestId, data: toConversationDto(updated ?? existing) };
+    }
+  );
+
   /** 线性消息游标页：按 sequence 升序，cursor = 已见 sequence。 */
   app.get<{
     Params: { conversationId: string };
@@ -147,3 +178,4 @@ export function registerConversationRoutes(app: FastifyInstance, deps: RouteDeps
     }
   );
 }
+

@@ -12,7 +12,7 @@ import {
   Wrench
 } from "lucide-react";
 import { type FormEvent, type ReactNode, useEffect, useRef, useState } from "react";
-import { formatRunStatus, formatTime } from "./format";
+import { formatApiError, formatRunStatus, formatTime } from "./format";
 import { projectLiveRun } from "./live-run-projection";
 import { JsonDetails, RunDetails, StatusBadge } from "./run-details";
 import { ComposerControls } from "./composer-controls";
@@ -242,7 +242,7 @@ export function ChatMessage(props: {
         <MessageBlocks blocks={blocks} live={isPending} />
         {isUser || (blocks.length === 0 && message.content) ? <p className="message-text">{message.content}</p> : null}
         {message.error ? (
-          <div className="error-block"><AlertTriangle className="icon-size" /><span>{message.error.code}: {message.error.message}</span></div>
+          <div className="error-block"><AlertTriangle className="icon-size" /><span>{formatApiError(message.error)}</span></div>
         ) : null}
         {!isUser && !isPending ? (
           <div className="message-actions" aria-label="回答操作">
@@ -402,10 +402,10 @@ function LiveRunProcess(props: { label: string }) {
 
 interface ChatComposerProps {
   error: string | undefined;
+  /** 表单 id：主区左下角的设置按钮与发送键同处底行（FR-001）。 */
+  formId?: string;
   input: string;
   isSubmitting: boolean;
-  /** 跨工作区只读：会话属于其他工作区时禁用输入与发送。 */
-  readOnly?: boolean;
   models: ModelOptionDto[];
   modelCatalogStatus: "loading" | "ready" | "failed";
   modelCatalogError?: string;

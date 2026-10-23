@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { RunSnapshotDtoV2, RunStreamEventDtoV2 } from "@aiagent/types";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -159,7 +159,10 @@ describe("Workbench conversation history", () => {
     // 展开 toolCall 可见参数与配对结果。
     fireEvent.click(screen.getByText("read"));
     expect(toolDetails.open).toBe(true);
-    expect(screen.getByText(/"path": "src\/index.ts"/)).toBeTruthy();
+    // BUG-003 后工具参数走 JsonViewer 树：展开「调用参数」折叠块后断言 path 键与其值各自渲染。
+    fireEvent.click(within(toolDetails).getByText("调用参数"));
+    expect(within(toolDetails).getByText("path")).toBeTruthy();
+    expect(within(toolDetails).getByText('"src/index.ts"')).toBeTruthy();
     expect(screen.getByText("文件内容已返回")).toBeTruthy();
     expect(screen.getByText("历史已压缩")).toBeTruthy();
   });
@@ -253,6 +256,124 @@ describe("Workbench conversation history", () => {
     expect(await screen.findByText("第二会话消息")).toBeTruthy();
     await act(async () => delayedPage.resolve(ok({ items: [userMessage("late", "c1", "迟到分页消息")] })));
     expect(screen.queryByText("迟到分页消息")).toBeNull();
+  });
+
+  it("does not create a conversation when New Chat is clicked; creates it on first message send", async () => {
+    const { createAndStreamRun } = await import("../../shared/api/run-stream-client");
+    vi.mocked(createAndStreamRun).mockResolvedValue({
+      ok: false,
+      requestId: "run_failed",
+      error: { code: "internal_error", message: "network failed", requestId: "run_failed" }
+    });
+    const posts: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.startsWith("/api/conversations?")) return ok({ items: [conversation("c1", "已有会话")] });
+      if (url.includes("/messages")) return ok({ items: [] });
+      if (url === "/api/conversations" && init?.method === "POST") {
+        posts.push(JSON.parse(String(init.body)).title);
+        return ok(conversation("created", "新建任务"));
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    }));
+
+    render(<MemoryRouter><Workbench /></MemoryRouter>);
+    await screen.findByRole("heading", { name: "已有会话" });
+
+    // 点击 New Chat：不落盘、header 回到「新会话」、composer 可用。
+    fireEvent.click(screen.getByRole("button", { name: "New Chat" }));
+    await screen.findByRole("heading", { name: "新会话" });
+    expect(posts).toHaveLength(0);
+
+    // 发送首条真实消息才创建会话。
+    const textbox = screen.getByRole("textbox");
+    fireEvent.change(textbox, { target: { value: "第一次任务" } });
+    fireEvent.submit(textbox.closest("form")!);
+    await waitFor(() => expect(posts).toHaveLength(1));
+  });
+
+  it("requests a semantic title after the first message on a lazily-created conversation", async () => {
+    const { createAndStreamRun } = await import("../../shared/api/run-stream-client");
+    vi.mocked(createAndStreamRun).mockResolvedValue({
+      ok: false,
+      requestId: "run_failed",
+      error: { code: "internal_error", message: "network failed", requestId: "run_failed" }
+    });
+    const titlePosts: Array<{ url: string; body: unknown }> = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.startsWith("/api/conversations?")) return ok({ items: [] });
+      if (url.includes("/messages")) return ok({ items: [] });
+      if (url === "/api/conversations" && init?.method === "POST") {
+        return ok(conversation("created", "截断标题"));
+      }
+      if (url.includes("/generate-title") && init?.method === "POST") {
+        titlePosts.push({ url, body: JSON.parse(String(init.body)) });
+        // 服务端返回语义标题，前端据此改写侧栏。
+        return ok(conversation("created", "修复类型错误"));
+      }
+      if (url === "/api/conversations/created" && init?.method === "PATCH") {
+        return ok(conversation("created", "截断标题"));
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    }));
+
+    render(<MemoryRouter><Workbench /></MemoryRouter>);
+    await screen.findByText("暂无历史会话，创建一个开始编码。");
+    const textbox = screen.getByRole("textbox");
+    fireEvent.change(textbox, { target: { value: "帮我修复这段 TypeScript 类型错误" } });
+    fireEvent.submit(textbox.closest("form")!);
+
+    // 首条消息发送后必须发起 generate-title POST，携带首条用户消息原文。
+    await waitFor(() => expect(titlePosts).toHaveLength(1));
+    expect(titlePosts[0].url).toContain("/api/conversations/created/generate-title");
+    expect(titlePosts[0].body).toEqual({ text: "帮我修复这段 TypeScript 类型错误" });
+  });
+
+  it("does not re-PATCH the title or regenerate it on subsequent messages in the same conversation", async () => {
+    const { createAndStreamRun } = await import("../../shared/api/run-stream-client");
+    vi.mocked(createAndStreamRun).mockResolvedValue({
+      ok: false,
+      requestId: "run_failed",
+      error: { code: "internal_error", message: "network failed", requestId: "run_failed" }
+    });
+    const generateTitlePosts: string[] = [];
+    const titlePatches: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.startsWith("/api/conversations?")) return ok({ items: [] });
+      if (url.includes("/messages")) return ok({ items: [] });
+      if (url === "/api/conversations" && init?.method === "POST") {
+        return ok(conversation("created", "修复类型错误"));
+      }
+      if (url.includes("/generate-title") && init?.method === "POST") {
+        generateTitlePosts.push(url);
+        return ok(conversation("created", "修复类型错误"));
+      }
+      if (url === "/api/conversations/created" && init?.method === "PATCH") {
+        titlePatches.push(String(JSON.parse(String(init.body)).title));
+        return ok(conversation("created", "修复类型错误"));
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    }));
+
+    render(<MemoryRouter><Workbench /></MemoryRouter>);
+    await screen.findByText("暂无历史会话，创建一个开始编码。");
+    const textbox = screen.getByRole("textbox");
+
+    // 首条消息懒创建会话并触发一次语义标题升级。
+    fireEvent.change(textbox, { target: { value: "帮我修复这段 TypeScript 类型错误" } });
+    fireEvent.submit(textbox.closest("form")!);
+    await waitFor(() => expect(generateTitlePosts).toHaveLength(1));
+    await waitFor(() => expect(createAndStreamRun).toHaveBeenCalledTimes(1));
+
+    // 第二条消息复用已创建会话：既不改写标题（覆盖语义标题），也不再次生成语义标题。
+    fireEvent.change(textbox, { target: { value: "再帮我看看另一个文件" } });
+    fireEvent.submit(textbox.closest("form")!);
+    await waitFor(() => expect(createAndStreamRun).toHaveBeenCalledTimes(2));
+
+    expect(generateTitlePosts).toHaveLength(1);
+    expect(titlePatches).toHaveLength(0);
   });
 
   it("skips the known-empty initial history so a newly persisted user message cannot duplicate live state", async () => {

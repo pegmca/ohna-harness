@@ -1,5 +1,5 @@
 import type { WorkspaceConversationDto } from "@aiagent/types";
-import { Archive, ChevronDown, Plus, X } from "lucide-react";
+import { Archive, ChevronDown, Plus, Settings, X } from "lucide-react";
 import { useMemo, useState } from "react";
 import { formatRelativeTime } from "./format";
 
@@ -14,6 +14,7 @@ interface ConversationSidebarProps {
   onClose: () => void;
   onLoadMore: () => void;
   onNewConversation: () => void;
+  onOpenSettings: () => void;
   onRetry: () => void;
   onSelectConversation: (conversationId: string) => void;
 }
@@ -167,6 +168,19 @@ export function ConversationSidebar(props: ConversationSidebarProps) {
               {props.isLoading ? "加载中…" : "加载更多"}
             </button>
           ) : null}
+        </div>
+
+        <div className="sidebar-footer">
+          <button
+            aria-haspopup="dialog"
+            aria-label="设置"
+            className="profile-trigger settings-entry-trigger"
+            onClick={props.onOpenSettings}
+            title="设置"
+            type="button"
+          >
+            <Settings className="icon-size" />
+          </button>
         </div>
       </aside>
     </>

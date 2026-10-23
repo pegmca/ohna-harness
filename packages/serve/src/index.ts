@@ -6,8 +6,7 @@
  * 2. 构造 RunManager（消费 `agentLoop`，实现 run-v2 线协议）；
  * 3. 注册 HTTP/SSE 路由与静态 fallback。
  *
- * `apps/ohna-api` 只负责进程生命周期；未来 `ohna-cli --web` 复用同一装配，
- * 因此这里不读取 `process.argv`、不打开浏览器、不注册信号处理。
+ * `ohna-cli --web` 只负责进程生命周期；这里不读取 `process.argv`、不打开浏览器、不注册信号处理。
  */
 import { randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
@@ -356,7 +355,7 @@ export async function createOhnaServer(options: OhnaServerOptions): Promise<Ohna
 }
 
 /**
- * 确保数据目录存在（供 ohna-api 启动日志/诊断使用）。
+ * 确保数据目录存在（供 `ohna --web` 启动日志/诊断使用）。
  *
  * @param dataDir 数据目录。
  */
@@ -367,7 +366,7 @@ export async function ensureDataDir(dataDir: string): Promise<void> {
 /**
  * 在 127.0.0.1 上监听端口；占用时自动 +1 重试（EADDRINUSE 除外直接抛出）。
  *
- * Phase 5 起为共享 helper：`ohna-api` 与 `ohna --web` 两个入口使用同一套
+ * Phase 5 起为共享 helper：`ohna --web` 入口使用同一套
  * 端口探测逻辑，避免「一个入口会 +1、另一个直接失败」的漂移。
  *
  * @param server 已装配的服务。

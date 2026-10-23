@@ -2,7 +2,7 @@
  * 从环境变量选择「当前可用的真实模型」。
  *
  * 该逻辑原先位于 `apps/ohna-cli/src/harness.ts`，Phase 1 下沉到 `@aiagent/ai`：
- * ohna-cli 与未来的 serve / ohna-api 装配需要同一套 profile 遍历规则，若留在 app 层，
+ * ohna-cli 与 serve 装配需要同一套 profile 遍历规则，若留在 app 层，
  * 每个入口都要复制一份（容易出现「一个入口识别 bridge_ai、另一个不识别」的漂移）。
  *
  * 边界：只依赖包内 provider 工厂与 `process.env`，不引用 @aiagent/agent 或任何 app。

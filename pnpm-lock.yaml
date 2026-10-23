@@ -170,25 +170,6 @@ importers:
         specifier: ^4.1.10
         version: 4.1.10(@types/node@22.20.0)(jsdom@29.1.1)(vite@6.4.3(@types/node@22.20.0)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.22.4))
 
-  apps/ohna-api:
-    dependencies:
-      '@aiagent/ai':
-        specifier: workspace:*
-        version: link:../../packages/ai
-      '@aiagent/coding':
-        specifier: workspace:*
-        version: link:../../packages/coding
-      '@aiagent/serve':
-        specifier: workspace:*
-        version: link:../../packages/serve
-    devDependencies:
-      tsx:
-        specifier: ^4.22.4
-        version: 4.22.4
-      typescript:
-        specifier: ^5.7.2
-        version: 5.9.3
-
   apps/ohna-cli:
     dependencies:
       '@aiagent/agent':

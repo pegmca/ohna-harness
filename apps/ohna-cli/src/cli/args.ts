@@ -39,7 +39,7 @@ export interface CliOptions {
   team: boolean;
 }
 
-/** --web 模式的默认端口（与 ohna-api 一致）。 */
+/** --web 模式的默认端口。 */
 export const DEFAULT_WEB_PORT = 4173;
 
 /** 取值选项的字段名（字符串原样收集，数字在解析末尾统一校验）。 */

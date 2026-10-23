@@ -44,16 +44,6 @@ module.exports = {
       to: { path: "^apps/ohna-" }
     },
     {
-      name: "ohna-cli-and-api-independent",
-      severity: "error",
-      comment: "ohna-cli 与 ohna-api 是同一装配的两个入口，彼此不得互依。",
-      from: { path: "^apps/ohna-(cli|api)/" },
-      to: {
-        path: "^apps/ohna-(cli|api)/",
-        pathNot: "^apps/ohna-$1/"
-      }
-    },
-    {
       name: "web-feature-public-entrypoints-only",
       severity: "error",
       comment: "跨 feature 只能使用其 index.ts 公共入口，避免读取内部 ui/model/api。",

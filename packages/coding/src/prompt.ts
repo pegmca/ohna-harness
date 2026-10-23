@@ -2,7 +2,7 @@
  * 编码模式系统提示词装配。
  *
  * 该逻辑原先位于 `apps/ohna-cli/src/mode.ts`，Phase 1 下沉到 `@aiagent/coding`：
- * 提示词模板与项目上下文读取同属「编码域知识」，ohna-cli 与未来的 serve / ohna-api
+ * 提示词模板与项目上下文读取同属「编码域知识」，ohna-cli 与 serve
  * 装配都应复用同一份，而不是各 app 复制一段文案（文案漂移会让不同入口的 Agent 行为不一致）。
  *
  * 边界：本模块不向 stdout/stderr 写任何内容；上下文读取失败时通过 `onContextError`

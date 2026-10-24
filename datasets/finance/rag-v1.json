@@ -1,0 +1,705 @@
+{
+  "schemaVersion": "2.0.0",
+  "datasetVersion": "finance-rag-v1.0.0",
+  "generatedBy": {
+    "generator": "test/generate-finance-rag-v1.mjs",
+    "version": "1.0.0",
+    "source": "datasets/eval-financial-v1.json",
+    "note": "唯一权威生成器；禁止改用会写 expectedDocumentIds 的旧 migrate 脚本，否则门禁指标跌至~0。"
+  },
+  "seed": 20260719,
+  "domain": "finance",
+  "minCases": 1,
+  "cases": [
+    {
+      "id": "rag-001",
+      "query": "平安银行不良率",
+      "mode": "rag",
+      "documents": [
+        {
+          "source": "annual",
+          "fileName": "annual.md",
+          "content": "2024年不良率1.05%\n\n2024年净利润397亿元人民币\n\n2024年资本充足率13.5%\n\n2024年ROE为10.5%\n\n2024年股利0.5元/股人民币\n\n资产质量稳定\n\n净利润397亿元\n\n2024年净息差2.31%\n\n资产质量保持稳定"
+        }
+      ],
+      "expectedSources": [
+        "annual"
+      ],
+      "expectedKeywords": [
+        "不良率"
+      ],
+      "goldEvidence": [
+        "2024年不良率1.05%。",
+        "不良率 1.05 % 2024年"
+      ],
+      "minCitations": 2,
+      "tags": [
+        "rag",
+        "fact"
+      ]
+    },
+    {
+      "id": "rag-002",
+      "query": "平安银行净利润",
+      "mode": "rag",
+      "documents": [
+        {
+          "source": "annual",
+          "fileName": "annual.md",
+          "content": "2024年不良率1.05%\n\n2024年净利润397亿元人民币\n\n2024年资本充足率13.5%\n\n2024年ROE为10.5%\n\n2024年股利0.5元/股人民币\n\n资产质量稳定\n\n净利润397亿元\n\n2024年净息差2.31%\n\n资产质量保持稳定"
+        }
+      ],
+      "expectedSources": [
+        "annual"
+      ],
+      "expectedKeywords": [
+        "净利润"
+      ],
+      "goldEvidence": [
+        "2024年净利润397亿元人民币。",
+        "净利润 397 亿元 2024年"
+      ],
+      "minCitations": 2,
+      "tags": [
+        "rag",
+        "financial"
+      ]
+    },
+    {
+      "id": "rag-003",
+      "query": "宁德时代营收",
+      "mode": "rag",
+      "documents": [
+        {
+          "source": "q3",
+          "fileName": "q3.md",
+          "content": "2024年前三季度营收2590亿元人民币\n\n2024年前三季度毛利率25.1%\n\n2024年前三季度研发费用180亿元人民币\n\n2024年前三季度海外收入占比35%\n\n2024年上半年市占率37%\n\n毛利率25.1%\n\n净利润360亿元\n\n2024年总产能超过500GWh"
+        }
+      ],
+      "expectedSources": [
+        "q3"
+      ],
+      "expectedKeywords": [
+        "营收"
+      ],
+      "goldEvidence": [
+        "2024年前三季度营收2590亿元人民币。",
+        "营收 2590 亿元 2024年前三季度"
+      ],
+      "minCitations": 2,
+      "tags": [
+        "rag",
+        "financial"
+      ]
+    },
+    {
+      "id": "rag-004",
+      "query": "宁德时代毛利率",
+      "mode": "rag",
+      "documents": [
+        {
+          "source": "q3",
+          "fileName": "q3.md",
+          "content": "2024年前三季度营收2590亿元人民币\n\n2024年前三季度毛利率25.1%\n\n2024年前三季度研发费用180亿元人民币\n\n2024年前三季度海外收入占比35%\n\n2024年上半年市占率37%\n\n毛利率25.1%\n\n净利润360亿元\n\n2024年总产能超过500GWh"
+        }
+      ],
+      "expectedSources": [
+        "q3"
+      ],
+      "expectedKeywords": [
+        "毛利率"
+      ],
+      "goldEvidence": [
+        "2024年前三季度毛利率25.1%。",
+        "毛利率 25.1 % 2024年前三季度"
+      ],
+      "minCitations": 2,
+      "tags": [
+        "rag",
+        "financial"
+      ]
+    },
+    {
+      "id": "rag-005",
+      "query": "招商银行拨备覆盖率",
+      "mode": "rag",
+      "documents": [
+        {
+          "source": "announcement",
+          "fileName": "announcement.md",
+          "content": "2024年一季度拨备覆盖率450%\n\n2024年一季度关注类贷款1.2%\n\n风险总体可控\n\n2024年一季度房地产不良率3.85%"
+        }
+      ],
+      "expectedSources": [
+        "announcement"
+      ],
+      "expectedKeywords": [
+        "拨备覆盖率"
+      ],
+      "goldEvidence": [
+        "2024年一季度拨备覆盖率450%。",
+        "拨备覆盖率 450 % 2024年一季度"
+      ],
+      "minCitations": 2,
+      "tags": [
+        "rag",
+        "financial"
+      ]
+    },
+    {
+      "id": "rag-006",
+      "query": "新能源汽车销量",
+      "mode": "rag",
+      "documents": [
+        {
+          "source": "industry",
+          "fileName": "industry.md",
+          "content": "2024年销量预计1700万辆\n\n原材料价格波动、供应链扰动\n\n2024年中国新能源渗透率40%\n\n行业竞争加剧"
+        }
+      ],
+      "expectedSources": [
+        "industry"
+      ],
+      "expectedKeywords": [
+        "销量"
+      ],
+      "goldEvidence": [
+        "2024年销量预计1700万辆。",
+        "销量 1700 万辆 2024年"
+      ],
+      "minCitations": 2,
+      "tags": [
+        "rag",
+        "industry"
+      ]
+    },
+    {
+      "id": "rag-007",
+      "query": "新能源汽车风险",
+      "mode": "rag",
+      "documents": [
+        {
+          "source": "industry",
+          "fileName": "industry.md",
+          "content": "2024年销量预计1700万辆\n\n原材料价格波动、供应链扰动\n\n2024年中国新能源渗透率40%\n\n行业竞争加剧"
+        }
+      ],
+      "expectedSources": [
+        "industry"
+      ],
+      "expectedKeywords": [],
+      "goldEvidence": [
+        "风险包括原材料波动与供应链扰动。"
+      ],
+      "minCitations": 2,
+      "tags": [
+        "rag",
+        "risk"
+      ]
+    },
+    {
+      "id": "rag-008",
+      "query": "平安银行资本充足率",
+      "mode": "rag",
+      "documents": [
+        {
+          "source": "annual",
+          "fileName": "annual.md",
+          "content": "2024年不良率1.05%\n\n2024年净利润397亿元人民币\n\n2024年资本充足率13.5%\n\n2024年ROE为10.5%\n\n2024年股利0.5元/股人民币\n\n资产质量稳定\n\n净利润397亿元\n\n2024年净息差2.31%\n\n资产质量保持稳定"
+        }
+      ],
+      "expectedSources": [
+        "annual"
+      ],
+      "expectedKeywords": [
+        "资本充足率"
+      ],
+      "goldEvidence": [
+        "2024年资本充足率13.5%。",
+        "资本充足率 13.5 % 2024年"
+      ],
+      "minCitations": 2,
+      "tags": [
+        "rag"
+      ]
+    },
+    {
+      "id": "rag-009",
+      "query": "平安银行ROE",
+      "mode": "rag",
+      "documents": [
+        {
+          "source": "annual",
+          "fileName": "annual.md",
+          "content": "2024年不良率1.05%\n\n2024年净利润397亿元人民币\n\n2024年资本充足率13.5%\n\n2024年ROE为10.5%\n\n2024年股利0.5元/股人民币\n\n资产质量稳定\n\n净利润397亿元\n\n2024年净息差2.31%\n\n资产质量保持稳定"
+        }
+      ],
+      "expectedSources": [
+        "annual"
+      ],
+      "expectedKeywords": [
+        "ROE"
+      ],
+      "goldEvidence": [
+        "2024年ROE为10.5%。",
+        "ROE 10.5 % 2024年"
+      ],
+      "minCitations": 2,
+      "tags": [
+        "rag"
+      ]
+    },
+    {
+      "id": "rag-010",
+      "query": "宁德时代研发费用",
+      "mode": "rag",
+      "documents": [
+        {
+          "source": "q3",
+          "fileName": "q3.md",
+          "content": "2024年前三季度营收2590亿元人民币\n\n2024年前三季度毛利率25.1%\n\n2024年前三季度研发费用180亿元人民币\n\n2024年前三季度海外收入占比35%\n\n2024年上半年市占率37%\n\n毛利率25.1%\n\n净利润360亿元\n\n2024年总产能超过500GWh"
+        }
+      ],
+      "expectedSources": [
+        "q3"
+      ],
+      "expectedKeywords": [
+        "研发费用"
+      ],
+      "goldEvidence": [
+        "2024年前三季度研发费用180亿元人民币。",
+        "研发费用 180 亿元 2024年前三季度"
+      ],
+      "minCitations": 2,
+      "tags": [
+        "rag"
+      ]
+    },
+    {
+      "id": "rag-011",
+      "query": "宁德时代海外收入占比",
+      "mode": "rag",
+      "documents": [
+        {
+          "source": "q3",
+          "fileName": "q3.md",
+          "content": "2024年前三季度营收2590亿元人民币\n\n2024年前三季度毛利率25.1%\n\n2024年前三季度研发费用180亿元人民币\n\n2024年前三季度海外收入占比35%\n\n2024年上半年市占率37%\n\n毛利率25.1%\n\n净利润360亿元\n\n2024年总产能超过500GWh"
+        }
+      ],
+      "expectedSources": [
+        "q3"
+      ],
+      "expectedKeywords": [
+        "占比"
+      ],
+      "goldEvidence": [
+        "2024年前三季度海外收入占比35%。",
+        "占比 35 % 2024年前三季度"
+      ],
+      "minCitations": 2,
+      "tags": [
+        "rag"
+      ]
+    },
+    {
+      "id": "rag-012",
+      "query": "招商银行关注类贷款",
+      "mode": "rag",
+      "documents": [
+        {
+          "source": "announcement",
+          "fileName": "announcement.md",
+          "content": "2024年一季度拨备覆盖率450%\n\n2024年一季度关注类贷款1.2%\n\n风险总体可控\n\n2024年一季度房地产不良率3.85%"
+        }
+      ],
+      "expectedSources": [
+        "announcement"
+      ],
+      "expectedKeywords": [
+        "关注类贷款"
+      ],
+      "goldEvidence": [
+        "2024年一季度关注类贷款1.2%。",
+        "关注类贷款 1.2 % 2024年一季度"
+      ],
+      "minCitations": 2,
+      "tags": [
+        "rag"
+      ]
+    },
+    {
+      "id": "rag-013",
+      "query": "中国新能源渗透率",
+      "mode": "rag",
+      "documents": [
+        {
+          "source": "industry",
+          "fileName": "industry.md",
+          "content": "2024年销量预计1700万辆\n\n原材料价格波动、供应链扰动\n\n2024年中国新能源渗透率40%\n\n行业竞争加剧"
+        }
+      ],
+      "expectedSources": [
+        "industry"
+      ],
+      "expectedKeywords": [
+        "渗透率"
+      ],
+      "goldEvidence": [
+        "2024年中国新能源渗透率40%。",
+        "渗透率 40 % 2024年"
+      ],
+      "minCitations": 2,
+      "tags": [
+        "rag"
+      ]
+    },
+    {
+      "id": "rag-014",
+      "query": "宁德时代市占率",
+      "mode": "rag",
+      "documents": [
+        {
+          "source": "q3",
+          "fileName": "q3.md",
+          "content": "2024年前三季度营收2590亿元人民币\n\n2024年前三季度毛利率25.1%\n\n2024年前三季度研发费用180亿元人民币\n\n2024年前三季度海外收入占比35%\n\n2024年上半年市占率37%\n\n毛利率25.1%\n\n净利润360亿元\n\n2024年总产能超过500GWh"
+        }
+      ],
+      "expectedSources": [
+        "q3"
+      ],
+      "expectedKeywords": [
+        "市占率"
+      ],
+      "goldEvidence": [
+        "2024年上半年市占率37%。",
+        "市占率 37 % 2024年上半年"
+      ],
+      "minCitations": 2,
+      "tags": [
+        "rag"
+      ]
+    },
+    {
+      "id": "rag-015",
+      "query": "平安银行分红",
+      "mode": "rag",
+      "documents": [
+        {
+          "source": "annual",
+          "fileName": "annual.md",
+          "content": "2024年不良率1.05%\n\n2024年净利润397亿元人民币\n\n2024年资本充足率13.5%\n\n2024年ROE为10.5%\n\n2024年股利0.5元/股人民币\n\n资产质量稳定\n\n净利润397亿元\n\n2024年净息差2.31%\n\n资产质量保持稳定"
+        }
+      ],
+      "expectedSources": [
+        "annual"
+      ],
+      "expectedKeywords": [
+        "股利"
+      ],
+      "goldEvidence": [
+        "2024年股利0.5元/股人民币。",
+        "股利 0.5 元/股 2024年"
+      ],
+      "minCitations": 2,
+      "tags": [
+        "rag"
+      ]
+    },
+    {
+      "id": "chat-001",
+      "query": "解释ROE",
+      "mode": "chat",
+      "documents": [],
+      "expectedSources": [],
+      "expectedKeywords": [],
+      "goldEvidence": [
+        "ROE衡量净利润相对净资产的回报。"
+      ],
+      "minCitations": 2,
+      "tags": [
+        "chat"
+      ]
+    },
+    {
+      "id": "chat-002",
+      "query": "解释净息差",
+      "mode": "chat",
+      "documents": [],
+      "expectedSources": [],
+      "expectedKeywords": [],
+      "goldEvidence": [
+        "净息差衡量生息资产的利差收益。"
+      ],
+      "minCitations": 2,
+      "tags": [
+        "chat"
+      ]
+    },
+    {
+      "id": "chat-003",
+      "query": "解释拨备覆盖率",
+      "mode": "chat",
+      "documents": [],
+      "expectedSources": [],
+      "expectedKeywords": [],
+      "goldEvidence": [
+        "拨备覆盖率衡量贷款损失准备对不良贷款的覆盖。"
+      ],
+      "minCitations": 2,
+      "tags": [
+        "chat"
+      ]
+    },
+    {
+      "id": "chat-004",
+      "query": "什么是同比",
+      "mode": "chat",
+      "documents": [],
+      "expectedSources": [],
+      "expectedKeywords": [],
+      "goldEvidence": [
+        "同比比较本期与上年同期。"
+      ],
+      "minCitations": 2,
+      "tags": [
+        "chat"
+      ]
+    },
+    {
+      "id": "chat-005",
+      "query": "什么是环比",
+      "mode": "chat",
+      "documents": [],
+      "expectedSources": [],
+      "expectedKeywords": [],
+      "goldEvidence": [
+        "环比比较本期与相邻上一期。"
+      ],
+      "minCitations": 2,
+      "tags": [
+        "chat"
+      ]
+    },
+    {
+      "id": "report-001",
+      "query": "生成银行研报",
+      "mode": "report",
+      "documents": [],
+      "expectedSources": [
+        "annual"
+      ],
+      "expectedKeywords": [],
+      "goldEvidence": [
+        "银行研究报告已生成。"
+      ],
+      "minCitations": 2,
+      "tags": [
+        "report"
+      ]
+    },
+    {
+      "id": "report-002",
+      "query": "生成新能源研报",
+      "mode": "report",
+      "documents": [],
+      "expectedSources": [
+        "industry"
+      ],
+      "expectedKeywords": [],
+      "goldEvidence": [
+        "新能源研究报告已生成。"
+      ],
+      "minCitations": 2,
+      "tags": [
+        "report"
+      ]
+    },
+    {
+      "id": "report-003",
+      "query": "生成电池公司研报",
+      "mode": "report",
+      "documents": [],
+      "expectedSources": [
+        "q3"
+      ],
+      "expectedKeywords": [],
+      "goldEvidence": [
+        "电池公司研究报告已生成。"
+      ],
+      "minCitations": 2,
+      "tags": [
+        "report"
+      ]
+    },
+    {
+      "id": "report-004",
+      "query": "生成资产质量研报",
+      "mode": "report",
+      "documents": [],
+      "expectedSources": [
+        "announcement"
+      ],
+      "expectedKeywords": [],
+      "goldEvidence": [
+        "资产质量研究报告已生成。"
+      ],
+      "minCitations": 2,
+      "tags": [
+        "report"
+      ]
+    },
+    {
+      "id": "report-005",
+      "query": "生成对比研报",
+      "mode": "report",
+      "documents": [],
+      "expectedSources": [
+        "annual",
+        "q3"
+      ],
+      "expectedKeywords": [],
+      "goldEvidence": [
+        "对比研究报告已生成。"
+      ],
+      "minCitations": 2,
+      "tags": [
+        "report"
+      ]
+    },
+    {
+      "id": "rag-016",
+      "query": "平安银行净息差",
+      "mode": "rag",
+      "documents": [
+        {
+          "source": "annual",
+          "fileName": "annual.md",
+          "content": "2024年不良率1.05%\n\n2024年净利润397亿元人民币\n\n2024年资本充足率13.5%\n\n2024年ROE为10.5%\n\n2024年股利0.5元/股人民币\n\n资产质量稳定\n\n净利润397亿元\n\n2024年净息差2.31%\n\n资产质量保持稳定"
+        }
+      ],
+      "expectedSources": [
+        "annual"
+      ],
+      "expectedKeywords": [
+        "净息差"
+      ],
+      "goldEvidence": [
+        "2024年净息差2.31%。",
+        "净息差 2.31 % 2024年"
+      ],
+      "minCitations": 2,
+      "tags": [
+        "rag"
+      ]
+    },
+    {
+      "id": "rag-017",
+      "query": "宁德时代产能",
+      "mode": "rag",
+      "documents": [
+        {
+          "source": "q3",
+          "fileName": "q3.md",
+          "content": "2024年前三季度营收2590亿元人民币\n\n2024年前三季度毛利率25.1%\n\n2024年前三季度研发费用180亿元人民币\n\n2024年前三季度海外收入占比35%\n\n2024年上半年市占率37%\n\n毛利率25.1%\n\n净利润360亿元\n\n2024年总产能超过500GWh"
+        }
+      ],
+      "expectedSources": [
+        "q3"
+      ],
+      "expectedKeywords": [
+        "产能"
+      ],
+      "goldEvidence": [
+        "2024年总产能超过500GWh。",
+        "产能 500 GWh 2024年"
+      ],
+      "minCitations": 2,
+      "tags": [
+        "rag"
+      ]
+    },
+    {
+      "id": "rag-018",
+      "query": "招商银行房地产不良率",
+      "mode": "rag",
+      "documents": [
+        {
+          "source": "announcement",
+          "fileName": "announcement.md",
+          "content": "2024年一季度拨备覆盖率450%\n\n2024年一季度关注类贷款1.2%\n\n风险总体可控\n\n2024年一季度房地产不良率3.85%"
+        }
+      ],
+      "expectedSources": [
+        "announcement"
+      ],
+      "expectedKeywords": [
+        "不良率"
+      ],
+      "goldEvidence": [
+        "2024年一季度房地产不良率3.85%。",
+        "不良率 3.85 % 2024年一季度"
+      ],
+      "minCitations": 2,
+      "tags": [
+        "rag"
+      ]
+    },
+    {
+      "id": "fail-001",
+      "query": "不存在公司的收入",
+      "mode": "failure",
+      "documents": [],
+      "expectedSources": [
+        "missing"
+      ],
+      "expectedKeywords": [
+        "收入"
+      ],
+      "goldEvidence": [
+        "2024年收入100亿元。",
+        "收入 100 亿元 2024年"
+      ],
+      "minCitations": 2,
+      "tags": [
+        "failure",
+        "wrong_fact"
+      ]
+    },
+    {
+      "id": "fail-002",
+      "query": "给出无来源结论",
+      "mode": "failure",
+      "documents": [],
+      "expectedSources": [
+        "annual"
+      ],
+      "expectedKeywords": [],
+      "goldEvidence": [
+        "资产质量优秀。"
+      ],
+      "minCitations": 2,
+      "tags": [
+        "failure",
+        "ungrounded"
+      ]
+    },
+    {
+      "id": "fail-003",
+      "query": "证据不足时生成研报",
+      "mode": "failure",
+      "documents": [],
+      "expectedSources": [
+        "annual"
+      ],
+      "expectedKeywords": [],
+      "goldEvidence": [
+        "证据不足，workflow终止。"
+      ],
+      "minCitations": 2,
+      "tags": [
+        "failure",
+        "workflow"
+      ]
+    }
+  ]
+}

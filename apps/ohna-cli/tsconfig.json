@@ -40,6 +40,9 @@
     },
     {
       "path": "../../packages/term"
+    },
+    {
+      "path": "../../packages/eval-core"
     }
   ]
 }

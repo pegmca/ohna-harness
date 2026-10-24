@@ -22,6 +22,18 @@ import type { KeywordCandidateStore } from "./keyword-store.js";
 export type { KeywordCandidateStore } from "./keyword-store.js";
 
 export type RagDocument = RagDocumentDto;
+
+/**
+ * 证据充分性阈值（前置修正 #1）：控制 synthesizeRagAnswer 把「可答」翻转为「拒答」的灵敏度，
+ * 作为 DataSourceRuntimeOptions 的可注入点。两条判定通道可独立注入：
+ * - minQueryTermCoverage：检索词覆盖率下限；
+ * - minFinalScore：最终相关性分数下限。
+ * 任一字段缺省时由 synthesizeRagAnswer 沿用内置常量（0.15 / 0.42）。
+ */
+export interface EvidenceSufficiencyThreshold {
+  minQueryTermCoverage?: number;
+  minFinalScore?: number;
+}
 export type RagChunk = RagChunkDto;
 export type Citation = CitationDto;
 export type RetrievalResult = RetrievalResultDto;
@@ -301,6 +313,16 @@ export interface DataSourceRuntimeOptions {
    * 缺省（undefined 或 null）不改写（恒等）。通过 createQueryRewriterFromEnv() 注入，禁用时返回 null。
    */
   queryRewriter?: QueryRewriter | null;
+  /**
+   * ingest 切块策略注入点（前置修正 #5）：覆盖默认 DEFAULT_CHUNKING_OPTIONS（heading_aware / 1200 / 150）。
+   * 缺省 undefined 时 ingest 沿用默认切块行为，零回归；finance-api 等领域可在组合根注入不同窗口/重叠。
+   */
+  chunkingOptions?: ChunkingOptions;
+  /**
+   * 证据充分性阈值注入点（前置修正 #1）：覆盖 synthesizeRagAnswer 内置的 0.15 / 0.42 默认阈值。
+   * 缺省 undefined 时 runtime 透传空对象，由 synthesizeRagAnswer 沿用内置常量，行为与原版一致。
+   */
+  evidenceSufficiencyThreshold?: EvidenceSufficiencyThreshold;
 }
 
 export interface HybridRetrieverOptions {

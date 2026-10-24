@@ -109,11 +109,23 @@ export interface RetrievalResultDto {
 
 /**
  * RAG answer DTO 是 API 返回给 UI 的 grounded answer 合同。
+ *
+ * status 是 v2.0 评测体系「前置修正 #1」引入的【可选】结构化拒答信号：
+ * 当证据不足以可靠回答时，status 为 "insufficient_evidence"，取代原先 answer 文本中的
+ * 魔法字符串「当前资料不足，无法可靠回答」。旧消费方（Web/API/评测）只读取
+ * answer/citations/retrievalResults，不感知 status，因此该字段完全向后兼容。
  */
 export interface RagAnswerDto {
   answer: string;
   citations: CitationDto[];
   retrievalResults: RetrievalResultDto[];
+  /**
+   * 回答状态信号（前置修正 #1）。
+   * - "answered"：基于召回证据生成了摘要性回答；
+   * - "insufficient_evidence"：证据不足，结构化拒答（取代 answer 文本魔法字符串）。
+   * 缺省（旧数据/旧消费方）为 undefined，等价于未携带结构化信号，向后兼容。
+   */
+  status?: "answered" | "insufficient_evidence";
 }
 
 /**

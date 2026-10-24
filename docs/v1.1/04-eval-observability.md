@@ -6,6 +6,8 @@
 > 缺口（已落地部分见 §3 标记）：无轨迹级评测、trace 未全量接 OTel 导出管线、无 SLO。
 > **已实现（本阶段）**：P0 LLM-as-Judge 校准层（`createLoopLlmJudge` 公共 API）、P1 trace 对齐 OTel `gen_ai` semconv + token/成本字段 + token 级 PII 治理。详见带读文档 `04-eval-observability-reading.md`。
 
+> **v2.0 评测体系改造（已落地，见 `docs/v2.0/02-eval-system-v2.md`）**：原共享 `packages/eval`（约 4000 行、含 7 项金融硬指标 + baseline + 门禁 + judge）已整体删除。评测改为「共享纯机制薄内核 `packages/eval-core`（`gate` / `report` / `judge` / `calibration` / `trajectory`，零 `@aiagent/agent|ai|rag|trace` 运行时依赖）+ 各上层应用完全自治」：指标定义、数据集 schema、执行器、judge rubric 由 `apps/finance-api/src/eval/` 与 `apps/ohna-cli/src/eval/` 各自拥有，二者仅依赖 `packages/eval-core` 与跨边界线格式 `@aiagent/types` 的 `EvalReportDto` / `BaselineDiff` / `GateResult`。本文件中所有「`packages/eval` …」的现状与落地描述均指 v1.x 历史状态，已在 v2.0 被上述架构取代。
+
 ## 1. 行业现状速览（2025–2026）
 
 - **轨迹评测为一等公民**：不只看结果，评 tool 参数、多步、图结构；确定性任务用 trajectory match（strict/subset），开放任务用 LLM-as-Judge，二者混搭。

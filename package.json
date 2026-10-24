@@ -17,9 +17,11 @@
     "architecture:check": "depcruise apps packages --config .dependency-cruiser.cjs",
     "typecheck": "pnpm -r typecheck",
     "test:e2e": "pnpm --filter @aiagent/finance-web test:e2e",
-    "eval": "pnpm --filter @aiagent/eval eval",
+    "eval:ohna": "pnpm --filter @aiagent/ohna-cli eval",
     "smoke:compose": "node test/smoke-compose.mjs",
-    "eval:update-baseline": "pnpm --filter @aiagent/eval eval:update-baseline"
+    "eval:finance-api": "pnpm --filter @aiagent/finance-api eval",
+    "eval:finance-api:update-baseline": "pnpm --filter @aiagent/finance-api eval --update-baseline",
+    "eval:ohna:update-baseline": "pnpm --filter @aiagent/ohna-cli eval --update-baseline"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.5",

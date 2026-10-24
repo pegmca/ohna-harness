@@ -74,13 +74,13 @@ test("渲染：选中项以 selected 颜色块高亮，选中变化后高亮迁�
   configure({ forced: true });
   try {
     const first = card.render({ width: 80, maxRows: 6 }).join("\n");
-    assert.match(first, /\x1b\[48;2;58;42;32;38;2;252;233;212m\[1\] 允许一次/);
-    assert.match(first, /\x1b\[38;2;255;159;69m│ /, "卡片左边框 / 标题使用 focused");
+    assert.match(first, /\x1b\[48;2;46;51;49;38;2;237;230;218m\[1\] 允许一次/);
+    assert.match(first, /\x1b\[38;2;191;227;210m│ /, "卡片左边框 / 标题使用 focused");
     assert.doesNotMatch(first, /\x1b\[7m/, "选中态不再依赖反转视频");
 
     card.handleKey("\x1b[B");
     const second = card.render({ width: 80, maxRows: 6 }).join("\n");
-    assert.match(second, /\x1b\[48;2;58;42;32;38;2;252;233;212m\[2\] 本会话一律/);
+    assert.match(second, /\x1b\[48;2;46;51;49;38;2;237;230;218m\[2\] 本会话一律/);
   } finally {
     resetForTest();
   }

@@ -1,5 +1,4 @@
 @import "tailwindcss";
-@import "../../../system.css";
 
 :root {
   color: var(--md-color-text-primary);
@@ -7,6 +6,170 @@
   font-family: var(--md-font-ui);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
+}
+
+/* ============================================================
+   Glass Depths 自持 token（docs/design/glass-tokens.md §6.1 逐字抄录）
+   —— 断开 system.css 共享（07 · D1），颜色/玻璃浮层/语法色全部自持。
+   基建类（字体/字号/间距/圆角/动效）按 system.css 原值搬运，非颜色不受影响。
+   ============================================================ */
+
+/* 基建 token（双主题共用） */
+:root {
+  --md-font-ui: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --md-font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --md-text-page-title-size: 1.875rem;
+  --md-text-page-title-weight: 650;
+  --md-text-page-title-leading: 1.15;
+  --md-text-section-title-size: 0.875rem;
+  --md-text-section-title-weight: 650;
+  --md-text-section-title-leading: 1.3;
+  --md-text-body-size: 0.9375rem;
+  --md-text-body-leading: 1.6;
+  --md-text-body-sm-size: 0.8125rem;
+  --md-text-body-sm-leading: 1.5;
+  --md-text-label-size: 0.75rem;
+  --md-text-label-weight: 600;
+  --md-text-label-tracking: 0.08em;
+  --md-text-code-size: 0.75rem;
+  --md-text-code-leading: 1.5;
+  --md-space-1: 4px;
+  --md-space-2: 8px;
+  --md-space-3: 12px;
+  --md-space-4: 16px;
+  --md-space-5: 20px;
+  --md-space-6: 24px;
+  --md-space-8: 32px;
+  /* Glass 稿圆角：sm8/md12/lg14（与 system.css 旧值 4/6/8 不同，以 Glass 稿为准）。 */
+  --md-radius-sm: 8px;
+  --md-radius-md: 12px;
+  --md-radius-lg: 14px;
+  --md-radius-xl: 12px;
+  --md-radius-full: 999px;
+  --md-border-width: 1px;
+  --md-motion-fast: 120ms;
+  --md-motion-base: 160ms;
+  --md-motion-slow: 240ms;
+  --md-ease: cubic-bezier(.22,1,.36,1);
+  --md-focus-ring: 0 0 0 3px rgba(137,215,183,.26);
+  --md-shadow-popover: 0 12px 28px rgba(0,0,0,.28);
+  --md-shadow-lg: 0 18px 48px rgba(0,0,0,.45);
+  /* 补充定义：修复既有 3 处未定义引用（842/1339/3000）。 */
+  --md-color-muted: #2A2E2C;
+  --md-color-border-subtle: rgba(255,255,255,.07);
+}
+
+/* 暗档（:root 与 data-theme="dark" 同义；theme.tsx 控制根节点 data-theme） */
+:root,
+[data-theme="dark"] {
+  --md-color-canvas: #18191A;
+  --md-color-surface: #1E2120;
+  --md-color-elevated: #232726;
+  --md-color-muted: #2A2E2C;
+  --md-color-border: rgba(255,255,255,.10);
+  --md-color-border-strong: rgba(255,255,255,.16);
+  --md-color-text-primary: #EDE6DA;
+  --md-color-text-secondary: #B9BCB7;
+  --md-color-text-muted: #868C88;
+  --md-color-text-disabled: #5C625F;
+  --md-color-primary: #89D7B7;
+  --md-color-primary-hover: #9BE2C5;
+  --md-color-text-inverse: #0E1512;
+  --md-color-primary-soft: rgba(137,215,183,.12);
+  --md-color-danger: #D36A5F;
+  --md-color-danger-soft: rgba(211,106,95,.14);
+  --md-color-warning: #D9A441;
+  --md-color-warning-soft: rgba(217,164,65,.14);
+  --md-color-success: #89D7B7;
+  --md-color-success-soft: rgba(137,215,183,.10);
+  --md-color-info: #428475;
+  --md-color-info-soft: rgba(66,132,117,.16);
+  --md-color-overlay: rgba(12,13,14,.68);
+  --md-glass-sidebar: rgba(24,27,26,.62);
+  --md-glass-inspector: rgba(24,27,26,.78);
+  --md-glass-panel: rgba(24,27,26,.84);
+  --md-glass-float: rgba(24,27,26,.90);
+  --md-glass-sunken: rgba(18,20,21,.62);
+  --md-app-shell-bg: rgba(20,22,23,.88);
+  --md-hover-wash: rgba(255,255,255,.03);
+  --md-hairline: rgba(255,255,255,.05);
+  --md-inset-highlight: inset 0 1px 0 rgba(255,255,255,.05);
+  --md-code-fg: #B8C5BF;
+  --md-diff-add: #A9E2C9;
+  --md-diff-del: #F09A92;
+  --md-diff-ctx: #84918B;
+  --md-diff-add-bg: rgba(137,215,183,.10);
+  --md-diff-del-bg: rgba(232,117,107,.10);
+  --md-kw: #C6A9E8;
+  --md-str: #A8D6BE;
+  --md-fn: #8FC4E5;
+  --md-comment: #64746D;
+  --md-json-key: #8FC4E5;
+  --md-json-string: #9ED0B6;
+  --md-json-number: #E5B567;
+  --md-json-bool: #C6A9E8;
+  --md-json-null: #E36B60;
+  --md-inline-code: #BBD9CB;
+  --md-error-fg: #F0B0AA;
+  --md-shadow-popover: 0 12px 28px rgba(0,0,0,.28);
+  --md-shadow-lg: 0 18px 48px rgba(0,0,0,.45);
+  --md-color-border-subtle: rgba(255,255,255,.07);
+}
+
+/* 亮档（浅底深彩） */
+[data-theme="light"] {
+  --md-color-canvas: #FBFAF9;
+  --md-color-surface: #FFFFFF;
+  --md-color-elevated: #F4F4F2;
+  --md-color-muted: #ECECEA;
+  --md-color-border: rgba(0,0,0,.10);
+  --md-color-border-strong: rgba(0,0,0,.16);
+  --md-color-text-primary: #1A1A18;
+  --md-color-text-secondary: #5C5C58;
+  --md-color-text-muted: #868C88;
+  --md-color-text-disabled: #A8A8A4;
+  --md-color-primary: #2F6F63;
+  --md-color-primary-hover: #356F63;
+  --md-color-text-inverse: #FFFFFF;
+  --md-color-primary-soft: rgba(47,111,99,.12);
+  --md-color-danger: #B4232F;
+  --md-color-danger-soft: rgba(180,35,47,.12);
+  --md-color-warning: #8A5200;
+  --md-color-warning-soft: rgba(138,82,0,.12);
+  --md-color-success: #056626;
+  --md-color-success-soft: rgba(5,102,38,.10);
+  --md-color-info: #2F6F63;
+  --md-color-info-soft: rgba(47,111,99,.12);
+  --md-color-overlay: rgba(0,0,0,.40);
+  --md-glass-sidebar: rgba(244,244,242,.72);
+  --md-glass-inspector: rgba(255,255,255,.82);
+  --md-glass-panel: rgba(255,255,255,.90);
+  --md-glass-float: rgba(255,255,255,.92);
+  --md-glass-sunken: rgba(0,0,0,.035);
+  --md-app-shell-bg: rgba(255,255,255,.86);
+  --md-hover-wash: rgba(0,0,0,.035);
+  --md-hairline: rgba(0,0,0,.05);
+  --md-inset-highlight: inset 0 1px 0 rgba(255,255,255,.05);
+  --md-code-fg: #2C2C28;
+  --md-diff-add: #0F7A52;
+  --md-diff-del: #B4232F;
+  --md-diff-ctx: #6A6A66;
+  --md-diff-add-bg: rgba(15,122,82,.12);
+  --md-diff-del-bg: rgba(180,35,47,.10);
+  --md-kw: #6B3FA0;
+  --md-str: #1F7A4D;
+  --md-fn: #1E6FA8;
+  --md-comment: #8A8A85;
+  --md-json-key: #1E6FA8;
+  --md-json-string: #1F7A4D;
+  --md-json-number: #8A5200;
+  --md-json-bool: #6B3FA0;
+  --md-json-null: #B4232F;
+  --md-inline-code: #2F6F63;
+  --md-error-fg: #B4232F;
+  --md-shadow-popover: 0 12px 28px rgba(0,0,0,.08);
+  --md-shadow-lg: 0 18px 48px rgba(0,0,0,.12);
+  --md-color-border-subtle: rgba(0,0,0,.07);
 }
 
 * {
@@ -353,26 +516,6 @@ textarea:disabled {
 .run-progress-list button:hover { background: var(--md-color-elevated); color: var(--md-color-text-primary); }
 .run-progress-list small { color: var(--md-color-text-muted); }
 
-.market-chart-card {
-  display: grid;
-  gap: var(--md-space-3);
-  margin-bottom: var(--md-space-5);
-  border: 1px solid var(--md-color-border-subtle);
-  border-radius: var(--md-radius-xl);
-  background: var(--md-color-surface);
-  padding: var(--md-space-4);
-}
-.market-chart-card header,
-.market-chart-card footer { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--md-space-2) var(--md-space-3); }
-.market-chart-card header div { display: grid; gap: 2px; }
-.market-chart-card header span,
-.market-chart-card header small,
-.market-chart-card footer { color: var(--md-color-text-muted); font-size: .75rem; }
-.market-chart-card footer span:last-child { margin-left: auto; overflow-wrap: anywhere; }
-.market-chart { min-height: 340px; }
-.market-up { color: var(--md-market-up); }
-.market-down { color: var(--md-market-down); }
-
 .conversation-sidebar {
   position: sticky;
   top: 0;
@@ -380,8 +523,11 @@ textarea:disabled {
   height: 100vh;
   min-width: 0;
   flex-direction: column;
-  border-right: 1px solid var(--md-color-border-subtle);
-  background: var(--md-color-surface);
+  /* G2 玻璃浮层：侧栏切到 glass 别名 + blur + 内高光，弱化为 hairline 细边（07 §4.3）。 */
+  border-right: 1px solid var(--md-hairline);
+  background: var(--md-glass-sidebar);
+  backdrop-filter: blur(18px) saturate(150%);
+  box-shadow: var(--md-shadow-lg), var(--md-inset-highlight);
   padding: var(--md-space-4);
 }
 
@@ -2902,8 +3048,11 @@ textarea:disabled {
   min-width: 0;
   height: 100vh;
   grid-template-rows: auto minmax(0, 1fr);
-  border-left: 1px solid var(--md-color-border-subtle);
-  background: var(--md-color-surface);
+  /* G2 玻璃浮层：inspector 玻璃底 + 内高光；左侧用 hairline 弱边（滚轮内容非 glass）。 */
+  border-left: 1px solid var(--md-hairline);
+  background: var(--md-glass-inspector);
+  backdrop-filter: blur(18px) saturate(150%);
+  box-shadow: var(--md-shadow-lg), var(--md-inset-highlight);
   overflow: hidden;
   animation: trace-drawer-in var(--md-motion-slow) var(--md-ease);
 }
@@ -3036,6 +3185,12 @@ textarea:disabled {
   grid-template-rows: auto minmax(0, 1fr);
   padding: 0;
   overflow: hidden;
+  /* G2 玻璃浮层：设置弹窗用 panel 玻璃底 + hairline 弱边 + 内高光（07 §4.3）。 */
+  border: 1px solid var(--md-hairline);
+  border-radius: var(--md-radius-lg);
+  background: var(--md-glass-panel);
+  backdrop-filter: blur(18px) saturate(150%);
+  box-shadow: var(--md-shadow-lg), var(--md-inset-highlight);
   animation: settings-dialog-in var(--md-motion-slow) var(--md-ease);
 }
 

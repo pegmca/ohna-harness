@@ -158,11 +158,11 @@ test("buildPalette：选中行改用 selected 颜色块（不再依赖反转视�
     assert.equal(palette.length, 12);
     assert.match(
       palette[0],
-      /^\x1b\[48;2;58;42;32;38;2;252;233;212m/,
+      /^\x1b\[48;2;46;51;49;38;2;237;230;218m/,
       "选中行应以 selected 背景 + selectedText 前景开头",
     );
     assert.match(palette[0], /\x1b\[0m$/, "选中行应以全量复位结尾");
-    assert.match(palette[1], /^\x1b\[48;2;27;19;16m/, "未选中行应铺 panel 背景");
+    assert.match(palette[1], /^\x1b\[48;2;30;33;32m/, "未选中行应铺 panel 背景");
     assert.doesNotMatch(palette[0], /\x1b\[7m/, "选中态不再使用反转视频");
   } finally {
     resetForTest();
@@ -178,7 +178,7 @@ test("buildFrame：forced ANSI 下背景 SGR 不改变可见宽（每行仍 <= �
     for (const [i, line] of frame.entries()) {
       assert.ok(visibleWidth(line) <= 40, `第 ${i} 行宽 ${visibleWidth(line)} > 40`);
     }
-    assert.ok(frame.some((line) => line.includes("\x1b[48;2;27;19;16m")), "panel 背景应铺在面板行");
+    assert.ok(frame.some((line) => line.includes("\x1b[48;2;30;33;32m")), "panel 背景应铺在面板行");
     for (const line of frame.slice(-2)) {
       assert.ok(!line.includes("\x1b[7m"), "面板行不应依赖反转视频（输入框光标仍可反色）");
     }

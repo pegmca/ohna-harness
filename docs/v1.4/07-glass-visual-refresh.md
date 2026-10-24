@@ -294,10 +294,17 @@
 
 | 阶段 | 内容 | 状态 |
 |---|---|---|
-| G1 | Web `--md-*` 覆盖 + 玻璃浮层别名 + 语法色（`styles.css`） | ⬜ 未开始 |
-| G2 | 玻璃浮层落点微调 + 分层规则转 CSS | ⬜ 未开始 |
-| G3 | CLI `PALETTE`/`BACKGROUND` 青绿平移（`theme.ts`） | ⬜ 未开始 |
-| G4 | 测试 + 文档同步 | ⬜ 未开始 |
+| G1 | Web `--md-*` 覆盖 + 玻璃浮层别名 + 语法色（`styles.css`） | ✅ 已完成 |
+| G2 | 玻璃浮层落点微调 + 分层规则转 CSS | ✅ 已完成 |
+| G3 | CLI `PALETTE`/`BACKGROUND` 青绿平移（`theme.ts`） | ✅ 已完成 |
+| G4 | 测试 + 文档同步 | ✅ 已完成 |
+
+### 实施记录
+
+- **Web（G1/G2）**：`apps/ohna-web/src/styles.css` 已删除 `@import "../../../system.css"`，全部 `--md-*` token 自持（基建 token 按 `system.css` 原值搬运、颜色/玻璃浮层/语法色逐字抄 `glass-tokens.md` §6.1）。暗档画布 `#18191A`、亮档 `#FBFAF9` 双档就绪；玻璃浮层别名（`--md-glass-sidebar/-inspector/-panel/-float/-sunken` 等）与内高光 `--md-inset-highlight` 已接入侧栏 / Trace 抽屉 / 设置弹窗（Web 无独立 toast 组件，不造无引用类）；分层规则落地为「区域无硬边框、浮层 glass blur + 内高光、控件保留描边」。`system.css`、`finance-web`、组件 TSX 结构、`theme.tsx` 机制均零改动。
+- **CLI（G3）**：`apps/ohna-cli/src/ui/theme.ts` 的 `PALETTE` 14 个 role 与 `BACKGROUND` 4 档已从 Amberwood 暖橙系整体平移为 Glass Depths 青绿系 + 中性近黑（`canvas #14171A` / `panel #1E2120` / `toolCard #262A28` / `stroke #3A3F3D`）。`ThemeRole` 类型、`paint`/`paintBg`/`surface`/`paintOnSurface`/`inputTopBar`/`inputBottomBar` 签名、`supportsAnsi`/`configure`/`resetForTest` 降级机制、符号常量全部零改动；终端不引入任何玻璃/发光特效。
+- **测试（G4）**：Web 新增 `apps/ohna-web/.../styles-glass.test.ts`（断言 `data-theme="dark"` 下 `--md-color-canvas` 计算值为 `#18191A`、亮档为 `#FBFAF9`，以及玻璃浮层/语法色 token 存在）；CLI 测试同步覆盖 `apps/ohna-cli/test/theme.test.mjs` 色值断言 + `tui-session-picker` / `permission-card` / `tui-app` 三处派生颜色断言（`selected`/`selectedText`/`focused`/`panel` 字节级断言已同步为 Glass Depths 值）。
+- **文档同步（G4）**：本文状态表已更新、本实施记录已补；`docs/v1.4/README.md` 配套计划段已追加 07 说明；`DESIGN.md` 暗档 colors 已回填为 Glass Depths 值并标注「以 glass-tokens.md 评审稿为准」；`AGENTS.md` `apps/ohna-web` 段已补 Glass Depths 视觉说明；`docs/design/glass-tokens.md` §7 待办已裁决/标注。
 
 ---
 

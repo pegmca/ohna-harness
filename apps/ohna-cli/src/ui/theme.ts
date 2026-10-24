@@ -1,9 +1,9 @@
 /**
- * 终端主题层：Claude Code 风格复刻的 ANSI 色板与符号（零依赖手写）。
+ * 终端主题层：Glass Depths 玻璃青绿系 · 中性近黑画布的 ANSI 色板与符号（零依赖手写）。
  *
  * 与 diff.ts 的零依赖哲学一致，不引入 chalk / picocolors。本模块只提供两件事：
  * 1. 惰性的 ANSI 能力探测（`supportsAnsi`）+ 显式覆盖（`configure` / `resetForTest`）；
- * 2. Amberwood 语义映射 + `paint` / `paintBg` / `surface` 安全包装 + 一套无条件替换的符号常量。
+ * 2. Glass Depths 青绿语义映射 + `paint` / `paintBg` / `surface` 安全包装 + 一套无条件替换的符号常量。
  *
  * 为什么探测必须惰性：ESM import 链（index → harness → turn → render → theme）会在
  * `parseArgs` 之前求值模块级常量。若在模块顶层读 `process.stdout.isTTY`，则
@@ -12,7 +12,7 @@
  * `configure` / `resetForTest` 仅作测试注入入口（见 `test/theme.test.mjs`）。
  */
 
-/** 主题语义色角色：对应 Amberwood 设计稿的「语义块 → 颜色」映射。 */
+/** 主题语义色角色：对应 Glass Depths 设计稿的「语义块 → 颜色」映射。 */
 export type ThemeRole =
   | "foreground"
   | "accent"
@@ -32,40 +32,40 @@ export type ThemeRole =
 /** 样式修饰：bold / italic，不占独立色位。 */
 export type ThemeStyle = "bold" | "italic";
 
-/** Amberwood 色板：语义角色 → 24-bit RGB 三元组。 */
+/** Glass Depths 色板：语义角色 → 24-bit RGB 三元组（青绿统一强调 + 中性近黑）。 */
 const PALETTE: Record<ThemeRole, readonly [number, number, number]> = {
-  foreground: [0xe8, 0xdc, 0xcb], // 助手正文 / 标题
-  accent: [0xe8, 0x62, 0x3c], // ⏺ 工具名
-  user: [0xe0, 0x7b, 0x39], // ❯ 用户标签
-  string: [0xd9, 0xa4, 0x41], // 命令 / 工具参数
-  property: [0xc9, 0x8a, 0x5e], // 文件路径 / 属性
-  success: [0x8f, 0xb3, 0x6b], // ✓ / diff +
-  error: [0xe2, 0x55, 0x3d], // ✗ / diff -
-  warn: [0xf2, 0xa6, 0x5a], // plan 模式 / ⚠
-  info: [0x6f, 0xa8, 0xc7], // 链接 / 行号引用
-  dim: [0x8c, 0x7a, 0x68], // 次要文本 / 系统行
-  note: [0xb5, 0xa3, 0x92], // 提示说明
-  selected: [0x3a, 0x2a, 0x20], // 选中行背景（面板 / picker / palette）
-  selectedText: [0xfc, 0xe9, 0xd4], // 选中行前景（保证深色背景上的对比度）
-  focused: [0xff, 0x9f, 0x45], // 确认态边框 / accent（比 warn 更亮、更偏橙）
+  foreground: [0xED, 0xE6, 0xDA], // 助手正文 / 标题
+  accent: [0x89, 0xD7, 0xB7], // ⏺ 工具名 / 统一强调（青绿）
+  user: [0xBF, 0xE3, 0xD2], // ❯ 用户标签
+  string: [0xA6, 0xE6, 0xCC], // 命令 / 工具参数
+  property: [0x9A, 0xA8, 0xA2], // 文件路径 / 属性
+  success: [0x89, 0xD7, 0xB7], // ✓ / diff +（与 accent 同青绿）
+  error: [0xD3, 0x6A, 0x5F], // ✗ / diff -
+  warn: [0xD9, 0xA4, 0x41], // plan 模式 / ⚠
+  info: [0x42, 0x84, 0x75], // 链接 / 行号引用
+  dim: [0x5C, 0x62, 0x5F], // 次要文本 / 系统行
+  note: [0x9A, 0xA8, 0xA2], // 提示说明
+  selected: [0x2E, 0x33, 0x31], // 选中行背景（面板 / picker / palette）
+  selectedText: [0xED, 0xE6, 0xDA], // 选中行前景（保证深背景上的对比度）
+  focused: [0xBF, 0xE3, 0xD2], // 确认态边框 / accent（青绿）
 };
 
 /**
- * 背景分层（Amberwood 设计稿）：画布 / 会话面板 / 工具卡片 / 描边。
+ * 背景分层（Glass Depths 设计稿）：中性近黑画布 / 会话面板 / 工具卡片 / 描边。
  *
  * 由 {@link surface} 解析成 24-bit 背景 SGR，供整屏 TUI 的输入框、palette、
  * session picker 与权限卡消费（C5）。`stroke` 用作边框行底色，形成「面板 / 边框」
  * 两层视觉分层；色值仍是代码内常量，主题 JSON 与 16 色检测为远期。
  */
 export const BACKGROUND = {
-  /** 画布底色。 */
-  canvas: "#180F0D",
+  /** 画布底色（中性近黑）。 */
+  canvas: "#14171A",
   /** 会话面板底色。 */
-  panel: "#1B1310",
+  panel: "#1E2120",
   /** 工具卡片底色。 */
-  toolCard: "#241A14",
+  toolCard: "#262A28",
   /** 描边色（边框行底色）。 */
-  stroke: "#38291F",
+  stroke: "#3A3F3D",
 } as const;
 
 /** 可解析的背景表面名（与 {@link BACKGROUND} 的键一一对应）。 */

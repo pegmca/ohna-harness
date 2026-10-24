@@ -277,7 +277,7 @@ export const PALETTE = {
 
 ## 7. 待办 / 开放项
 
-- [ ] 是否把暗模式画布对齐到 `system.css` 精确值 `#161e17`（当前 `#18191A` 更中性一档，评审已认可）。
-- [ ] CLI 是否也需要浅色主题（当前纯深色；Web 已双主题）。
-- [ ] 代码落地时，把 `--md-glass-*` / 语法色变量接入实际组件（侧栏、Trace 抽屉、设置弹窗、diff 渲染、JSON viewer）。
+- [x] ~~是否把暗模式画布对齐到 `system.css` 精确值 `#161e17`（当前 `#18191A` 更中性一档，评审已认可）~~ → **已裁决：ohna-web 断开 `system.css`、token 自持，不再对齐 `system.css` 精确值**；暗档画布维持 Glass Depths 中性近黑 `#18191A`（见 07 方案 D1/D2）。
+- [ ] CLI 是否也需要浅色主题（当前纯深色；Web 已双主题）。 → **暂不做**（CLI 维持纯深色玻璃平移，终端降级机制不变）。
+- [x] ~~代码落地时，把 `--md-glass-*` / 语法色变量接入实际组件（侧栏、Trace 抽屉、设置弹窗、diff 渲染、JSON viewer）~~ → **已完成**：G2 已接入侧栏 / Trace 抽屉 / 设置弹窗（Web 无独立 toast 组件，不造无引用类；玻璃浮层别名 + 内高光）、diff 渲染（`--md-diff-*`）与 JSON viewer（`--md-json-*` 语法色），见 07 方案 §3 G2。
 - [ ] `theme.ts` 的 `PALETTE` 现有 16 role 名称以实际源码为准，上表为对齐目标值。

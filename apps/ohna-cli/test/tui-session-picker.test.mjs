@@ -37,7 +37,7 @@ test("openWith：截断到上限并展示标题 / 短 id / 时间", () => {
   configure({ forced: true });
   try {
     const surfaced = picker.buildLines(60);
-    assert.match(surfaced[1], /^\x1b\[48;2;58;42;32;38;2;252;233;212m/, "首行默认选中（selected 颜色块）");
+    assert.match(surfaced[1], /^\x1b\[48;2;46;51;49;38;2;237;230;218m/, "首行默认选中（selected 颜色块）");
     assert.doesNotMatch(surfaced[1], /\x1b\[7m/, "选中态不再依赖反转视频");
     for (const line of surfaced) {
       assert.ok(visibleWidth(line) <= 60, `面板行可见宽 ${visibleWidth(line)} > 60`);
@@ -54,7 +54,7 @@ test("handleKey：↑/↓ 移动选中，Enter 返回 id 并关闭", () => {
   picker.handleKey("\x1b[B");
   configure({ forced: true });
   try {
-    assert.match(picker.buildLines()[2], /^\x1b\[48;2;58;42;32;38;2;252;233;212m/, "下移后第二行选中");
+    assert.match(picker.buildLines()[2], /^\x1b\[48;2;46;51;49;38;2;237;230;218m/, "下移后第二行选中");
   } finally {
     resetForTest();
   }

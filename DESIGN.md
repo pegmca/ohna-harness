@@ -11,14 +11,15 @@ colors:
   light-surface: "#FFFFFF"
   light-secondary: "#F5F5F5"
   light-text-primary: "rgba(0, 0, 0, 0.90)"
-  dark-canvas: "#181817"
-  dark-surface: "#121212"
-  dark-secondary: "#1F1F1F"
-  dark-text-primary: "rgba(255, 255, 255, 0.84)"
+  dark-canvas: "#18191A"
+  dark-surface: "#1E2120"
+  dark-secondary: "#232726"
+  dark-text-primary: "#EDE6DA"
   primary-light: "#428475"
   primary-dark: "#89D7B7"
   market-up: "#FF3849"
   market-down: "#16C456"
+  # 暗档以 docs/design/glass-tokens.md（2026-10-24 评审稿）为准：中性近黑画布 #18191A / 实色面 #1E2120 / 浮起面 #232726 / 暖中性主文本 #EDE6DA。
 typography:
   ui:
     fontFamily: "Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
@@ -129,17 +130,19 @@ Immersive supports light, dark, and system preferences. Both modes use the same 
 
 | Token | Light | Dark | Role |
 | --- | --- | --- | --- |
-| `canvas` | `#FBFAF9` | `#181817` | App background |
-| `surface` | `#FFFFFF` | `#121212` | Panels and inputs |
-| `elevated` | `#F5F5F5` | `#1F1F1F` | Hover and secondary surfaces |
-| `muted` | `#EEEEEE` | `#292929` | Inactive controls |
+| `canvas` | `#FBFAF9` | `#18191A` | App background |
+| `surface` | `#FFFFFF` | `#1E2120` | Panels and inputs |
+| `elevated` | `#F5F5F5` | `#232726` | Hover and secondary surfaces |
+| `muted` | `#EEEEEE` | `#2A2E2C` | Inactive controls |
 | `border-subtle` | `rgba(0,0,0,.08)` | `rgba(255,255,255,.08)` | Quiet separators |
 | `border` | `rgba(0,0,0,.13)` | `rgba(255,255,255,.12)` | Default outlines |
-| `text-primary` | `rgba(0,0,0,.90)` | `rgba(255,255,255,.84)` | Primary text |
-| `text-secondary` | `rgba(0,0,0,.60)` | `rgba(255,255,255,.56)` | Supporting text |
+| `text-primary` | `rgba(0,0,0,.90)` | `#EDE6DA` | Primary text |
+| `text-secondary` | `rgba(0,0,0,.60)` | `#B9BCB7` | Supporting text |
 | `primary` | `#428475` | `#89D7B7` | Action, focus and selection |
 | `market-up` | `#FF3849` | `#FF4756` | A-share price increase |
 | `market-down` | `#16C456` | `#16C456` | A-share price decrease |
+
+> 暗档颜色（canvas / surface / elevated / muted / text-primary / text-secondary）以 `docs/design/glass-tokens.md`（2026-10-24 评审稿）为准：中性近黑画布 `#18191A`、实色面 `#1E2120`、浮起面 `#232726`、暖中性主文本 `#EDE6DA`，与 Web 端 `ohna-web` 自持 token 保持单一权威。
 
 Rules:
 

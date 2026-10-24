@@ -107,16 +107,16 @@ test("paint：非 TTY 降级返回原串，不含 \\x1b", () => {
 
 test("paint：forced=true 输出 24-bit truecolor + 样式修饰", () => {
   configure({ forced: true });
-  assert.equal(paint("x", "accent"), "\x1b[38;2;232;98;60mx\x1b[0m");
-  assert.equal(paint("x", "error", "bold"), "\x1b[38;2;226;85;61;1mx\x1b[0m");
-  assert.equal(paint("x", "dim", "italic"), "\x1b[38;2;140;122;104;3mx\x1b[0m");
+  assert.equal(paint("x", "accent"), "\x1b[38;2;137;215;183mx\x1b[0m");
+  assert.equal(paint("x", "error", "bold"), "\x1b[38;2;211;106;95;1mx\x1b[0m");
+  assert.equal(paint("x", "dim", "italic"), "\x1b[38;2;92;98;95;3mx\x1b[0m");
 });
 
 test("paint：C5 新增 selected / selectedText / focused 角色可解析", () => {
   configure({ forced: true });
-  assert.equal(paint("x", "selected"), "\x1b[38;2;58;42;32mx\x1b[0m");
-  assert.equal(paint("x", "selectedText"), "\x1b[38;2;252;233;212mx\x1b[0m");
-  assert.equal(paint("x", "focused"), "\x1b[38;2;255;159;69mx\x1b[0m");
+  assert.equal(paint("x", "selected"), "\x1b[38;2;46;51;49mx\x1b[0m");
+  assert.equal(paint("x", "selectedText"), "\x1b[38;2;237;230;218mx\x1b[0m");
+  assert.equal(paint("x", "focused"), "\x1b[38;2;191;227;210mx\x1b[0m");
 });
 
 test("paintBg：选中行背景 + 前景一次成对输出，非 TTY 原样降级", () => {
@@ -125,12 +125,12 @@ test("paintBg：选中行背景 + 前景一次成对输出，非 TTY 原样降�
   configure({ forced: true });
   assert.equal(
     paintBg("row", "selected", "selectedText"),
-    "\x1b[48;2;58;42;32;38;2;252;233;212mrow\x1b[0m",
+    "\x1b[48;2;46;51;49;38;2;237;230;218mrow\x1b[0m",
     "选中行应为 selected 背景 + selectedText 前景",
   );
   assert.equal(
     paintBg("row", "selected"),
-    "\x1b[48;2;58;42;32;38;2;232;220;203mrow\x1b[0m",
+    "\x1b[48;2;46;51;49;38;2;237;230;218mrow\x1b[0m",
     "前景缺省为 foreground",
   );
 });
@@ -141,10 +141,10 @@ test("surface：四个 BACKGROUND 表面按 24-bit 背景解析，且非 TTY 为
   }
 
   configure({ forced: true });
-  assert.equal(surface("canvas"), "\x1b[48;2;24;15;13m");
-  assert.equal(surface("panel"), "\x1b[48;2;27;19;16m");
-  assert.equal(surface("toolCard"), "\x1b[48;2;36;26;20m");
-  assert.equal(surface("stroke"), "\x1b[48;2;56;41;31m");
+  assert.equal(surface("canvas"), "\x1b[48;2;20;23;26m");
+  assert.equal(surface("panel"), "\x1b[48;2;30;33;32m");
+  assert.equal(surface("toolCard"), "\x1b[48;2;38;42;40m");
+  assert.equal(surface("stroke"), "\x1b[48;2;58;63;61m");
 });
 
 test("surface：TTY + NO_COLOR 下仍为空串（NO_COLOR 优先）", () => {
@@ -161,7 +161,7 @@ test("paintOnSurface：背景复位可靠，内部 paint 复位后重放背景",
   configure({ forced: true });
   const dim = paint("b", "dim");
   const wrapped = paintOnSurface(`a${dim}c`, "panel");
-  const bg = "\x1b[48;2;27;19;16m";
+  const bg = "\x1b[48;2;30;33;32m";
   assert.ok(wrapped.startsWith(bg), "整行以 panel 背景开头");
   assert.ok(wrapped.endsWith("\x1b[49m"), "结尾只复位背景，避免误伤前景样式");
   assert.equal(wrapped.split(bg).length - 1, 2, "内部 paint 复位后应重放一次背景");

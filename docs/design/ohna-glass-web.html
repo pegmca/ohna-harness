@@ -1,0 +1,1993 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ohna Web · 09 玻璃 Glass Depths 高保真交互稿</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --canvas: #18191A;
+    --canvas-deep: #121314;
+    --solid: #1E2120;
+    --solid-2: #232726;
+    --solid-3: #2A2E2C;
+    --glass-1: rgba(255,255,255,.04);
+    --glass-2: rgba(255,255,255,.06);
+    --glass-3: rgba(255,255,255,.095);
+    --stroke: rgba(255,255,255,.10);
+    --stroke-strong: rgba(255,255,255,.16);
+    --text: #EDE6DA;
+    --text-2: #B9BCB7;
+    --text-3: #868C88;
+    --text-4: #5C625F;
+    --accent: #89D7B7;
+    --accent-ink: #0E1512;
+    --accent-soft: rgba(137,215,183,.12);
+    --accent-line: rgba(137,215,183,.30);
+    --danger: #D36A5F;
+    --danger-soft: rgba(211,106,95,.14);
+    --danger-line: rgba(211,106,95,.38);
+    --warn: #D9A441;
+    --warn-soft: rgba(217,164,65,.14);
+    --warn-line: rgba(217,164,65,.36);
+    --success: #89D7B7;
+    --success-soft: rgba(137,215,183,.10);
+    --info: #428475;
+    --info-soft: rgba(66,132,117,.16);
+    --info-line: rgba(66,132,117,.40);
+    --code: #121314;
+    --shadow: 0 18px 48px rgba(0,0,0,.45);
+    --shadow-small: 0 12px 28px rgba(0,0,0,.28);
+    --r-sm: 8px;
+    --r-md: 12px;
+    --r-lg: 14px;
+    --s-1: 4px;
+    --s-2: 8px;
+    --s-3: 12px;
+    --s-4: 16px;
+    --s-6: 24px;
+    --s-8: 32px;
+    --ease: cubic-bezier(.22,1,.36,1);
+    --fast: 160ms;
+    --slow: 240ms;
+    --ui-scale: 1;
+
+    /* 派生表面别名：让浮层/面板统一引用，避免各处硬编码中性叠层。暗档沿用现有中性近黑值。 */
+    --overlay: rgba(12,13,14,.68);            /* 弹窗遮罩 */
+    --app-shell-bg: rgba(20,22,23,.88);       /* 主壳背景 */
+    --sidebar-bg: rgba(24,27,26,.62);         /* 侧栏玻璃底 */
+    --inspector-bg: rgba(24,27,26,.78);       /* 抽屉玻璃底 */
+    --surface-panel: rgba(24,27,26,.84);      /* 设置弹窗玻璃底 */
+    --surface-float: rgba(24,27,26,.90);      /* toast 浮层底 */
+    --surface-sunken: rgba(18,20,21,.62);     /* llm-call 等内嵌块底 */
+    --hover-wash: rgba(255,255,255,.03);      /* 行/卡片 hover 微洗白 */
+    --accent-hover: #9BE2C5;                  /* 主按钮 hover */
+    --glow-1: rgba(255,255,255,.03);          /* 背景光斑 1（薄荷幽光之外的白微光） */
+    --glow-2: rgba(137,215,183,.04);          /* 背景光斑 2（薄荷幽光，仅暗档） */
+    --hairline: rgba(255,255,255,.05);        /* 区域级发丝线：替代硬边框，仅做极淡分界 */
+
+    /* 代码 / diff / JSON 语法色：暗档亮彩，亮档在下方覆盖为深彩 */
+    --c-code: #B8C5BF;
+    --c-diff-add: #A9E2C9;
+    --c-diff-del: #F09A92;
+    --c-diff-ctx: #84918B;
+    --c-keyword: #C6A9E8;
+    --c-string: #A8D6BE;
+    --c-fn: #8FC4E5;
+    --c-comment: #64746D;
+    --c-json-key: #8FC4E5;
+    --c-json-string: #9ED0B6;
+    --c-json-number: #E5B567;
+    --c-json-bool: #C6A9E8;
+    --c-json-null: #E36B60;
+    --c-inline: #BBD9CB;
+    --c-settings-code: #B5C8BF;
+    --c-error: #F0B0AA;
+    --diff-add-bg: rgba(137,215,183,.10);
+    --diff-del-bg: rgba(232,117,107,.10);
+  }
+
+  html[data-theme="light"] {
+    color-scheme: light;
+    --canvas: #FBFAF9;
+    --canvas-deep: #F0EFEC;
+    --solid: #FFFFFF;
+    --solid-2: #F4F4F2;
+    --solid-3: #ECECEA;
+    --glass-1: rgba(0,0,0,.025);
+    --glass-2: rgba(0,0,0,.04);
+    --glass-3: rgba(0,0,0,.06);
+    --stroke: rgba(0,0,0,.10);
+    --stroke-strong: rgba(0,0,0,.16);
+    --text: #1A1A18;
+    --text-2: #5C5C58;
+    --text-3: #868C88;
+    --text-4: #A8A8A4;
+    --accent: #2F6F63;
+    --accent-ink: #FFFFFF;
+    --accent-soft: rgba(47,111,99,.12);
+    --accent-line: rgba(47,111,99,.30);
+    --danger: #B4232F;
+    --danger-soft: rgba(180,35,47,.12);
+    --danger-line: rgba(180,35,47,.32);
+    --warn: #8A5200;
+    --warn-soft: rgba(138,82,0,.12);
+    --warn-line: rgba(138,82,0,.30);
+    --success: #056626;
+    --success-soft: rgba(5,102,38,.10);
+    --info: #2F6F63;
+    --info-soft: rgba(47,111,99,.12);
+    --info-line: rgba(47,111,99,.30);
+    --code: #F4F4F2;
+    --shadow: 0 18px 48px rgba(0,0,0,.12);
+    --shadow-small: 0 12px 28px rgba(0,0,0,.08);
+
+    --overlay: rgba(0,0,0,.40);
+    --app-shell-bg: rgba(255,255,255,.86);
+    --sidebar-bg: rgba(244,244,242,.72);
+    --inspector-bg: rgba(255,255,255,.82);
+    --surface-panel: rgba(255,255,255,.90);
+    --surface-float: rgba(255,255,255,.92);
+    --surface-sunken: rgba(0,0,0,.035);
+    --hover-wash: rgba(0,0,0,.035);
+    --accent-hover: #356F63;
+
+    /* 亮模式光珠：中性极弱暗调，去掉薄荷/白光斑以避免发灰失真。 */
+    --glow-1: rgba(0,0,0,.018);
+    --glow-2: rgba(0,0,0,.012);
+    --hairline: rgba(0,0,0,.05);             /* 区域级发丝线：替代硬边框，仅做极淡分界 */
+
+    /* 语法色亮档：在浅底上必须用深彩才能看清，不再用暗档的浅彩。 */
+    --c-code: #2C2C28;
+    --c-diff-add: #0F7A52;
+    --c-diff-del: #B4232F;
+    --c-diff-ctx: #6A6A66;
+    --c-keyword: #6B3FA0;
+    --c-string: #1F7A4D;
+    --c-fn: #1E6FA8;
+    --c-comment: #8A8A85;
+    --c-json-key: #1E6FA8;
+    --c-json-string: #1F7A4D;
+    --c-json-number: #8A5200;
+    --c-json-bool: #6B3FA0;
+    --c-json-null: #B4232F;
+    --c-inline: #2F6F63;
+    --c-settings-code: #2F6F63;
+    --c-error: #B4232F;
+    --diff-add-bg: rgba(15,122,82,.12);
+    --diff-del-bg: rgba(180,35,47,.10);
+  }
+
+  * { box-sizing: border-box; }
+  html { background: var(--canvas); }
+  body {
+    margin: 0;
+    min-width: 320px;
+    min-height: 100vh;
+    overflow: hidden;
+    background: var(--canvas);
+    color: var(--text);
+    font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    font-size: calc(14px * var(--ui-scale));
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+  body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    z-index: -2;
+    pointer-events: none;
+    background:
+      radial-gradient(540px 420px at 12% 8%, var(--glow-1), transparent 72%),
+      radial-gradient(620px 460px at 88% 92%, var(--glow-2), transparent 74%),
+      var(--canvas);
+  }
+  button, textarea, input, select { font: inherit; }
+  button { cursor: pointer; }
+  button:disabled { cursor: not-allowed; opacity: .48; }
+  code, pre, .mono { font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, ui-monospace, monospace; }
+  a { color: inherit; }
+  [hidden] { display: none !important; }
+
+  * { scrollbar-width: thin; scrollbar-color: transparent transparent; }
+  *:hover, *:focus-within { scrollbar-color: rgba(255,255,255,.20) transparent; }
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { border: 2px solid transparent; border-radius: 999px; background: rgba(255,255,255,.16); background-clip: padding-box; }
+  ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,.24); background-clip: padding-box; }
+
+  :focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+  .sr-only {
+    position: fixed;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0,0,0,0);
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+  .icon {
+    display: inline-grid;
+    place-items: center;
+    width: 18px;
+    height: 18px;
+    flex: none;
+    font-size: 15px;
+    line-height: 1;
+  }
+  .glass {
+    background: var(--glass-1);
+    border: 1px solid var(--stroke);
+    -webkit-backdrop-filter: blur(18px) saturate(150%);
+    backdrop-filter: blur(18px) saturate(150%);
+    box-shadow: var(--shadow);
+  }
+
+  /* 顶部 token 面板：用于设计同步，不属于产品运行时 UI。 */
+  .design-top {
+    position: relative;
+    z-index: 80;
+    height: 154px;
+    overflow: hidden;
+    border-bottom: 1px solid var(--stroke);
+    background: var(--overlay);
+    -webkit-backdrop-filter: blur(18px) saturate(150%);
+    backdrop-filter: blur(18px) saturate(150%);
+    transition: height var(--slow) var(--ease);
+  }
+  body.tokens-collapsed .design-top { height: 54px; }
+  .design-top-inner {
+    display: grid;
+    grid-template-columns: minmax(260px, .9fr) minmax(720px, 2.1fr) auto;
+    gap: var(--s-4);
+    max-width: 1660px;
+    height: 100%;
+    margin: 0 auto;
+    padding: 12px 20px;
+  }
+  .prototype-id { min-width: 0; }
+  .prototype-id strong { display: block; font-size: 14px; font-weight: 680; }
+  .prototype-id p { margin: 3px 0 0; color: var(--text-3); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .token-grid { display: grid; grid-template-columns: 1.25fr .72fr .85fr .9fr; gap: 10px; min-width: 0; }
+  .token-card {
+    min-width: 0;
+    padding: 9px 11px;
+    border: 1px solid var(--stroke);
+    border-radius: var(--r-sm);
+    background: var(--glass-1);
+  }
+  .token-card h2 { margin: 0 0 7px; color: var(--text-3); font-size: 10px; font-weight: 650; letter-spacing: .08em; text-transform: uppercase; }
+  .swatches { display: flex; gap: 6px; }
+  .swatch { min-width: 0; flex: 1; }
+  .swatch i { display: block; height: 20px; border: 1px solid var(--stroke); border-radius: 5px; }
+  .swatch span { display: block; margin-top: 3px; color: var(--text-3); font-size: 9px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .token-line { display: flex; align-items: center; gap: 7px; margin-top: 4px; color: var(--text-2); font-size: 10px; white-space: nowrap; }
+  .radius-demo { display: inline-block; width: 27px; height: 17px; border: 1px solid var(--accent-line); background: var(--accent-soft); }
+  .token-actions { display: flex; align-items: flex-start; gap: 8px; }
+  .collapse-tokens {
+    min-width: 36px;
+    height: 32px;
+    border: 1px solid var(--stroke);
+    border-radius: var(--r-sm);
+    background: var(--glass-2);
+    color: var(--text-2);
+  }
+  body.tokens-collapsed .token-grid { visibility: hidden; }
+  body.tokens-collapsed .prototype-id p { display: none; }
+
+  .app-stage {
+    position: relative;
+    z-index: 1;
+    height: calc(100vh - 154px);
+    min-height: 620px;
+    padding: 16px;
+    transition: height var(--slow) var(--ease);
+  }
+  body.tokens-collapsed .app-stage { height: calc(100vh - 54px); }
+  .app-shell {
+    position: relative;
+    display: grid;
+    grid-template-columns: 276px minmax(0,1fr) 0;
+    width: min(1680px, 100%);
+    height: 100%;
+    margin: 0 auto;
+    overflow: hidden;
+    border: 1px solid var(--stroke);
+    border-radius: var(--r-lg);
+    background: var(--app-shell-bg);
+    box-shadow: var(--shadow);
+    transition: grid-template-columns var(--slow) var(--ease);
+  }
+  .app-shell.has-inspector { grid-template-columns: 276px minmax(620px,1fr) minmax(390px, 31vw); }
+
+  /* 侧栏是低频导航面，保留 blur；内容区不叠 blur。 */
+  .sidebar {
+    position: relative;
+    z-index: 8;
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    background: var(--sidebar-bg);
+    -webkit-backdrop-filter: blur(18px) saturate(150%);
+    backdrop-filter: blur(18px) saturate(150%);
+  }
+  .sidebar-head { display: flex; align-items: center; gap: 10px; padding: 18px 16px 12px; }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; letter-spacing: .01em; }
+  .brand-mark {
+    position: relative;
+    display: inline-block;
+    width: 30px;
+    height: 18px;
+    color: var(--accent);
+  }
+  .brand-mark::before, .brand-mark::after {
+    content: "";
+    position: absolute;
+    top: 4px;
+    width: 12px;
+    height: 8px;
+    border: 2px solid currentColor;
+    border-radius: 9px 9px 9px 2px;
+    transform: rotate(20deg);
+  }
+  .brand-mark::before { left: 2px; }
+  .brand-mark::after { right: 2px; border-radius: 9px 9px 2px 9px; transform: rotate(-20deg); }
+  .version { margin-left: auto; color: var(--text-4); font-size: 10px; }
+  .new-chat {
+    display: flex;
+    min-height: 42px;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    margin: 4px 12px 12px;
+    border: 1px solid var(--accent-line);
+    border-radius: var(--r-sm);
+    background: var(--accent-soft);
+    color: var(--accent);
+    font-weight: 650;
+    transition: transform var(--fast) var(--ease), background var(--fast) var(--ease), border-color var(--fast) var(--ease);
+  }
+  .new-chat:hover { transform: translateY(-1px); background: var(--accent-soft); border-color: var(--accent-line); }
+  .conversation-scroll { flex: 1; min-height: 0; overflow: auto; padding: 0 8px 14px; }
+  .workspace-group { margin-top: 4px; }
+  .group-toggle {
+    display: flex;
+    width: 100%;
+    min-height: 36px;
+    align-items: center;
+    gap: 8px;
+    border: 0;
+    border-radius: var(--r-sm);
+    background: transparent;
+    padding: 0 9px;
+    color: var(--text-3);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: .07em;
+    text-transform: uppercase;
+  }
+  .group-toggle:hover { background: var(--glass-1); color: var(--text-2); }
+  .group-chevron { transition: transform var(--fast) var(--ease); }
+  .group-toggle[aria-expanded="false"] .group-chevron { transform: rotate(-90deg); }
+  .group-count { margin-left: auto; color: var(--text-4); font-weight: 500; }
+  .conversation-list { display: grid; gap: 3px; }
+  .conversation-item {
+    position: relative;
+    display: grid;
+    grid-template-columns: minmax(0,1fr) auto;
+    align-items: center;
+    gap: 6px;
+    min-height: 54px;
+    border: 1px solid transparent;
+    border-radius: var(--r-sm);
+    padding: 4px 5px 4px 10px;
+    color: var(--text-2);
+    transition: background var(--fast) var(--ease), border-color var(--fast) var(--ease), transform var(--fast) var(--ease);
+  }
+  .conversation-item:hover { border-color: var(--stroke); background: var(--glass-2); transform: translateX(1px); }
+  .conversation-item.is-active { border-color: var(--accent-line); background: rgba(137,215,183,.09); }
+  .conversation-item.is-active::before { content: ""; position: absolute; left: -1px; top: 11px; bottom: 11px; width: 2px; border-radius: 2px; background: var(--accent); }
+  .conversation-main { min-width: 0; border: 0; background: transparent; padding: 4px 0; color: inherit; text-align: left; }
+  .conversation-title { display: block; overflow: hidden; color: var(--text); font-size: 12.5px; font-weight: 590; text-overflow: ellipsis; white-space: nowrap; }
+  .conversation-meta { display: flex; align-items: center; gap: 6px; margin-top: 2px; color: var(--text-4); font-size: 10.5px; }
+  .unread-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--info); box-shadow: 0 0 0 3px var(--info-soft); }
+  .resume-chip { color: var(--accent); }
+  .archive-button {
+    display: grid;
+    width: 30px;
+    height: 30px;
+    place-items: center;
+    border: 0;
+    border-radius: 7px;
+    background: transparent;
+    color: var(--text-4);
+    opacity: 0;
+    transition: opacity var(--fast) var(--ease), background var(--fast) var(--ease);
+  }
+  .conversation-item:hover .archive-button, .archive-button:focus-visible { opacity: 1; }
+  .archive-button:hover { background: var(--glass-3); color: var(--text); }
+  .sidebar-foot { display: flex; align-items: center; gap: 10px; padding: 12px 14px; }
+  .service-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--success); box-shadow: 0 0 0 4px var(--success-soft); }
+  .service-copy { min-width: 0; }
+  .service-copy strong { display: block; font-size: 11px; font-weight: 600; }
+  .service-copy span { display: block; color: var(--text-4); font-size: 10px; }
+
+  /* Transcript 使用更实的 solid 表面：长对话滚动不叠 backdrop blur，保障对比度与性能。 */
+  .chat-main {
+    display: grid;
+    min-width: 0;
+    min-height: 0;
+    grid-template-rows: auto minmax(0,1fr) auto;
+    background: var(--solid);
+  }
+  .chat-header {
+    display: flex;
+    min-height: 78px;
+    align-items: center;
+    gap: 18px;
+    background: var(--solid);
+    padding: 12px 22px;
+  }
+  .mobile-menu { display: none; }
+  .title-stack { min-width: 0; }
+  .eyebrow { margin: 0; color: var(--text-3); font-size: 10px; font-weight: 680; letter-spacing: .08em; text-transform: uppercase; }
+  .chat-title { margin: 2px 0 0; overflow: hidden; font-size: 15px; font-weight: 680; line-height: 1.3; text-overflow: ellipsis; white-space: nowrap; }
+  .workspace-line { display: flex; min-width: 0; align-items: center; gap: 6px; margin-top: 3px; color: var(--text-3); font-size: 10.5px; }
+  .workspace-line code { overflow: hidden; color: var(--text-2); text-overflow: ellipsis; white-space: nowrap; }
+  .cross-workspace-label { display: none; align-items: center; gap: 5px; color: var(--accent); }
+  .chat-main.is-cross-workspace .cross-workspace-label { display: inline-flex; }
+  .header-actions { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+  .header-tabs { display: flex; gap: 3px; padding: 3px; border: 1px solid var(--stroke); border-radius: 10px; background: var(--glass-1); }
+  .header-tab {
+    min-height: 32px;
+    border: 0;
+    border-radius: 7px;
+    background: transparent;
+    padding: 0 13px;
+    color: var(--text-3);
+    font-size: 11.5px;
+    transition: background var(--fast) var(--ease), color var(--fast) var(--ease);
+  }
+  .header-tab:hover { color: var(--text); }
+  .header-tab.is-active { background: var(--glass-3); color: var(--text); box-shadow: inset 0 0 0 1px var(--stroke); }
+  .status-badge {
+    display: inline-flex;
+    min-height: 23px;
+    align-items: center;
+    gap: 6px;
+    border: 1px solid var(--stroke);
+    border-radius: 999px;
+    background: var(--glass-1);
+    padding: 2px 8px;
+    color: var(--text-2);
+    font-size: 10.5px;
+    white-space: nowrap;
+  }
+  .status-badge::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+  .tone-success { border-color: rgba(137,215,183,.18); background: var(--success-soft); color: var(--success); }
+  .tone-info { border-color: rgba(127,179,213,.18); background: var(--info-soft); color: var(--info); }
+  .tone-warn { border-color: rgba(229,181,103,.18); background: var(--warn-soft); color: var(--warn); }
+  .tone-danger { border-color: rgba(232,117,107,.18); background: var(--danger-soft); color: var(--danger); }
+  .pulse::before { animation: pulse 1.15s ease-in-out infinite; }
+  @keyframes pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:.35;transform:scale(.72)} }
+
+  .timeline {
+    min-width: 0;
+    min-height: 0;
+    overflow: auto;
+    background: var(--solid);
+    padding: 24px 20px 32px;
+    overscroll-behavior: contain;
+  }
+  .timeline-inner { width: min(860px,100%); margin: 0 auto; }
+  .scene-toolbar {
+    position: sticky;
+    top: -12px;
+    z-index: 4;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    width: fit-content;
+    max-width: 100%;
+    margin: 0 auto 24px;
+    overflow-x: auto;
+    border: 1px solid var(--stroke);
+    border-radius: 999px;
+    background: var(--surface-float);
+    padding: 4px;
+    box-shadow: var(--shadow-small);
+  }
+  .scene-button { min-height: 28px; border: 0; border-radius: 999px; background: transparent; padding: 0 10px; color: var(--text-3); font-size: 10.5px; white-space: nowrap; }
+  .scene-button:hover { color: var(--text); }
+  .scene-button.is-active { background: var(--accent-soft); color: var(--accent); }
+  .workspace-resume-banner {
+    display: none;
+    align-items: flex-start;
+    gap: 10px;
+    margin-bottom: 20px;
+    border: 1px solid var(--accent-line);
+    border-radius: var(--r-sm);
+    background: var(--accent-soft);
+    padding: 11px 13px;
+    color: var(--text-2);
+    font-size: 11px;
+  }
+  .chat-main.is-cross-workspace .workspace-resume-banner { display: flex; }
+  .workspace-resume-banner strong { color: var(--accent); }
+  .message { display: flex; min-width: 0; gap: 12px; margin-bottom: 24px; }
+  .message.is-user { flex-direction: row-reverse; }
+  .avatar {
+    display: grid;
+    width: 32px;
+    height: 32px;
+    flex: none;
+    place-items: center;
+    border: 1px solid var(--stroke);
+    border-radius: 50%;
+    background: var(--solid-2);
+    color: var(--text-2);
+    font-size: 11px;
+    font-weight: 700;
+  }
+  .message.is-assistant .avatar { border-color: var(--accent-line); background: var(--accent-soft); color: var(--accent); }
+  .message-body { min-width: 0; flex: 1; }
+  .message.is-user .message-body { flex: 0 1 auto; max-width: min(720px,88%); }
+  .message-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-height: 22px; margin-bottom: 6px; color: var(--text-3); font-size: 10.5px; }
+  .message.is-user .message-meta { justify-content: flex-end; }
+  .message-role { color: var(--text-2); font-weight: 620; }
+  .message-text { margin: 0; color: var(--text); font-size: 13.5px; line-height: 1.75; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .message-text + .message-text { margin-top: 10px; }
+  .message-text code { border: 1px solid var(--stroke); border-radius: 5px; background: var(--code); padding: 1px 5px; color: var(--c-inline); font-size: 12px; }
+  .message.is-user .message-text { border: 1px solid var(--stroke); border-radius: 12px 14px 8px 14px; background: var(--solid-2); padding: 11px 14px; }
+  .message-actions { display: flex; gap: 3px; margin-top: 9px; opacity: .56; transition: opacity var(--fast) var(--ease); }
+  .message:hover .message-actions { opacity: 1; }
+  .icon-button {
+    display: inline-grid;
+    width: 34px;
+    height: 34px;
+    place-items: center;
+    border: 1px solid transparent;
+    border-radius: var(--r-sm);
+    background: transparent;
+    color: var(--text-3);
+    transition: background var(--fast) var(--ease), border-color var(--fast) var(--ease), color var(--fast) var(--ease);
+  }
+  .icon-button:hover { border-color: var(--stroke); background: var(--glass-2); color: var(--text); }
+
+  .process-summary, .tool-block, .long-block {
+    margin: 10px 0;
+    overflow: hidden;
+    border: 1px solid var(--stroke);
+    border-radius: var(--r-sm);
+    background: var(--solid-2);
+  }
+  details > summary { list-style: none; }
+  details > summary::-webkit-details-marker { display: none; }
+  .process-summary > summary, .tool-block > summary, .long-block > summary {
+    display: flex;
+    min-height: 42px;
+    align-items: center;
+    gap: 9px;
+    padding: 0 12px;
+    color: var(--text-2);
+    cursor: pointer;
+    font-size: 12px;
+  }
+  .process-summary > summary:hover, .tool-block > summary:hover, .long-block > summary:hover { background: var(--hover-wash); color: var(--text); }
+  .chevron { margin-left: auto; color: var(--text-4); transition: transform var(--fast) var(--ease); }
+  details[open] > summary .chevron { transform: rotate(90deg); }
+  details[open] > summary { border-bottom: 1px solid var(--stroke); }
+  .process-body, .tool-body { padding: 12px; }
+  .process-list { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+  .process-list li { display: grid; grid-template-columns: 8px minmax(0,1fr) auto; align-items: center; gap: 9px; color: var(--text-2); font-size: 11.5px; }
+  .process-list i { width: 6px; height: 6px; border-radius: 50%; background: var(--success); }
+  .process-list li.is-running i { background: var(--info); animation: pulse 1.1s infinite; }
+  .process-list li.is-error i { background: var(--danger); }
+  .tool-name { color: var(--text); font-weight: 620; }
+  .tool-summary { min-width: 0; overflow: hidden; color: var(--text-3); text-overflow: ellipsis; white-space: nowrap; }
+  .tool-meta { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 9px; color: var(--text-3); font-size: 10.5px; }
+  .tool-meta b { color: var(--text-2); font-weight: 580; }
+  .code-block {
+    position: relative;
+    margin: 8px 0 0;
+    overflow: auto;
+    border: 1px solid var(--stroke);
+    border-radius: 7px;
+    background: var(--code);
+    padding: 11px 13px;
+    color: var(--c-code);
+    font-size: 11.5px;
+    line-height: 1.65;
+    white-space: pre;
+  }
+  .code-label { display: flex; justify-content: space-between; gap: 10px; color: var(--text-4); font-size: 10px; }
+  .code-label strong { color: var(--text-2); font-weight: 580; }
+  .diff-line { display: block; min-width: max-content; padding: 0 6px; }
+  .diff-add { background: var(--diff-add-bg); color: var(--c-diff-add); }
+  .diff-del { background: var(--diff-del-bg); color: var(--c-diff-del); }
+  .diff-context { color: var(--c-diff-ctx); }
+  .keyword { color: var(--c-keyword); }
+  .string { color: var(--c-string); }
+  .fn { color: var(--c-fn); }
+  .comment { color: var(--c-comment); }
+  .live-line {
+    display: flex;
+    min-height: 44px;
+    align-items: center;
+    gap: 10px;
+    margin: 10px 0;
+    border: 1px solid var(--info-line);
+    border-radius: var(--r-sm);
+    background: var(--info-soft);
+    padding: 0 12px;
+    color: var(--info);
+    font-size: 12px;
+  }
+  .spinner { width: 14px; height: 14px; border: 2px solid rgba(127,179,213,.26); border-top-color: var(--info); border-radius: 50%; animation: spin .8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .error-block {
+    display: flex;
+    align-items: flex-start;
+    gap: 9px;
+    margin-top: 10px;
+    border: 1px solid var(--danger-line);
+    border-radius: var(--r-sm);
+    background: var(--danger-soft);
+    padding: 10px 12px;
+    color: var(--c-error);
+    font-size: 11.5px;
+  }
+  .empty-state { display: grid; min-height: 420px; place-items: center; text-align: center; }
+  .empty-inner { width: min(620px,100%); }
+  .empty-logo { display: grid; width: 74px; height: 52px; place-items: center; margin: 0 auto 20px; border: 1px solid var(--accent-line); border-radius: var(--r-md); background: var(--accent-soft); color: var(--accent); }
+  .empty-state h2 { margin: 0 0 7px; font-size: 20px; }
+  .empty-state p { margin: 0; color: var(--text-3); font-size: 12.5px; }
+  .starters { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 10px; margin-top: 22px; }
+  .starter {
+    min-height: 62px;
+    border: 1px solid var(--stroke);
+    border-radius: var(--r-sm);
+    background: var(--solid-2);
+    padding: 11px 13px;
+    color: var(--text-2);
+    text-align: left;
+    font-size: 11.5px;
+    line-height: 1.5;
+  }
+  .starter:hover { border-color: var(--accent-line); background: var(--accent-soft); color: var(--text); }
+
+  .confirmation-stack { display: grid; gap: 12px; margin: 12px 0 22px; }
+  .confirmation-card {
+    position: relative;
+    overflow: hidden;
+    border: 1px solid var(--warn-line);
+    border-radius: var(--r-md);
+    background: var(--warn-soft);
+    padding: 14px;
+    box-shadow: 0 10px 32px rgba(0,0,0,.18);
+  }
+  .confirmation-card.level-danger { border-color: var(--danger-line); background: var(--danger-soft); }
+  .confirmation-card.is-allowed { border-color: var(--accent-line); background: var(--success-soft); }
+  .confirmation-card.is-denied { border-color: var(--danger-line); background: rgba(232,117,107,.08); }
+  .confirmation-head { display: flex; align-items: center; gap: 9px; min-width: 0; }
+  .risk-icon { display: grid; width: 28px; height: 28px; place-items: center; border: 1px solid currentColor; border-radius: 8px; color: var(--warn); }
+  .level-danger .risk-icon { color: var(--danger); }
+  .confirmation-copy { min-width: 0; }
+  .confirmation-copy strong { display: block; font-size: 12.5px; }
+  .confirmation-copy span { display: block; overflow: hidden; color: var(--text-2); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+  .risk-label { margin-left: auto; }
+  .confirmation-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+  .button {
+    display: inline-flex;
+    min-height: 36px;
+    align-items: center;
+    justify-content: center;
+    gap: 7px;
+    border: 1px solid var(--stroke-strong);
+    border-radius: var(--r-sm);
+    background: var(--glass-2);
+    padding: 0 13px;
+    color: var(--text);
+    font-size: 11.5px;
+    transition: transform var(--fast) var(--ease), background var(--fast) var(--ease), border-color var(--fast) var(--ease);
+  }
+  .button:hover:not(:disabled) { transform: translateY(-1px); border-color: var(--stroke-strong); background: var(--glass-3); }
+  .button.primary { border-color: transparent; background: var(--accent); color: var(--accent-ink); font-weight: 650; }
+  .button.primary:hover:not(:disabled) { background: var(--accent-hover); }
+  .button.danger { border-color: var(--danger-line); background: var(--danger-soft); color: var(--c-error); }
+  .button.ghost { background: transparent; color: var(--text-2); }
+  .confirmation-status { display: none; margin-top: 10px; color: var(--text-2); font-size: 11.5px; }
+  .confirmation-card.is-allowed .confirmation-actions, .confirmation-card.is-denied .confirmation-actions { display: none; }
+  .confirmation-card.is-allowed .confirmation-status, .confirmation-card.is-denied .confirmation-status { display: flex; gap: 8px; }
+  .decision-error { margin: 10px 0 0; color: var(--c-error); font-size: 11px; }
+
+  .composer-dock { background: transparent; padding: 12px 22px 14px; }
+  .composer-wrap { display: flex; flex-direction: column; align-items: center; gap: 10px; width: min(1050px,100%); margin: 0 auto; }
+  .settings-trigger { color: var(--text-2); }
+  .sidebar-foot .settings-trigger { margin-left: auto; border-color: var(--stroke); background: var(--solid-3); }
+  .composer-box {
+    width: min(860px, 100%);
+    border: 1px solid var(--stroke-strong);
+    border-radius: var(--r-md);
+    background: var(--solid-2);
+    padding: 8px;
+    box-shadow: 0 12px 30px rgba(0,0,0,.24);
+    transition: border-color var(--fast) var(--ease), box-shadow var(--fast) var(--ease);
+  }
+  .composer-box:focus-within { border-color: var(--accent-line); box-shadow: 0 0 0 3px var(--accent-soft), 0 12px 30px rgba(0,0,0,.24); }
+  .composer-input { display: block; width: 100%; min-height: 42px; max-height: 132px; resize: none; border: 0; background: transparent; padding: 7px 8px 4px; color: var(--text); outline: 0; line-height: 1.55; }
+  .composer-input::placeholder { color: var(--text-4); }
+  .composer-toolbar { display: flex; align-items: center; gap: 7px; padding: 3px 3px 0; }
+  .composer-tool { min-height: 30px; border: 0; border-radius: 999px; background: transparent; padding: 0 9px; color: var(--text-3); font-size: 10.5px; }
+  .composer-tool:hover { background: var(--glass-2); color: var(--text); }
+  .model-button { margin-left: auto; border: 1px solid var(--stroke); background: var(--glass-1); color: var(--text-2); }
+  .send-button { display: grid; width: 34px; height: 34px; place-items: center; border: 0; border-radius: 9px; background: var(--accent); color: var(--accent-ink); font-size: 17px; }
+  .send-button:disabled { background: var(--glass-3); color: var(--text-4); }
+  .composer-hint { width: min(860px, 100%); margin-top: -4px; color: var(--text-4); font-size: 9.5px; text-align: center; }
+
+  /* 右侧 Trace / RunDetail 共用同一列，blur 只发生在抽屉面。 */
+  .inspector {
+    position: relative;
+    z-index: 10;
+    display: none;
+    min-width: 0;
+    min-height: 0;
+    grid-template-rows: auto minmax(0,1fr) auto;
+    background: var(--inspector-bg);
+    -webkit-backdrop-filter: blur(18px) saturate(150%);
+    backdrop-filter: blur(18px) saturate(150%);
+    box-shadow: -18px 0 48px rgba(0,0,0,.24), inset 0 1px 0 rgba(255,255,255,.05);
+  }
+  .inspector.is-open { display: grid; animation: drawer-in var(--slow) var(--ease); }
+  @keyframes drawer-in { from { opacity: 0; transform: translateX(22px); } to { opacity: 1; transform: translateX(0); } }
+  .inspector-head { display: flex; min-height: 74px; align-items: center; gap: 12px; padding: 13px 15px; }
+  .inspector-title { min-width: 0; }
+  .inspector-title h2 { margin: 2px 0 0; overflow: hidden; font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
+  .inspector-head .icon-button { margin-left: auto; }
+  .inspector-body { min-width: 0; min-height: 0; overflow: auto; padding: 14px; }
+  .inspector-foot { padding: 10px 14px; color: var(--text-4); font-size: 9.5px; line-height: 1.5; }
+  .run-picker, .trace-state-switch { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 3px; }
+  .run-chip, .trace-state-button {
+    min-height: 32px;
+    flex: none;
+    border: 1px solid var(--stroke);
+    border-radius: 999px;
+    background: var(--glass-1);
+    padding: 0 10px;
+    color: var(--text-3);
+    font-size: 10.5px;
+  }
+  .run-chip:hover, .run-chip.is-active, .trace-state-button:hover, .trace-state-button.is-active { border-color: var(--accent-line); background: var(--accent-soft); color: var(--accent); }
+  .trace-state-switch { margin: 10px 0 12px; }
+  .trace-meta { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0 12px; color: var(--text-3); font-size: 10px; }
+  .trace-meta code { color: var(--text-2); }
+  .sequence-line { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; border: 1px solid var(--info-line); border-radius: var(--r-sm); background: var(--info-soft); padding: 8px 10px; color: var(--info); font-size: 10.5px; }
+  .llm-call { margin-bottom: 10px; overflow: hidden; border: 1px solid var(--stroke); border-radius: var(--r-sm); background: var(--surface-sunken); }
+  .llm-call.has-error { border-color: var(--danger-line); }
+  .llm-summary { display: grid; grid-template-columns: auto auto minmax(90px,1fr) auto; align-items: center; gap: 8px; min-height: 46px; padding: 0 11px; }
+  .llm-summary button { display: contents; color: inherit; }
+  .llm-index { color: var(--text-4); font-size: 10px; }
+  .llm-model { overflow: hidden; color: var(--text); font-size: 11.5px; font-weight: 620; text-overflow: ellipsis; white-space: nowrap; }
+  .llm-metrics { display: flex; justify-content: flex-end; gap: 7px; color: var(--text-3); font-size: 9.5px; }
+  .llm-body { border-top: 1px solid var(--stroke); padding: 10px; }
+  .tablist { display: flex; gap: 4px; border-bottom: 1px solid var(--stroke); padding-bottom: 7px; }
+  .tab-button { min-height: 30px; border: 0; border-radius: 7px; background: transparent; padding: 0 9px; color: var(--text-3); font-size: 10.5px; }
+  .tab-button:hover { color: var(--text); }
+  .tab-button[aria-selected="true"] { background: var(--glass-3); color: var(--text); }
+  .trace-panel { padding-top: 9px; }
+  .trace-empty, .trace-error, .trace-long { display: grid; min-height: 310px; place-items: center; padding: 24px; text-align: center; }
+  .trace-empty h3, .trace-error h3, .trace-long h3 { margin: 0 0 5px; font-size: 14px; }
+  .trace-empty p, .trace-error p, .trace-long p { margin: 0; color: var(--text-3); font-size: 11px; }
+  .trace-error { color: var(--danger); }
+  .event-row { display: grid; grid-template-columns: 46px 1fr; gap: 8px; border-top: 1px dashed var(--stroke); padding: 8px 2px; font-size: 10.5px; }
+  .event-row time { color: var(--text-4); }
+  .event-row strong { color: var(--text-2); font-weight: 600; }
+  .event-row span { display: block; color: var(--text-4); }
+
+  .json-viewer { min-width: 0; overflow: hidden; border: 1px solid var(--stroke); border-radius: var(--r-sm); background: var(--code); }
+  .json-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; border-bottom: 1px solid var(--stroke); padding: 7px; }
+  .json-action { min-height: 28px; border: 1px solid var(--stroke); border-radius: 6px; background: var(--glass-1); padding: 0 8px; color: var(--text-2); font-size: 10px; }
+  .json-action:hover { border-color: var(--accent-line); color: var(--accent); }
+  .json-budget-note { flex: 1; min-width: 180px; color: var(--warn); font-size: 9.5px; line-height: 1.4; }
+  .json-tree { max-height: 330px; overflow: auto; padding: 8px 7px 10px; font-family: "SFMono-Regular", Consolas, monospace; font-size: 10.5px; line-height: 1.65; }
+  .json-row { display: flex; min-width: max-content; align-items: flex-start; gap: 4px; padding-left: calc(var(--depth,0) * 14px); border-radius: 4px; }
+  .json-row:hover { background: var(--hover-wash); }
+  .json-toggle { display: grid; width: 17px; height: 19px; flex: none; place-items: center; border: 0; background: transparent; padding: 0; color: var(--text-4); font-size: 9px; }
+  .json-toggle[aria-expanded="true"] { transform: rotate(90deg); }
+  .json-key { color: var(--c-json-key); }
+  .json-key::after { content: ":"; color: var(--text-4); }
+  .json-string { color: var(--c-json-string); white-space: pre-wrap; overflow-wrap: anywhere; }
+  .json-number { color: var(--c-json-number); }
+  .json-boolean { color: var(--c-json-bool); }
+  .json-null { color: var(--c-json-null); font-style: italic; }
+  .json-bracket, .json-summary { color: var(--text-3); }
+  .json-more { margin-left: 5px; border: 0; background: transparent; padding: 0; color: var(--accent); font-size: 9.5px; text-decoration: underline; }
+  .payload-warning { margin-bottom: 10px; border: 1px solid var(--warn-line); border-radius: var(--r-sm); background: var(--warn-soft); padding: 9px 10px; color: var(--warn); font-size: 10px; }
+  .detail-section { margin-bottom: 14px; }
+  .detail-section h3 { display: flex; align-items: center; gap: 7px; margin: 0 0 8px; font-size: 12px; }
+  .fact-grid { display: grid; grid-template-columns: 108px minmax(0,1fr); margin: 0; border-top: 1px solid var(--stroke); }
+  .fact-grid dt, .fact-grid dd { margin: 0; border-bottom: 1px solid var(--stroke); padding: 8px 0; font-size: 10.5px; }
+  .fact-grid dt { color: var(--text-3); }
+  .fact-grid dd { min-width: 0; color: var(--text-2); overflow-wrap: anywhere; }
+
+  /* 设置弹窗：仅弹窗与遮罩使用玻璃 blur，主内容仍保持 solid。 */
+  .dialog-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 70;
+    display: grid;
+    place-items: center;
+    background: var(--overlay);
+    padding: 24px;
+    -webkit-backdrop-filter: blur(8px);
+    backdrop-filter: blur(8px);
+  }
+  .settings-dialog {
+    display: grid;
+    width: min(940px,100%);
+    max-height: min(760px,94%);
+    grid-template-rows: auto minmax(0,1fr);
+    overflow: hidden;
+    border: 1px solid var(--hairline);
+    border-radius: var(--r-lg);
+    background: var(--surface-panel);
+    box-shadow: var(--shadow), inset 0 1px 0 rgba(255,255,255,.05);
+    -webkit-backdrop-filter: blur(18px) saturate(150%);
+    backdrop-filter: blur(18px) saturate(150%);
+    animation: dialog-in var(--slow) var(--ease);
+  }
+  @keyframes dialog-in { from { opacity:0; transform: translateY(12px) scale(.985); } to { opacity:1; transform:none; } }
+  .dialog-head { display: flex; align-items: flex-start; gap: 12px; border-bottom: 1px solid var(--stroke); padding: 18px 20px; }
+  .dialog-head h2 { margin: 1px 0 0; font-size: 17px; }
+  .dialog-head p { margin: 3px 0 0; color: var(--text-3); font-size: 11px; }
+  .dialog-head .icon-button { margin-left: auto; }
+  .dialog-layout { display: grid; min-height: 0; grid-template-columns: 196px minmax(0,1fr); }
+  .settings-nav { display: grid; align-content: start; gap: 5px; border-right: 1px solid var(--stroke); padding: 12px; }
+  .settings-nav-button { display: grid; gap: 1px; border: 1px solid transparent; border-radius: var(--r-sm); background: transparent; padding: 9px 10px; color: var(--text-2); text-align: left; }
+  .settings-nav-button small { color: var(--text-4); font-size: 9.5px; }
+  .settings-nav-button:hover { background: var(--glass-1); }
+  .settings-nav-button.is-active { border-color: var(--accent-line); background: var(--accent-soft); color: var(--accent); }
+  .settings-content { min-height: 0; overflow: auto; padding: 20px 22px 28px; }
+  .settings-section h3 { margin: 0; font-size: 15px; }
+  .settings-section > p { margin: 4px 0 16px; color: var(--text-3); font-size: 11px; }
+  .settings-rows { border-top: 1px solid var(--stroke); }
+  .settings-row { display: grid; grid-template-columns: minmax(150px,.8fr) minmax(0,1.2fr); gap: 16px; align-items: center; border-bottom: 1px solid var(--stroke); padding: 12px 0; }
+  .settings-row strong { display: block; font-size: 11.5px; }
+  .settings-row small { display: block; margin-top: 2px; color: var(--text-4); font-size: 9.5px; }
+  .settings-value { min-width: 0; color: var(--text-2); font-size: 11px; overflow-wrap: anywhere; }
+  .settings-value code { color: var(--c-settings-code); }
+  .segmented { display: flex; gap: 3px; width: fit-content; border: 1px solid var(--stroke); border-radius: 9px; background: var(--glass-1); padding: 3px; }
+  .theme-switch { display: flex; gap: 2px; align-items: center; margin-left: 4px; padding-left: 8px; border-left: 1px solid var(--stroke); }
+  .theme-option { min-height: 28px; border: 0; border-radius: 999px; background: transparent; padding: 0 11px; color: var(--text-3); font-size: 10.5px; font-weight: 600; transition: background var(--fast) var(--ease), color var(--fast) var(--ease); }
+  .theme-option:hover { color: var(--text); }
+  .theme-option.is-active { background: var(--accent-soft); color: var(--accent); }
+  .segment { min-height: 30px; border: 0; border-radius: 6px; background: transparent; padding: 0 10px; color: var(--text-3); font-size: 10px; }
+  .segment.is-active { background: var(--glass-3); color: var(--text); }
+  .model-row { display: grid; gap: 5px; border: 1px solid var(--stroke); border-radius: var(--r-sm); background: var(--glass-1); padding: 11px; }
+  .model-row + .model-row { margin-top: 8px; }
+  .model-row-head { display: flex; align-items: center; gap: 8px; }
+  .model-row-head strong { font-size: 11.5px; }
+  .model-row p { margin: 0; color: var(--text-4); font-size: 9.5px; }
+
+  .toast {
+    position: absolute;
+    right: 20px;
+    bottom: 18px;
+    z-index: 90;
+    display: flex;
+    max-width: 360px;
+    align-items: center;
+    gap: 9px;
+    border: 1px solid var(--stroke-strong);
+    border-radius: var(--r-sm);
+    background: var(--surface-float);
+    padding: 10px 12px;
+    color: var(--text-2);
+    box-shadow: var(--shadow-small);
+    -webkit-backdrop-filter: blur(18px) saturate(150%);
+    backdrop-filter: blur(18px) saturate(150%);
+    font-size: 11px;
+    animation: toast-in var(--slow) var(--ease);
+  }
+  @keyframes toast-in { from { opacity:0; transform: translateY(8px); } to { opacity:1; transform:none; } }
+
+  @media (max-width: 1240px) {
+    .app-shell.has-inspector { grid-template-columns: 276px minmax(0,1fr); }
+    .inspector { position: absolute; inset: 0 0 0 auto; width: min(520px,88vw); }
+    .design-top-inner { grid-template-columns: minmax(250px,.65fr) minmax(640px,1.8fr) auto; }
+  }
+  @media (max-width: 980px) {
+    .design-top-inner { grid-template-columns: 1fr auto; }
+    .token-grid { display: none; }
+    .app-shell, .app-shell.has-inspector { grid-template-columns: minmax(0,1fr); }
+    .sidebar { position: absolute; inset: 0 auto 0 0; width: min(310px,88vw); transform: translateX(-105%); transition: transform var(--slow) var(--ease); box-shadow: var(--shadow); }
+    .sidebar.is-open { transform: translateX(0); }
+    .mobile-menu { display: inline-grid; }
+    .chat-header { padding-inline: 14px; }
+    .timeline { padding-inline: 14px; }
+    .composer-dock { padding-inline: 14px; }
+    .composer-hint { text-align: center; }
+  }
+  @media (max-width: 680px) {
+    .app-stage { padding: 0; }
+    .app-shell { border: 0; border-radius: 0; }
+    .design-top { height: 54px; }
+    .app-stage, body.tokens-collapsed .app-stage { height: calc(100vh - 54px); }
+    .prototype-id p { display: none; }
+    .header-actions .status-badge { display: none; }
+    .workspace-line { max-width: 64vw; }
+    .scene-toolbar { justify-content: flex-start; width: 100%; border-radius: var(--r-sm); }
+    .starters { grid-template-columns: 1fr; }
+    .message.is-user .message-body { max-width: 92%; }
+    .settings-trigger { width: 38px; }
+    .dialog-backdrop { padding: 8px; }
+    .dialog-layout { grid-template-columns: 1fr; }
+    .settings-nav { display: flex; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--stroke); }
+    .settings-nav-button { min-width: 110px; }
+    .settings-row { grid-template-columns: 1fr; gap: 8px; }
+    .inspector { width: 100%; }
+    .llm-summary { grid-template-columns: auto minmax(90px,1fr) auto; }
+    .llm-metrics span:nth-child(n+3) { display: none; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { scroll-behavior: auto !important; animation-duration: 1ms !important; animation-iteration-count: 1 !important; transition-duration: 1ms !important; }
+  }
+</style>
+</head>
+<body>
+  <!-- 两个径向光斑只由 body::before 铺在 canvas 背后，不进入任何内容容器。 -->
+  <header class="design-top" aria-label="设计令牌面板">
+    <div class="design-top-inner">
+      <div class="prototype-id">
+        <strong>ohna Web · 09 玻璃 Glass Depths</strong>
+        <p>高保真交互稿 · 单文件 · WCAG AA 重点状态 · 2026-10-24</p>
+      </div>
+      <div class="token-grid">
+        <section class="token-card" aria-label="色板">
+          <h2>色板</h2>
+          <div class="swatches">
+            <span class="swatch"><i style="background:var(--canvas)"></i><span>canvas</span></span>
+            <span class="swatch"><i style="background:var(--solid)"></i><span>solid</span></span>
+            <span class="swatch"><i style="background:var(--glass-2)"></i><span>glass</span></span>
+            <span class="swatch"><i style="background:var(--accent)"></i><span>accent</span></span>
+            <span class="swatch"><i style="background:var(--danger)"></i><span>danger</span></span>
+            <span class="swatch"><i style="background:var(--warn)"></i><span>warn</span></span>
+            <span class="swatch"><i style="background:var(--info)"></i><span>info</span></span>
+          </div>
+        </section>
+        <section class="token-card" aria-label="圆角">
+          <h2>圆角</h2>
+          <div class="token-line"><i class="radius-demo" style="border-radius:8px"></i><span>8 · 控件</span></div>
+          <div class="token-line"><i class="radius-demo" style="border-radius:12px"></i><span>12 · 面板</span></div>
+          <div class="token-line"><i class="radius-demo" style="border-radius:14px"></i><span>14 · 弹窗</span></div>
+        </section>
+        <section class="token-card" aria-label="间距">
+          <h2>间距</h2>
+          <div class="token-line"><b>12</b><span>紧凑行</span><b>16</b><span>组件</span></div>
+          <div class="token-line"><b>24</b><span>区块</span><b>32</b><span>主节奏</span></div>
+        </section>
+        <section class="token-card" aria-label="动效与材质">
+          <h2>动效 / 材质</h2>
+          <div class="token-line"><b>160ms</b><span>hover / focus</span></div>
+          <div class="token-line"><b>240ms</b><span>drawer / dialog</span></div>
+          <div class="token-line"><b>18px</b><span>blur · 浮层限定</span></div>
+        </section>
+      </div>
+      <div class="token-actions">
+        <button class="collapse-tokens" id="collapseTokens" type="button" aria-expanded="true" aria-label="收起设计令牌面板">⌃</button>
+      </div>
+    </div>
+  </header>
+
+  <div class="app-stage">
+    <main class="app-shell" id="appShell">
+      <aside class="sidebar" id="sidebar" aria-label="会话侧栏">
+        <div class="sidebar-head">
+          <span class="brand"><i class="brand-mark" aria-hidden="true"></i>ohna</span>
+          <span class="version">web v1.4 · local</span>
+        </div>
+        <button class="new-chat" id="newChat" type="button"><span aria-hidden="true">＋</span> New Chat</button>
+
+        <div class="conversation-scroll">
+          <section class="workspace-group" data-workspace-group>
+            <button class="group-toggle" type="button" aria-expanded="true" title="/Users/pegmca/code/ohna-harness">
+              <span class="group-chevron" aria-hidden="true">⌄</span><span>ohna-harness</span><span class="group-count">3</span>
+            </button>
+            <div class="conversation-list">
+              <article class="conversation-item is-active" data-conversation="trace-fix" data-title="修复 Trace 抽屉与详情面板互斥" data-root="/Users/pegmca/code/ohna-harness" data-scene="chat">
+                <button class="conversation-main" type="button">
+                  <span class="conversation-title">修复 Trace 抽屉与详情面板互斥</span>
+                  <span class="conversation-meta">2 分钟前 · 已完成</span>
+                </button>
+                <button class="archive-button" type="button" aria-label="归档 修复 Trace 抽屉与详情面板互斥" title="归档">⌁</button>
+              </article>
+              <article class="conversation-item" data-conversation="settings" data-title="给 settings 增加主题与字号" data-root="/Users/pegmca/code/ohna-harness" data-scene="pending">
+                <button class="conversation-main" type="button">
+                  <span class="conversation-title">给 settings 增加主题与字号</span>
+                  <span class="conversation-meta"><i class="unread-dot" aria-hidden="true"></i>1 小时前 · 运行中</span>
+                </button>
+                <button class="archive-button" type="button" aria-label="归档 给 settings 增加主题与字号" title="归档">⌁</button>
+              </article>
+              <article class="conversation-item" data-conversation="permission" data-title="梳理 packages/agent 权限链路" data-root="/Users/pegmca/code/ohna-harness" data-scene="confirm">
+                <button class="conversation-main" type="button">
+                  <span class="conversation-title">梳理 packages/agent 权限链路</span>
+                  <span class="conversation-meta">昨天 · 等待确认</span>
+                </button>
+                <button class="archive-button" type="button" aria-label="归档 梳理 packages/agent 权限链路" title="归档">⌁</button>
+              </article>
+            </div>
+          </section>
+
+          <section class="workspace-group" data-workspace-group>
+            <button class="group-toggle" type="button" aria-expanded="true" title="/Users/pegmca/code/app-shell">
+              <span class="group-chevron" aria-hidden="true">⌄</span><span>app-shell</span><span class="group-count">2</span>
+            </button>
+            <div class="conversation-list">
+              <article class="conversation-item" data-conversation="cross-workspace" data-title="CLI · 桌面壳启动失败排查" data-root="/Users/pegmca/code/app-shell" data-scene="chat" data-cross="true">
+                <button class="conversation-main" type="button">
+                  <span class="conversation-title">CLI · 桌面壳启动失败排查</span>
+                  <span class="conversation-meta"><span class="resume-chip">跨工作区可续写</span> · 3 小时前</span>
+                </button>
+                <button class="archive-button" type="button" aria-label="归档 CLI 桌面壳启动失败排查" title="归档">⌁</button>
+              </article>
+              <article class="conversation-item" data-conversation="empty" data-title="CLI · 新工作区能力验证" data-root="/Users/pegmca/code/app-shell" data-scene="empty" data-cross="true">
+                <button class="conversation-main" type="button">
+                  <span class="conversation-title">CLI · 新工作区能力验证</span>
+                  <span class="conversation-meta">周一 · 暂无消息</span>
+                </button>
+                <button class="archive-button" type="button" aria-label="归档 CLI 新工作区能力验证" title="归档">⌁</button>
+              </article>
+            </div>
+          </section>
+
+          <section class="workspace-group" data-workspace-group>
+            <button class="group-toggle" type="button" aria-expanded="true" title="未分组">
+              <span class="group-chevron" aria-hidden="true">⌄</span><span>未分组</span><span class="group-count">1</span>
+            </button>
+            <div class="conversation-list">
+              <article class="conversation-item" data-conversation="readme" data-title="读 README 总结项目目标" data-root="未上报 workspaceRoot" data-scene="error">
+                <button class="conversation-main" type="button">
+                  <span class="conversation-title">读 README 总结项目目标</span>
+                  <span class="conversation-meta">上周 · 失败</span>
+                </button>
+                <button class="archive-button" type="button" aria-label="归档 读 README 总结项目目标" title="归档">⌁</button>
+              </article>
+            </div>
+          </section>
+        </div>
+
+        <footer class="sidebar-foot">
+          <i class="service-dot" aria-hidden="true"></i>
+          <div class="service-copy"><strong>本地服务已连接</strong><span>127.0.0.1:8787 · PID 43128</span></div>
+          <button class="icon-button settings-trigger" id="settingsTrigger" type="button" aria-haspopup="dialog" aria-label="打开设置" title="设置">⚙</button>
+        </footer>
+      </aside>
+
+      <section class="chat-main" id="chatMain" aria-label="Agent Chat 主区域">
+        <header class="chat-header">
+          <button class="icon-button mobile-menu" id="openSidebar" type="button" aria-label="打开会话列表">☰</button>
+          <div class="title-stack">
+            <p class="eyebrow">ohna · 本地编码 Agent</p>
+            <h1 class="chat-title" id="conversationTitle">修复 Trace 抽屉与详情面板互斥</h1>
+            <div class="workspace-line">
+              <span>本地运行 · 工作目录</span><code id="workspaceRoot">/Users/pegmca/code/ohna-harness</code>
+              <span class="cross-workspace-label"><span aria-hidden="true">↗</span>跨工作区续写</span>
+            </div>
+          </div>
+          <div class="header-actions">
+            <nav class="header-tabs" role="tablist" aria-label="工作台导航">
+              <button class="header-tab is-active" id="chatTab" role="tab" aria-selected="true" type="button">对话</button>
+              <button class="header-tab" id="traceTab" role="tab" aria-selected="false" type="button">Trace</button>
+            </nav>
+            <span class="status-badge tone-success" id="runStatus">已完成</span>
+          </div>
+        </header>
+
+        <!--
+          可读性 / 性能取舍：长 transcript 的正文与消息容器均使用 solid 表面，不使用 backdrop-filter。
+          玻璃 blur 只保留给侧栏、Trace/RunDetail 抽屉、设置弹窗与 toast 浮层，避免滚动重绘与文字对比度下降。
+        -->
+        <section class="timeline" id="timeline" aria-label="消息时间线">
+          <div class="timeline-inner">
+            <div class="scene-toolbar" role="toolbar" aria-label="界面状态预览">
+              <button class="scene-button is-active" data-scene-button="chat" type="button">对话主态</button>
+              <button class="scene-button" data-scene-button="empty" type="button">空状态</button>
+              <button class="scene-button" data-scene-button="confirm" type="button">权限确认</button>
+              <button class="scene-button" data-scene-button="pending" type="button">运行中</button>
+              <button class="scene-button" data-scene-button="error" type="button">错误态</button>
+              <button class="scene-button" data-scene-button="long" type="button">超长内容</button>
+              <button class="scene-button" id="openJsonDetail" type="button">JSON Viewer</button>
+              <span class="theme-switch" role="radiogroup" aria-label="主题">
+                <button class="theme-option" data-theme-option="dark" role="radio" aria-checked="true" type="button">Dark</button>
+                <button class="theme-option" data-theme-option="light" role="radio" aria-checked="false" type="button">Light</button>
+              </span>
+            </div>
+
+            <div class="workspace-resume-banner" role="status">
+              <span aria-hidden="true">↗</span>
+              <span><strong>跨工作区会话已恢复。</strong> 当前消息仍投递到原会话；编码工具与系统提示词已按 <code>workspaceRoot</code> 重新装配，无需切换实例工作区。</span>
+            </div>
+
+            <div class="timeline-scene" data-scene="chat">
+              <article class="message is-user">
+                <div class="avatar" aria-hidden="true">U</div>
+                <div class="message-body">
+                  <div class="message-meta"><span class="message-role">User</span><time>10:32</time></div>
+                  <p class="message-text">Trace 抽屉打开时，右侧的运行详情面板没有收起，两个面板会抢同一列。帮我改成互斥，并保留刷新后默认回到对话的行为。</p>
+                </div>
+              </article>
+
+              <article class="message is-assistant">
+                <div class="avatar" aria-hidden="true"><i class="brand-mark"></i></div>
+                <div class="message-body">
+                  <div class="message-meta"><span class="message-role">Assistant</span><time>10:33</time><span class="status-badge tone-success">completed</span></div>
+
+                  <details class="process-summary">
+                    <summary><span aria-hidden="true">◇</span><span>回答过程 · 读取 2 个文件，执行 1 条命令，修改 1 处</span><span class="chevron">›</span></summary>
+                    <div class="process-body">
+                      <ul class="process-list">
+                        <li><i></i><span>理解问题并定位两个右侧状态</span><small>0.8s</small></li>
+                        <li><i></i><span>读取 Workbench 与面板组件</span><small>1.4s</small></li>
+                        <li><i></i><span>建立 Trace / RunDetail 互斥切换</span><small>0.6s</small></li>
+                        <li><i></i><span>运行最窄测试并通过</span><small>4.1s</small></li>
+                      </ul>
+                    </div>
+                  </details>
+
+                  <details class="tool-block">
+                    <summary><span class="icon" aria-hidden="true">↧</span><strong class="tool-name">read</strong><span class="tool-summary">apps/ohna-web/src/features/workbench/Workbench.tsx</span><span class="status-badge tone-success">completed</span><span class="chevron">›</span></summary>
+                    <div class="tool-body">
+                      <div class="code-label"><strong>文件片段</strong><span>742–772 · 31 行</span></div>
+                      <pre class="code-block"><code><span class="keyword">const</span> [isTraceOpen, setIsTraceOpen] = useState(<span class="keyword">false</span>);
+<span class="keyword">const</span> [selectedRunDetail, setSelectedRunDetail] = useState();
+
+<span class="comment">// 右侧排查位由页面统一编排</span>
+&lt;RunDetailPanel detail={selectedRunDetail} /&gt;
+&lt;TraceDrawer isOpen={isTraceOpen} /&gt;</code></pre>
+                      <div class="tool-meta"><span><b>状态</b> 已读取</span><span><b>耗时</b> 42ms</span><span><b>序列</b> #18</span></div>
+                    </div>
+                  </details>
+
+                  <details class="tool-block">
+                    <summary><span class="icon" aria-hidden="true">⌘</span><strong class="tool-name">bash</strong><span class="tool-summary">pnpm --filter @aiagent/ohna-web test -- Workbench.trace.test.tsx</span><span class="status-badge tone-success">completed</span><span class="chevron">›</span></summary>
+                    <div class="tool-body">
+                      <pre class="code-block"><code>$ pnpm --filter @aiagent/ohna-web test -- Workbench.trace.test.tsx
+✓ 打开 Trace 会清空 RunDetailPanel
+✓ 打开 RunDetailPanel 会收起 Trace
+Test Files  1 passed · Tests 2 passed · 4.12s</code></pre>
+                      <div class="tool-meta"><span><b>exit</b> 0</span><span><b>cwd</b> /Users/pegmca/code/ohna-harness</span></div>
+                    </div>
+                  </details>
+
+                  <p class="message-text">我确认了两处状态都在 <code>Workbench.tsx</code>：<code>isTraceOpen</code> 与 <code>selectedRunDetail</code>。它们共用同一「右侧排查位」，因此在打开任一面板前先清掉另一个。</p>
+
+                  <details class="tool-block" open>
+                    <summary><span class="icon" aria-hidden="true">±</span><strong class="tool-name">edit</strong><span class="tool-summary">建立右侧抽屉互斥状态</span><span class="status-badge tone-success">completed</span><span class="chevron">›</span></summary>
+                    <div class="tool-body">
+                      <div class="code-label"><strong>Workbench.tsx</strong><span>+8 / -2</span></div>
+                      <pre class="code-block"><code><span class="diff-line diff-del">- onClick={() =&gt; setIsTraceOpen((current) =&gt; !current)}</span>
+<span class="diff-line diff-add">+ onClick={() =&gt; setIsTraceOpen((current) =&gt; {</span>
+<span class="diff-line diff-add">+   if (!current) setSelectedRunDetail(undefined);</span>
+<span class="diff-line diff-add">+   return !current;</span>
+<span class="diff-line diff-add">+ })}</span>
+<span class="diff-line diff-context">  function openRunDetail(detail) {</span>
+<span class="diff-line diff-add">+   setIsTraceOpen(false);</span>
+<span class="diff-line diff-context">    setSelectedRunDetail(detail);</span>
+<span class="diff-line diff-context">  }</span></code></pre>
+                    </div>
+                  </details>
+
+                  <details class="tool-block">
+                    <summary><span class="icon" aria-hidden="true">▣</span><strong class="tool-name">write</strong><span class="tool-summary">docs/design/trace-mutual-exclusion.md</span><span class="status-badge tone-danger">error</span><span class="chevron">›</span></summary>
+                    <div class="tool-body">
+                      <div class="error-block"><span aria-hidden="true">!</span><span>路径不在本次允许写范围内，未创建文件。主功能改动不受影响。</span></div>
+                      <div class="tool-meta"><span><b>error.code</b> path_outside_scope</span><span><b>重试</b> 未执行</span></div>
+                    </div>
+                  </details>
+
+                  <p class="message-text">已完成。现在打开 Trace 会收起运行详情，反向同理；刷新不从 URL 恢复抽屉状态，仍默认回到对话。相关测试通过。</p>
+                  <div class="message-actions" aria-label="回答操作">
+                    <button class="icon-button" type="button" aria-label="复制回答" title="复制">⧉</button>
+                    <button class="icon-button" type="button" aria-label="重新生成" title="重新生成">↻</button>
+                    <button class="button ghost" id="openRunDetail" type="button">查看运行详情</button>
+                  </div>
+                </div>
+              </article>
+              <div id="dynamicMessages"></div>
+            </div>
+
+            <div class="timeline-scene" data-scene="empty" hidden>
+              <div class="empty-state">
+                <div class="empty-inner">
+                  <div class="empty-logo"><i class="brand-mark" aria-hidden="true"></i></div>
+                  <h2>从一个编码任务开始</h2>
+                  <p>Agent 直接读写当前工作目录；变更文件与执行命令会先弹出待确认卡片。</p>
+                  <div class="starters">
+                    <button class="starter" type="button">列出 src 目录结构并说明各模块职责。</button>
+                    <button class="starter" type="button">读取 README.md 并总结项目目标。</button>
+                    <button class="starter" type="button">运行 pnpm typecheck，若有错误请修复。</button>
+                    <button class="starter" type="button">在 utils.ts 中新增 formatDate 并补测试。</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="timeline-scene" data-scene="confirm" hidden>
+              <article class="message is-user">
+                <div class="avatar" aria-hidden="true">U</div>
+                <div class="message-body">
+                  <div class="message-meta"><span class="message-role">User</span><time>10:41</time></div>
+                  <p class="message-text">修复设置弹窗的焦点归还，并清理旧的本地构建目录。</p>
+                </div>
+              </article>
+              <article class="message is-assistant">
+                <div class="avatar" aria-hidden="true"><i class="brand-mark"></i></div>
+                <div class="message-body">
+                  <div class="message-meta"><span class="message-role">Assistant</span><time>10:42</time><span class="status-badge tone-warn pulse">waiting</span></div>
+                  <p class="message-text">我已经定位到焦点生命周期，接下来需要确认两个变更操作。</p>
+                  <div class="confirmation-stack" aria-label="askToolCall 权限确认">
+                    <article class="confirmation-card" data-confirmation>
+                      <div class="confirmation-head">
+                        <span class="risk-icon" aria-hidden="true">!</span>
+                        <div class="confirmation-copy"><strong>edit · 中风险</strong><span>修改 use-dialog-focus.ts 的清理逻辑</span></div>
+                        <span class="status-badge tone-warn risk-label">可回滚变更</span>
+                      </div>
+                      <pre class="code-block"><code>file: apps/ohna-web/src/features/settings/use-dialog-focus.ts
+old: previouslyFocused?.focus()
+new: requestAnimationFrame(() =&gt; previouslyFocused?.focus())</code></pre>
+                      <div class="confirmation-actions">
+                        <button class="button primary" data-decision="once" type="button">✓ 允许一次</button>
+                        <button class="button" data-decision="always" type="button">✓ 始终允许 edit</button>
+                        <button class="button danger" data-decision="deny" type="button">× 拒绝</button>
+                      </div>
+                      <div class="confirmation-status" role="status"></div>
+                    </article>
+
+                    <article class="confirmation-card level-danger" data-confirmation>
+                      <div class="confirmation-head">
+                        <span class="risk-icon" aria-hidden="true">!!</span>
+                        <div class="confirmation-copy"><strong>bash · 高风险</strong><span>递归删除本地构建缓存，命令不可撤销</span></div>
+                        <span class="status-badge tone-danger risk-label">破坏性命令</span>
+                      </div>
+                      <pre class="code-block"><code>command: rm -rf apps/ohna-web/dist .turbo
+cwd: /Users/pegmca/code/ohna-harness
+effect: mutate · destructive</code></pre>
+                      <p class="decision-error" role="status">上次提交失败：confirmation_expired · 该请求已刷新，可重新选择。</p>
+                      <div class="confirmation-actions">
+                        <button class="button primary" data-decision="once" type="button">✓ 允许一次</button>
+                        <button class="button" data-decision="always" type="button">✓ 始终允许 bash</button>
+                        <button class="button danger" data-decision="deny" type="button">× 拒绝</button>
+                      </div>
+                      <div class="confirmation-status" role="status"></div>
+                    </article>
+                  </div>
+                </div>
+              </article>
+            </div>
+
+            <div class="timeline-scene" data-scene="pending" hidden>
+              <article class="message is-user">
+                <div class="avatar" aria-hidden="true">U</div>
+                <div class="message-body"><div class="message-meta"><span class="message-role">User</span><time>10:46</time></div><p class="message-text">运行全量 typecheck，只修 apps/ohna-web 范围内的错误。</p></div>
+              </article>
+              <article class="message is-assistant">
+                <div class="avatar" aria-hidden="true"><i class="brand-mark"></i></div>
+                <div class="message-body">
+                  <div class="message-meta"><span class="message-role">Assistant</span><time>10:46</time><span class="status-badge tone-info pulse">running</span></div>
+                  <div class="live-line"><i class="spinner" aria-hidden="true"></i><span>正在执行 bash · pnpm --filter @aiagent/ohna-web typecheck</span></div>
+                  <details class="process-summary" open>
+                    <summary><span aria-hidden="true">◇</span><span>实时回答过程</span><span class="chevron">›</span></summary>
+                    <div class="process-body"><ul class="process-list"><li><i></i><span>读取 package scripts</span><small>完成</small></li><li class="is-running"><i></i><span>等待 TypeScript 编译结果</span><small>8.4s…</small></li><li><i style="background:var(--text-4)"></i><span>修复并复验</span><small>排队</small></li></ul></div>
+                  </details>
+                  <p class="message-text">我会保持输入内容，运行结束后把错误按文件归组；停止不会丢失当前草稿。</p>
+                </div>
+              </article>
+            </div>
+
+            <div class="timeline-scene" data-scene="error" hidden>
+              <article class="message is-user">
+                <div class="avatar" aria-hidden="true">U</div>
+                <div class="message-body"><div class="message-meta"><span class="message-role">User</span><time>09:12</time></div><p class="message-text">读取 README 并说明 ohna 的产品边界。</p></div>
+              </article>
+              <article class="message is-assistant">
+                <div class="avatar" aria-hidden="true"><i class="brand-mark"></i></div>
+                <div class="message-body">
+                  <div class="message-meta"><span class="message-role">Assistant</span><time>09:12</time><span class="status-badge tone-danger">failed</span></div>
+                  <div class="error-block"><span aria-hidden="true">!</span><span>请求失败：本地服务连接已断开。请确认 <code>ohna --web</code> 仍在运行，且浏览器连接的是 127.0.0.1:8787。</span></div>
+                  <details class="tool-block">
+                    <summary><span class="icon" aria-hidden="true">↧</span><strong class="tool-name">read</strong><span class="tool-summary">README.md</span><span class="status-badge tone-danger">error</span><span class="chevron">›</span></summary>
+                    <div class="tool-body"><pre class="code-block"><code>{ "code": "connection_lost", "retryable": true, "sequence": 31 }</code></pre></div>
+                  </details>
+                  <div class="message-actions"><button class="button" type="button">↻ 重新生成</button></div>
+                </div>
+              </article>
+            </div>
+
+            <div class="timeline-scene" data-scene="long" hidden>
+              <article class="message is-user">
+                <div class="avatar" aria-hidden="true">U</div>
+                <div class="message-body"><div class="message-meta"><span class="message-role">User</span><time>11:03</time></div><p class="message-text">把整个 run 的原始 SSE 事件给我看一下，尤其是超长 payload。</p></div>
+              </article>
+              <article class="message is-assistant">
+                <div class="avatar" aria-hidden="true"><i class="brand-mark"></i></div>
+                <div class="message-body">
+                  <div class="message-meta"><span class="message-role">Assistant</span><time>11:04</time><span class="status-badge tone-success">completed</span></div>
+                  <p class="message-text">共有 684 条事件。为了避免一次把大 payload 铺进 DOM，正文只保留摘要；完整结构使用节点级 JSON Viewer 惰性展开。</p>
+                  <details class="long-block">
+                    <summary><span aria-hidden="true">▤</span><span>折叠的长工具输出 · 2.8 MB · 18,492 行</span><span class="status-badge tone-warn">已截断预览</span><span class="chevron">›</span></summary>
+                    <div class="tool-body">
+                      <pre class="code-block" style="max-height:220px"><code>sequence=141 type=message_update delta="正在分析…"
+sequence=142 type=llm_call callIndex=4 payload={…}
+sequence=143 type=tool_execution_start toolName=grep
+sequence=144 type=tool_execution_end result={ matches: 1268, files: 94 }
+…
+sequence=684 type=run_end status=completed</code></pre>
+                      <div class="payload-warning">预览只显示首尾事件；完整载荷请打开右侧 JSON Viewer，节点级展开不会一次渲染全部内容。</div>
+                      <button class="button" id="openJsonFromLong" type="button">打开 JSON Viewer</button>
+                    </div>
+                  </details>
+                </div>
+              </article>
+            </div>
+          </div>
+        </section>
+
+        <footer class="composer-dock">
+          <form class="composer-wrap" id="composerForm">
+            <div class="composer-box">
+              <label class="sr-only" for="composerInput">描述一个编码任务</label>
+              <textarea class="composer-input" id="composerInput" rows="1" placeholder="描述一个编码任务…"></textarea>
+              <div class="composer-toolbar">
+                <button class="composer-tool" type="button">✦ 任务灵感</button>
+                <button class="composer-tool" type="button">@ 引用文件</button>
+                <button class="composer-tool model-button" type="button">DeepSeek · deepseek-chat⌄</button>
+                <button class="send-button" id="sendButton" type="submit" aria-label="发送" disabled>↑</button>
+              </div>
+            </div>
+            <div class="composer-hint">Enter 发送 · Shift+Enter 换行 · 写与执行操作会先弹出 askToolCall</div>
+          </form>
+        </footer>
+      </section>
+
+      <aside class="inspector" id="runDetailPanel" aria-label="运行详情与 JSON Viewer">
+        <header class="inspector-head">
+          <div class="inspector-title"><p class="eyebrow">Run detail · JSON Viewer</p><h2>回答过程 / tool_call_018</h2></div>
+          <button class="icon-button" data-close-inspector type="button" aria-label="关闭运行详情">×</button>
+        </header>
+        <div class="inspector-body">
+          <section class="detail-section">
+            <h3><span aria-hidden="true">◇</span>运行摘要</h3>
+            <dl class="fact-grid">
+              <dt>runId</dt><dd><code>run_8f3a5c17d92b4e46</code></dd>
+              <dt>requestId</dt><dd><code>req_01JF8Q3N8S2</code></dd>
+              <dt>model</dt><dd>deepseek-chat</dd>
+              <dt>状态</dt><dd><span class="status-badge tone-success">completed</span></dd>
+              <dt>工具</dt><dd>read × 2 · bash × 1 · edit × 1 · write × 1</dd>
+            </dl>
+          </section>
+          <section class="detail-section">
+            <h3><span aria-hidden="true">{ }</span>统一 JSON Viewer</h3>
+            <div class="payload-warning">长字符串默认截断为 200 字符；批量展开最多 1,000 个容器节点，超出预算的节点保持原状，可逐级展开。</div>
+            <div class="json-viewer" data-json-viewer>
+              <div class="json-toolbar">
+                <button class="json-action" data-json-expand type="button">全部展开</button>
+                <button class="json-action" data-json-collapse type="button">全部折叠</button>
+                <span class="json-budget-note" data-json-budget>默认展开根与第一层容器 · 节点预算 50,000</span>
+              </div>
+              <div class="json-tree" data-json-tree aria-label="JSON 结构"></div>
+            </div>
+          </section>
+        </div>
+        <footer class="inspector-foot">此面板与 Trace 抽屉共用右侧排查位；打开任一面板会自动关闭另一个。</footer>
+      </aside>
+
+      <aside class="inspector" id="traceDrawer" aria-label="Trace">
+        <header class="inspector-head">
+          <div class="inspector-title"><p class="eyebrow">Trace 排查</p><h2 id="traceConversationTitle">修复 Trace 抽屉与详情面板互斥</h2></div>
+          <button class="icon-button" data-close-inspector type="button" aria-label="收起 Trace">×</button>
+        </header>
+        <div class="inspector-body">
+          <div class="run-picker" role="list" aria-label="Run 列表">
+            <button class="run-chip is-active" type="button" aria-pressed="true"><span class="status-badge tone-success">completed</span> 2 分钟前</button>
+            <button class="run-chip" type="button" aria-pressed="false"><span class="status-badge tone-danger">failed</span> 18 分钟前</button>
+            <button class="run-chip" type="button" aria-pressed="false"><span class="status-badge tone-info">running</span> CLI</button>
+          </div>
+          <div class="trace-state-switch" role="tablist" aria-label="Trace 数据态">
+            <button class="trace-state-button is-active" data-trace-state="normal" role="tab" aria-selected="true" type="button">正常</button>
+            <button class="trace-state-button" data-trace-state="empty" role="tab" aria-selected="false" type="button">空</button>
+            <button class="trace-state-button" data-trace-state="error" role="tab" aria-selected="false" type="button">错误</button>
+            <button class="trace-state-button" data-trace-state="long" role="tab" aria-selected="false" type="button">超长载荷</button>
+          </div>
+
+          <section data-trace-view="normal">
+            <div class="trace-meta"><span>mode: auto</span><span>source: composer</span><span>model: deepseek-chat</span><span><code>req_01JF8Q3N8S2</code></span></div>
+            <div class="sequence-line"><i class="spinner" aria-hidden="true"></i><span>SSE 已从 sequence #142 续传至 #151 · replay 与 live 按 sequence 去重</span></div>
+
+            <section class="llm-call" data-llm-call>
+              <div class="llm-summary">
+                <button type="button" data-llm-toggle aria-expanded="false" aria-label="展开第 1 次 LLM 调用"><span class="chevron">›</span><span class="llm-index">#1</span><span class="llm-model">deepseek-chat</span><span class="llm-metrics"><span>1.82s</span><span>in 3.1k</span><span>out 0.6k</span><span>$0.0028</span></span></button>
+              </div>
+              <div class="llm-body" hidden>
+                <div class="tablist" role="tablist" aria-label="第 1 次 LLM 调用详情">
+                  <button class="tab-button" role="tab" aria-selected="true" data-llm-tab="request" type="button">请求参数</button>
+                  <button class="tab-button" role="tab" aria-selected="false" data-llm-tab="response" type="button">响应</button>
+                  <button class="tab-button" role="tab" aria-selected="false" data-llm-tab="raw" type="button">原始 JSON</button>
+                </div>
+                <div class="trace-panel" data-llm-panel="request"><pre class="code-block"><code>{ modelId: "deepseek-chat", messages: [4 项], tools: [7 项], temperature: 0.2 }</code></pre></div>
+                <div class="trace-panel" data-llm-panel="response" hidden><pre class="code-block"><code>{ finishReason: "tool_calls", usage: { input: 3128, output: 624 }, status: 200 }</code></pre></div>
+                <div class="trace-panel" data-llm-panel="raw" hidden><pre class="code-block"><code>{ callId: "llm_001", callIndex: 1, attemptCount: 1, durationMs: 1820 }</code></pre></div>
+              </div>
+            </section>
+
+            <section class="llm-call" data-llm-call>
+              <div class="llm-summary">
+                <button type="button" data-llm-toggle aria-expanded="true" aria-label="收起第 2 次 LLM 调用"><span class="chevron" style="transform:rotate(90deg)">›</span><span class="llm-index">#2</span><span class="llm-model">deepseek-chat</span><span class="llm-metrics"><span>4.07s</span><span>in 5.2k</span><span>out 1.4k</span><span>$0.0061</span></span></button>
+              </div>
+              <div class="llm-body">
+                <div class="tablist" role="tablist" aria-label="第 2 次 LLM 调用详情">
+                  <button class="tab-button" role="tab" aria-selected="true" data-llm-tab="request" type="button">请求参数</button>
+                  <button class="tab-button" role="tab" aria-selected="false" data-llm-tab="response" type="button">响应</button>
+                  <button class="tab-button" role="tab" aria-selected="false" data-llm-tab="raw" type="button">原始 JSON</button>
+                </div>
+                <div class="trace-panel" data-llm-panel="request">
+                  <pre class="code-block"><code>provider: deepseek
+baseUrl: https://api.deepseek.com
+messages: 7 · tools: 7 · toolChoice: auto
+systemPrompt: "You are ohna, a local coding agent…"</code></pre>
+                </div>
+                <div class="trace-panel" data-llm-panel="response" hidden><pre class="code-block"><code>finishReason: stop
+responseModel: deepseek-chat
+message.content: "已完成。现在两个面板互斥…"
+usage: in 5238 · out 1401</code></pre></div>
+                <div class="trace-panel" data-llm-panel="raw" hidden><pre class="code-block"><code>{ "callIndex": 2, "durationMs": 4072, "attemptCount": 1, "error": null }</code></pre></div>
+              </div>
+            </section>
+
+            <div class="event-row"><time>00:01</time><div><strong>run_start · sequence #142</strong><span>mode=auto · source=composer</span></div></div>
+            <div class="event-row"><time>00:02</time><div><strong>tool_execution_start · #145</strong><span>read · Workbench.tsx</span></div></div>
+            <div class="event-row"><time>00:03</time><div><strong>tool_execution_end · #146</strong><span>read · 885 lines</span></div></div>
+            <div class="event-row"><time>00:06</time><div><strong>permission_ask · #149</strong><span>edit · 等待确认 2.1s</span></div></div>
+            <div class="event-row"><time>00:11</time><div><strong>run_end · #151</strong><span>completed · 24.6s</span></div></div>
+          </section>
+
+          <section data-trace-view="empty" hidden>
+            <div class="trace-empty"><div><h3>该 run 暂无事件</h3><p>CLI 镜像 run 只记录 LLM 请求/响应与 loop 事件，不会写入会话消息。</p></div></div>
+          </section>
+          <section data-trace-view="error" hidden>
+            <div class="trace-error"><div><h3>Trace 续传失败</h3><p>sequence #88 后连接中断，服务端返回 run_event_gap。请重新回放。</p><button class="button" style="margin-top:14px" type="button">↻ 重新回放</button></div></div>
+          </section>
+          <section data-trace-view="long" hidden>
+            <div class="trace-long" style="display:block;text-align:left;padding:0">
+              <h3>llm_call #4 · 超长载荷</h3>
+              <p style="margin-bottom:10px">2.8 MB · 50,214 个节点 · 已超过 JSON 渲染安全上限 50,000。</p>
+              <div class="payload-warning">已只展示根摘要；完整内容可复制，或按 request / response 分区逐级检查。批量展开受 1,000 节点预算保护。</div>
+              <div class="json-viewer">
+                <div class="json-toolbar"><button class="json-action" type="button">复制 JSON</button><span class="json-budget-note">节点数超过安全上限（50,214 &gt; 50,000）</span></div>
+                <div class="json-tree"><div class="json-row" style="--depth:0"><button class="json-toggle" type="button" aria-expanded="false">›</button><span class="json-bracket">{</span><span class="json-summary">50,214 个节点 · 根摘要</span><span class="json-bracket">}</span></div></div>
+              </div>
+            </div>
+          </section>
+        </div>
+        <footer class="inspector-foot">实时帧为原文；刷新后 replay 经模式级脱敏。Trace 收起即卸载并中断 SSE。</footer>
+      </aside>
+
+      <div class="dialog-backdrop" id="settingsBackdrop" hidden>
+        <section class="settings-dialog" id="settingsDialog" role="dialog" aria-modal="true" aria-labelledby="settingsTitle" tabindex="-1">
+          <header class="dialog-head">
+            <div><p class="eyebrow">Settings</p><h2 id="settingsTitle">设置</h2><p>适用于当前 ohna 进程 · 进程配置只读，界面偏好保存在浏览器</p></div>
+            <button class="icon-button" id="closeSettings" type="button" aria-label="关闭设置">×</button>
+          </header>
+          <div class="dialog-layout">
+            <nav class="settings-nav" aria-label="设置分区">
+              <button class="settings-nav-button is-active" data-settings-tab="connection" type="button"><span>连接状态</span><small>本地服务与工作区</small></button>
+              <button class="settings-nav-button" data-settings-tab="appearance" type="button"><span>外观</span><small>Glass 09 与字号</small></button>
+              <button class="settings-nav-button" data-settings-tab="models" type="button"><span>模型</span><small>当前进程模型目录</small></button>
+              <button class="settings-nav-button" data-settings-tab="permission" type="button"><span>权限</span><small>确认模式与策略</small></button>
+              <button class="settings-nav-button" data-settings-tab="about" type="button"><span>关于</span><small>版本与运行环境</small></button>
+            </nav>
+            <div class="settings-content">
+              <section class="settings-section" data-settings-panel="connection">
+                <h3>连接状态</h3><p>本地服务与工作区事实，由启动 ohna 的进程决定，只读。</p>
+                <div class="settings-rows">
+                  <div class="settings-row"><div><strong>连接状态</strong><small>health probe · 12ms</small></div><div class="settings-value"><span class="status-badge tone-success">已连接</span></div></div>
+                  <div class="settings-row"><div><strong>服务地址</strong><small>当前浏览器连接</small></div><div class="settings-value"><code>http://127.0.0.1:8787</code></div></div>
+                  <div class="settings-row"><div><strong>workspaceRoot</strong><small>当前实例工作区</small></div><div class="settings-value"><code>/Users/pegmca/code/ohna-harness</code></div></div>
+                  <div class="settings-row"><div><strong>dataDir / PID</strong><small>会话持久化与服务进程</small></div><div class="settings-value"><code>~/.ohna · 43128</code></div></div>
+                </div>
+              </section>
+
+              <section class="settings-section" data-settings-panel="appearance" hidden>
+                <h3>外观</h3><p>本稿锁定为 09 玻璃 Glass Depths；仅字号偏好可交互。</p>
+                <div class="settings-rows">
+                  <div class="settings-row"><div><strong>界面风格</strong><small>本轮唯一落地方向</small></div><div class="settings-value"><span class="status-badge tone-success">09 Glass Depths</span></div></div>
+                  <div class="settings-row"><div><strong>主题外观</strong><small>保存在浏览器（ohna-theme）</small></div><div class="settings-value"><div class="segmented" id="appearanceTheme" role="radiogroup" aria-label="主题外观"><button class="segment" data-theme-option="dark" role="radio" aria-checked="true" type="button">深色</button><button class="segment" data-theme-option="light" role="radio" aria-checked="false" type="button">浅色</button></div></div></div>
+                  <div class="settings-row"><div><strong>玻璃策略</strong><small>只用于低频浮层</small></div><div class="settings-value">sidebar / drawer / dialog · blur(18px) saturate(150%)</div></div>
+                  <div class="settings-row"><div><strong>界面字号</strong><small>全站等比缩放</small></div><div class="settings-value"><div class="segmented" role="radiogroup" aria-label="界面字号"><button class="segment" data-scale=".93" role="radio" aria-checked="false" type="button">紧凑</button><button class="segment is-active" data-scale="1" role="radio" aria-checked="true" type="button">舒适</button><button class="segment" data-scale="1.08" role="radio" aria-checked="false" type="button">宽松</button></div></div></div>
+                </div>
+              </section>
+
+              <section class="settings-section" data-settings-panel="models" hidden>
+                <h3>模型</h3><p>模型由启动 ohna 时的 CLI 参数决定，此处只读展示。</p>
+                <div class="model-row"><div class="model-row-head"><strong>DeepSeek · deepseek-chat</strong><span class="status-badge tone-info">默认</span></div><p>provider: deepseek · tool calling · structured output</p></div>
+                <div class="model-row"><div class="model-row-head"><strong>DeepSeek · deepseek-reasoner</strong><span class="status-badge">可用</span></div><p>provider: deepseek · reasoning · tool calling</p></div>
+                <div class="model-row"><div class="model-row-head"><strong>Bridge AI · bridge-ai-default</strong><span class="status-badge">可用</span></div><p>provider: bridge_ai · local proxy</p></div>
+              </section>
+
+              <section class="settings-section" data-settings-panel="permission" hidden>
+                <h3>权限</h3><p>变更类工具调用由 askToolCall 阻塞，策略由宿主与启动参数决定。</p>
+                <div class="settings-rows">
+                  <div class="settings-row"><div><strong>当前模式</strong><small>default · 写操作需确认</small></div><div class="settings-value"><span class="status-badge tone-warn">询问</span></div></div>
+                  <div class="settings-row"><div><strong>自动批准</strong><small>autoApprove = false</small></div><div class="settings-value">关闭</div></div>
+                  <div class="settings-row"><div><strong>只读工具</strong><small>read / grep / find / ls</small></div><div class="settings-value">无需确认</div></div>
+                  <div class="settings-row"><div><strong>变更工具</strong><small>edit / write / bash</small></div><div class="settings-value">允许一次 / 始终允许 / 拒绝</div></div>
+                </div>
+              </section>
+
+              <section class="settings-section" data-settings-panel="about" hidden>
+                <h3>关于</h3><p>版本与本地单用户运行环境。</p>
+                <div class="settings-rows">
+                  <div class="settings-row"><div><strong>ohna-web</strong><small>前端观测台</small></div><div class="settings-value"><code>v1.4.0</code></div></div>
+                  <div class="settings-row"><div><strong>本地运行</strong><small>无登录、无租户隔离</small></div><div class="settings-value">observeOnly = false</div></div>
+                  <div class="settings-row"><div><strong>原型</strong><small>设计交付</small></div><div class="settings-value">09 Glass Depths · 单文件 HTML</div></div>
+                </div>
+              </section>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <div class="toast" id="toast" role="status" aria-live="polite" hidden><span aria-hidden="true">✓</span><span id="toastText">操作完成</span></div>
+    </main>
+  </div>
+
+<script>
+(function () {
+  "use strict";
+
+  const qs = (selector, root = document) => root.querySelector(selector);
+  const qsa = (selector, root = document) => Array.from(root.querySelectorAll(selector));
+  const appShell = qs("#appShell");
+  const chatMain = qs("#chatMain");
+  const sidebar = qs("#sidebar");
+  const traceDrawer = qs("#traceDrawer");
+  const runDetailPanel = qs("#runDetailPanel");
+  const traceTab = qs("#traceTab");
+  const chatTab = qs("#chatTab");
+  const timeline = qs("#timeline");
+  let inspector = null;
+  let settingsTriggerElement = null;
+  let toastTimer = 0;
+
+  function showToast(message) {
+    const toast = qs("#toast");
+    qs("#toastText").textContent = message;
+    toast.hidden = false;
+    window.clearTimeout(toastTimer);
+    toastTimer = window.setTimeout(() => { toast.hidden = true; }, 2400);
+  }
+
+  /* 主题：工具栏分段控件与设置→外观联动，写入 localStorage('ohna-theme')，两入口即时生效。 */
+  const THEME_KEY = "ohna-theme";
+  const toolbarOptions = qsa("[data-theme-option]").filter((b) => b.closest(".theme-switch"));
+  const appearanceOptions = qsa("#appearanceTheme [data-theme-option]");
+  function syncThemeControls(theme) {
+    toolbarOptions.forEach((b) => {
+      const active = b.dataset.themeOption === theme;
+      b.classList.toggle("is-active", active);
+      b.setAttribute("aria-checked", String(active));
+    });
+    appearanceOptions.forEach((b) => {
+      const active = b.dataset.themeOption === theme;
+      b.classList.toggle("is-active", active);
+      b.setAttribute("aria-checked", String(active));
+    });
+  }
+  function applyTheme(theme) {
+    document.documentElement.dataset.theme = theme;
+    try { window.localStorage.setItem(THEME_KEY, theme); } catch (_) {}
+    syncThemeControls(theme);
+  }
+  function initTheme() {
+    let theme = "dark";
+    try { theme = window.localStorage.getItem(THEME_KEY) || "dark"; } catch (_) {}
+    document.documentElement.dataset.theme = theme;
+    syncThemeControls(theme);
+  }
+  toolbarOptions.forEach((button) => button.addEventListener("click", () => applyTheme(button.dataset.themeOption)));
+  appearanceOptions.forEach((button) => button.addEventListener("click", () => applyTheme(button.dataset.themeOption)));
+  initTheme();
+
+  function setInspector(next) {
+    inspector = inspector === next ? null : next;
+    const traceOpen = inspector === "trace";
+    const detailOpen = inspector === "detail";
+    traceDrawer.classList.toggle("is-open", traceOpen);
+    runDetailPanel.classList.toggle("is-open", detailOpen);
+    appShell.classList.toggle("has-inspector", traceOpen || detailOpen);
+    traceTab.classList.toggle("is-active", traceOpen);
+    traceTab.setAttribute("aria-selected", String(traceOpen));
+    chatTab.classList.toggle("is-active", !traceOpen);
+    chatTab.setAttribute("aria-selected", String(!traceOpen));
+  }
+
+  traceTab.addEventListener("click", () => setInspector("trace"));
+  chatTab.addEventListener("click", () => {
+    if (inspector === "trace") setInspector("trace");
+  });
+  qs("#openRunDetail").addEventListener("click", () => setInspector("detail"));
+  qs("#openJsonDetail").addEventListener("click", () => setInspector("detail"));
+  qs("#openJsonFromLong").addEventListener("click", () => setInspector("detail"));
+  qsa("[data-close-inspector]").forEach((button) => button.addEventListener("click", () => setInspector(inspector)));
+
+  qsa("[data-workspace-group]").forEach((group) => {
+    const button = qs(".group-toggle", group);
+    const list = qs(".conversation-list", group);
+    button.addEventListener("click", () => {
+      const expanded = button.getAttribute("aria-expanded") === "true";
+      button.setAttribute("aria-expanded", String(!expanded));
+      list.hidden = expanded;
+    });
+  });
+
+  function switchScene(name) {
+    qsa(".timeline-scene").forEach((scene) => { scene.hidden = scene.dataset.scene !== name; });
+    qsa("[data-scene-button]").forEach((button) => button.classList.toggle("is-active", button.dataset.sceneButton === name));
+    const statusMap = {
+      chat: ["已完成", "tone-success"],
+      empty: ["ready", ""],
+      confirm: ["waiting", "tone-warn"],
+      pending: ["running", "tone-info"],
+      error: ["failed", "tone-danger"],
+      long: ["已完成", "tone-success"]
+    };
+    const status = qs("#runStatus");
+    status.className = "status-badge " + (statusMap[name][1] || "");
+    status.textContent = statusMap[name][0];
+    if (name === "pending" || name === "confirm") status.classList.add("pulse");
+    timeline.scrollTop = 0;
+  }
+
+  qsa("[data-scene-button]").forEach((button) => button.addEventListener("click", () => switchScene(button.dataset.sceneButton)));
+  qsa(".starter").forEach((button) => button.addEventListener("click", () => {
+    qs("#composerInput").value = button.textContent.trim();
+    qs("#sendButton").disabled = false;
+    qs("#composerInput").focus();
+  }));
+
+  qsa(".conversation-main").forEach((button) => {
+    button.addEventListener("click", () => {
+      const item = button.closest(".conversation-item");
+      qsa(".conversation-item").forEach((entry) => entry.classList.toggle("is-active", entry === item));
+      qs("#conversationTitle").textContent = item.dataset.title;
+      qs("#traceConversationTitle").textContent = item.dataset.title;
+      qs("#workspaceRoot").textContent = item.dataset.root;
+      chatMain.classList.toggle("is-cross-workspace", item.dataset.cross === "true");
+      switchScene(item.dataset.scene || "chat");
+      sidebar.classList.remove("is-open");
+      showToast(item.dataset.cross === "true" ? "已按该会话 workspaceRoot 恢复编码上下文" : "会话已切换");
+    });
+  });
+  qsa(".archive-button").forEach((button) => button.addEventListener("click", () => showToast("原型演示：会话已移入归档")));
+
+  qs("#newChat").addEventListener("click", () => {
+    qsa(".conversation-item").forEach((item) => item.classList.remove("is-active"));
+    qs("#conversationTitle").textContent = "新会话";
+    chatMain.classList.remove("is-cross-workspace");
+    switchScene("empty");
+    sidebar.classList.remove("is-open");
+    qs("#composerInput").focus();
+  });
+  qs("#openSidebar").addEventListener("click", () => sidebar.classList.add("is-open"));
+
+  qsa("[data-confirmation]").forEach((card) => {
+    qsa("[data-decision]", card).forEach((button) => {
+      button.addEventListener("click", () => {
+        qsa("button", card).forEach((control) => { control.disabled = true; });
+        const original = button.textContent;
+        button.textContent = "提交中…";
+        window.setTimeout(() => {
+          const decision = button.dataset.decision;
+          const allowed = decision !== "deny";
+          card.classList.toggle("is-allowed", allowed);
+          card.classList.toggle("is-denied", !allowed);
+          const status = qs(".confirmation-status", card);
+          status.textContent = allowed
+            ? (decision === "always" ? "✓ 已始终允许该工具（仅当前会话）" : "✓ 已允许一次，工具调用继续执行")
+            : "× 已拒绝，Agent 将调整方案";
+          const error = qs(".decision-error", card);
+          if (error) error.hidden = true;
+          button.textContent = original;
+          showToast(allowed ? "权限决定已提交" : "已拒绝工具调用");
+        }, 520);
+      });
+    });
+  });
+
+  qsa("[data-llm-call]").forEach((call) => {
+    const toggle = qs("[data-llm-toggle]", call);
+    const body = qs(".llm-body", call);
+    toggle.addEventListener("click", () => {
+      const next = toggle.getAttribute("aria-expanded") !== "true";
+      toggle.setAttribute("aria-expanded", String(next));
+      toggle.setAttribute("aria-label", (next ? "收起" : "展开") + " LLM 调用");
+      body.hidden = !next;
+      qs(".chevron", toggle).style.transform = next ? "rotate(90deg)" : "";
+    });
+    qsa("[data-llm-tab]", call).forEach((tab) => {
+      tab.addEventListener("click", () => {
+        qsa("[data-llm-tab]", call).forEach((candidate) => candidate.setAttribute("aria-selected", String(candidate === tab)));
+        qsa("[data-llm-panel]", call).forEach((panel) => { panel.hidden = panel.dataset.llmPanel !== tab.dataset.llmTab; });
+      });
+    });
+  });
+
+  qsa("[data-trace-state]").forEach((button) => {
+    button.addEventListener("click", () => {
+      qsa("[data-trace-state]").forEach((candidate) => {
+        const active = candidate === button;
+        candidate.classList.toggle("is-active", active);
+        candidate.setAttribute("aria-selected", String(active));
+      });
+      qsa("[data-trace-view]").forEach((view) => { view.hidden = view.dataset.traceView !== button.dataset.traceState; });
+    });
+  });
+  qsa(".run-chip").forEach((button) => button.addEventListener("click", () => {
+    qsa(".run-chip").forEach((candidate) => {
+      const active = candidate === button;
+      candidate.classList.toggle("is-active", active);
+      candidate.setAttribute("aria-pressed", String(active));
+    });
+  }));
+
+  const jsonData = {
+    runId: "run_8f3a5c17d92b4e46",
+    sequence: 151,
+    type: "tool_execution_end",
+    payload: {
+      toolCallId: "tool_call_018",
+      toolName: "edit",
+      status: "completed",
+      args: {
+        file_path: "apps/ohna-web/src/features/workbench/Workbench.tsx",
+        old_string: "setIsTraceOpen((current) => !current)",
+        new_string: "setIsTraceOpen((current) => { if (!current) setSelectedRunDetail(undefined); return !current; })"
+      },
+      result: {
+        changed: true,
+        diff: ["- setIsTraceOpen((current) => !current)", "+ setSelectedRunDetail(undefined)", "+ setIsTraceOpen(true)"],
+        diagnostics: { errors: 0, warnings: 0, filesChecked: 94 },
+        note: "这是一段用于验证长字符串截断、控制字符转义和展开全文行为的真实感说明。".repeat(8)
+      }
+    },
+    replay: {
+      fromSequence: 142,
+      toSequence: 151,
+      transport: "SSE",
+      deduplicated: true,
+      redaction: ["email", "phone", "api_key"]
+    },
+    budget: { maxRenderNodes: 50000, maxBulkExpandNodes: 1000, simulatedNestedNodes: 2360 }
+  };
+  const jsonState = { expanded: new Set(["$", "$.payload"]), expandedStrings: new Set(), bulkNote: "" };
+
+  function jsonType(value) {
+    if (value === null) return "null";
+    if (Array.isArray(value)) return "array";
+    return typeof value;
+  }
+
+  function renderJson() {
+    const tree = qs("[data-json-tree]");
+    tree.textContent = "";
+    const fragment = document.createDocumentFragment();
+
+    function renderNode(value, key, path, depth) {
+      const type = jsonType(value);
+      const isContainer = type === "object" || type === "array";
+      const row = document.createElement("div");
+      row.className = "json-row";
+      row.style.setProperty("--depth", String(depth));
+
+      if (isContainer) {
+        const toggle = document.createElement("button");
+        toggle.type = "button";
+        toggle.className = "json-toggle";
+        toggle.setAttribute("aria-expanded", String(jsonState.expanded.has(path)));
+        toggle.setAttribute("aria-label", "展开/收起 " + (key === null ? "根节点" : key));
+        toggle.textContent = "›";
+        toggle.addEventListener("click", () => {
+          if (jsonState.expanded.has(path)) jsonState.expanded.delete(path); else jsonState.expanded.add(path);
+          renderJson();
+        });
+        row.appendChild(toggle);
+      } else {
+        const spacer = document.createElement("span");
+        spacer.style.width = "17px";
+        row.appendChild(spacer);
+      }
+
+      if (key !== null) {
+        const keyNode = document.createElement("span");
+        keyNode.className = "json-key";
+        keyNode.textContent = String(key);
+        row.appendChild(keyNode);
+      }
+
+      if (isContainer) {
+        const open = type === "array" ? "[" : "{";
+        const close = type === "array" ? "]" : "}";
+        const bracket = document.createElement("span");
+        bracket.className = "json-bracket";
+        bracket.textContent = open;
+        row.appendChild(bracket);
+        if (!jsonState.expanded.has(path)) {
+          const summary = document.createElement("span");
+          summary.className = "json-summary";
+          summary.textContent = (type === "array" ? value.length : Object.keys(value).length) + " 项 " + close;
+          row.appendChild(summary);
+        } else {
+          const summary = document.createElement("span");
+          summary.className = "json-summary";
+          summary.textContent = close;
+          row.appendChild(summary);
+        }
+        fragment.appendChild(row);
+        if (jsonState.expanded.has(path)) {
+          const entries = type === "array" ? value.map((item, index) => [index, item]) : Object.entries(value);
+          entries.forEach(([childKey, childValue]) => renderNode(childValue, childKey, path + "." + childKey, depth + 1));
+        }
+        return;
+      }
+
+      const valueNode = document.createElement("span");
+      valueNode.className = "json-" + (type === "string" ? "string" : type);
+      if (type === "string") {
+        const long = value.length > 200;
+        const expanded = jsonState.expandedStrings.has(path);
+        valueNode.textContent = '"' + (long && !expanded ? value.slice(0, 200) + "…" : value) + '"';
+        row.appendChild(valueNode);
+        if (long && !expanded) {
+          const more = document.createElement("button");
+          more.type = "button";
+          more.className = "json-more";
+          more.textContent = "展开全文（" + value.length + " 字符）";
+          more.addEventListener("click", () => { jsonState.expandedStrings.add(path); renderJson(); });
+          row.appendChild(more);
+        }
+      } else {
+        valueNode.textContent = type === "null" ? "null" : String(value);
+        row.appendChild(valueNode);
+      }
+      fragment.appendChild(row);
+    }
+
+    renderNode(jsonData, null, "$", 0);
+    tree.appendChild(fragment);
+    qs("[data-json-budget]").textContent = jsonState.bulkNote || "默认展开根与第一层容器 · 节点预算 50,000";
+  }
+
+  function collectContainerPaths(value, path, output) {
+    const type = jsonType(value);
+    if (type !== "object" && type !== "array") return;
+    output.push(path);
+    const entries = type === "array" ? value.map((item, index) => [index, item]) : Object.entries(value);
+    entries.forEach(([key, child]) => collectContainerPaths(child, path + "." + key, output));
+  }
+
+  qs("[data-json-expand]").addEventListener("click", () => {
+    const paths = [];
+    collectContainerPaths(jsonData, "$", paths);
+    paths.slice(0, 1000).forEach((path) => jsonState.expanded.add(path));
+    jsonState.bulkNote = "已展开预算内 1,000 个节点；模拟载荷另有 1,360 个嵌套节点保持原状，可逐级展开";
+    renderJson();
+  });
+  qs("[data-json-collapse]").addEventListener("click", () => {
+    jsonState.expanded.clear();
+    jsonState.bulkNote = "全部容器已折叠；长字符串展开状态会在本次查看中保留";
+    renderJson();
+  });
+  renderJson();
+
+  const settingsBackdrop = qs("#settingsBackdrop");
+  const settingsDialog = qs("#settingsDialog");
+  const focusableSelector = "button:not([disabled]), [href], input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex='-1'])";
+
+  function openSettings() {
+    settingsTriggerElement = document.activeElement instanceof HTMLElement ? document.activeElement : qs("#settingsTrigger");
+    settingsBackdrop.hidden = false;
+    window.requestAnimationFrame(() => settingsDialog.focus());
+  }
+  function closeSettings() {
+    if (settingsBackdrop.hidden) return;
+    settingsBackdrop.hidden = true;
+    settingsTriggerElement?.focus();
+  }
+  qs("#settingsTrigger").addEventListener("click", openSettings);
+  qs("#closeSettings").addEventListener("click", closeSettings);
+  settingsBackdrop.addEventListener("mousedown", (event) => { if (event.target === settingsBackdrop) closeSettings(); });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !settingsBackdrop.hidden) {
+      event.preventDefault();
+      closeSettings();
+      return;
+    }
+    if (event.key !== "Tab" || settingsBackdrop.hidden) return;
+    const focusables = qsa(focusableSelector, settingsDialog);
+    if (!focusables.length) return;
+    const first = focusables[0];
+    const last = focusables[focusables.length - 1];
+    if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+    else if (event.shiftKey && (document.activeElement === first || document.activeElement === settingsDialog)) { event.preventDefault(); last.focus(); }
+  });
+
+  qsa("[data-settings-tab]").forEach((button) => button.addEventListener("click", () => {
+    qsa("[data-settings-tab]").forEach((candidate) => candidate.classList.toggle("is-active", candidate === button));
+    qsa("[data-settings-panel]").forEach((panel) => { panel.hidden = panel.dataset.settingsPanel !== button.dataset.settingsTab; });
+  }));
+  qsa("[data-scale]").forEach((button) => button.addEventListener("click", () => {
+    document.documentElement.style.setProperty("--ui-scale", button.dataset.scale);
+    qsa("[data-scale]").forEach((candidate) => {
+      const active = candidate === button;
+      candidate.classList.toggle("is-active", active);
+      candidate.setAttribute("aria-checked", String(active));
+    });
+  }));
+
+  const composerInput = qs("#composerInput");
+  const sendButton = qs("#sendButton");
+  composerInput.addEventListener("input", () => {
+    sendButton.disabled = composerInput.value.trim().length === 0;
+    composerInput.style.height = "auto";
+    composerInput.style.height = Math.min(composerInput.scrollHeight, 132) + "px";
+  });
+  composerInput.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
+      event.preventDefault();
+      qs("#composerForm").requestSubmit();
+    }
+  });
+  qs("#composerForm").addEventListener("submit", (event) => {
+    event.preventDefault();
+    const text = composerInput.value.trim();
+    if (!text) return;
+    switchScene("chat");
+    const wrapper = document.createElement("div");
+    wrapper.innerHTML = '<article class="message is-user"><div class="avatar" aria-hidden="true">U</div><div class="message-body"><div class="message-meta"><span class="message-role">User</span><time>刚刚</time></div><p class="message-text"></p></div></article><article class="message is-assistant"><div class="avatar" aria-hidden="true"><i class="brand-mark"></i></div><div class="message-body"><div class="message-meta"><span class="message-role">Assistant</span><time>刚刚</time><span class="status-badge tone-info pulse">running</span></div><div class="live-line"><i class="spinner" aria-hidden="true"></i><span>正在理解任务并检查工作区…</span></div></div></article>';
+    qs(".message-text", wrapper).textContent = text;
+    qs("#dynamicMessages").appendChild(wrapper);
+    composerInput.value = "";
+    composerInput.style.height = "auto";
+    sendButton.disabled = true;
+    timeline.scrollTop = timeline.scrollHeight;
+  });
+
+  qs("#collapseTokens").addEventListener("click", (event) => {
+    const collapsed = document.body.classList.toggle("tokens-collapsed");
+    event.currentTarget.setAttribute("aria-expanded", String(!collapsed));
+    event.currentTarget.setAttribute("aria-label", collapsed ? "展开设计令牌面板" : "收起设计令牌面板");
+    event.currentTarget.textContent = collapsed ? "⌄" : "⌃";
+  });
+
+  qsa("[role='tablist']").forEach((list) => {
+    list.addEventListener("keydown", (event) => {
+      if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+      const tabs = qsa("[role='tab']", list).filter((tab) => !tab.disabled);
+      if (!tabs.length) return;
+      const index = tabs.indexOf(document.activeElement);
+      if (index < 0) return;
+      event.preventDefault();
+      const next = (index + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
+      tabs[next].focus();
+      tabs[next].click();
+    });
+  });
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,779 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>ohna CLI / TUI · 09 玻璃 Glass Depths 终端高保真交互稿</title>
+<style>
+  /* ============================================================
+     09 玻璃 Glass Depths —— 终端侧 token 平移说明
+     ------------------------------------------------------------
+     玻璃稿在「真实终端」里无法使用 blur / 阴影 / 光斑 / 半透明玻璃层
+     （packages/term 只提供 RawTerminal + Screen 行差分重绘 + box 细圆角
+     ╭─╮│╰─╯ + visibleWidth/truncateToWidth）。本稿据此把玻璃质感平移：
+       · blur/backdrop-filter/box-shadow/glow  —— 全部剔除
+       · 半透明 glass 层            —— 平移为 4 档纯色表面（canvas/panel/toolCard/stroke）
+       · 玻璃高光描边              —— 平移为 stroke 细描边（1px 实线，不再发光）
+       · 青绿强调                —— 平移为 accent 语义色 #89D7B7（见 PALETTE）
+     页面本身用 CSS 模拟「暗终端 + 细描边盒」观感，但明确标注：真实终端无玻璃。
+     ============================================================ */
+  :root {
+    /* —— 终端 4 档表面（来自 theme.ts BACKGROUND，玻璃层→纯色；画布收敛中性近黑） —— */
+    --canvas: #14171A;       /* 画布底色（中性近黑，玻璃稿 canvas 平移） */
+    --panel: #1E2120;        /* 会话面板 / 卡片 / 输入框正文 */
+    --tool-card: #262A28;    /* 工具卡片底色 */
+    --stroke: #3A3F3D;       /* 细描边（玻璃高光→实线描边，不发光） */
+    --stroke-soft: #2E3331;
+
+    /* —— 语义色（PALETTE 的 24-bit 真值；终端侧用纯色替代玻璃荧光） —— */
+    --c-foreground: #EDE6DA; /* 助手正文 / 标题 */
+    --c-text-2: #B9BCB7; /* 次级正文 */
+    --c-text-3: #868C88; /* 三级正文 */
+    --c-dim: #5C625F;        /* 次要文本 / 系统行 */
+    --c-accent: #89D7B7;     /* ⏺ 工具名 / 强调：青绿，与 Web 统一 */
+    --c-user: #BFE3D2;       /* ❯ 用户标签：浅薄荷，区别于 accent 但仍属青绿系 */
+    --c-string: #A6E6CC;     /* 命令 / 工具参数 */
+    --c-property: #9AA8A2;   /* 文件路径 / 属性：中性灰绿 */
+    --c-success: #89D7B7;    /* ✓ / diff + */
+    --c-error: #D36A5F;      /* ✗ / diff - / 危险（统一 danger） */
+    --c-warn: #D9A441;       /* ⚠ 警告 */
+    --c-info: #428475;       /* ℹ 信息类别 */
+    --c-note: #9AA8A2;
+    --c-selected: #2E3331;   /* 选中行背景 */
+    --c-selected-text: #EDE6DA;
+    --c-focused: #BFE3D2;    /* 确认态边框 / focused */
+
+    /* diff 语义（玻璃稿 diff 色 → 终端纯色，无荧光） */
+    --diff-add: #89D7B7;
+    --diff-del: #D36A5F;
+
+    --mono: "SF Mono", "JetBrains Mono", "Cascadia Code", "Fira Code",
+            ui-monospace, "Menlo", "Consolas", "Liberation Mono", monospace;
+    --bg: #0B0D0E;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background:
+      radial-gradient(1200px 600px at 80% -10%, rgba(137,215,183,.04) 0%, transparent 60%),
+      var(--canvas);
+    color: var(--c-foreground);
+    font-family: var(--mono);
+    font-size: 14px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    padding: 20px;
+  }
+
+  /* —— 顶部标题区 —— */
+  header.top {
+    max-width: 1180px;
+    margin: 0 auto 14px;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 12px;
+    border-bottom: 1px solid var(--stroke);
+    padding-bottom: 12px;
+  }
+  header.top h1 {
+    font-size: 18px;
+    margin: 0 0 4px;
+    letter-spacing: .5px;
+    color: var(--c-foreground);
+  }
+  header.top .badge {
+    display: inline-block;
+    font-size: 11px;
+    color: var(--c-success);
+    border: 1px solid var(--stroke);
+    background: var(--tool-card);
+    padding: 2px 8px;
+    border-radius: 6px;
+  }
+  header.top .sub { color: var(--c-dim); font-size: 12px; }
+
+  /* —— 布局 —— */
+  .wrap { max-width: 1180px; margin: 0 auto; display: grid; grid-template-columns: 1fr; gap: 16px; }
+  @media (min-width: 980px) { .wrap { grid-template-columns: 320px 1fr; align-items: start; } }
+
+  /* —— 左侧 token 表 / 控制 —— */
+  .side { display: flex; flex-direction: column; gap: 14px; }
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--stroke);
+    border-radius: 10px;
+    padding: 14px;
+  }
+  .card h2 {
+    font-size: 13px; margin: 0 0 10px; color: var(--c-note);
+    text-transform: uppercase; letter-spacing: 1px; font-weight: 600;
+  }
+
+  /* token 映射表 */
+  table.tokens { width: 100%; border-collapse: collapse; font-size: 12px; }
+  table.tokens th, table.tokens td {
+    text-align: left; padding: 4px 6px; border-bottom: 1px solid var(--stroke-soft);
+    white-space: nowrap;
+  }
+  table.tokens th { color: var(--c-dim); font-weight: 600; }
+  table.tokens td.role { color: var(--c-note); }
+  .chip { display:inline-flex; align-items:center; gap:6px; }
+  .chip i { width: 12px; height: 12px; border-radius: 3px; border: 1px solid var(--stroke); display:inline-block; }
+  .mono { font-family: var(--mono); color: var(--c-dim); }
+
+  /* —— 屏幕切换按钮 —— */
+  .nav { display: flex; flex-wrap: wrap; gap: 6px; }
+  .nav button {
+    font-family: var(--mono); font-size: 12px;
+    background: var(--tool-card); color: var(--c-foreground);
+    border: 1px solid var(--stroke); border-radius: 7px;
+    padding: 7px 10px; cursor: pointer; transition: border-color .15s, background .15s;
+  }
+  .nav button:hover { border-color: var(--c-success); }
+  .nav button.active { background: var(--c-selected); border-color: var(--c-success); color: var(--c-selected-text); }
+
+  /* 演示切换 */
+  .seg { display:flex; gap:6px; margin-top: 6px; }
+  .seg button {
+    flex:1; font-family: var(--mono); font-size: 12px; cursor:pointer;
+    background: var(--tool-card); color: var(--c-dim);
+    border:1px solid var(--stroke); border-radius:7px; padding:6px 8px;
+  }
+  .seg button.active { color: var(--c-foreground); border-color: var(--c-accent); }
+  .note-small { font-size: 11px; color: var(--c-dim); margin: 8px 0 0; }
+
+  /* —— 右侧终端画布 —— */
+  .stage { display:flex; flex-direction: column; gap: 10px; }
+  .term-frame {
+    background: var(--canvas);
+    border: 1px solid var(--stroke);
+    border-radius: 12px;
+    /* 注意：真实终端无 box-shadow / blur，这里仅页面装饰，标注「页面装饰，非终端能力」 */
+    box-shadow: 0 10px 40px rgba(0,0,0,.45);
+    overflow: hidden;
+  }
+  .term-bar {
+    display:flex; align-items:center; gap: 8px;
+    padding: 8px 12px; background: var(--panel);
+    border-bottom: 1px solid var(--stroke);
+  }
+  .term-bar .dot { width: 11px; height: 11px; border-radius: 50%; background: var(--stroke); }
+  .term-bar .dot.r { background:#D36A5F; } .term-bar .dot.y { background:#D9A441; } .term-bar .dot.g { background:#89D7B7; }
+  .term-bar .title { font-size: 12px; color: var(--c-dim); }
+  .term-bar .meta { margin-left: auto; font-size: 11px; color: var(--c-dim); }
+
+  pre.term {
+    margin: 0; padding: 16px 18px;
+    font-family: var(--mono); font-size: 13.5px; line-height: 1.45;
+    color: var(--c-foreground);
+    white-space: pre; overflow-x: auto;
+    tab-size: 2;
+  }
+  /* 在 HTML 里用 span 着色模拟 ANSI 24-bit；真实终端用 paint() 生成 \x1b[38;2;r;g;b */
+  .fg-foreground { color: var(--c-foreground); }
+  .fg-accent     { color: var(--c-accent); }
+  .fg-user       { color: var(--c-user); }
+  .fg-string     { color: var(--c-string); }
+  .fg-property   { color: var(--c-property); }
+  .fg-success    { color: var(--c-success); }
+  .fg-error      { color: var(--c-error); }
+  .fg-warn       { color: var(--c-warn); }
+  .fg-info       { color: var(--c-info); }
+  .fg-dim        { color: var(--c-dim); }
+  .fg-note       { color: var(--c-note); }
+  .fg-selected-text { color: var(--c-selected-text); }
+  .fg-focused    { color: var(--c-focused); }
+
+  /* 选中块：背景 + 前景（paintBg） */
+  .sel { background: var(--c-selected); color: var(--c-selected-text); }
+  /* 表面铺底：仅用于页面观感对齐；真实终端用 surface()/paintOnSurface 铺背景行 */
+  .surf-panel  { background: var(--panel); }
+  .surf-stroke { background: var(--stroke); }
+  .surf-tool   { background: var(--tool-card); }
+  .b-stroke    { border:1px solid var(--stroke); }
+  .b-focus     { border:1px solid var(--c-focused); }
+
+  /* 折叠行（▲ 收起 / ▼ 展开） */
+  .fold-toggle { color: var(--c-dim); }
+
+  .legend { font-size: 11px; color: var(--c-dim); }
+  .legend code { color: var(--c-property); }
+
+  footer.note {
+    max-width: 1180px; margin: 18px auto 0; color: var(--c-dim);
+    font-size: 12px; border-top: 1px solid var(--stroke); padding-top: 12px;
+  }
+  footer.note b { color: var(--c-note); }
+  .kbd { font-family: var(--mono); color: var(--c-info); border:1px solid var(--stroke); border-radius:4px; padding:0 4px; font-size:11px; }
+
+  /* 隐藏非活动屏幕 */
+  .screen { display: none; }
+  .screen.active { display: block; }
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div>
+    <span class="badge">09 玻璃 Glass Depths</span>
+    <h1>ohna CLI / TUI · 终端高保真交互稿</h1>
+    <div class="sub">玻璃质感在终端的平移：blur/阴影/光斑全部剔除，改用 4 档纯色表面 + stroke 细描边 + 青绿强调（与 Web 统一 #89D7B7）</div>
+  </div>
+  <div class="sub" id="id-meta">单文件 · 零外部依赖 · vanilla JS · 中文界面</div>
+</header>
+
+<div class="wrap">
+  <!-- ============ 左侧：token 映射表 + 控制 ============ -->
+  <aside class="side">
+    <section class="card">
+      <h2>主题色 · Token 映射表</h2>
+      <p class="note-small" style="margin-top:0">role（theme.ts）→ 24-bit 真彩 → 256 降级 → NO_COLOR 零转义</p>
+      <table class="tokens" id="id-tokentable">
+        <thead>
+          <tr><th>role</th><th>truecolor</th><th>256</th><th>NO_COLOR 存活方式</th></tr>
+        </thead>
+        <tbody><!-- 由 JS 填充 --></tbody>
+      </table>
+    </section>
+
+    <section class="card">
+      <h2>画面切换</h2>
+      <div class="nav" id="id-nav">
+        <button data-screen="welcome" class="active">① 欢迎/空会话</button>
+        <button data-screen="main">② 整屏 TUI</button>
+        <button data-screen="permission">③ 权限卡</button>
+        <button data-screen="thinking">④ 思考/进度</button>
+        <button data-screen="diff">⑤ 代码块/Diff</button>
+        <button data-screen="fold">⑥ 折叠/@/#</button>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>降级演示（页面内切换）</h2>
+      <div class="seg" id="id-mode">
+        <button data-mode="true" class="active">24-bit 真彩</button>
+        <button data-mode="256">256 降级</button>
+        <button data-mode="no">NO_COLOR</button>
+      </div>
+      <p class="note-small">
+        <b style="color:var(--c-note)">24-bit</b>：真终端 TTY，paint() 输出 <code>\x1b[38;2;r;g;b</code>。<br>
+        <b style="color:var(--c-warn)">256</b>：旧终端只支持调色板，颜色按最近 256 色对齐。<br>
+        <b style="color:var(--c-error)">NO_COLOR</b>：非 TTY / NO_COLOR / TERM=dumb → 零转义，信息靠符号·缩进·前缀存活，绝不只编码在颜色里。
+      </p>
+    </section>
+
+    <section class="card">
+      <h2>玻璃 → 终端 平移对照</h2>
+      <p class="note-small" style="margin-top:0">
+        <b style="color:var(--c-error)">已剔除</b>：backdrop-filter blur、box-shadow、glow 荧光、半透明玻璃层、圆角渐变。<br>
+        <b style="color:var(--c-success)">终端替代</b>：玻璃层→<span class="mono" style="color:var(--c-note)">canvas/panel/toolCard/stroke</span> 纯色分层；高光→<span class="mono" style="color:var(--c-note)">stroke 1px 实线描边</span>；青绿强调→<span class="mono" style="color:var(--c-success)">accent #89D7B7</span>；圆角→box 细圆角 <span class="mono">╭─╮│╰─╯</span>；spinner→<span class="mono">✻</span> 200ms 单帧。
+      </p>
+    </section>
+  </aside>
+
+  <!-- ============ 右侧：终端画布 ============ -->
+  <div class="stage">
+    <div class="term-frame">
+      <div class="term-bar">
+        <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+        <span class="title">ohna — bash — 96×30</span>
+        <span class="meta" id="id-mode-meta">mode: 24-bit truecolor</span>
+      </div>
+      <pre class="term" id="id-term"><!-- 终端内容由 JS 按屏幕与降级模式渲染 --></pre>
+    </div>
+    <div class="legend">
+      符号契约（<code>entries.ts</code>）：⏺ 工具调用 · ⎿ 工具结果 · ⏹ 停止 · ✻ spinner/欢迎 · ✗ 错误。
+      布局顺序（<code>frame.ts</code>）：对话区 → toast(≤1) → 输入框/权限卡 → 面板 → 状态行。
+      box 细圆角 <code>╭─╮ / │ / ╰─╯</code>，CJK 计 2 列（<code>packages/term</code> visibleWidth）。
+    </div>
+  </div>
+</div>
+
+<footer class="note">
+  <b>自检说明：</b> 本文件单文件自包含、零 CDN、vanilla JS、系统等宽字体回退；HTML 标签闭合、内联 JS 通过 <code>node --check</code>、唯一 ID 计数 &lt; 29（见源码注释）。
+  玻璃质感剔除清单与终端替代见左侧「玻璃 → 终端 平移对照」。token 表可直接抄进 <code>apps/ohna-cli/src/ui/theme.ts</code> 的 PALETTE / BACKGROUND，并同步 Figma。
+</footer>
+
+<script>
+/* =============================================================================
+ * ohna CLI/TUI 终端高保真稿 —— 纯数据 + 渲染器
+ * 唯一写范围：docs/design/ohna-glass-cli.html
+ * 不引 CDN、不依赖外部；与 theme.ts 的 role 一一对应。
+ * ========================================================================== */
+(function () {
+  "use strict";
+
+  /* ---------------------------------------------------------------
+   * 1. 语义色角色 → 24-bit(RGB) → 256 最近色 → NO_COLOR 存活方式
+   *    与 theme.ts PALETTE / BACKGROUND 对齐（薄荷绿强调 #89D7B7 等）。
+   * ------------------------------------------------------------- */
+  const PALETTE = {
+    foreground: { rgb: [0xED, 0xE6, 0xDA], hex: "#EDE6DA", c256: 231, label: "助手正文 / 标题" },
+    accent:     { rgb: [0x89, 0xD7, 0xB7], hex: "#89D7B7", c256: 115, label: "⏺ 工具名 / 青绿强调" },
+    user:       { rgb: [0xBF, 0xE3, 0xD2], hex: "#BFE3D2", c256: 158, label: "❯ 用户标签（薄荷）" },
+    string:     { rgb: [0xA6, 0xE6, 0xCC], hex: "#A6E6CC", c256: 121, label: "命令 / 工具参数" },
+    property:   { rgb: [0x9A, 0xA8, 0xA2], hex: "#9AA8A2", c256: 151, label: "文件路径 / 属性" },
+    success:    { rgb: [0x89, 0xD7, 0xB7], hex: "#89D7B7", c256: 115, label: "✓ / diff + / 青绿强调" },
+    error:      { rgb: [0xD3, 0x6A, 0x5F], hex: "#D36A5F", c256: 167, label: "✗ / diff - / danger 红" },
+    warn:       { rgb: [0xD9, 0xA4, 0x41], hex: "#D9A441", c256: 221, label: "plan 模式 / ⚠" },
+    info:       { rgb: [0x42, 0x84, 0x75], hex: "#428475", c256: 23,  label: "链接 / 行号 / info" },
+    dim:        { rgb: [0x5C, 0x62, 0x5F], hex: "#5C625F", c256: 59,  label: "次要文本 / 系统行" },
+    note:       { rgb: [0x9A, 0xA8, 0xA2], hex: "#9AA8A2", c256: 151, label: "提示说明" },
+    selected:   { rgb: [0x2E, 0x33, 0x31], hex: "#2E3331", c256: 102, label: "选中行背景" },
+    selectedText:{rgb: [0xED, 0xE6, 0xDA], hex: "#EDE6DA", c256: 231, label: "选中行前景" },
+    focused:    { rgb: [0xBF, 0xE3, 0xD2], hex: "#BFE3D2", c256: 158, label: "确认态边框 / focused" },
+  };
+
+  const BACKGROUND = {
+    canvas:   "#14171A", // 画布（中性近黑，玻璃 canvas 平移）
+    panel:    "#1E2120", // 会话面板 / 卡片 / 输入框正文
+    toolCard: "#262A28", // 工具卡片底色
+    stroke:   "#3A3F3D", // 细描边（玻璃高光→实线，不发光）
+  };
+
+  const DIFF = { add: "#89D7B7", del: "#D36A5F" }; // diff 语义纯色（玻璃 diff 荧光→纯色）
+
+  /* 256 色降级：xterm 调色板近似（与 theme.ts paint 24-bit 同源，仅低色端对齐） */
+  const ROLE_ORDER = ["foreground","accent","user","string","property","success","error","warn","info","dim","note","selected","selectedText","focused"];
+  const NO_COLOR_SURVIVE = {
+    foreground: "正文（不靠颜色，靠文字本身）",
+    accent:     "⏺ 工具名 + 大写前缀「TOOL」",
+    user:       "❯ 用户标签（符号 + 缩进）",
+    string:     "引号包裹 / 单引号参数",
+    property:   "路径前后加「·」或反引号",
+    success:    "「✓」对勾符号 + [done] 前缀",
+    error:      "「✗」叉号符号 + [ERR] 前缀",
+    warn:       "「⚠」符号 + [plan] 前缀",
+    info:       "「→」「#」链接/行号前缀",
+    dim:        "缩进 + 小一号靠排版（符号 −）",
+    note:       "「*」星号提示标记",
+    selected:   "「▸」箭头前缀（不靠反色）",
+    selectedText:"同上（箭头 + 加亮文本）",
+    focused:    "「?」问号 + 方括号 [ ]",
+  };
+
+  /* ---------------------------------------------------------------
+   * 2. 着色工具：根据当前 mode 生成 HTML span（模拟 ANSI 24-bit）。
+   *    mode: "true"(24-bit) | "256" | "no"(NO_COLOR)
+   *    真实终端里这些由 theme.ts paint()/paintBg()/surface() 输出转义序列；
+   *    这里只做视觉近似，并演示「信息不只在颜色里」。
+   * ------------------------------------------------------------- */
+  let CURRENT_MODE = "true";
+
+  // 把文本包进某个 role 的色；NO_COLOR 模式下返回纯文本（无色）。
+  function paint(text, role) {
+    if (CURRENT_MODE === "no") {
+      // NO_COLOR：靠前缀/符号存活，不包色
+      return escapeHtml(text);
+    }
+    return '<span class="fg-' + role + '">' + escapeHtml(text) + "</span>";
+  }
+  // 反色块（选中行）：背景 + 前景
+  function paintBg(text, role, fg) {
+    if (CURRENT_MODE === "no") {
+      return '<span class="sel">▸ ' + escapeHtml(text) + "</span>"; // 用箭头前缀代替反色
+    }
+    return '<span class="sel">' + escapeHtml(text) + "</span>";
+  }
+  // 表面铺底（页面观感对齐；终端用 paintOnSurface 铺满整行）
+  function surfLine(innerHtml, surfaceName) {
+    const cls = surfaceName === "stroke" ? "surf-stroke" : surfaceName === "toolCard" ? "surf-tool" : "surf-panel";
+    return '<span class="' + cls + '">│ ' + innerHtml + '</span>';
+  }
+
+  function escapeHtml(s) {
+    return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
+
+  // 在 NO_COLOR 模式下，给关键行加符号前缀（信息不编码在颜色里）
+  function noColorPrefix(kind) {
+    if (CURRENT_MODE !== "no") return "";
+    switch (kind) {
+      case "tool": return "⏺ ";
+      case "user": return "❯ ";
+      case "ok": return "✓ ";
+      case "err": return "✗ ";
+      case "warn": return "⚠ ";
+      case "focus": return "? ";
+      case "arrow": return "▸ ";
+      default: return "";
+    }
+  }
+
+  /* ---------------------------------------------------------------
+   * 3. 各画面的终端帧（返回 HTML 字符串行）
+   * ------------------------------------------------------------- */
+
+  // ① 欢迎 / 空会话态（renderWelcome / renderTtyWelcome）
+  function screenWelcome() {
+    const logo = [
+      "███████ ██   ██ ██   ██ ███████",
+      "██   ██ ██   ██ ███  ██ ██   ██",
+      "██   ██ ███████ ██ █ ██ ██   ██",
+      "██   ██ ██   ██ ██  ███ ███████",
+      "███████ ██   ██ ██   ██ ██   ██",
+    ];
+    let out = "";
+    logo.forEach((l) => { out += paint(l, "accent") + "\n"; });
+    out += "\n";
+    out += paint("工作目录  ", "dim") + paint("/Users/pegmca/code/ohna-harness", "property") + "\n";
+    out += paint("工具      ", "dim") + paint("bash · read · write · edit · grep · find · ls", "string") + paint("（7 个）", "dim") + "\n";
+    out += paint("会话      ", "dim") + paint("sess_a1b2c3", "note") + paint("（--resume sess_a1b2c3 可恢复）", "dim") + "\n";
+    out += paint("MCP       ", "dim") + paint("filesystem · github", "info") + "\n";
+    out += paint("观测台    ", "dim") + paint("http://127.0.0.1:56173（对话页「Trace」抽屉）", "info") + "\n";
+    out += paint("快捷键    ", "dim") + paint("Ctrl+O 分组 · Shift+Tab 权限模式 · Ctrl+C 中断", "dim") + "\n";
+    out += "\n";
+    // 空会话提示（transcript 空态）
+    out += paint("提示：直接描述任务，或用 / 唤起命令面板。例如：", "note") + "\n";
+    out += paint("  /resume sess_a1b2c3", "string") + "\n";
+    out += paint("  /model", "string") + "\n";
+    out += "\n";
+    // composer 边框（box 细圆角，正文铺 panel，边框铺 stroke）
+    out += renderComposer("");
+    return out;
+  }
+
+  // ② 整屏 TUI 主画面
+  function screenMain() {
+    let out = "";
+    // 对话区（transcript，自上而下）
+    out += paint("✻ 思考中… (2s)", "dim") + "\n"; // spinner 行（思考中态）
+    out += "\n";
+    // user 条目
+    out += paint("❯", "user") + " " + paint("帮我在 packages/term 的 box 里加一个可选的标题对齐参数，并把 README 更新一下。", "foreground") + "\n";
+    out += "\n";
+    // assistant 思考灰块（reasoning high verbosity）
+    out += paint("⏺", "accent") + " " + paint("我先看 box.ts 现有结构和 README 的边框示例。", "note") + "\n";
+    out += "\n";
+    // 工具调用流：⏺ 工具名 + args
+    out += paint("⏺", "accent") + " " + paint("read", "accent") + " " + paint("packages/term/src/components/box.ts", "property") + "\n";
+    out += surfLine(paint("⎿", "dim") + " " + paint("读取 118 行；导出 box / truncateToWidth。", "dim"), "toolCard") + "\n";
+    out += "\n";
+    out += paint("⏺", "accent") + " " + paint("grep", "accent") + " " + paint("--include=*.ts \"visibleWidth\"", "string") + "\n";
+    out += surfLine(paint("⎿", "dim") + " " + paint("5 处匹配：box.ts / utils.ts / screen.ts …", "dim"), "toolCard") + "\n";
+    out += "\n";
+    // tool 结果较长 → 折叠提示（见 screenFold 展开）
+    out += paint("⏺", "accent") + " " + paint("edit", "accent") + " " + paint("packages/term/src/components/box.ts", "property") + "\n";
+    out += surfLine(paint("⎿", "dim") + " " + paint("+24 −3  已插入 titleAlign 参数（预览折叠，回车展开）", "success"), "toolCard") + "\n";
+    out += "\n";
+    out += paint("⏹", "note") + " " + paint("已完成 box 标题对齐；README 同步更新 2 处。", "foreground") + "\n";
+    out += "\n";
+    // toast（D8 合成槽，≤1 行）
+    out += paint("✓", "success") + " " + paint("已自动保存会话到 ~/.ohna/sessions/sess_a1b2c3.jsonl", "note") + paint("  +1 more", "dim") + "\n";
+    out += "\n";
+    // composer
+    out += renderComposer("好的，我来看一下 diff 预览 ");
+    // 面板（/ 命令面板示例）
+    out += paint("  /model", "string") + "        " + paint("切换模型", "dim") + "\n";
+    out += paint("  /resume", "string") + "       " + paint("恢复历史会话", "dim") + "\n";
+    out += paint("  /cost", "string") + "         " + paint("查看本次花费", "dim") + "\n";
+    out += paint("  ↑/↓ 选择 · Tab 补全 · Enter 执行 · Esc 关闭", "dim") + "\n";
+    // 状态行
+    out += renderStatusLine("default", "hy3-x", 38, 0);
+    return out;
+  }
+
+  // ③ 权限确认卡 askToolCall（含 readline 降级路径，键盘可达）
+  function screenPermission() {
+    let out = "";
+    // 对话区略（卡片态替换输入区）
+    out += paint("✻ 思考中… (4s)", "dim") + "\n";
+    out += paint("⏺", "accent") + " " + paint("需要调用 bash 运行构建验证改动。", "note") + "\n";
+    out += "\n";
+    // 权限卡（render + box 细圆角，整卡铺 panel，标题/竖线用 focused）
+    out += renderPermissionCard("bash", "bash 执行命令：pnpm build（构建产物约 48 个文件）", "diff-sample");
+    return out;
+  }
+
+  // ④ spinner / 进度 与 思考中态
+  function screenThinking() {
+    let out = "";
+    out += paint("✻ 思考中… (12s)", "dim") + "\n";
+    out += "\n";
+    out += paint("❯", "user") + " " + paint("把编码 agent 的 TUI 截图整理成一份发布说明。", "foreground") + "\n";
+    out += "\n";
+    // reasoning 灰块（high verbosity 展开）
+    out += paint("⏺", "accent") + " " + paint("（思考）先确认要覆盖的发布亮点：玻璃主题翻译、Figma MCP、权限卡键盘可达……", "note") + "\n";
+    out += "\n";
+    // 工具执行中（running）spinner
+    out += paint("✻", "dim") + " " + paint("执行 bash", "dim") + paint(" … (3s)", "dim") + "\n";
+    out += surfLine(paint("⎿", "dim") + " " + paint("pnpm build 完成，12.4s，0 error", "success"), "toolCard") + "\n";
+    out += "\n";
+    // spinner 帧序列说明（FRAMES = [✻]，200ms）
+    out += paint("spinner 帧：", "dim") + " " + paint("✻", "dim") + "  " + paint("（单帧，200ms 刷新，旧端对齐多帧动画形态）", "dim") + "\n";
+    out += "\n";
+    out += renderComposer("");
+    out += renderStatusLine("acceptEdits", "hy3-x", 61, 0);
+    return out;
+  }
+
+  // ⑤ 代码块与 diff
+  function screenDiff() {
+    let out = "";
+    out += paint("⏺", "accent") + " " + paint("edit", "accent") + " " + paint("packages/term/src/components/box.ts", "property") + "\n";
+    // 写前 unified diff 预览（colorDiffLine：@@ property / + success / - error / ctx dim）
+    const diff = [
+      "@@ -41,7 +41,12 @@ export function box(lines, opts) {",
+      "   const title = opts?.title;",
+      "-  const titlePrefix = title ? `─ ${title} ` : \"\";",
+      "-  const titlePrefixWidth = visibleWidth(titlePrefix);",
+      "+  const titleAlign = opts?.titleAlign ?? \"left\";",
+      "+  const titlePrefix = title ? (titleAlign === \"right\"",
+      "+    ? `${title} ─ ` : `─ ${title} `) : \"\";",
+      "+  const titlePrefixWidth = visibleWidth(titlePrefix);",
+      "+  // 右对齐标题时把前缀放到上边框尾部",
+    ];
+    let d = "";
+    diff.forEach((ln) => {
+      let role = "dim";
+      if (ln.startsWith("@@")) role = "property";
+      else if (ln.startsWith("+")) role = "success";
+      else if (ln.startsWith("-")) role = "error";
+      d += paint(ln, role) + "\n";
+    });
+    out += surfLine(d.trimEnd(), "toolCard") + "\n";
+    out += "\n";
+    out += paint("⎿", "dim") + " " + paint("✓ 已写入 5 处；类型检查通过。", "success") + "\n";
+    out += "\n";
+    // 代码块（assistant 返回的可读代码）
+    out += paint("⏺", "accent") + " " + paint("以下是改动后的边框片段：", "foreground") + "\n";
+    const code = [
+      "  const top = titleAlign === \"right\"",
+      "    ? `╭${'─'.repeat(topFill)}${titlePrefix}╮`",
+      "    : `╭${titlePrefix}${'─'.repeat(topFill)}╮`;",
+      "  const bottom = `╰${'─'.repeat(contentWidth)}╯`;",
+    ];
+    let c = "";
+    code.forEach((ln) => { c += paint(ln, "foreground") + "\n"; });
+    out += surfLine(c.trimEnd(), "toolCard") + "\n";
+    out += "\n";
+    out += renderComposer("");
+    out += renderStatusLine("default", "hy3-x", 44, 0);
+    return out;
+  }
+
+  // ⑥ 长内容折叠 与 @文件引用 / #记忆写入
+  function screenFold() {
+    let out = "";
+    out += paint("❯", "user") + " " + paint("审查这个 200 行的 PR，并 @src/ui/theme.ts 把色板对照写进记忆。", "foreground") + "\n";
+    out += "\n";
+    out += paint("⏺", "accent") + " " + paint("read", "accent") + " " + paint("src/ui/theme.ts", "property") + "\n";
+    // 超长结果 → 折叠（foldLinesToBudget 头尾折叠）
+    out += paint("  ▼", "dim") + " " + paint("工具输出已折叠（共 268 行，按预算头尾保留）— 回车 / ▶ 展开", "dim") + "\n";
+    out += surfLine(
+      paint("⎿", "dim") + " " +
+      paint("[1] PALETTE 16 个角色 … [266] export function inputBottomBar()", "dim"),
+      "toolCard"
+    ) + "\n";
+    out += "\n";
+    // @ 文件引用（file-reference.ts：@fragment 识别 + 提交时展开）
+    out += paint("⏺", "accent") + " " + paint("已捕获引用：", "foreground") + "\n";
+    out += surfLine(paint("  @", "info") + paint("src/ui/theme.ts", "property") + " " + paint("· 268 行 · 已展开为独立素材块", "dim"), "toolCard") + "\n";
+    out += "\n";
+    // # 记忆写入（memory-note.ts：# 直通写入记忆）
+    out += paint("⏺", "accent") + " " + paint("#", "info") + " " + paint("写入记忆：Amberwood 色板 ↔ 09 Glass Depths token 映射见设计稿。", "foreground") + "\n";
+    out += surfLine(paint("  ✓", "success") + " " + paint("记忆已写入 ~/.ohna/memory/theme-map.md", "success"), "toolCard") + "\n";
+    out += "\n";
+    // composer 含 @ 触发文件面板
+    out += renderComposer("@src/ui/");
+    out += paint("  @src/ui/theme.ts", "info") + "      " + paint("268 行 · 色板 + 背景分层", "dim") + "\n";
+    out += paint("  @src/ui/spinner.ts", "info") + "    " + paint("43 行 · 200ms 帧", "dim") + "\n";
+    out += paint("  ↑/↓ 选择 · Tab 补全 · Enter 引用 · Esc 关闭", "dim") + "\n";
+    out += renderStatusLine("default", "hy3-x", 52, 1);
+    return out;
+  }
+
+  /* ---------------------------------------------------------------
+   * 3a. 通用部件：composer 框 / 权限卡 / 状态行
+   * ------------------------------------------------------------- */
+  function renderComposer(value) {
+    // box 细圆角：╭─ ohna ─…─╮ / │ value │ / ╰─…─╯ ；正文铺 panel，边框铺 stroke
+    const top = "╭─ ohna " + "─".repeat(64) + "╮";
+    const bottom = "╰" + "─".repeat(72) + "╯";
+    let body;
+    if (CURRENT_MODE === "no") {
+      // NO_COLOR：顶/底框仍用 box 字符（它们本身不是颜色），编辑器提示用前缀
+      body = "│ " + (value ? escapeHtml(value) : "") + escapeHtml("▏") + " │";
+    } else {
+      body = "│ " + paint(value || "", "foreground") + paint("▏", "dim") + " │";
+    }
+    const topL = '<span class="surf-stroke">' + escapeHtml(top) + "</span>";
+    const botL = '<span class="surf-stroke">' + escapeHtml(bottom) + "</span>";
+    const bodyL = '<span class="surf-panel">' + body + "</span>";
+    return topL + "\n" + bodyL + "\n" + botL + "\n";
+  }
+
+  function renderPermissionCard(tool, summary, diffKey) {
+    // 标题（focused）+ 整卡铺 panel + 竖线 focused
+    const title = "? 权限确认：" + summary;
+    let out = '<span class="surf-panel">' + escapeHtml("│ ") +
+      (CURRENT_MODE === "no" ? escapeHtml("? ") : '<span class="fg-focused">?</span> ') +
+      (CURRENT_MODE === "no" ? escapeHtml(title) : '<span class="fg-focused">' + escapeHtml(title) + "</span>") + "</span>\n";
+
+    // diff 预览（键盘可达：↑↓ 选 / 数字直选 / Enter / Esc 拒绝）
+    const diffSample = [
+      "@@ -36,3 +36,3 @@ export function box(lines, opts) {",
+      "-  const fill = \"─\";",
+      "+  const fill = opts?.fill ?? \"─\";",
+      "   return `╭${titlePrefix}${'─'.repeat(topFill)}╮`;",
+    ];
+    const dv = (CURRENT_MODE === "no") ? "  " : "";
+    diffSample.forEach((ln) => {
+      let role = "dim";
+      if (ln.startsWith("@@")) role = "property";
+      else if (ln.startsWith("+")) role = "success";
+      else if (ln.startsWith("-")) role = "error";
+      out += '<span class="surf-panel">' + escapeHtml("│   ") +
+        (CURRENT_MODE === "no" ? escapeHtml(ln) : '<span class="fg-' + role + '">' + escapeHtml(ln) + "</span>") + "</span>\n";
+    });
+
+    // 选项行：选中项（index 0）用 paintBg 高亮；NO_COLOR 用 ▸ 前缀
+    const opts = [
+      { k: "1", a: "y", l: "允许一次" },
+      { k: "2", a: "a", l: "本会话一律" },
+      { k: "3", a: "n", l: "拒绝" },
+    ];
+    const selIdx = 0; // 演示默认选中「允许一次」
+    let optLine = "  ";
+    opts.forEach((o, i) => {
+      const label = "[" + o.k + "] " + o.l;
+      if (i === selIdx) {
+        optLine += (CURRENT_MODE === "no")
+          ? '<span class="sel">▸ ' + escapeHtml(label) + "</span>  "
+          : '<span class="sel">' + escapeHtml(label) + "</span>  ";
+      } else {
+        optLine += (CURRENT_MODE === "no")
+          ? escapeHtml(label) + "  "
+          : '<span class="fg-dim">' + escapeHtml(label) + "</span>  ";
+      }
+    });
+    out += '<span class="surf-panel">' + escapeHtml("│ ") + optLine + "</span>\n";
+    // 键位提示
+    out += '<span class="surf-panel">' + escapeHtml("│ ") +
+      (CURRENT_MODE === "no" ? escapeHtml("↑/↓ 选择 · Enter 确认 · Esc 拒绝") : '<span class="fg-dim">↑/↓ 选择 · Enter 确认 · Esc 拒绝</span>') +
+      "</span>\n";
+
+    // readline 降级路径提示（非 TTY / NO_COLOR 无卡片，走字符串三选一）
+    if (CURRENT_MODE === "no") {
+      out += '<span class="surf-panel">' + escapeHtml("│   (readline 降级路径: ? 是否允许 …？ 1)允许 2)本会话 3)拒绝 > )") + "</span>\n";
+    }
+    return out;
+  }
+
+  function renderStatusLine(mode, model, pct, historyAbove) {
+    // 左：权限模式（带语义色）；右：模型 · 占比
+    const modeRole = mode === "acceptEdits" ? "accent" : mode === "plan" ? "warn" : mode === "bypass" ? "error" : "dim";
+    const left = (CURRENT_MODE === "no")
+      ? "⏵⏵ " + mode
+      : '<span class="fg-' + modeRole + '">⏵⏵ ' + escapeHtml(mode) + "</span>";
+    const hist = historyAbove > 0
+      ? (CURRENT_MODE === "no" ? "  ↑历史" + historyAbove + "条" : '<span class="fg-dim">  ↑ 历史 ' + historyAbove + " 条</span>")
+      : "";
+    const right = (CURRENT_MODE === "no")
+      ? model + " · " + pct + "%"
+      : '<span class="fg-accent">' + escapeHtml(model) + '</span><span class="fg-dim"> · ' + pct + "%</span>";
+    const line = left + hist + " " + right;
+    return '<span class="surf-panel">' + escapeHtml(" ") + line + "</span>";
+  }
+
+  /* ---------------------------------------------------------------
+   * 4. 渲染调度
+   * ------------------------------------------------------------- */
+  const SCREENS = {
+    welcome: screenWelcome,
+    main: screenMain,
+    permission: screenPermission,
+    thinking: screenThinking,
+    diff: screenDiff,
+    fold: screenFold,
+  };
+
+  let CURRENT_SCREEN = "welcome";
+
+  function render() {
+    const fn = SCREENS[CURRENT_SCREEN] || screenWelcome;
+    const html = fn();
+    document.getElementById("id-term").innerHTML = html;
+  }
+
+  /* ---------------------------------------------------------------
+   * 5. 填充 token 映射表
+   * ------------------------------------------------------------- */
+  function buildTokenTable() {
+    const tbody = document.querySelector("#id-tokentable tbody");
+    let rows = "";
+    ROLE_ORDER.forEach((role) => {
+      const p = PALETTE[role];
+      const chip = '<span class="chip"><i style="background:' + p.hex + '"></i>' + p.hex + "</span>";
+      const c256 = '<span class="mono">\x1b[38;5;' + p.c256 + "m</span>";
+      const survive = NO_COLOR_SURVIVE[role];
+      rows += "<tr>" +
+        '<td class="role">' + role + "</td>" +
+        "<td>" + chip + "</td>" +
+        '<td class="mono">' + p.c256 + "</td>" +
+        '<td class="mono" style="white-space:normal;color:var(--c-note)">' + survive + "</td>" +
+        "</tr>";
+    });
+    tbody.innerHTML = rows;
+
+    // BACKGROUND 表面行
+    const bgRows = [
+      ["canvas", BACKGROUND.canvas, "画布底色（玻璃 canvas 平移）"],
+      ["panel", BACKGROUND.panel, "会话面板 / 卡片 / 输入正文"],
+      ["toolCard", BACKGROUND.toolCard, "工具卡片底色"],
+      ["stroke", BACKGROUND.stroke, "细描边（玻璃高光→实线，不发光）"],
+    ];
+    bgRows.forEach((r) => {
+      const chip = '<span class="chip"><i style="background:' + r[1] + '"></i>' + r[1] + "</span>";
+      rows += "<tr>" +
+        '<td class="role">' + r[0] + "</td>" +
+        "<td>" + chip + "</td>" +
+        '<td class="mono">surface()</td>' +
+        '<td class="mono" style="white-space:normal;color:var(--c-note)">' + r[2] + "</td>" +
+        "</tr>";
+    });
+    // diff 语义
+    rows += "<tr><td class=\"role\">diff +</td><td><span class=\"chip\"><i style=\"background:" + DIFF.add + "\"></i>" + DIFF.add + "</span></td><td class=\"mono\">115</td><td class=\"mono\" style=\"white-space:normal;color:var(--c-note)\">「+」前缀 + ✓ 不靠色</td></tr>";
+    rows += "<tr><td class=\"role\">diff −</td><td><span class=\"chip\"><i style=\"background:" + DIFF.del + "\"></i>" + DIFF.del + "</span></td><td class=\"mono\">167</td><td class=\"mono\" style=\"white-space:normal;color:var(--c-note)\">「−」前缀 + ✗ 不靠色</td></tr>";
+    tbody.innerHTML = rows;
+  }
+
+  /* ---------------------------------------------------------------
+   * 6. 事件绑定
+   * ------------------------------------------------------------- */
+  function bind() {
+    // 屏幕切换
+    document.querySelectorAll("#id-nav button").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        document.querySelectorAll("#id-nav button").forEach((b) => b.classList.remove("active"));
+        btn.classList.add("active");
+        CURRENT_SCREEN = btn.getAttribute("data-screen");
+        render();
+      });
+    });
+    // 降级模式切换
+    document.querySelectorAll("#id-mode button").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        document.querySelectorAll("#id-mode button").forEach((b) => b.classList.remove("active"));
+        btn.classList.add("active");
+        CURRENT_MODE = btn.getAttribute("data-mode");
+        const meta = document.getElementById("id-mode-meta");
+        if (CURRENT_MODE === "true") meta.textContent = "mode: 24-bit truecolor";
+        else if (CURRENT_MODE === "256") meta.textContent = "mode: 256-color fallback";
+        else meta.textContent = "mode: NO_COLOR (zero-escape)";
+        render();
+      });
+    });
+  }
+
+  // 启动
+  buildTokenTable();
+  bind();
+  render();
+})();
+</script>
+</body>
+</html>

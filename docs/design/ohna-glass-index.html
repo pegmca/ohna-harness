@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<!--
+  ohna · 玻璃 Glass Depths 设计稿导航（09 玻璃，用户已确认唯一方向）
+  本文件只做导航与说明，不承载任何设计 token。
+  Figma 同步待办：需要先到「设置 → DSH Figma MCP」完成连接/刷新授权，
+  当前会话没有 mcp__figma__* 工具，连上后把以下 token 与六处界面组件同步进
+  文件 Ps2B77piz5nVUqsRP3q13A。
+-->
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ohna · 玻璃 Glass Depths 设计稿</title>
+  <style>
+    :root {
+      --canvas: #080C0B;
+      --panel: rgba(255, 255, 255, 0.06);
+      --stroke: rgba(255, 255, 255, 0.085);
+      --accent: #89D7B7;
+      --text: #d8e4df;
+      --muted: #8aa29a;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; min-height: 100vh;
+      background:
+        radial-gradient(900px 500px at 15% 10%, rgba(137, 215, 183, 0.08), transparent 60%),
+        radial-gradient(700px 500px at 85% 90%, rgba(127, 179, 213, 0.06), transparent 60%),
+        var(--canvas);
+      color: var(--text);
+      font: 15px/1.6 system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      display: flex; align-items: center; justify-content: center; padding: 40px 20px;
+    }
+    .wrap {
+      width: min(720px, 100%);
+      background: var(--panel);
+      backdrop-filter: blur(18px) saturate(150%);
+      -webkit-backdrop-filter: blur(18px) saturate(150%);
+      border: 1px solid var(--stroke);
+      border-radius: 14px;
+      box-shadow: 0 18px 48px rgba(0, 0, 0, 0.45);
+      padding: 28px 32px 32px;
+    }
+    h1 { margin: 0 0 4px; font-size: 22px; }
+    .sub { color: var(--muted); margin: 0 0 20px; }
+    ul { list-style: none; padding: 0; margin: 0 0 20px; }
+    li { margin: 10px 0; }
+    a {
+      display: block; padding: 14px 16px; border-radius: 12px;
+      border: 1px solid var(--stroke); text-decoration: none; color: var(--text);
+      background: rgba(255, 255, 255, 0.03); transition: transform .2s cubic-bezier(.22, 1, .36, 1), border-color .2s;
+    }
+    a:hover { transform: translateY(-2px); border-color: var(--accent); }
+    a b { color: var(--accent); }
+    .note {
+      border: 1px dashed rgba(232, 117, 107, 0.5); border-radius: 12px;
+      padding: 12px 14px; color: #f0c9c3; font-size: 13px; line-height: 1.5;
+    }
+    code { color: var(--accent); }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>ohna · 玻璃 Glass Depths</h1>
+    <p class="sub">09 玻璃（已确认唯一方向）· 高保真交互稿导航 · 2026-10-24</p>
+    <ul>
+      <li><a href="ohna-glass-web.html"><b>Web 端交互稿</b> —— 侧栏分组 / transcript / 权限卡 / Trace 抽屉 / JsonViewer / 设置弹窗 + token 面板</a></li>
+      <li><a href="ohna-glass-cli.html"><b>CLI / TUI 模拟稿</b> —— 欢迎态 / 整屏 TUI / 权限卡 + readline 降级 / spinner / diff / 长内容折叠，含 256 与 NO_COLOR 降级演示 + token 映射表</a></li>
+    </ul>
+    <div class="note">
+      <b>Figma 同步待办：</b>当前会话未挂载 <code>mcp__figma__*</code> 工具，无法读取/写入文件
+      <code>Ps2B77piz5nVUqsRP3q13A</code>。请到 <b>设置 → DSH Figma MCP</b> 完成连接或刷新授权后告知，
+      届时把两稿的 token（角色 → truecolor → 256 降级 → NO_COLOR）与组件结构同步进 Figma。
+    </div>
+  </div>
+</body>
+</html>

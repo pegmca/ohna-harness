@@ -19,6 +19,11 @@ export function registerHealthRoutes(app: FastifyInstance, deps: RouteDeps): voi
     workspaceRoot: deps.workspaceRoot,
     model: { id: deps.model.id, provider: deps.model.provider },
     pid: deps.pid,
-    dataDir: deps.dataDir
+    dataDir: deps.dataDir,
+    /**
+     * 是否只读观测实例（docs/v1.4/06 D-A7）：true 时 Web 应禁用 composer 并提示，
+     * 而不是让用户发送后 404（BUG-005 的止血）。CLI 单一形态恒为 false。
+     */
+    observeOnly: deps.observeOnly === true
   }));
 }

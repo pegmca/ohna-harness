@@ -10,7 +10,8 @@
 | BUG-001 | composer 失败提示与消息内容不一致 | ✅ 已修复 | `apps/ohna-web/src/features/workbench/{format.ts,Workbench.tsx,chat.tsx,types.ts}` |
 | BUG-002 | 跨工作区会话 web 侧无法续写 | ✅ 已修复（服务端 + web） | 服务端 `packages/serve/src/{index.ts,run-manager.ts,run/types.ts}`；web 侧移除只读守卫（见下方「修复记录」） |
 | BUG-003 | JSON 展示缺少阅读器能力 | ✅ 已修复 | `apps/ohna-web/src/features/json-viewer/*` + `trace/{LlmCallBlock,TraceStream}.tsx` + `workbench/run-details.tsx` + `styles.css` |
-| BUG-005 | 会话标题用「前 24 字符截断」未语义化 | ✅ 已修复 | 服务端 `packages/serve/src/{run/title.ts,run-manager.ts,routes/conversations.ts,index.ts}`；web `apps/ohna-web/src/{features/workbench/Workbench.tsx,shared/api/conversation-client.ts}` |
+| BUG-002 | 会话标题用「前 24 字符截断」未语义化 | ✅ 已修复 | 服务端 `packages/serve/src/{run/title.ts,run-manager.ts,routes/conversations.ts,index.ts}`；web `apps/ohna-web/src/{features/workbench/Workbench.tsx,shared/api/conversation-client.ts}` |
+| BUG-005 | 默认 `ohna` 只读观测台下 Web composer 仍可提交，POST /api/runs 404「not_found: 接口不存在」 | ✅ 已修复（06 A2+A4） | CLI 单一形态 `observeOnly` 恒为 false（TUI+Web 双端订阅同一执行线，POST /api/runs 始终注册）；`/api/health` 透出 `observeOnly`，web composer 只读态禁用 + 提示；见 `docs/v1.4/06-two-end-alignment.md` |
 
 ---
 

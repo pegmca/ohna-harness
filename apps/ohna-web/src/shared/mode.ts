@@ -12,6 +12,11 @@ export interface LocalModeInfo {
   modelId?: string;
   /** JSONL 数据目录。 */
   dataDir?: string;
+  /**
+   * 是否只读观测实例（docs/v1.4/06 D-A7）：true 时 composer 应禁用并提示，
+   * 而不是让用户发送后 404。CLI 单一形态恒为 false。
+   */
+  observeOnly?: boolean;
 }
 
 /** /api/health 的原始形状（packages/serve/routes/health.ts）。 */
@@ -20,6 +25,7 @@ interface LocalHealthPayload {
   workspaceRoot?: string;
   model?: { id?: string };
   dataDir?: string;
+  observeOnly?: boolean;
 }
 
 /**
@@ -37,7 +43,8 @@ export async function fetchLocalMode(signal?: AbortSignal): Promise<LocalModeInf
     return {
       workspaceRoot: payload.workspaceRoot,
       ...(typeof payload.model?.id === "string" ? { modelId: payload.model.id } : {}),
-      ...(typeof payload.dataDir === "string" ? { dataDir: payload.dataDir } : {})
+      ...(typeof payload.dataDir === "string" ? { dataDir: payload.dataDir } : {}),
+      ...(typeof payload.observeOnly === "boolean" ? { observeOnly: payload.observeOnly } : {})
     };
   } catch {
     // 本地服务未启动 / 代理断连：按「非本地」降级，由调用方决定展示。

@@ -6,7 +6,8 @@
  * 2. 构造 RunManager（消费 `agentLoop`，实现 run-v2 线协议）；
  * 3. 注册 HTTP/SSE 路由与静态 fallback。
  *
- * `ohna-cli --web` 只负责进程生命周期；这里不读取 `process.argv`、不打开浏览器、不注册信号处理。
+ * `ohna-cli` 单一形态下经本包驱动执行（TUI / 浏览器双端订阅同一执行线），
+ * 仅负责进程内装配；不读取 `process.argv`、不打开浏览器、不注册信号处理。
  */
 import { randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
@@ -26,8 +27,6 @@ import type {
 } from "@aiagent/types";
 import type {
   CreateRunResult,
-  ObserveRunInput,
-  ObservedRun,
   ResolvedWorkspaceContext
 } from "./run/types.js";
 import Fastify, { type FastifyInstance } from "fastify";
@@ -59,8 +58,8 @@ export interface OhnaServerOptions {
   /** 跳过写/执行确认（`--auto-approve`）；缺省 false。 */
   autoApprove?: boolean;
   /**
-   * 只读观测模式（S2）：true 时**不注册** run 创建/取消与确认写路由，并强制 autoApprove=false。
-   * 默认模式的 CLI（本地执行 + 镜像观测）用 true；`--web` 托管模式用 false。
+   * 只读观测模式（可选能力）：true 时**不注册** run 创建/取消与确认写路由，并强制 autoApprove=false。
+   * 仅外部只读观测实例可能传 true；CLI 单一形态恒传 false，始终经同一 `server.createRun` 驱动执行。
    */
   observeOnly?: boolean;
   /** 确认等待上限（毫秒）；缺省 5 分钟，测试可注入短超时。 */
@@ -103,13 +102,18 @@ export interface OhnaServer {
   /**
    * 创建并启动一次 run（进程内入口复用，等价 POST /api/runs）。
    * requestId 缺省时自动生成；mode/source 缺省取 composer 语义（auto / composer）。
+   * maxTurns/deadlineMs/maxCost 为 `--max-turns` / `--deadline-ms` / `--max-cost` 预算护栏的透传。
    */
   createRun(input: {
     conversationId: string;
     message: string;
     mode?: "auto" | "report";
-    source?: "composer" | "report_button";
+    /** 触发入口：composer/report_button 来自浏览器，cli 来自终端。 */
+    source?: "composer" | "report_button" | "cli";
     requestId?: string;
+    maxTurns?: number;
+    deadlineMs?: number;
+    maxCost?: number;
   }): Promise<CreateRunResult>;
   /** 订阅单个 run 的实时事件（run 不在内存时为 noop）。 */
   subscribeRun(runId: string, listener: (event: RunStreamEventDtoV2) => void): () => void;
@@ -122,11 +126,8 @@ export interface OhnaServer {
   cancelRun(runId: string): Promise<RunSnapshotDtoV2 | null>;
   /** 当前是否处于自动批准模式（只读观测模式下恒为 false）。 */
   isAutoApprove(): boolean;
-  /**
-   * 启动观测型 run（docs/v1.4 的 D1）：CLI 本地执行、serve 只承接事件。
-   * 与 createRun 并存——执行权归属不同，存储 / SSE / sequence 语义相同。
-   */
-  observeRun(input: ObserveRunInput): Promise<ObservedRun>;
+  /** 是否只读观测实例（docs/v1.4/06 D-A7）：true 时 Web 应禁用 composer。 */
+  readonly observeOnly: boolean;
   /** 按会话列 run 摘要（等价 GET /api/conversations/:id/runs）。 */
   listRunsByConversation(conversationId: string): Promise<RunMetaDtoV2[]>;
   readonly port: number | undefined;
@@ -314,7 +315,10 @@ export async function createOhnaServer(options: OhnaServerOptions): Promise<Ohna
         message: input.message,
         mode: input.mode ?? "auto",
         source: input.source ?? "composer",
-        requestId: input.requestId ?? randomUUID()
+        requestId: input.requestId ?? randomUUID(),
+        ...(input.maxTurns !== undefined ? { maxTurns: input.maxTurns } : {}),
+        ...(input.deadlineMs !== undefined ? { deadlineMs: input.deadlineMs } : {}),
+        ...(input.maxCost !== undefined ? { maxCost: input.maxCost } : {})
       });
     },
 
@@ -334,8 +338,8 @@ export async function createOhnaServer(options: OhnaServerOptions): Promise<Ohna
       return runManager.isAutoApprove();
     },
 
-    observeRun(input) {
-      return runManager.observeRun(input);
+    get observeOnly() {
+      return options.observeOnly === true;
     },
 
     listRunsByConversation(conversationId) {
@@ -397,8 +401,6 @@ export type { RunManager } from "./run-manager.js";
 export type {
   CreateRunResult,
   LlmCallPushEvent,
-  ObserveRunInput,
-  ObservedRun,
   ResolvedWorkspaceContext,
 } from "./run/types.js";
 export {

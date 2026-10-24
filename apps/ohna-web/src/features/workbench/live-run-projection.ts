@@ -1,6 +1,6 @@
-import type { ApiError, RunStreamEventDtoV2 } from "@aiagent/types";
+import type { ApiError, RunStreamEventDtoV2, UserMessagePayloadDto } from "@aiagent/types";
 import { parseAssistantBlocks, parseToolResult } from "./format";
-import type { UiContentBlock, UiToolCallBlock } from "./types";
+import type { UiContentBlock, UiMessage, UiToolCallBlock } from "./types";
 
 export type LiveTerminalStatus = "running" | "completed" | "failed" | "cancelled";
 
@@ -167,6 +167,40 @@ export function projectLiveRun(events: RunStreamEventDtoV2[]): LiveRunProjection
   }
 
   return { blocks: segments.flat(), progressLabel, terminal, error };
+}
+
+/**
+ * 从 run 事件流中提取用户消息气泡（docs/v1.4/06 U1/U2）：`user_message` 帧是总线上的
+ * 一等用户消息事件，Web 时间线以它为准渲染「用户气泡」，覆盖终端 CLI 发起（source="cli"）
+ * 与浏览器 composer 发起（source="web"）两种来源，不再只依赖本地乐观插入。
+ *
+ * 按事件 sequence 保序、按 messageId 去重（replay 与 live 重叠投送时同一个用户消息只出现一次）。
+ * 该函数只产出用户气泡，assistant 内容仍由 {@link projectLiveRun} 投影；二者在装配处拼接进时间线。
+ *
+ * @param events 按到达顺序收到的 envelope 列表。
+ * @returns 时间线用户气泡（role=user，status=complete），按出现顺序。
+ */
+export function projectRunUserMessages(events: RunStreamEventDtoV2[]): UiMessage[] {
+  const seen = new Set<string>();
+  const bubbles: UiMessage[] = [];
+  for (const event of events) {
+    if (event.type !== "user_message") continue;
+    const payload = (event.payload ?? {}) as UserMessagePayloadDto;
+    // 协议约束：messageId 与 content 是必填锚点；缺字段视为畸形帧直接跳过，不污染时间线。
+    if (typeof payload.messageId !== "string" || typeof payload.content !== "string") continue;
+    if (seen.has(payload.messageId)) continue;
+    seen.add(payload.messageId);
+    bubbles.push({
+      id: payload.messageId,
+      role: "user",
+      content: payload.content,
+      blocks: [],
+      createdAt: event.createdAt,
+      status: "complete",
+      runId: payload.runId
+    });
+  }
+  return bubbles;
 }
 
 /**

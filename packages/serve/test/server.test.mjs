@@ -372,3 +372,68 @@ test("真实 HTTP：绑定 127.0.0.1、fetch SSE、DELETE 取消结束连接", a
     await dispose(context);
   }
 });
+
+/**
+ * 迁移自 observe-run.test.mjs（A3-B 退役镜像通道）：托管 run 同样满足
+ * 「sequence 单调续传 + 瞬态 message_update 不落盘」。
+ * 用 isPersistableRunEvent 的语义：TRANSIENT_EVENT_TYPES 仅含 message_update。
+ */
+test("托管 run：subscribeRun live 按 sequence 有序，SSE afterSequence 续传，瞬态不落盘", async () => {
+  const context = await createTestServer(createTextStream("你好，我是 ohna。"));
+  try {
+    const { server, dataDir } = context;
+    const conversation = await server.createConversation("续传托管");
+    const created = await server.createRun({
+      conversationId: conversation.conversationId,
+      message: "介绍一下你自己"
+    });
+    const runId = created.accepted.runId;
+
+    // live 订阅：收集 subscribeRun 实时帧。注意 user_message 首帧在 createRun 内部、
+    // 订阅注册前已同步广播，故 live 从 agent_start（sequence>=2）开始。
+    const live = [];
+    const unsubscribe = server.subscribeRun(runId, (event) => live.push(event));
+    await waitForTerminal(server, created.accepted.snapshotUrl);
+    unsubscribe();
+
+    // live 帧 sequence 严格升序，终态 run_status 在末尾。
+    assert.ok(live.length > 0, "live 应收集到运行期帧");
+    assert.deepEqual(
+      live.map((event) => event.sequence),
+      [...live.map((event) => event.sequence)].sort((left, right) => left - right)
+    );
+    assert.ok(live.every((event) => event.sequence >= 2), "运行期订阅晚于 user_message 首帧");
+    assert.equal(live.at(-1).type, "run_status");
+
+    // SSE 续传：afterSequence=1 跳过 user_message，返回后续全部帧且 sequence 连续。
+    const sse = await server.app.inject({
+      method: "GET",
+      url: `/api/runs/${runId}/events?afterSequence=1`
+    });
+    assert.equal(sse.statusCode, 200);
+    const frames = parseSseFrames(sse.body);
+    assert.equal(frames[0].event.type, "agent_start");
+    assert.equal(frames[0].id, 2);
+    assert.deepEqual(
+      frames.map((frame) => frame.id),
+      [...frames.map((frame) => frame.id)].sort((left, right) => left - right)
+    );
+
+    // 瞬态不落盘：磁盘 run 事件文件中不得出现 message_update。
+    const lines = (
+      await fs.readFile(path.join(dataDir, "runs", `${runId}.jsonl`), "utf8")
+    )
+      .split("\n")
+      .filter((line) => line.trim() !== "")
+      .map((line) => JSON.parse(line));
+    assert.equal(lines[0].type, "run_meta");
+    assert.equal(
+      lines.slice(1).some((event) => event.type === "message_update"),
+      false,
+      "message_update 是瞬态，不应落盘"
+    );
+    assert.equal(lines.at(-1).type, "run_status");
+  } finally {
+    await dispose(context);
+  }
+});

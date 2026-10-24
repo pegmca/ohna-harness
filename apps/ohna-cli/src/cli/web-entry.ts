@@ -1,44 +1,19 @@
 /**
- * `ohna --web`：进程内托管（D8 主路径）。
+ * 共享渲染与常量（docs/v1.4/06 单一形态复用）。
  *
- * 复用 `@aiagent/serve` 的 `createOhnaServer` 在**同一进程**内起 HTTP/SSE 服务，
- * 终端 REPL 与浏览器通过 serve 的会话存储看到**同一个 conversation**：
- * - 终端创建（或 /resume 选择）一个 conversation；
- * - 终端输入经 `server.createRun`（source=composer）执行，事件经
- *   `subscribeConversation` 回流渲染（流式 delta / 工具行 / diff / 折叠 / cost）；
- * - 浏览器发的 run（同一会话）也会实时渲染到终端（共享事件流，C-M3-6 的验收路径），
- *   其它会话的 run 不进入终端；
- * - /exit 或空闲 Ctrl-C → `server.shutdown()`（中断在途 run）+ `close()` 干净退出。
- *
- * 本文件只做「入口 + 复用」：不改 serve 内核语义，所有新能力都来自 serve 句柄的
- * 新增方法（createConversation / createRun / subscribeConversation / cancelRun）。
+ * 旧版 `ohna --web` 的进程内托管 readline 循环已退役：单一形态下，默认 REPL（repl.ts）
+ * 与浏览器都是进程内 serve 的执行线订阅者，走同一条 `server.createRun` +
+ * `server.subscribeConversation` 事件流。本文件只保留终端与浏览器可复用的渲染逻辑：
+ * `renderFrame` 把 run-v2 帧渲染进终端（AgentEvent 帧交给 renderEvent；run_status /
+ * user_message / confirmation_requested 由调用方配合处理）。
  */
-import { promises as fs } from "node:fs";
-import * as path from "node:path";
-import * as readline from "node:readline";
 import type { AgentEvent } from "@aiagent/agent";
-import { listAvailableModelProfiles, resolveActiveModelFromEnv } from "@aiagent/ai";
-import { createCodingToolRegistry } from "@aiagent/coding";
 import type { RunStreamEventDtoV2 } from "@aiagent/types";
-import { hostOhnaWeb, openBrowser } from "./web-host.js";
-import { printProviderError } from "./provider-error.js";
-import { loadMcpTools } from "../runtime/mcp-config.js";
-import { formatPermissionStatus } from "../permission/permission-mode.js";
-import { createUsageTracker, formatCostLine, renderEvent, type RenderOptions } from "../ui/render.js";
-import { createSlashDispatcher, printUnknownCommand } from "../commands/registry.js";
-import { CROSS, inputTopBar, inputBottomBar, paint, STOP, supportsAnsi } from "../ui/theme.js";
-import { printReplCommands } from "../ui/welcome.js";
-import type { CliOptions } from "./args.js";
-
-/** 在途 run 的状态：用于 Ctrl-C 中断与「run 结束后恢复 prompt」。 */
-interface ActiveWebRun {
-  runId: string;
-  /** run_status 终态到达时 resolve。 */
-  finish: () => void;
-}
+import { renderEvent, type RenderOptions } from "../ui/render.js";
+import { CROSS, paint, STOP, supportsAnsi } from "../ui/theme.js";
 
 /** 可渲染为 AgentEvent 的 run-v2 帧类型（payload 即 AgentEvent JSON）。 */
-const AGENT_EVENT_FRAME_TYPES: ReadonlySet<string> = new Set([
+export const AGENT_EVENT_FRAME_TYPES: ReadonlySet<string> = new Set([
   "agent_start",
   "turn_start",
   "turn_end",
@@ -52,426 +27,32 @@ const AGENT_EVENT_FRAME_TYPES: ReadonlySet<string> = new Set([
 ]);
 
 /** run-v2 的终态 run_status 取值（与 run-stream-client 的 TERMINAL_STATUSES 一致）。 */
-const TERMINAL_RUN_STATUSES: ReadonlySet<string> = new Set(["completed", "failed", "cancelled", "interrupted"]);
-
-/**
- * `--web` 托管主流程：装配 serve → 监听 → 建/选会话 → 终端 REPL 与浏览器共享事件流。
- *
- * @param options 已解析的 CLI 选项（web / webDir / webPort / open / mcpConfig / model / yes）。
- */
-export async function runWeb(options: CliOptions): Promise<void> {
-  const workspaceRoot = path.resolve(options.webDir ?? process.cwd());
-  try {
-    const stat = await fs.stat(workspaceRoot);
-    if (!stat.isDirectory()) throw new Error("not a directory");
-  } catch {
-    process.stderr.write(`工作区目录不存在或不可访问：${workspaceRoot}\n`);
-    process.exitCode = 1;
-    return;
-  }
-
-  const active = resolveActiveModelFromEnv(options.model);
-  if (!active) {
-    printProviderError(options.model);
-    process.exitCode = 1;
-    return;
-  }
-
-  // 工具装配与本地 CLI 完全一致（ohna 恒为编码助手）；--mcp 追加外部工具（失败只警告，不中断托管）。
-  const tools = createCodingToolRegistry(workspaceRoot);
-  const mcpToolNames = new Set<string>();
-  let mcpServerNames: string[] = [];
-  const mcp = options.mcpConfig ? await loadMcpTools(options.mcpConfig) : null;
-  if (mcp) {
-    tools.push(...mcp.tools);
-    for (const name of mcp.toolNames) mcpToolNames.add(name);
-    mcpServerNames = mcp.serverNames;
-  }
-
-  // 装配进程内 serve（与默认模式的观测台共用同一段装配，见 web-host.ts）。
-  const hosted = await hostOhnaWeb({
-    workspaceRoot,
-    active,
-    tools,
-    autoApprove: options.yes,
-    // --web 是托管模式：执行权在 serve，写端点必须保留。
-    observeOnly: false,
-    port: options.webPort,
-    conversationTitle: "终端会话",
-  });
-  if (!hosted) {
-    process.stderr.write("托管模式启动失败，已退出。\n");
-    process.exitCode = 1;
-    await mcp?.close();
-    return;
-  }
-  const { server, url } = hosted;
-  // 终端与浏览器共享同一会话：conversation 由 serve 的 sessionStore 持有，
-  // 浏览器 GET /api/conversations 能看到它；/resume 可切换到浏览器创建的会话。
-  // 空串 = 「待创建」态：托管模式不再 eager 建会话，首条真实消息发送时才懒创建（BUG 空会话落盘）。
-  let conversationId = hosted.conversationId;
-  let conversationTitle = "终端会话";
-
-  const tracker = createUsageTracker();
-  const renderOptions: RenderOptions = {
-    workspaceRoot,
-    mcpToolNames,
-  };
-
-  /** 在途 run 状态（本终端创建的最近一次 run）。 */
-  let activeRun: ActiveWebRun | null = null;
-
-  // 终态 runId 记录：createRun 与订阅回调之间存在「run 已终态但 activeRun 未赋值」的窗口，
-  // 命中该集合时在赋值后立即 resolve，避免 REPL 挂在等待终态上（幂等 resolve 安全）。
-  const terminalRunIds = new Set<string>();
-
-  /** 退订当前会话；无订阅时为 noop。 */
-  let unsubscribe = (): void => {};
-
-  /**
-   * 订阅指定会话：退订旧会话、订阅新会话（/resume / 懒创建 / clear 共用）。
-   *
-   * @param nextId 目标会话 id。
-   */
-  const subscribeConversation = (nextId: string): void => {
-    unsubscribe();
-    unsubscribe = server.subscribeConversation(nextId, (event) => {
-      if (event.type === "run_status") {
-        const status = (event.payload as { status?: string } | null)?.status;
-        if (status && TERMINAL_RUN_STATUSES.has(status)) terminalRunIds.add(event.runId);
-      }
-      renderFrame(event, tracker, renderOptions, activeRun, () => activeRun?.finish());
-    });
-  };
-
-  /**
-   * 确保当前会话已创建（懒创建 + 订阅）。
-   *
-   * 托管模式启动时 `conversationId` 是「待创建」空串；首条真实消息发送前调用此函数，
-   * 物化会话并建立会话级订阅。已物化时是幂等 noop。
-   *
-   * @returns 物化后的会话 id。
-   */
-  const ensureConversation = async (): Promise<string> => {
-    if (conversationId) return conversationId;
-    const fresh = await server.createConversation(conversationTitle);
-    conversationId = fresh.conversationId;
-    conversationTitle = fresh.title;
-    subscribeConversation(conversationId);
-    return conversationId;
-  };
-
-  process.stdout.write(
-    [
-      "ohna --web · 进程内托管已启动",
-      `  工作目录：${workspaceRoot}`,
-      `  模型：${active.model.id}（${active.model.provider}）`,
-      `  地址：${url}`,
-      `  会话：（首条消息发送时创建，终端与浏览器共享）`,
-      `  确认方式：${options.yes ? "已自动批准写/执行（--yes）" : "写/执行需在终端或浏览器确认"}`,
-      "",
-    ].join("\n"),
-  );
-  if (options.open) {
-    openBrowser(url);
-  } else {
-    process.stdout.write(`已跳过自动打开浏览器（--no-open），请手动访问：${url}\n`);
-  }
-  process.stdout.write("\n  /help 查看命令；输入问题开始对话（浏览器可见同一会话）。\n\n");
-
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout, prompt: "│ > " });
-
-  /** 上次绘制顶线时的列宽：用于屏蔽「同宽 resize 虚假事件」与自触发风暴。 */
-  let lastColumns = process.stdout.columns || 80;
-  /** 重绘防重入：rl.prompt() 可能同步派发 resize，包成临界区避免递归风暴。 */
-  let redrawing = false;
-
-  /**
-   * 打印输入区顶线（TTY 门控）后进入 readline prompt（§3.4 降级：打印式顶线 + 单行 prompt）。
-   */
-  const promptInput = (): void => {
-    if (supportsAnsi()) {
-      const cols = process.stdout.columns || 80;
-      process.stdout.write(paint(inputTopBar(cols), "dim"));
-      lastColumns = cols;
-    }
-    rl.prompt();
-  };
-  promptInput();
-
-  let closed = false;
-  let stopRequested = false;
-  let running = false;
-  const pending: string[] = [];
-  let finish: (() => void) | undefined;
-
-  /**
-   * 终端尺寸变化：仅当空闲（无 run、未 EOF、未关闭）且当前输入行为空时才重绘当前输入
-   * 框顶线到新列宽。有未提交输入时不重绘（避免 readline 行缓冲视觉错位）；run 进行中
-   * 不重绘（避免污染流式输出）。已滚入历史的旧顶线无法回改，此为单框修正。
-   */
-  if (supportsAnsi()) {
-    process.stdout.on("resize", () => {
-      if (running || closed) return;
-      if (rl.line !== "") return;
-      if (redrawing) return; // 防重入：避免 rl.prompt() 触发同步 resize 造成递归风暴
-      const cols = process.stdout.columns || 80;
-      if (cols === lastColumns) return; // 宽度未变不重绘，屏蔽持续同宽 resize 虚假事件
-      redrawing = true;
-      try {
-        lastColumns = cols;
-        process.stdout.write("\r\x1b[1A\x1b[2K"); // 回到顶线行并清空
-        process.stdout.write(paint(inputTopBar(cols), "dim")); // 新宽度顶线
-        process.stdout.write("\r\x1b[2K"); // 清空旧 prompt 行
-        rl.prompt();
-      } finally {
-        redrawing = false;
-      }
-    });
-  }
-
-  /** 切换会话：退订旧会话、订阅新会话（/resume 与 /clear 共用）。 */
-  const switchConversation = async (nextId: string, title: string): Promise<void> => {
-    unsubscribe();
-    conversationId = nextId;
-    conversationTitle = title;
-    unsubscribe = server.subscribeConversation(conversationId, (event) => {
-      if (event.type === "run_status") {
-        const status = (event.payload as { status?: string } | null)?.status;
-        if (status && TERMINAL_RUN_STATUSES.has(status)) terminalRunIds.add(event.runId);
-      }
-      renderFrame(event, tracker, renderOptions, activeRun, () => activeRun?.finish());
-    });
-  };
-
-  const dispatch = createSlashDispatcher({
-    onUnknown: printUnknownCommand,
-    context: {
-      help: () => printReplCommands(),
-      cost: () => {
-        // F-3：与本地 REPL 共用 formatCostLine（含 reasoning token 展示）。
-        process.stdout.write(formatCostLine(tracker) + "\n");
-      },
-      tools: () => {
-        for (const tool of tools) {
-          process.stdout.write(`  ${tool.name}${mcpToolNames.has(tool.name) ? "（MCP）" : ""}\n`);
-        }
-        process.stdout.write(`共 ${tools.length} 个工具。\n`);
-      },
-      // B2：web 托管模式的策略固定由 serve 装配决定（--yes → bypass，否则 default）；
-      // 会话记住与 Shift+Tab 模式切换目前仅本地 REPL 支持，这里只做只读展示。
-      permissions: () => {
-        const preset = options.yes ? "bypass" : "default";
-        process.stdout.write(`${formatPermissionStatus(preset, [])}\n`);
-        process.stdout.write(
-          "提示：Web 托管模式的权限策略由 serve 启动参数决定，暂不支持会话记住与模式切换。\n",
-        );
-      },
-      model: (arg) => {
-        if (!arg) {
-          process.stdout.write(
-            `当前模型：${active.model.id}（profile: ${active.model.provider}）\n` +
-              `可用 profile：${listAvailableModelProfiles().join("、") || "（无）"}\n` +
-              "提示：--web 托管模式下模型在启动时装配，切换 profile 请重启进程。\n",
-          );
-          return;
-        }
-        process.stdout.write(
-          "提示：--web 托管模式下模型在启动时装配，切换 profile 请用 --model <profile> 重启进程。\n",
-        );
-      },
-      // web 模式的压缩由 serve 在每次 run 前自动管理（L3-3）；不提供手动触发端点。
-      compact: () => {
-        process.stdout.write(
-          "web 托管模式下，会话压缩由 serve 在每次 run 前自动管理（超窗时摘要并落盘 compaction 消息），无需手动触发。\n",
-        );
-      },
-      // F-8：web 模式只读快照（history 与 fork / export 由 serve 的会话存储负责）。
-      status: () => {
-        const usage = tracker.snapshot();
-        const reasoning = usage.reasoning ?? 0;
-        const output = reasoning > 0 ? `输出 ${usage.output}（推理 ${reasoning}）` : `输出 ${usage.output}`;
-        process.stdout.write(`模型：${active.model.id}（profile: ${active.model.provider}）\n`);
-        process.stdout.write(`会话：${conversationId} · ${conversationTitle}\n`);
-        process.stdout.write(`用量：${usage.total === 0 ? "暂无" : `token ${usage.total}（输入 ${usage.input} / ${output}），成本 $${usage.cost.toFixed(6)}`}\n`);
-        process.stdout.write(`MCP：${mcpServerNames.length} 个 server · ${mcpToolNames.size} 个工具\n`);
-        process.stdout.write("Team：未启用（web 托管模式不接 Team）\n");
-        process.stdout.write(`权限：${options.yes ? "bypass" : "default"}\n`);
-      },
-      mcp: () => {
-        if (mcpServerNames.length === 0 && mcpToolNames.size === 0) {
-          process.stdout.write("未接入 MCP server（启动时使用 --mcp <config.json> 接入）。\n");
-          return;
-        }
-        process.stdout.write(`MCP server（${mcpServerNames.length}）：${mcpServerNames.join("、") || "无"}\n`);
-        process.stdout.write(`工具（${mcpToolNames.size}）：${[...mcpToolNames].join("、") || "（无）"}\n`);
-      },
-      export: () => {
-        process.stdout.write("web 托管模式暂不支持 /export；会话由 serve 持久化，可在本地 REPL 导出。\n");
-      },
-      resume: async (arg) => {
-        const conversations = await server.listConversations();
-        if (!arg) {
-          if (conversations.length === 0) {
-            process.stdout.write("暂无历史会话。\n");
-            return;
-          }
-          process.stdout.write("最近会话（serve 会话存储）：\n");
-          for (const item of conversations.slice(0, 10)) {
-            process.stdout.write(`  ${item.conversationId}  ${item.title}  ${item.updatedAt}\n`);
-          }
-          process.stdout.write("使用 /resume <id> 切换（终端与浏览器将共享切换后的会话）。\n");
-          return;
-        }
-        const target = conversations.find((item) => item.conversationId === arg);
-        if (!target) {
-          process.stdout.write(`未找到会话 "${arg}"，保持当前会话不变。\n`);
-          return;
-        }
-        await switchConversation(target.conversationId, target.title);
-        process.stdout.write(`已切换到会话 ${target.conversationId}（标题：${target.title}）。\n`);
-      },
-      clear: async () => {
-        const previousId = conversationId;
-        // BUG-003（web）：/clear 不再 eager createConversation，避免「未发消息即建空会话」落盘。
-        // 退订旧会话、回到「待创建」空串占位态，首条真实消息发送时才由 ensureConversation 物化。
-        unsubscribe();
-        conversationId = "";
-        conversationTitle = "终端会话";
-        process.stdout.write(
-          `已清空上下文，首条消息发送时新建会话（旧会话 ${previousId} 保留在 serve 会话存储）\n`,
-        );
-      },
-      exit: () => {
-        stopRequested = true;
-        pending.length = 0;
-        closed = true;
-        rl.close();
-      },
-    },
-  });
-
-  /**
-   * 处理一行输入：命令即时响应；普通文本经 serve 创建 run 并等待终态。
-   *
-   * @param text 已 trim 的输入。
-   */
-  const processLine = async (text: string): Promise<void> => {
-    running = true;
-    // 对齐 repl.ts 的 run 期间 pause 语义：浏览器/终端发起的 run 期间挂起 prompt，
-    // 避免 spinner 与 readline 的输入区顶线打架（§3.3 web 模式对齐）。
-    if (!closed) rl.pause();
-    try {
-      if (await dispatch(text)) return;
-
-      if (activeRun) {
-        process.stdout.write("已有进行中的 run，请等待完成或 Ctrl-C 中断。\n");
-        return;
-      }
-
-      // 首条真实消息的落盘触发点：conversationId 仍为空串（待创建）时先物化会话，
-      // 确保 run 真正绑定到一个已落盘的 conversation（BUG-003 web 侧懒创建）。
-      const resolvedId = await ensureConversation();
-
-      // 终端输入与浏览器 composer 走同一条 run-v2 路径：同一会话、同一事件流。
-      const { accepted } = await server.createRun({
-        conversationId: resolvedId,
-        message: text,
-        mode: "auto",
-        source: "composer",
-      });
-      await new Promise<void>((resolve) => {
-        activeRun = { runId: accepted.runId, finish: resolve };
-        // 竞态兜底：run 在 createRun 返回与赋值之间已终态（stub/极速响应），立即收尾。
-        if (terminalRunIds.has(accepted.runId)) resolve();
-      });
-      terminalRunIds.delete(accepted.runId);
-      activeRun = null;
-    } catch (error) {
-      process.stdout.write(`\n运行出错：${error instanceof Error ? error.message : String(error)}\n`);
-    } finally {
-      running = false;
-      const next = stopRequested ? undefined : pending.shift();
-      if (next !== undefined) {
-        void processLine(next);
-      } else if (!closed) {
-        rl.resume();
-        promptInput();
-      }
-      if (closed && !running && pending.length === 0) finish?.();
-    }
-  };
-
-  rl.on("line", (line) => {
-    const text = line.trim();
-    if (!text) {
-      if (!running && !closed) promptInput();
-      return;
-    }
-    if (closed) return;
-    if (running) {
-      // K2/F-2 排队语义说明：web 模式的 run 由 serve 的 createRun 管理（每次一个完整 run），
-      // 终端侧没有 agentLoop 级 follow-up 钩子可注入「中途继续」，因此排队行仍保留
-      // 「run 结束后串行新开 run」的现状（与 repl.ts 的 follow-up 注入不同，但语义等价：
-      // 用户输入绝不并发读写同一会话）。仅补齐排队回显，不改造 web 的 run 生命周期。
-      pending.push(text);
-      process.stdout.write(`» 已排队（#${pending.length}）\n`);
-      return;
-    }
-    // 提交输入：先打印输入框下边框，把当前输入行在滚动历史里闭合为完整盒子。
-    if (supportsAnsi()) {
-      process.stdout.write(paint(inputBottomBar(process.stdout.columns || 80), "dim"));
-    }
-    void processLine(text);
-  });
-
-  rl.on("SIGINT", () => {
-    if (activeRun) {
-      // 有在途 run：走 serve 的取消语义（deny 挂起确认 → abort → interrupted 终态）。
-      const runId = activeRun.runId;
-      process.stdout.write("\n正在中断当前 run…\n");
-      void server.cancelRun(runId);
-      return;
-    }
-    stopRequested = true;
-    pending.length = 0;
-    closed = true;
-    rl.close();
-    finish?.();
-  });
-
-  rl.on("close", () => {
-    closed = true;
-    if (!running && pending.length === 0) finish?.();
-  });
-
-  await new Promise<void>((resolve) => {
-    finish = resolve;
-  });
-
-  // 干净退出：中断在途 run（shutdown 内部 abort + interrupted 落盘）→ 关闭 HTTP → 关闭 MCP 子进程。
-  await server.shutdown();
-  await server.close();
-  await mcp?.close();
-  process.stdout.write(`\n会话已保留：${conversationId}（标题：${conversationTitle}）\n浏览器可继续访问 ${url} 查看历史。\n`);
-}
+export const TERMINAL_RUN_STATUSES: ReadonlySet<string> = new Set([
+  "completed",
+  "failed",
+  "cancelled",
+  "interrupted",
+]);
 
 /**
  * 渲染单帧 run-v2 事件：AgentEvent 帧交给 renderEvent（流式 delta / 工具 / diff / 折叠），
- * run_status 终态触发在途 run 的收尾回调。
+ * run_status 终态触发在途 run 的收尾回调，其余控制帧（user_message / confirmation_requested）
+ * 由调用方在订阅回调里先行处理。
  *
  * @param event run-v2 帧。
  * @param tracker 会话级用量累计器。
  * @param options 渲染选项。
  * @param activeRun 在途 run（匹配 runId 时终态收尾）。
  * @param onFinish 终态回调。
+ * @param tui 可选整屏 TUI（user_message 走语义条目而非直写）。
  */
-function renderFrame(
+export function renderFrame(
   event: RunStreamEventDtoV2,
-  tracker: ReturnType<typeof createUsageTracker>,
+  tracker: { snapshot(): { total: number; cost: number } },
   options: RenderOptions,
-  activeRun: ActiveWebRun | null,
+  activeRun: { runId: string } | null,
   onFinish: () => void,
+  tui?: { appendUser(text: string): void },
 ): void {
   if (event.type === "run_status") {
     if (activeRun && event.runId === activeRun.runId) onFinish();
@@ -485,7 +66,22 @@ function renderFrame(
     process.stdout.write("\n" + paint(`${CROSS} run 错误：${error?.message ?? "未知错误"}`, "error") + "\n");
     return;
   }
+  // U1/D-A2：user_message 帧来自 serve 落盘的用户气泡权威来源。
+  // - source==="web"：浏览器 composer 发起，终端订阅同一会话时必须显示（避免「只渲染本地、Web 端不显示」）。
+  // - source==="cli"：本终端自己发起的输入，本地已回显（echoSubmitted），跳过以免双打印。
+  if (event.type === "user_message") {
+    const payload = event.payload as { source?: string; content?: string };
+    if (payload.source === "cli") return;
+    if (payload.content !== undefined) {
+      if (tui) tui.appendUser(payload.content);
+      else process.stdout.write(`${payload.content}\n`);
+    }
+    return;
+  }
   // 确认事件 / MCP discovery 事件由浏览器与日志侧消费，终端不重复渲染。
   if (!AGENT_EVENT_FRAME_TYPES.has(event.type)) return;
-  renderEvent(event.payload as AgentEvent, tracker, options);
+  renderEvent(event.payload as AgentEvent, tracker as never, options);
 }
+
+/** 终端是否支持 ANSI 颜色（供调用方选择渲染路径）。 */
+export const isAnsiSupported = supportsAnsi;

@@ -19,20 +19,10 @@ export interface CliOptions {
   deadlineMs?: number;
   /** --max-cost <n>：会话累计成本上限（美元）。 */
   maxCost?: number;
-  /** --web [dir]：进程内托管模式（ohna --web，D8 主路径）。 */
-  web: boolean;
-  /** --web 的位置参数：工作区目录；缺省 cwd。 */
-  webDir?: string;
-  /** --web-port <n>：托管端口；缺省 4173（占用自动 +1）。 */
+  /** --web-port <n>：进程内 Web 托管端口；缺省 4173（占用自动 +1）。 */
   webPort: number;
-  /** --no-open：--web 模式不自动打开浏览器。 */
+  /** --no-open：不自动打开浏览器（Web 端始终随进程启动，只控制自动打开）。 */
   open: boolean;
-  /**
-   * --no-web：关闭默认模式下的进程内观测台（docs/v1.4/02）。
-   * 默认 false = 启动 TUI repl 的同时起 serve 观测台；关闭后 llm_call 记录落本地
-   * `~/.ohna/traces/<sessionId>.jsonl`，CLI 交互行为完全不变。
-   */
-  noWeb: boolean;
   /** --mcp <config.json>：外部 MCP server 配置文件路径。 */
   mcpConfig?: string;
   /** 团队编排是否开启（默认 true；--no-team 关闭 TeamCreate / SendMessage）。 */
@@ -157,10 +147,7 @@ export function parseArgs(
   const parsed: Partial<Record<ValueFlagKey, string>> = {};
   let yes = false;
   let help = false;
-  let web = false;
   let open = true;
-  // 观测台默认开启（D1）：默认模式仍是本地 repl 执行，serve 只做镜像观测。
-  let noWeb = false;
   // 团队编排默认开启：--no-team 是唯一关闭开关（不提供 --team，避免两套真值来源）。
   let team = true;
   const positional: string[] = [];
@@ -175,29 +162,8 @@ export function parseArgs(
       yes = true;
       continue;
     }
-    if (arg === "--web") {
-      web = true;
-      continue;
-    }
     if (arg === "--no-open") {
       open = false;
-      continue;
-    }
-    if (arg === "--no-web") {
-      noWeb = true;
-      continue;
-    }
-    // 布尔开关也允许显式取值写法（`--no-web=false`）。默认已是 false，
-    // 这里的关键是**不要把它降级成位置参数**（否则会被拼进 prompt）。
-    if (arg.startsWith("--no-web=")) {
-      const value = arg.slice("--no-web=".length).toLowerCase();
-      if (value === "false" || value === "0" || value === "no") {
-        noWeb = false;
-      } else if (value === "true" || value === "1" || value === "yes") {
-        noWeb = true;
-      } else {
-        warn(`参数 --no-web 只接受 true/false，已忽略："${value}"。\n`);
-      }
       continue;
     }
     if (arg === "--no-team") {
@@ -230,14 +196,9 @@ export function parseArgs(
     positional.push(arg);
   }
 
-  // --web [dir]：托管模式下第一个位置参数是工作区目录（不是 prompt），
-  // 其余位置参数按原规则合并为 prompt（web 模式忽略）。
-  const promptPositional = [...positional];
-  let webDir: string | undefined;
-  if (web && promptPositional.length > 0) {
-    webDir = promptPositional.shift();
-  }
-  const prompt = parsed.prompt ?? (promptPositional.length > 0 ? promptPositional.join(" ") : undefined);
+  // 位置参数合并为单次 prompt（与 --prompt 等价）；ohna 恒为单一形态，
+  // 不存在「托管模式第一个位置参数是工作区目录」的语义（工作区恒为 cwd）。
+  const prompt = parsed.prompt ?? (positional.length > 0 ? positional.join(" ") : undefined);
 
   return {
     model: parsed.model,
@@ -248,11 +209,8 @@ export function parseArgs(
     maxTurns: parsePositiveInt(parsed.maxTurns, "--max-turns", warn),
     deadlineMs: parsePositiveInt(parsed.deadlineMs, "--deadline-ms", warn),
     maxCost: parseNonNegativeNumber(parsed.maxCost, "--max-cost", warn),
-    web,
-    webDir,
     webPort: parsePositiveInt(parsed.webPort, "--web-port", warn) ?? DEFAULT_WEB_PORT,
     open,
-    noWeb,
     mcpConfig: parsed.mcpConfig,
     team,
   };
@@ -266,11 +224,17 @@ export function parseArgs(
 export function printHelp(write: (text: string) => void = (text) => process.stdout.write(text)): void {
   const text = [
     "用法：",
-    "  ohna                          启动交互式 REPL（本地执行 + 观测台，多轮上下文保留）",
-    "  ohna \"你的问题\"             单次提问后退出",
+    "  ohna                          启动交互式终端（TUI）+ 本地 Web 双端，共享同一条执行线",
+    "  ohna \"你的问题\"             单次提问后退出（非 TTY 下 / --prompt 等价）",
     "  ohna --prompt \"你的问题\"     单次提问后退出（等价写法）",
     "  ohna --model deepseek         选择指定 profile 的真实模型",
     "  ohna --help                   打印本帮助",
+    "",
+    "双端形态（v1.4 统一为单一形态）：",
+    "  ohna 启动即同时拉起整屏 TUI 与进程内 Web；两者都是同一条执行线的订阅者，",
+    "  终端发的消息与浏览器发的消息实时双向同步（来源端区分，避免双打印）。",
+    "  ohna --web-port <n>           指定 Web 托管端口（默认 4173，占用自动 +1）",
+    "  ohna --no-open                启动后不自动打开浏览器",
     "",
     "编码能力（M1）：",
     "  工具集：read / write / edit / bash / grep / find / ls（作用域限定在当前工作目录）",
@@ -282,7 +246,7 @@ export function printHelp(write: (text: string) => void = (text) => process.stdo
     "  ohna --deadline-ms <n>         单次 run 的墙钟上限（毫秒，从 run 开始计时）",
     "  ohna --max-cost <n>            会话累计成本上限（美元；run 前 + 每轮后检查，单轮内可能超出）",
     "  会话内 /cost                  查看本会话累计 input/output token 与成本",
-    "  会话每轮结束自动保存到 ~/.ohna/sessions/<id>.jsonl（纯 JSONL，可 cat）",
+    "  会话每轮结束自动保存到本地数据目录（由 serve 托管，可经 /export 导出 Markdown）",
     "",
     "体验与扩展（M3）：",
     "  会话内 /model [profile]       无参列出可用 profile 与当前；带参切换模型（对后续 run 生效）",
@@ -291,14 +255,6 @@ export function printHelp(write: (text: string) => void = (text) => process.stdo
     "  ohna --no-team                关闭子代理编排（默认注册 TeamCreate / SendMessage）",
     "  会话内 /resume [id]           无参列出最近会话；带参切换会话",
     "  ohna --mcp <config.json>      挂载外部 MCP server：{\"servers\":[{\"command\",\"args\"?,\"env\"?,\"name\"?}]}",
-    "  ohna --web [dir]              进程内托管本地 Web UI（终端与浏览器看同一会话；暂不注册 Team 工具）",
-    "  ohna --web --web-port <n>     指定托管端口（默认 4173，占用自动 +1）",
-    "  ohna --web --no-open          不自动打开浏览器",
-    "",
-    "观测台（默认开启）：",
-    "  默认模式 = 本地 repl 执行 + 进程内 Web 观测台（只读 trace，执行权仍在本地）",
-    "  ohna --web-port <n>           指定观测台端口（默认 4173，占用自动 +1）",
-    "  ohna --no-web                 关闭观测台；llm_call 记录改落 ~/.ohna/traces/<sessionId>.jsonl",
     "",
     "说明：",
     "  工作区为当前目录：路径越界与危险命令会被拒绝，不传 --yes 时写/执行需终端确认。",

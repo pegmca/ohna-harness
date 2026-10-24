@@ -1,24 +1,20 @@
 /**
- * 会话级长任务治理：LLM 摘要器 + compaction 编排。
+ * 会话级长任务治理：LLM 摘要器 + compaction 编排（原 session/session-runtime.ts 收敛而来）。
  *
- * 为什么需要「会话级」压缩：`agentLoop` 在进入 run 时复制上下文（`agent-loop.ts:126`），
- * `transformContext` 的压缩结果只存在于 loop 内部副本，`agent_end.messages` 只含本轮增量。
- * 因此调用方保存的 history 永远未压缩——必须由组合根在 run 结束后对全量 history
- * 再跑一次 shouldCompact/compact，把 `CompactionMessage` + 未压缩尾部写回会话文件。
- * 好处：内核零改动。代价：运行期摘要结果无法取回，落盘时可能对同一段历史二次摘要
- * （见下方双基准说明与 `` 的取舍记录）。
+ * 持久化收敛（docs/v1.4/06 A3）：会话落盘已统一交给 serve 的 store，本模块只保留
+ * 「摘要怎么来」与「失败如何降级」这两块 CLI 侧策略，不再持有任何文件读写逻辑。
  *
  * 与 `packages/agent` 的分工：压缩原语（估算/切点/纯函数 compact）在内核包；
- * 本模块只负责「摘要怎么来」与「失败如何降级」这两个 CLI 侧策略。
+ * 本模块只负责「摘要器装配」与「会话级压缩编排」两个 CLI 侧策略。
  */
 import {
   compact,
+  enforceContextWindow,
   estimateContextTokens,
   estimateTokens,
   prepareCompaction,
-  shouldCompact,
   resolveCompactionSettings,
-  enforceContextWindow,
+  shouldCompact,
   type AgentMessage,
 } from "@aiagent/agent";
 import { streamSimple, type Model, type Usage } from "@aiagent/ai";

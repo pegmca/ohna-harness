@@ -1,6 +1,6 @@
 /**
  * provider 错误提示：从 harness 拆出，打破 harness ↔ web-entry 的运行时循环依赖
- * （--web 入口与本地模式入口都需要打印「未配置真实 provider」的同一份文案）。
+ * （单一形态下 TUI 与 Web 托管入口都需要打印「未配置真实 provider」的同一份文案）。
  */
 
 /**

@@ -1,13 +1,13 @@
 /**
- * 进程内 Web 观测台装配（docs/v1.4/02-web-llm-trace.md 的 W3）。
+ * 进程内 serve 装配（docs/v1.4/06 D-A1 单一形态）。
  *
- * 两条入口共用本模块：
- * - 默认模式：`ohna` = TUI repl **本地执行** + 进程内 serve 只做镜像观测（D1）；
- * - 托管模式：`ohna --web` = 执行权交给 serve（语义不变）。
+ * 单一形态下执行权唯一归属 serve：CLI 默认启动即「TUI/非 TTY 终端」与「浏览器」双端订阅
+ * 同一 serve 执行线（同一 `server.createRun` + `server.subscribeConversation` 事件流），
+ * 不再有「CLI 本地执行 + serve 只做镜像观测」的 observeOnly=true 路径。
  *
- * 差异只在「谁调 createRun」：本模块只负责把 server / URL / conversation 装起来。
+ * 本模块只负责把 server / URL 装起来（会话在首条真实消息到达时才懒创建）。
  * 装配失败（端口耗尽、工作区不可写、静态产物缺失等）一律 resolve `undefined`，
- * 由调用方降级为纯本地运行——观测缺失不能阻塞 CLI（D10）。
+ * 由调用方降级为无 Web 模式运行——serve 缺失不能阻塞 CLI（D10）。
  */
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
@@ -25,16 +25,20 @@ export interface HostOptions {
   active: ActiveModel;
   /** 已装配的工具表（编码工具 + MCP）。 */
   tools: AgentTool<any>[];
-  /** --yes：跳过写/执行确认（观测台模式下同样生效）。 */
+  /** --yes：跳过写/执行确认（单一形态下同样生效）。 */
   autoApprove: boolean;
   /**
-   * 只读观测模式（S2）：默认 `ohna` 传 true（serve 只承接镜像事件，不注册写 run/确认端点）；
-   * `--web` 托管模式传 false（执行权在 serve）。
+   * 只读观测模式（S2）：单一形态下 CLI 恒传 false（执行权唯一归属 serve，终端与浏览器
+   * 都是它的订阅者）。该字段仅保留为兼容 `createOhnaServer` 签名，未来若接入外部只读
+   * 观测实例才可能传 true；当前 CLI 路径不会触发 observeOnly=true 的语义分支。
    */
   observeOnly?: boolean;
   /** 起始端口（占用自动 +1）。 */
   port: number;
-  /** 观测台会话标题。 */
+  /**
+   * 会话标题（仅作 createConversation 的初值；首条消息发送时才物化会话）。
+   * 保留为兼容 `hostOhnaWeb` 签名，CLI 单一形态下装配阶段不 eager 建会话。
+   */
   conversationTitle: string;
   /** 数据目录覆盖（缺省 `~/.ohna`）；测试与多实例隔离时使用。 */
   dataDir?: string;
@@ -45,10 +49,9 @@ export interface HostResult {
   server: OhnaServer;
   url: string;
   /**
-   * 观测台会话 id。托管模式下为「待创建」占位（空串）：会话落盘的唯一触发点是
-   * 「首条真实 message 发送」，因此装配阶段不再 eager 建会话；`--web` 入口在首条消息
-   * 到达时才 `server.createConversation`。默认模式（observeOnly）仍需要一条镜像会话，
-   * 由调用方显式创建后写入。
+   * 观测台会话 id。单一形态下恒为「待创建」占位（空串）：会话落盘的唯一触发点是
+   * 「首条真实 message 发送」，因此装配阶段不再 eager 建会话；CLI 在首条消息到达时
+   * 才经 `server.createRun` 物化会话。`observeOnly` 恒为 false，不再有镜像会话分支。
    */
   conversationId: string;
 }
@@ -56,13 +59,13 @@ export interface HostResult {
 /**
  * 进程内是否已经有一个 host。
  *
- * 单入口分发天然保证同一进程只会走一条（默认或 --web），这里保留显式断言，
- * 防止未来引入插件式入口时同进程双起两个 server 抢占同一数据目录。
+ * 单入口分发天然保证同一进程只会起一个 serve（单一形态下 TUI 与浏览器都订阅它），
+ * 这里保留显式断言，防止未来引入插件式入口时同进程双起两个 server 抢占同一数据目录。
  */
 let hosting = false;
 
 /**
- * 在 127.0.0.1 上起 serve 并创建一个观测台会话。
+ * 在 127.0.0.1 上起进程内 serve（供浏览器端订阅同一执行线）。
  *
  * @param options 工作区、模型、工具、端口与会话标题。
  * @returns 装配结果；任何失败都 resolve undefined（调用方降级为纯本地）。
@@ -89,15 +92,11 @@ export async function hostOhnaWeb(options: HostOptions): Promise<HostResult | un
       ...(options.dataDir ? { dataDir: options.dataDir } : {}),
     });
     const listening = await listenWithRetry(server, options.port);
-    // 会话创建策略按模式区分（BUG 空会话落盘）：
-    // - 托管模式（--web，observeOnly=false）：不 eager 建会话，返回空占位 id，
-    //   由 web-entry 在首条真实消息到达时懒创建。
-    // - 默认观测模式（observeOnly=true）：serve 只做 CLI 本地会话的镜像观测，
-    //   需要一条与进程同生共死的镜像会话承接 run 事件，仍在此 eager 创建。
-    const conversation = options.observeOnly === true
-      ? await server.createConversation(options.conversationTitle)
-      : { conversationId: "" as string } as { conversationId: string };
-    return { server, url: listening.url, conversationId: conversation.conversationId };
+    // 单一形态（docs/v1.4/06 D-A1）：执行权唯一归属 serve，终端与浏览器都是它的订阅者，
+    // 不再有「CLI 本地执行 + 镜像观测」的 observeOnly=true 路径。会话在首条真实消息到达时
+    // 才由 REPL 经 server.createConversation 懒创建（BUG 空会话落盘），因此装配阶段不 eager 建会话。
+    const conversationId = "";
+    return { server, url: listening.url, conversationId };
   } catch (error) {
     hosting = false;
     const message = error instanceof Error ? error.message : String(error);

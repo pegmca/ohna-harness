@@ -18,6 +18,8 @@ export interface SettingsHealth {
   modelId: string | undefined;
   modelProvider: string | undefined;
   pid: number | undefined;
+  /** 是否只读观测实例（docs/v1.4/06 D-A7）：true 时浏览器不能发起或取消 run。 */
+  observeOnly: boolean;
 }
 
 /** health 原始 payload（packages/serve/src/routes/health.ts）。 */
@@ -27,6 +29,7 @@ interface RawHealth {
   model?: { id?: string; provider?: string };
   pid?: number;
   dataDir?: string;
+  observeOnly?: boolean;
 }
 
 /** 探针状态：loading → ready / unavailable。 */
@@ -58,7 +61,8 @@ export async function fetchSettingsHealth(signal?: AbortSignal): Promise<Setting
         dataDir: typeof payload.dataDir === "string" ? payload.dataDir : undefined,
         modelId: payload.model?.id,
         modelProvider: payload.model?.provider,
-        pid: typeof payload.pid === "number" ? payload.pid : undefined
+        pid: typeof payload.pid === "number" ? payload.pid : undefined,
+        observeOnly: payload.observeOnly === true
       }
     };
   } catch {

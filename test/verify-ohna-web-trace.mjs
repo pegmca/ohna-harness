@@ -5,8 +5,10 @@
  * 覆盖两条生产路径（docs/v1.4/02-web-llm-trace.md §5 TC-W5-01/02/03）：
  * 1. 托管 run：`createOhnaServer` + stub streamFn，在 `options.onPayload` 回填模拟请求体 →
  *    `createRun` → 事件流里必须出现完整的 `llm_call`（providerPayload + response + durationMs）。
- * 2. observe run：`observeRun()` 合成事件 → 与托管 run 同构地落盘/回放（CLI 镜像路径）。
- * 3. 静态托管：`apps/ohna-web/dist` 存在时 `GET /trace` 必须 200（不存在则跳过，不算失败）。
+ * 2. 静态托管：`apps/ohna-web/dist` 存在时 `GET /trace` 必须 200（不存在则跳过，不算失败）。
+ *
+ * 注：原「observe run」路径（CLI 镜像 + 合成事件句柄）已在 06 A3-B 退役，
+ * 单一形态下执行权唯一归属 serve，故该脚本只验证托管 run 与静态托管两条路径。
  *
  * 运行：
  *   pnpm --filter @aiagent/serve build
@@ -105,44 +107,6 @@ function createTraceableStream() {
       stream.push({ type: "done", reason: "stop", message });
     });
     return stream;
-  };
-}
-
-/**
- * 构造一条 llm_call 记录（observe 路径：模拟 CLI 采集层产物）。
- *
- * @returns {object} LlmCallRecordDto。
- */
-function syntheticRecord() {
-  return {
-    callId: "verify-call-1",
-    callIndex: 1,
-    startedAt: Date.now() - 3,
-    durationMs: 3,
-    attemptCount: 1,
-    request: {
-      provider: "mock",
-      api: "openai-completions",
-      modelId: "stub-model",
-      baseUrl: "http://127.0.0.1/mock",
-      systemPrompt: "verify system prompt",
-      messages: [{ role: "user", content: "镜像消息", timestamp: 1 }],
-      tools: [{ name: "read", description: "read file" }],
-      providerPayload: { model: "stub-model", stream: true, messages: [{ role: "user", content: "镜像消息" }] }
-    },
-    response: {
-      status: 200,
-      finishReason: "stop",
-      usage: {
-        input: 9,
-        output: 12,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 21,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }
-      },
-      message: assistantMessage("镜像回复")
-    }
   };
 }
 
@@ -260,52 +224,7 @@ async function main() {
     assert.equal(managedCall.payload.response.message.content[0].text, "托管回复", "response.message 应透传内容");
     pass(`托管 run：llm_call 完整（providerPayload + response.usage.cost + durationMs=${managedCall.payload.durationMs}）`);
 
-    // ---- 路径 2：observe run（CLI 镜像） ----
-    const observed = await server.observeRun({
-      conversationId: conversation.conversationId,
-      requestId: "verify-observe:1"
-    });
-    observed.push({ type: "message_start", message: { role: "user", content: "镜像消息", timestamp: 1 } });
-    observed.push({ type: "message_end", message: { role: "user", content: "镜像消息", timestamp: 1 } });
-    observed.push({ type: "message_end", message: assistantMessage("镜像回复") });
-    observed.push({ type: "llm_call", payload: syntheticRecord() });
-    observed.end();
-
-    const observeSnapshot = await waitForTerminal(url, observed.runId);
-    assert.equal(observeSnapshot.status, "completed", "observe run 应由 end() 正常收尾");
-    assert.equal(observeSnapshot.mode, "observe", "observe run 的 mode 应为 observe");
-    assert.equal(observeSnapshot.source, "cli", "observe run 的 source 应为 cli");
-
-    const observedEvents = await readRunEvents(url, observed.runId);
-    const observedCall = observedEvents.find((event) => event.type === "llm_call");
-    assertLlmRecord(observedCall?.payload, "观测路径");
-    assert.equal(observedCall.payload.request.systemPrompt, "verify system prompt", "观测路径应保留 systemPrompt");
-    assert.equal(observedCall.payload.response.message.content[0].text, "镜像回复", "观测路径应保留最终消息");
-    assert.ok(
-      observedEvents.every((event) => event.type !== "message_update"),
-      "message_update 是瞬态事件，不应出现在落盘/replay 中"
-    );
-    pass("observe run：llm_call 与消息事件按序列落盘并可 replay");
-
-    // observe 型 run 不写会话消息（避免与 CLI 本地会话双份存储）。
-    // 注意：同一 conversation 里托管 run 的 assistant 消息是正常落盘的，这里只针对本次 observe runId。
-    const conversationFile = path.join(dataDir, "conversations", `${conversation.conversationId}.jsonl`);
-    const rows = (await fs.readFile(conversationFile, "utf8"))
-      .split("\n")
-      .filter((line) => line.trim() !== "")
-      .map((line) => JSON.parse(line));
-    assert.equal(
-      rows.some((row) => row.role === "assistant" && row.runId === observed.runId),
-      false,
-      "observe 型 run 不得写入 assistant 会话消息"
-    );
-    assert.ok(
-      rows.some((row) => row.role === "assistant" && row.runId === created.accepted.runId),
-      "托管 run 的 assistant 消息应正常落盘"
-    );
-    pass("observe 型 run 未污染会话消息存储（托管 run 消息保持落盘）");
-
-    // ---- 路径 3：静态托管 ----
+    // ---- 路径 2：静态托管 ----
     if (existsSync(path.join(webDist, "index.html"))) {
       const traceResponse = await fetch(`${url}/trace`);
       assert.equal(traceResponse.status, 200, "GET /trace 应返回 200");

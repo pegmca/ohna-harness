@@ -33,10 +33,18 @@ interface ComposerControlsProps {
   onUsePrompt: (prompt: string) => void;
   prompts: string[];
   selectedModelId: string;
+  /**
+   * 只读观测实例（docs/v1.4/06 D-A7）：true 时禁用全部输入与发送，并提示用户，
+   * 而不是发送后 404。CLI 单一形态恒为 false。
+   */
+  observeOnly?: boolean;
 }
 
 /**
  * Kimi 式 Composer 控制面：本地版仅保留灵感、模型与发送，无附件 / Report Mode。
+ *
+ * 只读实例（observeOnly）下 composer 整体禁用：写入/取消 run 的路由未注册，发送必失败，
+ * 因此用「禁用 + 提示」替代「能输入但报错」（BUG-005 止血）。
  *
  * @param props Composer 状态与回调。
  * @returns 可访问的消息输入表单。
@@ -46,7 +54,9 @@ export function ComposerControls(props: ComposerControlsProps) {
   const [ideaOpen, setIdeaOpen] = useState(false);
   const [modelOpen, setModelOpen] = useState(false);
   const selectedModel = props.models.find((model) => model.id === props.selectedModelId);
-  const canSend = props.input.trim().length > 0
+  // 只读实例下直接禁发：绕过「输入非空 + 模型就绪」的常规可发判定。
+  const canSend = !props.observeOnly
+    && props.input.trim().length > 0
     && props.modelCatalogStatus === "ready"
     && Boolean(props.selectedModelId);
 
@@ -73,13 +83,18 @@ export function ComposerControls(props: ComposerControlsProps) {
   return (
     <form className="chat-composer" id={props.formId} onSubmit={props.onSubmit}>
       {props.error ? <div className="composer-error" role="status">{props.error}</div> : null}
+      {props.observeOnly ? (
+        <div className="composer-readonly-banner" role="status">
+          当前为只读观测实例，浏览器不能发起或取消 run；请在终端启动 ohna 后进行交互。
+        </div>
+      ) : null}
       <div className="composer-box">
         <textarea
           className="composer-textarea"
-          disabled={props.isSubmitting}
+          disabled={props.isSubmitting || props.observeOnly === true}
           onChange={(event) => props.onInputChange(event.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder="描述一个编码任务…"
+          placeholder={props.observeOnly ? "只读观测实例：不可发送消息。" : "描述一个编码任务…"}
           ref={textareaRef}
           rows={1}
           value={props.input}
@@ -92,6 +107,7 @@ export function ComposerControls(props: ComposerControlsProps) {
                 <button
                   aria-label="任务灵感"
                   className="composer-icon-button"
+                  disabled={props.observeOnly === true}
                   type="button"
                 ><Lightbulb className="icon-size" /></button>
               </Popover.Trigger>
@@ -122,7 +138,7 @@ export function ComposerControls(props: ComposerControlsProps) {
           <div className="composer-toolbar-group">
             <Popover.Root onOpenChange={setModelOpen} open={modelOpen}>
               <Popover.Trigger asChild>
-                <button className="model-selector" disabled={props.isSubmitting} type="button">
+                <button className="model-selector" disabled={props.isSubmitting || props.observeOnly === true} type="button">
                   <span>{selectedModel?.label ?? "选择模型"}</span>
                 </button>
               </Popover.Trigger>

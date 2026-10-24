@@ -36,7 +36,7 @@ import {
   textOfBlocks,
   toUiMessages
 } from "./format";
-import { projectLiveRun } from "./live-run-projection";
+import { projectLiveRun, projectRunUserMessages } from "./live-run-projection";
 import { RunDetailPanel } from "./run-details";
 import { ConversationSidebar } from "./sidebar";
 import type { RetryRunContext, SelectedRunDetail, UiMessage } from "./types";
@@ -585,7 +585,9 @@ export function Workbench() {
       content: trimmed,
       blocks: [],
       createdAt: now,
-      status: "complete"
+      status: "complete",
+      // runId 在 onAccepted 拿到服务端 runId 后回填；U2-2 用它识别「这条乐观气泡对应的权威消息」。
+      runId: undefined
     };
     const pendingMessage: UiMessage = {
       id: pendingMessageId,
@@ -626,15 +628,49 @@ export function Workbench() {
         submittedModelId,
         (event) => {
           liveEvents.push(event);
-          setMessages((current) => current.map((item) => item.id === pendingMessageId
-            ? { ...item, liveEvents: [...liveEvents] }
-            : item));
+          setMessages((current) => {
+            // U2-1：把总线上的 user_message 帧实时投影为时间线用户气泡，使终端 CLI 发起
+            // （source="cli"）的消息也能在 Web 端即时呈现，而不只依赖本地乐观插入。
+            // 去重：按 id（messageId）与 runId 双重判定，避免与本次提交自己的乐观用户气泡重复。
+            const projected = projectRunUserMessages(liveEvents);
+            if (projected.length === 0) {
+              return current.map((item) => item.id === pendingMessageId
+                ? { ...item, liveEvents: [...liveEvents] }
+                : item);
+            }
+            const localUserIds = new Set(current.filter((m) => m.role === "user").map((m) => m.id));
+            const localRunIds = new Set(
+              current.filter((m) => m.role === "user" && m.runId).map((m) => m.runId as string)
+            );
+            const toInsert = projected.filter(
+              (bubble) => !localUserIds.has(bubble.id)
+                && !(bubble.runId && localRunIds.has(bubble.runId))
+            );
+            if (toInsert.length === 0) {
+              return current.map((item) => item.id === pendingMessageId
+                ? { ...item, liveEvents: [...liveEvents] }
+                : item);
+            }
+            // 用户气泡插在 pending 助手消息之前，保持时间线「先用户后助手」的顺序。
+            const next: UiMessage[] = [];
+            for (const item of current) {
+              if (item.id === pendingMessageId) next.push(...toInsert, item);
+              else next.push(item);
+            }
+            return next.map((item) => item.id === pendingMessageId
+              ? { ...item, liveEvents: [...liveEvents] }
+              : item);
+          });
           handleRunEvent(event);
         },
         async (runId) => {
           // ref 必须先于 React state 更新，Stop 不依赖下一次 render 才能看到 accepted Run。
           activeRunIdRef.current = runId;
           setActiveRunId(runId);
+          // U2-2：把服务端 runId 回填到乐观用户气泡，使终态刷新时能按它识别并替换为权威消息，
+          // 避免「本地乐观气泡 + 服务端 user_message」重复出现在时间线（BUG-005 同源问题）。
+          setMessages((current) => current.map((item) =>
+            item.id === clientMessageId ? { ...item, runId } : item));
           if (cancelRequested.current) {
             const cancelled = await cancelRun(runId);
             if (!cancelled.ok) {
@@ -682,8 +718,9 @@ export function Workbench() {
         runStatus: result.data.status,
         liveEvents: undefined
       });
-      // 终态正文以服务端消息列表为准：拉取后移除本地 pending 占位，避免与持久化消息重复。
-      void refreshTerminalMessages(submittedConversationId, pendingMessageId, activeRunIdRef.current);
+      // 终态正文以服务端消息列表为准：拉取后移除本地 pending 占位 + 乐观用户气泡，
+      // 用服务端权威 user_message 校正（U2-2），避免与持久化消息重复。
+      void refreshTerminalMessages(submittedConversationId, pendingMessageId, clientMessageId, activeRunIdRef.current);
     } catch (caught) {
       if (runController.signal.aborted) {
         const projection = projectLiveRun(liveEvents);
@@ -704,7 +741,7 @@ export function Workbench() {
         ok: false,
         runStatus: "failed"
       });
-      setComposerError("请求失败，请确认 ohna 服务已启动（ohna --web 或 pnpm --filter @aiagent/ohna-cli start）且代理端口一致。");
+      setComposerError("请求失败，请确认 ohna 服务已启动（pnpm --filter @aiagent/ohna-cli start）且代理端口一致。");
     } finally {
       setIsSubmitting(false);
       setActiveRunId(undefined);
@@ -716,17 +753,19 @@ export function Workbench() {
 
   /**
    * run 终态后重新拉取会话消息（终态正文以服务端为准）。
-   * 只有服务端已可见该 run 的 assistant 消息时才移除本地 pending 占位，
-   * 避免落盘竞态导致终端内容闪空。
+   * 只有服务端已可见该 run 的 assistant 消息时才移除本地 pending 占位 + 乐观用户气泡，
+   * 避免落盘竞态导致终端内容闪空；移除后用服务端权威 user_message 校正（U2-2）。
    *
    * @param conversationId 会话 id。
    * @param pendingMessageId 本地 pending 占位 id。
+   * @param pendingUserMessageId 本地乐观用户气泡 id（与 pendingMessageId 成对移除）。
    * @param runId 刚结束的 Run id。
    * @returns 刷新完成 Promise。
    */
   async function refreshTerminalMessages(
     conversationId: string,
     pendingMessageId: string,
+    pendingUserMessageId: string,
     runId: string | undefined
   ): Promise<void> {
     const result = await listConversationMessages(conversationId);
@@ -736,7 +775,11 @@ export function Workbench() {
       && serverItems.some((item) => item.role === "assistant" && item.runId === runId);
     if (!hasRunAssistant) return;
     setMessages((current) => {
-      const withoutPending = current.filter((item) => item.id !== pendingMessageId);
+      // U2-2：成对移除乐观用户气泡与 pending 助手占位；二者 id 不同（clientMessageId vs 服务端
+      // messageId），但都归属同一个 run，移除后由服务端权威消息接管，杜绝重复用户气泡。
+      const withoutPending = current.filter(
+        (item) => item.id !== pendingMessageId && item.id !== pendingUserMessageId
+      );
       return mergeMessages(withoutPending, serverItems);
     });
     setMessageState("ready");
@@ -814,6 +857,7 @@ export function Workbench() {
             onRetryMessage={(message) => void retryFailedMessage(message)}
             onUsePrompt={setInput}
             showCliHint={activeConversation?.title.startsWith("CLI ·") ?? false}
+            observeOnly={localMode?.observeOnly === true ? true : undefined}
           />
         )}
         composer={(
@@ -832,6 +876,7 @@ export function Workbench() {
             onSubmit={handleSubmit}
             onUsePrompt={setInput}
             selectedModelId={composer.selectedModelId}
+            observeOnly={localMode?.observeOnly === true ? true : undefined}
           />
         )}
         composerFormId={COMPOSER_FORM_ID}

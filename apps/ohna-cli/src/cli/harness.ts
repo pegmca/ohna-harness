@@ -1,48 +1,35 @@
 /**
  * CLI 组合根（composition root）：装配真实模型、工具与 agentLoop，并决定单次 / REPL 运行方式。
  *
- * 为什么保留这一层：模型选择、工具注册表、摘要器与用量累计器必须在一个地方接线；
- * 运行期编排已拆到 turn.ts（单轮 run）与 repl.ts（交互循环），避免组合根膨胀到 500 行以上。
+ * 单一形态（docs/v1.4/06 D-A1）：执行权唯一归属进程内 serve，终端（TUI/REPL 与非 TTY 回退）
+ * 都是 serve 的执行线订阅者——同一 `server.createRun` + `server.subscribeConversation`
+ * 事件流。`--prompt` 与交互循环都经同一路径发起 run 并等待终态（D-A4/D-A10）。
+ *
+ * 模型选择、工具注册表、摘要器与用量累计器在此接线；运行期编排已拆到 turn.ts（单轮 /
+ * 单次）与 repl.ts（交互循环）。
  */
-import { type ActiveModel, resolveActiveModelFromEnv } from "@aiagent/ai";
+import type { ActiveModel } from "@aiagent/ai";
+import { resolveActiveModelFromEnv } from "@aiagent/ai";
 import type { AgentTool } from "@aiagent/tools";
 import { createCodingToolRegistry } from "@aiagent/coding";
-import { createToolConfirmGate, type ConfirmHook } from "../permission/confirm.js";
 import { createTeamToolset } from "../runtime/team-wiring.js";
 import { loadMcpTools } from "../runtime/mcp-config.js";
 import { resolveSystemPrompt } from "../runtime/mode.js";
-import { createUsageTracker, type UsageTracker } from "../ui/render.js";
-import { createLlmSummarizer } from "../session/session-runtime.js";
-import {
-  ensureFullHistory,
-  materializeSession,
-  openSession,
-  persistSession,
-  printResumeHint,
-} from "../session/session-flow.js";
-import { createSessionStore, type SessionStore } from "../session/session-store.js";
-import { printStopReason, reachedCostBudget, runTurn, type RunSetup } from "../runtime/turn.js";
-import {
-  createFileTurnObserver,
-  createObservationRef,
-  createServerTurnObserver,
-  createTracedStreamFn,
-  type TraceCounter,
-  type TurnObserver,
-} from "../runtime/observation.js";
-import { flushTraceWrites } from "../runtime/llm-trace-file.js";
+import { createUsageTracker } from "../ui/render.js";
+import { createLlmSummarizer } from "../runtime/summarizer.js";
+import { createObservationRef, createTracedStreamFn, type TraceCounter } from "../runtime/observation.js";
 import { runRepl } from "../input/repl.js";
+import { runSingleTurn } from "../runtime/single-turn.js";
 import type { ReplContext } from "../input/repl-context.js";
 import { hostOhnaWeb, type HostResult } from "./web-host.js";
-import { runWeb } from "./web-entry.js";
 import type { CliOptions } from "./args.js";
 import { printProviderError } from "./provider-error.js";
+import type { OhnaServer } from "@aiagent/serve";
+import type { ConfirmHook } from "../permission/confirm.js";
+import { resolveDataDir } from "../session/serve-session.js";
 
 /**
  * 解析当前环境可用的真实模型。
- *
- * 遍历/选择逻辑已下沉到 `@aiagent/ai` 的 `resolveActiveModelFromEnv`（ohna-cli 与 serve 共用），
- * 这里保留同名薄封装，避免 app 内调用点感知下沉细节。
  *
  * @param modelFlag 可选的 --model 值，用于锁定某个 profile。
  * @returns 可用模型或 null。
@@ -52,128 +39,12 @@ export function resolveActiveModel(modelFlag?: string): ActiveModel | null {
 }
 
 /**
- * 单次模式：跑完一轮、压缩并保存会话后返回（由调用方退出进程）。
- *
- * `--max-cost` 在 run 前先检查一次：零预算（0）或恢复会话已超预算时直接落盘并退出，
- * 不调用模型；每轮结束后 `shouldStopAfterTurn` 还会再检查（单轮内可能超出）。
- *
- * @param prompt 用户问题。
- * @param active 已解析的真实模型与凭据。
- * @param tools 已装配的工具列表。
- * @param setup 本轮的模式配置。
- * @param tracker 会话级用量累计器。
- * @param store 会话存储。
- * @param onGateReady 权限闸门就绪回调（K3：回填 team controller 的可变 gate 引用）。
- * @param observer 观测启动器（W3）：为本次 run 开一条镜像 run。
- */
-async function runSingleTurn(
-  prompt: string,
-  active: ActiveModel,
-  tools: AgentTool<any>[],
-  setup: RunSetup,
-  tracker: UsageTracker,
-  store: SessionStore,
-  onGateReady?: (gate: ConfirmHook) => void,
-  observer?: TurnObserver,
-): Promise<void> {
-  const controller = new AbortController();
-  // 单次模式无 readline，需显式把进程 SIGINT 接到 AbortController（与 REPL 对齐），
-  // 使 Ctrl-C 能中断当前 run 而非静默忽略；run 结束后移除监听，避免泄漏到进程退出前。
-  const onSigint = () => controller.abort();
-  process.once("SIGINT", onSigint);
-  try {
-    // 单次模式也落盘：退出后仍可用 --resume 接续；传了 --resume 时先恢复历史再追加本轮。
-    const session = await openSession(store, setup.resumeId, setup.cwd);
-    if (session.usage) tracker.restore(session.usage);
-    // C4：tail 恢复只拿到后缀；单次模式随后必然落盘，所以预算检查 / runTurn / persist
-    // 之前必须补载全量，否则会用后缀覆盖磁盘历史。补载失败则中止本次运行（不写盘）。
-    if (session.hasMore) {
-      const loaded = await ensureFullHistory(store, session.id, session.messages, (message) =>
-        process.stderr.write(`⚠️ ${message}\n`),
-      );
-      if (!loaded) {
-        process.stderr.write(
-          "未能补载会话完整历史，已中止本次运行以避免覆盖磁盘上的更早消息。\n",
-        );
-        process.exitCode = 1;
-        return;
-      }
-    }
-    const title = session.title ?? prompt.replace(/\s+/g, " ").slice(0, 40);
-    const beforeToolCall = createToolConfirmGate({
-      autoApprove: setup.autoApprove,
-      cwd: setup.cwd,
-    });
-    // K3：闸门在此才构造（单次模式无 readline 实例），立即回填给 team controller。
-    onGateReady?.(beforeToolCall);
-
-    // 待创建会话在首条消息时物化（单次模式必然发送消息）：观测 / runTurn 需要真实会话 id。
-    const sessionId = await materializeSession(store, session.id, setup.cwd);
-
-    // 零预算 / 恢复后已超预算：不调用模型，仍然把当前会话落盘，保证 --resume 可继续。
-    if (reachedCostBudget(tracker, setup.maxCost)) {
-      printStopReason("max_cost");
-      await persistSession(store, sessionId, session.messages, {
-        model: active.model,
-        summarizer: setup.summarizer,
-        title,
-        workspaceRoot: setup.cwd,
-        usage: tracker,
-      });
-      printResumeHint(sessionId);
-      return;
-    }
-
-    const result = await runTurn(
-      session.messages,
-      prompt,
-      active,
-      tools,
-      controller.signal,
-      setup,
-      tracker,
-      beforeToolCall,
-      undefined,
-      undefined,
-      // 单次模式同样镜像观测（runIndex 恒为 1：一次进程只有一轮 run）。
-      observer?.start(prompt, { sessionId, runIndex: 1 }),
-    );
-    await persistSession(store, sessionId, result.history, {
-      model: active.model,
-      summarizer: setup.summarizer,
-      title,
-      workspaceRoot: setup.cwd,
-      usage: tracker,
-    });
-    printResumeHint(sessionId);
-    // provider 错误已由 renderEvent 打印；单次模式用非零退出码让脚本/CI 能感知失败。
-    if (result.failed) process.exitCode = 1;
-  } finally {
-    process.removeListener("SIGINT", onSigint);
-  }
-}
-
-/**
- * CLI 主入口：解析模型、装配编码工具集，然后启动 REPL 或单次运行。
- * 若没有任何真实 provider 可用，打印清晰错误并以非零码退出，绝不静默回退 mock。
- *
- * M3：`--web` 走进程内托管（web-entry.ts）；`--mcp` 挂载外部工具（失败只警告）。
+ * CLI 主入口：解析模型、装配编码工具集，然后启动 REPL 或单次运行（均经进程内 serve）。
  *
  * @param options 已解析的命令行选项。
  */
 export async function runCli(options: CliOptions): Promise<void> {
-  if (options.help) return; // --help 已由 index.ts 打印，此处仅短路。
-
-  // --web：进程内托管（D8 主路径），工具装配与会话语义都在 web-entry 内完成。
-  // K3/B3：--web 本批次不接 team（serve 侧仍用其既有确认闸门，子代理策略继承留待后续批次）。
-  // 与默认模式互斥：单入口分发保证同进程只会走一条；--no-web 在托管模式下无意义。
-  if (options.web) {
-    if (options.noWeb) {
-      process.stderr.write("提示：--web 是托管模式（执行与观测同一套 serve），--no-web 在此模式下不生效。\n");
-    }
-    await runWeb(options);
-    return;
-  }
+  if (options.help) return;
 
   const active = resolveActiveModel(options.model);
   if (!active) {
@@ -183,12 +54,9 @@ export async function runCli(options: CliOptions): Promise<void> {
   }
 
   const cwd = process.cwd();
-  // ohna 恒为编码助手：工具集固定为编码工具集，作用域限定在 cwd（路径与命令策略在 @aiagent/coding 内）。
-  // 子代理只继承这份「编码工具池」快照（不含 MCP / team 自身），避免递归 spawn 与外部工具越权。
   const codingTools: AgentTool<any>[] = createCodingToolRegistry(cwd);
   const tools: AgentTool<any>[] = [...codingTools];
 
-  // --mcp：外部 MCP server 接线（失败只打印结构化警告，不中断启动）。
   const mcpContext: ReplContext = {};
   const mcp = options.mcpConfig ? await loadMcpTools(options.mcpConfig) : null;
   if (mcp) {
@@ -197,33 +65,18 @@ export async function runCli(options: CliOptions): Promise<void> {
     mcpContext.mcpServerNames = mcp.serverNames;
   }
 
-  /**
-   * W3 观测引用：TeamController 先于任何 run 创建，子代理的 streamFn 通过该可变引用
-   * 实时读取「当前 run 的观测句柄」，因此子代理 LLM 调用与 supervisor 落在同一条 run 里。
-   * callIndex 必须由两条链共享同一个 counter（S1），每轮 run 开始时归零。
-   */
+  // 唯一的采集 streamFn：Team 子代理与主线程共用同一个 counter，避免同 run 出现两条 callIndex。
   const observationRef = createObservationRef();
   const traceCounter: TraceCounter = { value: 0 };
-
-  /**
-   * 唯一的采集 streamFn：Team 子代理与主线程共用同一个实例（同一 counter、同一 wrapper 缓存），
-   * 避免两处各自包一层导致同 run 出现两条 callIndex:1。
-   */
   const tracedStreamFn = createTracedStreamFn(() => observationRef.current, traceCounter);
 
-  /**
-   * K3 策略继承（可变引用时序）：team controller 必须先于 REPL 创建（工具表要并入），
-   * 但真正的权限闸门依赖 REPL/单次模式的 readline/TUI 实例，只能后建。因此这里先给
-   * 子代理一个转发闭包，等宿主构造完闸门后通过 `onGateReady` 回填 `gateRef`——此后
-   * 子代理与 supervisor 指向同一个闸门、共享同一 PolicyState（write/edit/bash 同审）。
-   */
+  // K3 策略继承：team controller 先建，真实闸门（依赖 TUI/readline）后建，经 onGateReady 回填。
   let gateRef: ConfirmHook | undefined;
   const team = createTeamToolset({
     enabled: options.team,
     codingTools,
     defaultModel: active.model,
     getGate: () => gateRef,
-    // 与主线程共用采集层：子代理每次 LLM 调用同样产出 llm_call（W3-6）。
     streamFn: tracedStreamFn,
   });
   tools.push(...team.tools);
@@ -234,81 +87,60 @@ export async function runCli(options: CliOptions): Promise<void> {
     };
   }
 
+  const dataDir = resolveDataDir();
+  const tracker = createUsageTracker();
+  const setup = {
+    systemPrompt: await resolveSystemPrompt(cwd),
+    autoApprove: options.yes,
+    cwd,
+    maxTurns: options.maxTurns,
+    deadlineMs: options.deadlineMs,
+    maxCost: options.maxCost,
+    summarizer: createLlmSummarizer({
+      model: active.model,
+      apiKey: active.apiKey,
+      onUsage: (usage) => tracker.add(usage),
+    }),
+    resumeId: options.resume,
+    mcpToolNames: mcpContext.mcpToolNames,
+    streamFn: tracedStreamFn,
+  };
+
+  // 单一形态：起进程内 serve（observeOnly=false，执行权在 serve），终端与浏览器共享同一会话。
+  const hosted = await hostOhnaWeb({
+    workspaceRoot: cwd,
+    active,
+    tools,
+    autoApprove: options.yes,
+    observeOnly: false,
+    port: options.webPort,
+    conversationTitle: `CLI · ${(options.resume ?? cwd).slice(0, 8)}`,
+    dataDir,
+  });
+  const server = hosted?.server;
+  if (hosted) mcpContext.traceUrl = hosted.url;
+
   try {
-    // 先建 tracker 再建摘要器：摘要调用的 usage 必须计入同一会话累计（/cost、header、--max-cost）。
-    const tracker = createUsageTracker();
-    const setup: RunSetup = {
-      systemPrompt: await resolveSystemPrompt(cwd),
-      autoApprove: options.yes,
-      cwd,
-      maxTurns: options.maxTurns,
-      deadlineMs: options.deadlineMs,
-      maxCost: options.maxCost,
-      summarizer: createLlmSummarizer({
-        model: active.model,
-        apiKey: active.apiKey,
-        onUsage: (usage) => tracker.add(usage),
-      }),
-      resumeId: options.resume,
-      mcpToolNames: mcpContext.mcpToolNames,
-      // 已带采集标记的 streamFn：runTurn 不会再包第二层（S1）。
-      streamFn: tracedStreamFn,
-    };
-
-    // W3/D10 观测装配：默认起进程内观测台（执行权仍在本地）；--no-web 或启动失败时
-    // 降级为本地 JSONL——两条链路共用同一个采集层，只是 sink 不同。
-    // observeOnly=true：默认模式的 serve 只做只读观测，不注册写 run / 确认写端点（S2）。
-    const hosted = options.noWeb
-      ? undefined
-      : await hostOhnaWeb({
-          workspaceRoot: cwd,
-          active,
-          tools,
-          autoApprove: false,
-          observeOnly: true,
-          port: options.webPort,
-          conversationTitle: `CLI · ${(options.resume ?? cwd).slice(0, 8)}`,
-        });
-    const observer: TurnObserver =
-      hosted !== undefined
-        ? createServerTurnObserver({
-            server: hosted.server,
-            conversationId: hosted.conversationId,
-            ref: observationRef,
-            counter: traceCounter,
-          })
-        : createFileTurnObserver({ ref: observationRef, counter: traceCounter });
-    mcpContext.observation = { start: observer.start };
-    if (hosted) mcpContext.traceUrl = hosted.url;
-
-    try {
-      if (options.prompt !== undefined) {
-        await runSingleTurn(
-          options.prompt,
-          active,
-          tools,
-          setup,
-          tracker,
-          createSessionStore(),
-          (gate) => {
-            gateRef = gate;
-          },
-          observer,
-        );
-      } else {
-        await runRepl(active, tools, setup, tracker, mcpContext);
+    if (options.prompt !== undefined) {
+      if (!server) {
+        process.stderr.write("⚠️ 观测台启动失败，单次模式无法执行。\n");
+        process.exitCode = 1;
+        return;
       }
-    } finally {
-      // 观测台随 CLI 生命周期结束：中断在途镜像 run 并关闭 store 写入队列。
-      await shutdownHost(hosted);
-      // N1：--no-web 的 JSONL 写入是 fire-and-forget，退出前必须等最后一条落盘
-      // （单次 `--prompt` 尤其明显：进程可能在 append 完成前就结束）。
-      await flushTraceWrites();
+      await runSingleTurn(options.prompt, active, tools, setup, tracker, server, dataDir, (gate) => {
+        gateRef = gate;
+      });
+    } else if (server) {
+      await runRepl(active, tools, setup, tracker, server, dataDir, mcpContext);
+    } else {
+      process.stderr.write("⚠️ 观测台启动失败，已退出。\n");
+      process.exitCode = 1;
     }
   } finally {
-    // MCP stdio 子进程的管道会保持事件循环存活：退出前必须关闭，否则 REPL 结束后进程无法退出。
-    await mcp?.close();
+    await shutdownHost(hosted);
   }
+
+  await mcp?.close();
 }
 
 /**

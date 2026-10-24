@@ -4,9 +4,12 @@
  * 从 repl.ts 拆出的原因：repl 已到单文件行数上限，而这三个字段都属于「组合根注入
  * REPL 的接线信息」，不参与输入循环本身；拆出后 repl 只保留 `import type` 与 re-export，
  * 既有导入方（harness）无需修改。
+ *
+ * 单一形态（docs/v1.4/06 D-A1）：执行权在 serve，终端是进程内订阅者。观测镜像通道已
+ * 退役，因此本上下文只保留来源标注与权限闸门回填；权限卡改经 `server` 句柄的事件回流
+ * （订阅 `confirmation_requested` 后由终端决议并调用 `server.resolveConfirmation`）。
  */
 import type { ConfirmHook } from "../permission/confirm.js";
-import type { TurnObserver } from "../runtime/observation.js";
 
 /** REPL 的装配上下文：MCP / Team 来源标注与闸门回填。 */
 export interface ReplContext {
@@ -16,12 +19,7 @@ export interface ReplContext {
   mcpServerNames?: readonly string[];
   /** Team 编排工具名（/tools 据此标注「（Team）」）。 */
   teamToolNames?: ReadonlySet<string>;
-  /**
-   * 本轮 run 的观测启动器（W3）：每轮 run 前调用 `start` 拿到观测句柄，
-   * 由 runTurn 把 loop 事件与 llm_call 记录镜像出去。缺省表示纯本地、不观测。
-   */
-  observation?: { start: TurnObserver["start"] };
-  /** 观测台地址（欢迎头展示）；`--no-web` 或启动失败时不设置。 */
+  /** 观测台地址（欢迎头展示）；单一形态下恒为本进程 serve 的 URL。 */
   traceUrl?: string;
   /**
    * 权限闸门就绪回调（K3 时序）：team controller 先于 REPL 创建，但闸门必须在 REPL /

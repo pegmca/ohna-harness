@@ -50,10 +50,10 @@ TypeScript Agent 工程 monorepo：一套可复用的 Agent 内核（`packages/a
 
 - `apps/finance-web`：产品 A 的 Vite + React + TypeScript Web 应用入口，负责承载金融研究产品界面，只通过 HTTP API 调用 Agent。
 - `apps/finance-api`：产品 A 的 Fastify HTTP adapter，负责请求校验、异步 Run 生命周期、SSE 事件投影和结构化响应。
-- `apps/ohna-cli`：产品 B 的终端编码 Agent（bin `ohna`），恒为个人编码助手（金融研究能力归属产品 A），工具固定走编码工具集（`packages/coding`，作用域限定在当前工作目录）。M2 已支持会话持久化与 `--resume <id>`、上下文压缩、`--max-turns` / `--deadline-ms` / `--max-cost` 预算治理与 `/cost`；单轮模式同样落盘，可用 `ohna --resume <id>` 接续。M3 支持 slash 命令（`/model /cost /compact /tools /resume`）、写前 unified diff、输出折叠、`--mcp <config.json>` 接入外部 MCP 工具（输出经 `<untrusted_context>` 封装），以及 `ohna --web [dir]` 进程内托管（终端与浏览器共享同一会话，`--web-port` / `--no-open` 可选）。
-- `apps/ohna-web`：产品 B 的本地 Web UI（Phase 4）：浏览器里对话、待确认 allow/deny、只读文件树；`pnpm --filter @aiagent/ohna-web build` 后由 `ohna --web` 进程内托管，开发模式用 `pnpm --filter @aiagent/ohna-web dev`（代理 `/api` → 127.0.0.1:4173）。
+- `apps/ohna-cli`：产品 B 的终端编码 Agent（bin `ohna`），恒为个人编码助手（金融研究能力归属产品 A），工具固定走编码工具集（`packages/coding`，作用域限定在当前工作目录）。M2 已支持会话持久化与 `--resume <id>`、上下文压缩、`--max-turns` / `--deadline-ms` / `--max-cost` 预算治理与 `/cost`；单轮模式同样落盘，可用 `ohna --resume <id>` 接续。M3 支持 slash 命令（`/model /cost /compact /tools /resume`）、写前 unified diff、输出折叠、`--mcp <config.json>` 接入外部 MCP 工具（输出经 `<untrusted_context>` 封装）。v1.4（docs/v1.4/06）改为**单一形态**：`ohna` 启动即同时拉起整屏 TUI 与进程内 Web，二者都是同一条 serve 执行线的订阅者（TUI 与浏览器共享会话、双向实时同步）；`--web` / `--no-web` 参数已删除，端口仍可经 `--web-port` / `--no-open` 配置。
+- `apps/ohna-web`：产品 B 的本地 Web UI（Phase 4）：浏览器里对话、待确认 allow/deny、只读文件树；`pnpm --filter @aiagent/ohna-web build` 后由 `ohna` 单一形态进程内托管，开发模式用 `pnpm --filter @aiagent/ohna-web dev`（代理 `/api` → 127.0.0.1:4173）。
 - `packages/coding`：编码工具集（read / write / edit / bash / grep / find / ls）与路径、命令策略。
-- `packages/serve`：ohna 服务端装配包（`createOhnaServer`）：JSONL stores（sessions / conversations / runs）+ run-v2 HTTP/SSE + 异步确认闸门（`confirm-gate.ts` / `POST /api/runs/:runId/confirmations/:toolCallId`）+ 只读 `GET /api/local/fs`（复用 `@aiagent/coding` 沙箱语义）+ 静态 fallback，供 `ohna-cli --web` 使用。
+- `packages/serve`：ohna 服务端装配包（`createOhnaServer`）：JSONL stores（sessions / conversations / runs）+ run-v2 HTTP/SSE + 异步确认闸门（`confirm-gate.ts` / `POST /api/runs/:runId/confirmations/:toolCallId`）+ 只读 `GET /api/local/fs`（复用 `@aiagent/coding` 沙箱语义）+ 静态 fallback。`observeOnly` 为可选只读能力（仅外部只读观测实例可能传 `true`，不注册写 run/确认路由并强制 `autoApprove:false`）；CLI 单一形态恒传 `false`，始终经同一 `server.createRun` 驱动执行。
 - `packages/ai`：统一 LLM 抽象边界，对齐 pi-ai：`Message` 类型族、`AssistantMessageEvent`、provider 适配与 `stream` / `streamSimple`。
 - `packages/agent`：ReAct Agent 循环边界，提供 `agentLoop` / `agentLoopContinue`、`AgentTool` 契约与工具执行；不再有独立的意图路由器或 LLM Client。
 - `packages/identity`：浏览器指纹、稳定 `userId`、session 与 QQ 绑定规则的领域边界。
@@ -82,13 +82,14 @@ PostgreSQL 的本地连接、身份、Conversation/Message、Run/RunEvent、migr
 
 ```bash
 pnpm --filter @aiagent/ohna-cli build
-ohna --web <dir> --web-port 4173 --no-open
+ohna <dir> --web-port 4173 --no-open
 ```
 
-`ohna --web` 在终端进程内起本地 serve（复用 `packages/serve` 装配），并加载仓库根 `.env`，所以需先配置一个可用
+`ohna` 启动即同时拉起整屏 TUI 与进程内 Web（二者都是同一条 serve 执行线的订阅者，双向实时同步），
+并在终端进程内起本地 serve（复用 `packages/serve` 装配）、加载仓库根 `.env`，所以需先配置一个可用
 provider（`AIAGENT_LLM_API_KEY_*` + `AIAGENT_LLM_MODEL_*`，如 DeepSeek / OpenRouter / Bridge AI）；
 未配置时启动会直接退出并列出所需变量名。服务只绑 `127.0.0.1`，端口占用时自动 +1，
-数据默认落 `~/.ohna/`（`--data-dir` 可改）。
+数据默认落 `~/.ohna/`（`--data-dir` 可改）。`--web` / `--no-web` 参数已删除：默认即带 Web，且不能只启动一项。
 
 ```bash
 # 健康检查：返回 { mode: "local", workspaceRoot, model, pid, dataDir }

@@ -28,7 +28,7 @@ import {
   type RunStopReason,
   type RunStopState,
   type SessionSummarizer,
-} from "../session/session-runtime.js";
+} from "../runtime/summarizer.js";
 import type { ConfirmHook } from "../permission/confirm.js";
 
 /**

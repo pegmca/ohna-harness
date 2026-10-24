@@ -111,31 +111,25 @@ test("--no-team 关闭团队编排；缺省保持开启（F-4）", () => {
   assert.deepEqual(disabled.warnings, []);
 });
 
-test("TC-W3-01: --no-web 关闭默认观测台；缺省开启且不吞位置参数", () => {
+test("D-A8: 单一形态下无 --web / --no-web 字段；webPort/open 保留", () => {
   const defaults = parse([]);
-  assert.equal(defaults.options.noWeb, false, "观测台默认开启（D1）");
-  assert.equal(defaults.options.web, false, "默认模式不是 --web 托管");
+  assert.equal(defaults.options.webPort, 4173, "Web 托管端口缺省 4173");
+  assert.equal(defaults.options.open, true, "默认自动打开浏览器");
+  assert.equal(defaults.options.noWeb, undefined, "--no-web 已移除");
+  assert.equal(defaults.options.web, undefined, "--web 已移除");
 
-  const disabled = parse(["--no-web", "做一个任务"]);
-  assert.equal(disabled.options.noWeb, true);
-  assert.equal(disabled.options.prompt, "做一个任务", "--no-web 是开关，不吞位置参数");
-  assert.deepEqual(disabled.warnings, []);
+  // --web / --no-web 不再被识别为开关：它们会在解析层触发未知告警或落入位置参数。
+  const both = parse(["--web", "--no-web", "做一个任务"]);
+  assert.equal(both.options.web, undefined, "--web 字段已删除");
+  assert.equal(both.options.noWeb, undefined, "--no-web 字段已删除");
 
-  // 显式取值写法：既不能被当成位置参数拼进 prompt，也要能关掉。
-  const explicitOff = parse(["--no-web=false", "做一个任务"]);
-  assert.equal(explicitOff.options.noWeb, false);
-  assert.equal(explicitOff.options.prompt, "做一个任务", "--no-web=false 不进入 prompt");
-  assert.deepEqual(explicitOff.warnings, []);
+  // --no-open 仍生效且不吞位置参数。
+  const noOpen = parse(["--no-open", "做一个任务"]);
+  assert.equal(noOpen.options.open, false);
+  assert.equal(noOpen.options.prompt, "做一个任务", "--no-open 是开关，不吞位置参数");
+  assert.deepEqual(noOpen.warnings, []);
 
-  const explicitOn = parse(["--no-web=true"]);
-  assert.equal(explicitOn.options.noWeb, true);
-
-  const invalid = parse(["--no-web=maybe"]);
-  assert.equal(invalid.options.noWeb, false, "非法取值按缺省处理");
-  assert.equal(invalid.warnings.length, 1);
-
-  // --web 与默认模式互斥：两者同时出现时仍走托管分支（单入口分发）。
-  const both = parse(["--web", "--no-web"]);
-  assert.equal(both.options.web, true);
-  assert.equal(both.options.noWeb, true, "解析层不做吞并，由 harness 提示无效");
+  // --web-port 透传。
+  const port = parse(["--web-port=5000"]);
+  assert.equal(port.options.webPort, 5000);
 });

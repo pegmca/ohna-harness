@@ -25,7 +25,7 @@ import type {
 import type { LlmCallRecordDto, LlmCallRequestDto, LlmCallResponseDto, LlmCallUsageDto } from "@aiagent/types";
 import type { StreamFn } from "./types.js";
 
-/** 采集结果的出口：serve 侧转成 `llm_call` run 事件，CLI `--no-web` 侧写本地 JSONL。 */
+/** 采集结果的出口：serve 侧转成 `llm_call` run 事件（单一形态下 CLI 与 Web 共用此执行线）。 */
 export type LlmTraceSink = (record: LlmCallRecordDto) => void;
 
 /** 无终态事件时的兜底错误文案（abort / Ctrl-C 场景常见）。 */

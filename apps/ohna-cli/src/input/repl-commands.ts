@@ -29,11 +29,12 @@ import {
 } from "../commands/registry.js";
 import type { PermissionSession } from "../permission/permission-session.js";
 import type { RunSetup } from "../runtime/turn.js";
-import { ensureFullHistory } from "../session/session-flow.js";
 import { formatCostLine, write, type UsageTracker } from "../ui/render.js";
 import type { TuiApp } from "../ui/tui/tui-app.js";
 import { printReplCommands } from "../ui/welcome.js";
 import type { ReplContext } from "./repl-context.js";
+import { listConversations } from "../session/serve-session.js";
+import type { OhnaServer } from "@aiagent/serve";
 
 /** 本地命令装配的依赖：所有可变会话状态都用访问器暴露。 */
 export interface ReplCommandsOptions {
@@ -41,8 +42,10 @@ export interface ReplCommandsOptions {
   tools: readonly AgentTool<any>[];
   /** MCP / Team 来源标注与闸门回填（可选）。 */
   context?: ReplContext;
-  /** 会话存储。 */
-  store: SessionCommandContext["store"];
+  /** 进程内 serve 句柄（/resume 列表与切换、/export 读消息统一走它）。 */
+  server: OhnaServer;
+  /** 数据目录（与托管 serve 实例一致，用于读取消息）。 */
+  dataDir?: string;
   /** 会话级用量累计器。 */
   tracker: UsageTracker;
   /** 会话级模式配置。 */
@@ -85,6 +88,13 @@ export interface ReplCommandsOptions {
    * 在 `onSessionSwitched` 里用新会话 id 重新调用 `renderWelcome`。
    */
   onRenderWelcome?: () => void;
+  /**
+   * 切换会话回调整体：REPL 据此退订旧会话、订阅新会话并回放历史。
+   *
+   * @param id 新会话 id（空串表示「待创建」态）。
+   * @param title 新会话标题（undefined 表示新会话）。
+   */
+  onSessionSwitched(id: string, title: string | undefined): void;
 }
 
 /**
@@ -97,7 +107,8 @@ export function createReplCommands(options: ReplCommandsOptions): SlashDispatche
   const {
     tools,
     context,
-    store,
+    server,
+    dataDir,
     tracker,
     setup,
     history,
@@ -113,7 +124,8 @@ export function createReplCommands(options: ReplCommandsOptions): SlashDispatche
     ...(context?.mcpToolNames ? { mcpToolNames: context.mcpToolNames } : {}),
     ...(context?.mcpServerNames ? { mcpServerNames: context.mcpServerNames } : {}),
     ...(context?.teamToolNames ? { teamToolNames: context.teamToolNames } : {}),
-    store,
+    server,
+    ...(dataDir !== undefined ? { dataDir } : {}),
     tracker,
     setup,
     history,
@@ -131,26 +143,10 @@ export function createReplCommands(options: ReplCommandsOptions): SlashDispatche
     },
     getPermissionPreset: () => permissionSession.preset(),
     isFullHistoryLoaded: () => options.isFullHistoryLoaded(),
-    // /compact 落盘前补载完整历史：tail 恢复后先压缩尾部再覆盖保存会丢掉更早消息。
-    ensureFullHistory: async () => {
-      if (options.isFullHistoryLoaded()) return;
-      const activeSessionId = options.getSessionId();
-      const loaded = await ensureFullHistory(store, activeSessionId, history, (message) =>
-        write(`⚠️ ${message}\n`),
-      );
-      if (!loaded) throw new Error(`无法补载会话 ${activeSessionId} 的完整历史`);
-      options.markFullHistoryLoaded();
-    },
-    // /resume 成功切换后清空会话规则（/clear 通过同一钩子完成）。
-    // 所有切换路径（/resume 全量 load、fork、/clear 新建）得到的历史都是完整的。
-    onSessionSwitched: () => {
-      options.markFullHistoryLoaded();
-      permissionSession.reset();
-      // M2：切会话后清空 TUI 视图状态（expanded / 滚动 / toast），避免旧会话残留。
-      options.tui?.resetView();
-      // BUG「/clear 后 logo 消失」：会话切换后重打欢迎头（logo + 信息行）。
-      options.onRenderWelcome?.();
-    },
+    markFullHistoryLoaded: () => options.markFullHistoryLoaded(),
+    // /resume 成功切换后由 REPL 退订旧会话、订阅新会话并回放历史（单一形态下执行权在 serve）。
+    onSessionSwitched: (id, title) => options.onSessionSwitched(id, title),
+    onRenderWelcome: () => options.onRenderWelcome?.(),
   };
 
   // 命令分发：slash.ts 负责解析与别名，这里只注入本地会话语义的 handler。
@@ -171,7 +167,7 @@ export function createReplCommands(options: ReplCommandsOptions): SlashDispatche
         if (!trimmed && options.tui) {
           let metas;
           try {
-            metas = await store.list();
+            metas = await listConversations(server);
           } catch (error) {
             write(`读取会话列表失败（${error instanceof Error ? error.message : String(error)}）。\n`);
             return;
@@ -182,10 +178,10 @@ export function createReplCommands(options: ReplCommandsOptions): SlashDispatche
           }
           options.tui.openSessionPicker(
             metas.map((meta) => ({
-              id: meta.id,
+              id: meta.conversationId,
               title: meta.title,
-              updatedAt: meta.updatedAt,
-              messageCount: meta.messageCount,
+              updatedAt: Date.parse(meta.updatedAt) || 0,
+              messageCount: 0,
             })),
           );
           return;

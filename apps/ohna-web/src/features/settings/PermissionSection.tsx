@@ -16,9 +16,10 @@ import type { SettingsHealthState } from "./settings-health";
  */
 export function PermissionSection(props: { health: SettingsHealthState }) {
   const ready = props.health.state === "ready" && props.health.health !== undefined;
+  const observeOnly = props.health.health?.observeOnly === true;
   return (
     <SettingsSection
-      description="权限模式由启动 ohna 时的参数与宿主决定，Web 只读展示。"
+      description="权限模式与执行形态由启动 ohna 时的参数与宿主决定，Web 只读展示。"
       id="permission"
       title="权限模式"
     >
@@ -26,12 +27,16 @@ export function PermissionSection(props: { health: SettingsHealthState }) {
         <SettingsFacts
           items={[
             {
-              label: "观测台（observeOnly）",
+              label: "执行形态",
               value: (
                 <span className="settings-inline">
-                  <SettingsBadge tone="info">由宿主决定</SettingsBadge>
+                  <SettingsBadge tone={observeOnly ? "info" : "success"}>
+                    {observeOnly ? "只读观测" : "可交互"}
+                  </SettingsBadge>
                   <span className="settings-helper">
-                    只承接 CLI 镜像事件时，服务端不注册 run 创建/取消与确认写路由——浏览器不能发起或取消 run。
+                    {observeOnly
+                      ? "服务端不注册 run 创建/取消与确认写路由——浏览器不能发起或取消 run（composer 已禁用）。"
+                      : "服务端可执行 run：浏览器 composer 可发起对话，变更类工具调用经确认卡片放行。"}
                   </span>
                 </span>
               )

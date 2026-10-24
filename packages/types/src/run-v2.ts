@@ -25,6 +25,12 @@ export type RunModeDtoV2 = "auto" | "report" | "observe";
 /** run 触发入口：composer/report_button 来自 Web，cli 来自 CLI 镜像观测。 */
 export type RunSourceDtoV2 = "composer" | "report_button" | "cli";
 
+/**
+ * 用户消息来源端：Web composer 发的消息记 "web"，CLI 终端发的消息记 "cli"。
+ * 协议层只区分来源端，不绑定 UI 组件名（如 composer）。
+ */
+export type UserMessageSourceDto = "web" | "cli";
+
 /** run_events.event_type 枚举：loop 事件对齐 pi AgentEvent，retrieval/workflow_node/pdf_export 为能力事件，run_status/run_error 为服务端生命周期补充。 */
 export type RunEventTypeDto =
   | "agent_start"
@@ -50,7 +56,13 @@ export type RunEventTypeDto =
    * 编码 Agent 本地扩展（ohna 观测台）：一次 LLM 请求/响应的完整记录，
    * payload 为 `LlmCallRecordDto`（见 llm-trace.ts）。可持久化，非瞬态。
    */
-  | "llm_call";
+  | "llm_call"
+  /**
+   * 用户消息事件（docs/v1.4/06 U1）：让「Web 发的消息」成为总线上的一等事件，
+   * 对齐 CodeBuddy「与终端交互完全一致」的双端同步体验。payload 为
+   * `UserMessagePayloadDto`。在 `agent_start` 之前广播（sequence 更早）。
+   */
+  | "user_message";
 
 /**
  * SSE 与 run_events 共用的 canonical 事件 envelope。
@@ -71,6 +83,21 @@ export interface RunStreamEventDtoV2 {
 
 /** appendEvent 的输入：由存储分配 eventId 与 sequence。 */
 export type RunEventInputDtoV2 = Omit<RunStreamEventDtoV2, "eventId" | "sequence">;
+
+/**
+ * 用户消息事件 payload（docs/v1.4/06 U1）：`createRun` 落盘用户消息后立即广播，
+ * 让 Web 发起的轮次在终端与其它 Web 端有「用户气泡的权威来源」（不再依赖本地乐观插入）。
+ */
+export interface UserMessagePayloadDto {
+  /** 本次用户消息在消息存储中的 id（幂等 / 去重锚点）。 */
+  messageId: string;
+  /** 用户消息正文。 */
+  content: string;
+  /** 所属 run id。 */
+  runId: string;
+  /** 来源端：web = 浏览器 composer 发起，cli = 终端发起。 */
+  source: UserMessageSourceDto;
+}
 
 /** GET /api/runs/:runId 的快照 DTO。 */
 export interface RunSnapshotDtoV2 {

@@ -38,4 +38,40 @@ describe("fetchLocalMode", () => {
     }));
     await expect(fetchLocalMode()).resolves.toBeNull();
   });
+
+  it("parses observeOnly:true from a read-only observation instance", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
+      mode: "local",
+      workspaceRoot: "/tmp/ohna-ws",
+      observeOnly: true
+    }), { status: 200 })));
+
+    await expect(fetchLocalMode()).resolves.toEqual({
+      workspaceRoot: "/tmp/ohna-ws",
+      observeOnly: true
+    });
+  });
+
+  it("parses observeOnly:false from an interactive single-form instance", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
+      mode: "local",
+      workspaceRoot: "/tmp/ohna-ws",
+      observeOnly: false
+    }), { status: 200 })));
+
+    await expect(fetchLocalMode()).resolves.toEqual({
+      workspaceRoot: "/tmp/ohna-ws",
+      observeOnly: false
+    });
+  });
+
+  it("omits observeOnly when the field is absent (treated as interactive)", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
+      mode: "local",
+      workspaceRoot: "/tmp/ohna-ws"
+    }), { status: 200 })));
+
+    // 旧实例 / 未透出该字段时不应误判为只读，避免把可交互实例错误禁用 composer。
+    await expect(fetchLocalMode()).resolves.toEqual({ workspaceRoot: "/tmp/ohna-ws" });
+  });
 });

@@ -1,6 +1,6 @@
 import type { RunStreamEventDtoV2 } from "@aiagent/types";
 import { describe, expect, it } from "vitest";
-import { projectLiveRun } from "./live-run-projection";
+import { projectLiveRun, projectRunUserMessages } from "./live-run-projection";
 
 describe("projectLiveRun", () => {
   it("renders streaming text directly from cumulative partial without stitching deltas", () => {
@@ -140,6 +140,58 @@ describe("projectLiveRun", () => {
   });
 });
 
+describe("projectRunUserMessages", () => {
+  it("projects a web-sourced user_message frame into a timeline user bubble", () => {
+    const events = [
+      userMessage(1, { messageId: "m-web", content: "在 Web 端发的消息", runId: "run-1", source: "web" })
+    ];
+    const bubbles = projectRunUserMessages(events);
+    expect(bubbles).toHaveLength(1);
+    expect(bubbles[0]).toMatchObject({
+      id: "m-web",
+      role: "user",
+      content: "在 Web 端发的消息",
+      status: "complete",
+      runId: "run-1"
+    });
+  });
+
+  it("projects a cli-sourced user_message frame into a timeline user bubble", () => {
+    // 终端 CLI 发起的轮次经总线广播 user_message(source=cli)，Web 也应以用户气泡呈现。
+    const events = [
+      userMessage(1, { messageId: "m-cli", content: "在终端发的消息", runId: "run-2", source: "cli" })
+    ];
+    const bubbles = projectRunUserMessages(events);
+    expect(bubbles).toHaveLength(1);
+    expect(bubbles[0]).toMatchObject({ id: "m-cli", role: "user", content: "在终端发的消息" });
+  });
+
+  it("keeps user bubbles in sequence order and ignores non-user frames", () => {
+    const events = [
+      userMessage(1, { messageId: "a", content: "第一条", runId: "run-3", source: "web" }),
+      messageUpdate(2, "text_delta", [{ type: "text", text: "助手在思考" }]),
+      userMessage(3, { messageId: "b", content: "第二条", runId: "run-3", source: "cli" }),
+      runStatus(4, "completed")
+    ];
+    const bubbles = projectRunUserMessages(events);
+    expect(bubbles.map((bubble) => bubble.id)).toEqual(["a", "b"]);
+  });
+
+  it("deduplicates replayed user_message frames by messageId", () => {
+    const frame = userMessage(1, { messageId: "dup", content: "重复帧", runId: "run-4", source: "web" });
+    const bubbles = projectRunUserMessages([frame, frame]);
+    expect(bubbles).toHaveLength(1);
+  });
+
+  it("skips malformed user_message frames missing messageId or content", () => {
+    const events = [
+      envelope(1, "user_message", { content: "缺 messageId", source: "web", runId: "run-5" }),
+      envelope(2, "user_message", { messageId: "only-id", source: "web", runId: "run-5" })
+    ];
+    expect(projectRunUserMessages(events)).toHaveLength(0);
+  });
+});
+
 
 /** @param sequence 序号。 @param kind AssistantMessageEvent 类型。 @param content 累积 partial 内容。 @returns message_update 事件。 */
 function messageUpdate(sequence: number, kind: string, content: unknown): RunStreamEventDtoV2 {
@@ -161,6 +213,19 @@ function toolExecution(
 /** @param sequence 序号。 @param error 结构化错误。 @returns run_error 事件。 */
 function runError(sequence: number, error: { code: string; message: string; requestId: string }): RunStreamEventDtoV2 {
   return envelope(sequence, "run_error", { error });
+}
+
+/** @param sequence 序号。 @param payload user_message 帧 payload。 @returns user_message 事件。 */
+function userMessage(
+  sequence: number,
+  payload: { messageId: string; content: string; runId: string; source: "web" | "cli" }
+): RunStreamEventDtoV2 {
+  return envelope(sequence, "user_message", payload);
+}
+
+/** @param sequence 序号。 @param status run 终态。 @returns run_status 事件。 */
+function runStatus(sequence: number, status: string): RunStreamEventDtoV2 {
+  return envelope(sequence, "run_status", { status, message: status });
 }
 
 /** @param sequence 序号。 @param messages 最终消息。 @param error 可选 loop 错误。 @returns agent_end 事件。 */

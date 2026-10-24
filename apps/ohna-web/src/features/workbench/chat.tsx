@@ -84,6 +84,10 @@ interface ChatTimelineProps {
   onUsePrompt: (prompt: string) => void;
   /** 当前会话是 CLI 镜像会话（标题以 `CLI ·` 开头）时，空态提示改用 Trace 观测台（N5）。 */
   showCliHint?: boolean;
+  /**
+   * 只读观测实例（docs/v1.4/06 D-A7）：true 时禁用空态示例任务按钮。
+   */
+  observeOnly?: boolean;
 }
 
 /**
@@ -154,7 +158,7 @@ export function ChatTimeline(props: ChatTimelineProps) {
           {props.showCliHint ? (
             <p className="muted-row">CLI 会话（默认 `ohna`）只镜像 run 事件、不写入对话消息，请到 Trace 观测台查看。</p>
           ) : null}
-          <StarterPrompts disabled={props.isSubmitting} onUsePrompt={props.onUsePrompt} />
+          <StarterPrompts disabled={props.isSubmitting || props.observeOnly === true} onUsePrompt={props.onUsePrompt} />
         </div>
       </section>
     );
@@ -416,6 +420,11 @@ interface ChatComposerProps {
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
   onUsePrompt: (prompt: string) => void;
   selectedModelId: string;
+  /**
+   * 只读观测实例（docs/v1.4/06 D-A7）：true 时 composer 禁用并提示，
+   * 而不是让用户发送后 404（BUG-005 的止血）。CLI 单一形态恒为 false。
+   */
+  observeOnly?: boolean;
 }
 
 /**

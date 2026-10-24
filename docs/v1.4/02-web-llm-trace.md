@@ -10,6 +10,11 @@
 >
 > 执行纪律：沿用 v1.3/04 头部声明与 `设计演进记录` §3 七步法——每阶段「窄切片 + 可验收」、跑 §10 验收总闸相关子集、同步本文状态表 + ``（新建）。
 
+> **状态更新（docs/v1.4/06 D-A1 / D-A4）**：本文的 **D1「观测不接管执行」已被 06 的「单一形态」supersede**——`ohna` 现启动即 TUI + Web 双端订阅同一 serve 执行线（执行权唯一归属 serve），不再有「CLI 本地执行 + serve 只读观测」的默认模式。因此：
+> - **镜像通道 `observeRun` 已退役**（06 A3-B）：`packages/serve/src/run/observe.ts` 删除，`RunManager.observeRun` / `ObserveRunInput` / `ObservedRun` 一并移除；CLI 侧 `createServerTurnObserver` / `createFileTurnObserver` 与 `llm-trace-file.ts` 退役，仅保留采集层 `createLlmTraceStreamFn` / `llm_call`。
+> - **`--no-web` 降级链已删除**（06 D-A8）：单一形态下不能只启动一项，无降级路径。
+> - 采集层（①）保留并在托管（现即唯一）run 中继续使用。
+
 ---
 
 ## 0. 需求与范围

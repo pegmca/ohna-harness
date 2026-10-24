@@ -43,7 +43,6 @@ import {
 } from "./run/compaction.js";
 import { createTitleGenerator } from "./run/title.js";
 import { persistRunMessage } from "./run/persist.js";
-import { startObservedRun } from "./run/observe.js";
 import { isPersistableRunEvent } from "./store/index.js";
 import { cloneSnapshot, delay, toRunErrorPayload } from "./run/helpers.js";
 import { linearMessageToAgentMessage } from "./run/message-mapping.js";
@@ -52,8 +51,6 @@ import type {
   ActiveRun,
   CreateRunInput,
   CreateRunResult,
-  ObserveRunInput,
-  ObservedRun,
   ResolvedWorkspaceContext,
   RunErrorPayload,
   RunManagerOptions
@@ -62,8 +59,6 @@ import type {
 export type {
   CreateRunInput,
   CreateRunResult,
-  ObserveRunInput,
-  ObservedRun,
   ResolvedWorkspaceContext,
   RunManagerOptions
 } from "./run/types.js";
@@ -82,6 +77,12 @@ export class RunManager {
   private summarizer: RunManagerOptions["summarizer"];
   /** 语义标题生成器；懒构造，测试可通过 options.titleGenerator 注入。 */
   private titleGenerator: RunManagerOptions["titleGenerator"];
+  /**
+   * 会话级累计成本（美元）：按 conversationId 维度累加每轮 LLM 调用的 usage.cost.total，
+   * 供 `--max-cost` 预算在 run 前 / 每轮后检查。serve 单进程单实例，内存累加即可；
+   * 进程重启后从会话消息无法精确回填，但 budget 是「软护栏」，重启用 0 不阻断 run。
+   */
+  private readonly conversationCost = new Map<string, number>();
   /**
    * @param options 模型、工具、store、确认闸门与可选 streamFn（测试注入）。
    */
@@ -133,6 +134,28 @@ export class RunManager {
    */
   isAutoApprove(): boolean {
     return this.confirmations.isAutoApprove();
+  }
+
+  /**
+   * 累加某会话的累计成本（美元）。
+   *
+   * @param conversationId 会话 id。
+   * @param cost 本次 LLM 调用的成本（来自 `llm_call` usage）。
+   */
+  private addConversationCost(conversationId: string, cost: number): void {
+    const current = this.conversationCost.get(conversationId) ?? 0;
+    this.conversationCost.set(conversationId, current + cost);
+  }
+
+  /**
+   * 判断某会话累计成本是否已达预算。
+   *
+   * @param conversationId 会话 id。
+   * @param maxCost 成本上限（美元）。
+   * @returns 已超或达到上限返回 true。
+   */
+  private reachedConversationCost(conversationId: string, maxCost: number): boolean {
+    return (this.conversationCost.get(conversationId) ?? 0) >= maxCost;
   }
 
   /**
@@ -245,15 +268,29 @@ export class RunManager {
       lastPersistedSequence: 0,
       subscribers: new Set(),
       terminal: false,
-      skipFirstUserMessage: true
+      skipFirstUserMessage: true,
+      ...(input.maxTurns !== undefined ? { maxTurns: input.maxTurns } : {}),
+      ...(input.deadlineMs !== undefined ? { deadlineMs: input.deadlineMs } : {}),
+      ...(input.maxCost !== undefined ? { maxCost: input.maxCost } : {})
     };
     this.active.set(runId, run);
 
-    // 会话级订阅（--web 共享事件流）：新 run 自动接到其会话的订阅者上。
+    // 会话级订阅（--web 共享事件流）：新 run 必须先接到其会话的订阅者上，
+    // 再广播 user_message（否则订阅者会漏掉 sequence 最早的 user_message 帧）。
     const conversationListeners = this.conversationSubscribers.get(input.conversationId);
     if (conversationListeners) {
       for (const listener of conversationListeners) run.subscribers.add(listener);
     }
+
+    // U1：用户消息落盘后、loop 启动前广播为总线一等事件，使 Web 发起的轮次在终端 / 其它
+    // Web 端有「用户气泡的权威来源」（sequence 早于 agent_start）。source 区分来源端：
+    // 终端发起记 "cli"、浏览器 composer 发起记 "web"（协议层不绑定 UI 组件名）。
+    await this.emitFrame(run, "user_message", {
+      messageId: userMessage.messageId,
+      content: message,
+      runId,
+      source: input.source === "report_button" || input.source === "composer" ? "web" : "cli"
+    });
 
     // BUG-002 方案 2：按会话持久化的 workspaceRoot 动态装配上下文（编码工具 + 系统提示词）。
     // 解析失败回退 undefined（execute 内退回构造时的单工作区语义），不阻断本次 run。
@@ -289,33 +326,6 @@ export class RunManager {
       },
       snapshot: cloneSnapshot(snapshot)
     };
-  }
-
-  /**
-   * 启动一次**观测型** run：执行权仍在 CLI 本地（D1），serve 只承接事件。
-   *
-   * 与 createRun 的区别：不载入历史、不落用户消息、不跑 loop；run_meta 记
-   * `mode:"observe" / source:"cli"`，终态由调用方 `end()` 显式给出。
-   *
-   * @param input 会话 id / 请求 id / 标题。
-   * @returns 观测句柄（push 事件、end 收尾）。
-   */
-  async observeRun(input: ObserveRunInput): Promise<ObservedRun> {
-    return await startObservedRun(
-      {
-        modelId: this.model.id,
-        workspaceRoot: this.options.workspaceRoot,
-        runStore: this.options.runStore,
-        sessionStore: this.options.sessionStore,
-        messageStore: this.options.messageStore,
-        active: this.active,
-        conversationSubscribers: this.conversationSubscribers,
-        emitFrame: (run, type, payload) => this.emitFrame(run, type, payload),
-        finishStatus: (run, status, error) => this.finishStatus(run, status, error),
-        forceTerminal: (run, status, error) => this.forceTerminal(run, status, error)
-      },
-      input
-    );
   }
 
   /**
@@ -454,9 +464,6 @@ export class RunManager {
     const run = this.active.get(runId);
     if (!run) return await this.options.runStore.getRun(runId);
     if (run.terminal) return cloneSnapshot(run.snapshot);
-    // 观测型 run 的执行权在 CLI 本地（D1）：serve 侧 abort 只作用于一个空 controller，
-    // 既不会停下 CLI 的 loop，又会白等 5s 超时，因此直接返回当前快照（no-op）。
-    if (run.snapshot.mode === "observe") return cloneSnapshot(run.snapshot);
 
     // 先释放挂起的确认（deny），否则 loop 会一直等 beforeToolCall，abort 也唤醒不了它。
     this.confirmGate?.cancelRun(runId);
@@ -477,12 +484,6 @@ export class RunManager {
     await Promise.all(
       running.map(async (run) => {
         this.confirmGate?.cancelRun(run.snapshot.runId);
-        // 观测型 run 的执行权在 CLI 本地（与 cancel 守卫同源）：abort 停不下那边的 loop，
-        // 等待 done 只会白等 5s，因此直接落 interrupted。
-        if (run.snapshot.mode === "observe") {
-          await this.finishStatus(run, "interrupted");
-          return;
-        }
         run.controller.abort();
         await Promise.race([run.done, delay(5_000)]);
         if (!run.terminal) await this.finishStatus(run, "interrupted");
@@ -537,12 +538,45 @@ export class RunManager {
     };
     const runId = run.snapshot.runId;
     const confirmHook = this.confirmGate?.createHook(runId);
+    // A1：预算护栏（deadline / max-turns），与 CLI 侧 createConfig 语义对齐（内核零改动）。
+    const deadlineAt =
+      run.deadlineMs !== undefined ? Date.now() + run.deadlineMs : undefined;
+    let turns = 0;
     const config: AgentLoopConfig = {
       model: this.model,
       apiKey: this.options.apiKey,
       convertToLlm: defaultConvertToLlm,
       // 写/执行前挂起等待浏览器确认；只读工具在闸门内部直接放行。
-      ...(confirmHook ? { beforeToolCall: confirmHook } : {})
+      ...(confirmHook ? { beforeToolCall: confirmHook } : {}),
+      ...(run.deadlineMs !== undefined ? { deadlineMs: run.deadlineMs } : {}),
+      // 运行期预算停止：达到 deadline / max-turns 时干净收尾（run_status=interrupted）。
+      // maxCost 在 run 前与每轮后单独检查（见下方循环），这里只处理时间/回合两项。
+      // 闭包为 async：决定停止时 await finishStatus(interrupted) 后再返回 true，
+      // 确保 run.terminal 已置位、run_status 已广播，后续 agent_end 被 for-await 的
+      // `if (!run.terminal)` 守卫跳过，终态稳定为 interrupted 而非 completed。
+      shouldStopAfterTurn: async ({ message, toolResults }) => {
+        turns += 1;
+        // 仅当本轮仍会调用工具时才算「中断」；纯文本收尾属自然结束，不误报。
+        const hasToolCall = message.content.some((block) => block.type === "toolCall");
+        if (!hasToolCall && toolResults.length === 0) return false;
+        if (deadlineAt !== undefined && Date.now() >= deadlineAt) {
+          await this.finishStatus(run, "interrupted", {
+            code: "deadline_exceeded",
+            message: `已达到 run 截止时间（${run.deadlineMs}ms）。`,
+            requestId: run.requestId
+          });
+          return true;
+        }
+        if (run.maxTurns !== undefined && turns >= run.maxTurns) {
+          await this.finishStatus(run, "interrupted", {
+            code: "max_turns_exceeded",
+            message: `已达到单 run 最大回合数（${run.maxTurns}）。`,
+            requestId: run.requestId
+          });
+          return true;
+        }
+        return false;
+      }
     };
     const userMessage: AgentMessage = { role: "user", content: prompt, timestamp: Date.now() };
 
@@ -552,13 +586,38 @@ export class RunManager {
     const tracedStreamFn = createLlmTraceStreamFn(
       this.options.streamFn ?? streamSimple,
       (record) => {
+        // 累计本会话成本：每轮 LLM 调用的 usage.cost.total 累加到会话级护栏。
+        const cost = record.response?.usage?.cost?.total;
+        if (typeof cost === "number" && Number.isFinite(cost)) {
+          this.addConversationCost(run.snapshot.conversationId, cost);
+        }
         void this.emitTypedFrame(run, "llm_call", record).catch(() => undefined);
       }
     );
 
     try {
+      // A1：run 前检查成本预算；零预算（maxCost=0）或已超预算则不调用模型，直接终态。
+      if (run.maxCost !== undefined && this.reachedConversationCost(run.snapshot.conversationId, run.maxCost)) {
+        await this.finishStatus(run, "interrupted", {
+          code: "budget_exceeded",
+          message: `已达到会话成本上限 $${run.maxCost}。`,
+          requestId: run.requestId
+        });
+        return;
+      }
+
       const stream = agentLoop([userMessage], context, config, run.controller.signal, tracedStreamFn);
       for await (const event of stream) {
+        // A1：每轮结束后若已超成本预算，干净收尾（单轮内可能超出，故轮后再查一次）。
+        if (!run.terminal && run.maxCost !== undefined
+          && this.reachedConversationCost(run.snapshot.conversationId, run.maxCost)) {
+          await this.finishStatus(run, "interrupted", {
+            code: "budget_exceeded",
+            message: `已达到会话成本上限 $${run.maxCost}。`,
+            requestId: run.requestId
+          });
+          return;
+        }
         // 取消超时兜底可能已把 run 标记终态；剩余事件只消费不落盘/不广播。
         if (!run.terminal) await this.handleAgentEvent(run, event);
       }

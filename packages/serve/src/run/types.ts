@@ -2,7 +2,6 @@
  * RunManager 的公共输入/依赖与内部活跃状态类型。
  */
 import type { StreamFn } from "@aiagent/agent";
-import type { AgentEvent } from "@aiagent/agent";
 import type { Model } from "@aiagent/ai";
 import type { AgentTool } from "@aiagent/tools";
 import type {
@@ -34,6 +33,12 @@ export interface ActiveRun {
   terminal: boolean;
   /** 首次 user message_end 是创建 run 时已落库的 prompt，避免重复写入。 */
   skipFirstUserMessage: boolean;
+  /** 单次 run 的最大回合数（--max-turns 透传；undefined 取内核默认）。 */
+  maxTurns?: number;
+  /** 单次 run 的墙钟上限毫秒（--deadline-ms 透传；undefined 表示不限）。 */
+  deadlineMs?: number;
+  /** 会话累计成本上限美元（--max-cost；undefined 表示不限）。 */
+  maxCost?: number;
   /** 终态收尾 Promise；并发 cancel / shutdown 时复用，避免重复 run_status。 */
   finishPromise?: Promise<void>;
   /** 终态后内存回收定时器（P3-5）；unref，避免阻止进程退出。 */
@@ -46,7 +51,14 @@ export interface CreateRunInput {
   conversationId: string;
   message: string;
   mode: "auto" | "report";
-  source: "composer" | "report_button";
+  /** 触发入口：composer/report_button 来自浏览器，cli 来自终端（单一形态下终端也经 serve 执行）。 */
+  source: "composer" | "report_button" | "cli";
+  /** --max-turns：单次 run 最大回合数（缺省取内核默认）。 */
+  maxTurns?: number;
+  /** --deadline-ms：单次 run 墙钟上限。 */
+  deadlineMs?: number;
+  /** --max-cost：会话累计成本上限（美元）。 */
+  maxCost?: number;
 }
 
 /** createRun 的返回：accepted DTO + 初始快照。 */
@@ -62,35 +74,6 @@ export interface CreateRunResult {
 export interface LlmCallPushEvent {
   type: "llm_call";
   payload: LlmCallRecordDto;
-}
-
-/** observeRun 的输入：CLI 本地执行、serve 只承接事件。 */
-export interface ObserveRunInput {
-  /** 目标会话 id；不存在时按 title 自动创建。 */
-  conversationId: string;
-  /** 请求标识（CLI 侧通常是 `<sessionId>:<turnIndex>`），缺省自动生成。 */
-  requestId?: string;
-  /** 会话缺失时的标题。 */
-  title?: string;
-}
-
-/**
- * 观测型 run 句柄：CLI 把本地 agentLoop 的事件灌进来，serve 负责存储 / SSE / sequence。
- *
- * 语义约定：`push` / `end` 不抛错（观测不能打断 CLI）；执行权始终在 CLI 本地，
- * serve 不持有 AbortController 的决策权（cancel 对观测型 run 无意义）。
- */
-export interface ObservedRun {
-  runId: string;
-  /** 推送一条 loop 事件或 llm_call 记录；run 已终态时静默忽略。 */
-  push(event: AgentEvent | LlmCallPushEvent): void;
-  /**
-   * 合成 run_status 终态并释放内存态（幂等）。
-   *
-   * @param result.failed 本轮是否失败（映射为 failed / completed）。
-   * @param result.error 失败时的结构化错误（透传给 run_status.payload.error）。
-   */
-  end(result?: { failed?: boolean; error?: RunErrorPayload }): void;
 }
 
 /**

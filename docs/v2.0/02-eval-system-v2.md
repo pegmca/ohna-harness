@@ -245,6 +245,12 @@ apps/ohna-cli/eval/
 
 6. **正视 `RagAnswer = RagAnswerDto` 的隐性耦合**。`packages/rag/src/types.ts` 里 `export type RagAnswer = RagAnswerDto`——rag 领域类型直接别名了 types 跨边界 DTO。给 `RagAnswerDto` 加 `status` 会同时改 `synthesizeRagAnswer` 返回、`DataSourceRuntime.answer` 返回、`packages/types` 线格式，「动一处改三处」。这不是「轻量加一个可选字段」，需在 Step 3 验收时明确这条前置项同时触及三处，并据此决定是否要把 rag 领域类型与跨边界 DTO 拆开（`RagAnswer` 为领域类型、`RagAnswerDto` 为线格式）。
 
+**前置修正 #1 / #5 / #6（部分）已完成状态（rag-prereq）**：本阶段已在共享包落地非破坏性实现，Step 3 无需重复处理：
+- **#1**：`packages/types/src/rag.ts` 的 `RagAnswerDto` 已加可选 `status?: "answered" | "insufficient_evidence"`（中文 JSDoc 说明取代魔法字符串）；`packages/rag/src/answer.ts` 的 `synthesizeRagAnswer` 末尾追加可选 `threshold?: { minQueryTermCoverage?: number; minFinalScore?: number }`（缺省沿用常量 0.15 / 0.42，行为零回归），`isEvidenceSufficient` 改用注入阈值，两分支分别打 `insufficient_evidence` / `answered`；`createRagAnswer` 入参增可选 `status` 并透传。阈值可注入使「拒答率」可测 precision/recall。
+- **#5**：`chunkIngestedDocument(document, options)` 的 options 注入点已贯通——`DataSourceRuntimeOptions` 增可选 `chunkingOptions?: ChunkingOptions`，`data-source-runtime.ts` 构造时保存、ingest 透传 `options.chunkingOptions ?? DEFAULT_CHUNKING_OPTIONS`，缺省行为不变（仍 heading_aware/1200/150）。
+- **#6（部分，决策：不拆分）**：本阶段**保持** `export type RagAnswer = RagAnswerDto` 别名，仅在 DTO 加可选 `status`（非破坏性），未拆分领域类型与跨边界 DTO。理由：拆分属 Step 3 更大重构、会动 `packages/eval` 与 `apps/*` 的既有消费，超出本前置修正的「零回归」边界；`status` 作为可选字段已让三处（synthesizeRagAnswer / DataSourceRuntime.answer / 线格式）同步受益，无需拆类型即满足 #1 目标。若 Step 3 决定拆分，再单独排期。
+- 验收护栏：`pnpm --filter @aiagent/rag test` 全绿（含默认阈值回归 + 调高阈值翻转为拒答用例），`packages/types`、`packages/rag`、`packages/eval` 均 `build` 成功，零新增 `@aiagent/*` 运行时依赖。
+
 **shadow 衔接**：`ShadowResult`（`{caseId, query, answerCorrectness, faithfulness, ...}`）与 `EvalReportDto` 无法直接衔接，且其 `faithfulness` 是 judge 判定、与 runner 的 deterministic `faithfulness` **同名不同源**。需补 `ShadowResult → EvalReportDto` 适配器，并将 shadow 的 `faithfulness` 改名 `llmFaithfulness`（或独立 dataset `finance/rag-shadow`）。
 
 **rerank 回退层级可观测性（补强）**：rerank 当前是三层回退（`HeuristicReranker` → cross-encoder `/rerank` → LLM-judge → hybridScore 兜底），且 `reranking-providers.ts` 明确「rerank 永远 ok、绝不抛异常」——live 环境 rerank provider 未配好时 NDCG 会**无声退化回 heuristic**。当前 `RetrievalTraceSummary` 只记录 `rerankScore/finalScore`，不记录走了哪层。**评测 rerank 维度时，trace 必须能区分「走了 /rerank / judge / heuristic / hybrid 兜底」哪一层**，否则精排静默失效会被误判为「rerank 本身不行」。
@@ -328,6 +334,7 @@ pnpm eval:finance-api --update-baseline      # 只写 <app>/eval/baseline.json
 ### Step 3 — finance-api 领域自治化
 - **产出**：`apps/finance-api/eval/{dataset,run,metrics,adapter,judge-rubrics,index}.ts`；`datasets/finance/rag-v1.json`（迁原 `datasets/eval-financial-v1.json`）。
 - **接口**：`run.ts` 导出 `runFinanceEval(dataset, {tier, judge?, baseline?}): Promise<EvalReportDto>`；`metrics.ts` 导出 `scoreCaseWithEvidence`（金融指标）；`index.ts` 调 `eval-core.evaluateGate` 判 exit code。
+- **数据集生成器唯一性（provenance 约束，跨工作项对齐）**：`datasets/finance/rag-v1.json` 的**唯一权威生成器是 `test/generate-finance-rag-v1.mjs`**（幂等、字节级可复现，输出自描述 `generatedBy` 字段）。该生成器**不写 `expectedDocumentIds`**（仅 source 级命中），且 `minCitations=2`。**禁止**改用旧 `test/migrate-finance-eval-dataset.mjs` 重跑——它会按 source 列表回填 `expectedDocumentIds`，而真实 `citation.documentId` 是 ingest 生成的 UUID，会让 `metrics.ts` 的 documentId 优先匹配分支恒为 0，导致 `retrievalHitRate`/`mrr`/`ndcg` 跌至 ~0、破坏 CI 门禁。若需调整数据集，一律改 `generate-finance-rag-v1.mjs` 后重跑。
 - **前置**：先完成 §3.3 的六个前置修正（`RagAnswerDto.status` + 阈值暴露、`EvalCaseDto` 迁出 types、删 `expectedChunkIds`、`goldEvidence`、`ChunkingOptions` 贯穿、`RagAnswer`/`RagAnswerDto` 拆解决策、`EvalMetricDto → EvalReportDto` 映射）。
 - **命令**：根 `package.json` 增 `"eval:finance-api": "pnpm --filter finance-api eval"`。
 - **验收**：`--tier deterministic` 跑通并**新建 baseline**（RAG 线当前无 baseline，验收是「首次产出 `EvalReportDto` 并建基线」，不是「保持一致」）；`eval-core` 只被 `finance-api/eval` 依赖。

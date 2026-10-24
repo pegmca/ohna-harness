@@ -46,6 +46,9 @@
     },
     {
       "path": "../../packages/mcp"
+    },
+    {
+      "path": "../../packages/eval-core"
     }
   ]
 }

@@ -1,0 +1,25 @@
+{
+  "name": "@aiagent/eval-core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "dependencies": {
+    "@aiagent/types": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "test": "pnpm build && node --test test/*.test.mjs",
+    "typecheck": "pnpm --filter @aiagent/types build && tsc -p tsconfig.json --pretty false --noEmit"
+  }
+}

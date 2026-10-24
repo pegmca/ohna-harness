@@ -1,5 +1,6 @@
 import {
   type Citation,
+  type EvidenceSufficiencyThreshold,
   type RagAnswer,
   type RagChunk,
   type RetrievalResult,
@@ -48,18 +49,23 @@ export function createRetrievalResultFromRetrievedChunk(result: RetrievedChunk):
 /**
  * 从检索结果和引用创建 grounded answer 占位对象，后续会接入真实生成模型。
  *
- * @param input 回答文本、检索结果和引用列表。
+ * status 为可选项：不传时保持原形状（向后兼容）；传入时透传到 RagAnswer，
+ * 用于结构化区分「已回答」与「证据不足拒答」（前置修正 #1，取代 answer 文本魔法字符串）。
+ *
+ * @param input 回答文本、检索结果、引用列表与可选回答状态。
  * @returns 标准 RAG answer 结构。
  */
 export function createRagAnswer(input: {
   answer: string;
   citations: Citation[];
   retrievalResults: RetrievalResult[];
+  status?: RagAnswer["status"];
 }): RagAnswer {
   return {
     answer: input.answer,
     citations: [...input.citations],
-    retrievalResults: [...input.retrievalResults]
+    retrievalResults: [...input.retrievalResults],
+    ...(input.status !== undefined ? { status: input.status } : {})
   };
 }
 
@@ -73,20 +79,40 @@ export function createRagAnswer(input: {
  * - 过滤掉 Markdown 解析产生的 heading-only 块，避免答案中出现“盈利能力：盈利能力”这类无信息条目。
  * - 证据句优先选择包含命中词的最长句子，而不是简单取第一句，提高关键词覆盖和可解释性。
  *
+ * v2.0 前置修正 #1：
+ * - 两个分支分别打结构化 status：证据不足 → "insufficient_evidence"，否则 → "answered"，
+ *   取代原先 answer 文本中的魔法字符串，便于评测与 API 判定拒答；
+ * - 充分性阈值 threshold 可注入（minQueryTermCoverage / minFinalScore），缺省沿用常量 0.15 / 0.42，
+ *   不传参时行为与原版【完全一致】，实现阈值可观测、可调。
+ *
  * @param question 用户问题。
  * @param results 检索结果。
- * @returns 带 citations 和 retrieval results 的 RAG answer。
+ * @param threshold 证据充分性阈值（可选）；不传时沿用内置常量，行为与旧版一致。
+ * @returns 带 citations、retrieval results 与结构化 status 的 RAG answer。
  */
-export function synthesizeRagAnswer(question: string, results: readonly RetrievedChunk[]): RagAnswer {
+export function synthesizeRagAnswer(
+  question: string,
+  results: readonly RetrievedChunk[],
+  threshold: EvidenceSufficiencyThreshold = {}
+): RagAnswer {
+  // 内置默认阈值：与原版 isEvidenceSufficient 的判定常量（0.15 / 0.42）保持一致。
+  // 仅在调用方显式注入时覆盖，保证默认行为零回归。
+  const DEFAULT_THRESHOLD = { minQueryTermCoverage: 0.15, minFinalScore: 0.42 };
+  const activeThreshold = {
+    minQueryTermCoverage: threshold.minQueryTermCoverage ?? DEFAULT_THRESHOLD.minQueryTermCoverage,
+    minFinalScore: threshold.minFinalScore ?? DEFAULT_THRESHOLD.minFinalScore
+  };
+
   const retrievalResults = results.map(createRetrievalResultFromRetrievedChunk);
   const contentResults = results.filter((result) => !isHeadingOnlyChunk(result.chunk));
-  const sufficientResults = contentResults.filter(isEvidenceSufficient);
+  const sufficientResults = contentResults.filter((result) => isEvidenceSufficient(result, activeThreshold));
 
   if (sufficientResults.length === 0) {
     return createRagAnswer({
       answer: `当前资料不足，无法可靠回答“${question.trim()}”。请先 ingest 包含该问题信息的 Markdown/TXT 文档，或换一个与现有资料更匹配的问题。`,
       citations: retrievalResults.slice(0, 2).map((result) => result.citation),
-      retrievalResults
+      retrievalResults,
+      status: "insufficient_evidence"
     });
   }
 
@@ -100,7 +126,8 @@ export function synthesizeRagAnswer(question: string, results: readonly Retrieve
   return createRagAnswer({
     answer: `基于当前已 ingest 资料，可以得到以下摘要：\n${evidenceLines.join("\n")}`,
     citations,
-    retrievalResults
+    retrievalResults,
+    status: "answered"
   });
 }
 
@@ -124,15 +151,19 @@ function isHeadingOnlyChunk(chunk: RagChunk): boolean {
 /**
  * 判断单条召回结果是否足以进入 answer synthesis。
  *
+ * 阈值来自 synthesizeRagAnswer 解析后的 activeThreshold：覆盖率或最终分数任一过线即视为充分，
+ * 调用方调高阈值即可把边界样本翻转为拒答（阈值可观测、可调）。
+ *
  * @param result 检索结果。
+ * @param threshold 生效的充分性阈值（已合并缺省值）。
  * @returns 相关性足够时返回 true。
  */
-function isEvidenceSufficient(result: RetrievedChunk): boolean {
+function isEvidenceSufficient(result: RetrievedChunk, threshold: { minQueryTermCoverage: number; minFinalScore: number }): boolean {
   const hasMeaningfulTerm = result.scoreBreakdown.matchedTerms.some(
     (term) => term.length > 1 && !["公司", "如何", "多少", "是什么"].includes(term)
   );
 
-  return hasMeaningfulTerm && (result.scoreBreakdown.queryTermCoverage >= 0.15 || result.scoreBreakdown.finalScore >= 0.42);
+  return hasMeaningfulTerm && (result.scoreBreakdown.queryTermCoverage >= threshold.minQueryTermCoverage || result.scoreBreakdown.finalScore >= threshold.minFinalScore);
 }
 
 /**

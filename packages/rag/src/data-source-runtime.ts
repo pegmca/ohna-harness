@@ -28,8 +28,10 @@ import {
   toNewChunkRecord
 } from "./source-uri.js";
 import {
+  DEFAULT_CHUNKING_OPTIONS,
   RAG_CHUNKER_VERSION,
   RAG_PARSER_VERSION,
+  type ChunkingOptions,
   type DataSourceIngestContext,
   type DataSourceListChunksOptions,
   type DataSourceListOptions,
@@ -38,6 +40,7 @@ import {
   type DataSourceRuntimeOptions,
   type DataSourceRuntimeResult,
   type EmbeddingClient,
+  type EvidenceSufficiencyThreshold,
   type KeywordCandidateStore,
   type RagAnswerRuntimeResponse,
   type RagChunk,
@@ -96,6 +99,16 @@ class DataSourceRuntimeService implements DataSourceRuntime {
     chunks: RagChunk[]
   ) => Promise<RagChunk[]>;
   private readonly queryRewriter?: QueryRewriter;
+  /**
+   * ingest 切块策略（前置修正 #5）：注入后覆盖默认 DEFAULT_CHUNKING_OPTIONS；
+   * 缺省 undefined 时 ingest 透传 undefined，由 chunkIngestedDocument 回落默认切块，行为不变。
+   */
+  private readonly chunkingOptions?: ChunkingOptions;
+  /**
+   * 证据充分性阈值（前置修正 #1）：传给 synthesizeRagAnswer 控制拒答灵敏度；
+   * 缺省 undefined 时透传空对象，由 synthesizeRagAnswer 沿用内置 0.15 / 0.42 常量，零回归。
+   */
+  private readonly evidenceThreshold: EvidenceSufficiencyThreshold;
 
   /**
    * 创建 runtime 实例。
@@ -104,6 +117,7 @@ class DataSourceRuntimeService implements DataSourceRuntime {
    * embeddingClient 不设默认值：生产必须注入真实 client，测试必须显式注入 testing.ts 替身；
    * reranker / contextEnricher / queryRewriter 均为可选生产增强，传 null/undefined 时视作"未注入"，
    * 分别由 HybridRetriever 的 HeuristicReranker 保底、保持 chunk 原样、保持原 query。
+   * chunkingOptions / evidenceSufficiencyThreshold 为可选注入点，缺省时回落默认行为。
    *
    * @param options 显式 adapter 依赖与可选生产增强。
    */
@@ -116,6 +130,10 @@ class DataSourceRuntimeService implements DataSourceRuntime {
     this.reranker = options.reranker ?? undefined;
     this.contextEnricher = options.contextEnricher ?? undefined;
     this.queryRewriter = options.queryRewriter ?? undefined;
+    // 切块策略注入点（前置修正 #5）：缺省 undefined 时由 chunkIngestedDocument 回落 DEFAULT_CHUNKING_OPTIONS。
+    this.chunkingOptions = options.chunkingOptions;
+    // 阈值注入点（前置修正 #1）：未注入时透传空对象，synthesizeRagAnswer 用内置默认常量（零回归）。
+    this.evidenceThreshold = options.evidenceSufficiencyThreshold ?? {};
   }
 
   /**
@@ -222,7 +240,7 @@ class DataSourceRuntimeService implements DataSourceRuntime {
       return { ok: false, error };
     }
 
-    const chunkingResult = chunkIngestedDocument(ingestionResult.document);
+    const chunkingResult = chunkIngestedDocument(ingestionResult.document, this.chunkingOptions ?? DEFAULT_CHUNKING_OPTIONS);
 
     if (!chunkingResult.ok) {
       await this.saveLineage({
@@ -394,7 +412,7 @@ class DataSourceRuntimeService implements DataSourceRuntime {
     return {
       ok: true,
       data: {
-        answer: synthesizeRagAnswer(question, retrievalResult.results),
+        answer: synthesizeRagAnswer(question, retrievalResult.results, this.evidenceThreshold),
         trace
       }
     };

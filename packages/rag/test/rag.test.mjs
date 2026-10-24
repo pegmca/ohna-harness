@@ -11,6 +11,7 @@ import {
   createInMemoryVectorStore,
   createRagAnswer,
   createRagPackageSummary,
+  synthesizeRagAnswer,
   DEFAULT_CHUNKING_OPTIONS,
   DEFAULT_KEYWORD_WEIGHT,
   DEFAULT_VECTOR_SEARCH_TOP_K,
@@ -700,6 +701,99 @@ test("data source runtime applies unknown answer policy when evidence is missing
   assert.equal(ingestResult.ok, true);
   assert.equal(answerResult.ok, true);
   assert.match(answerResult.data.answer.answer, /资料不足|无法可靠回答/);
+});
+
+test("answer synthesizes structured status without breaking the legacy answer shape", async () => {
+  const runtime = createTestDataSourceRuntime();
+  await runtime.ingest({
+    source: "demo",
+    fileName: "annual-report.md",
+    contentType: "text/markdown",
+    content: "# 资产质量\n公司不良率保持稳定。\n\n# 盈利能力\n公司净利润同比增长。"
+  });
+
+  // 充分证据：默认阈值下应得到 "answered"，且三字段形状保持不变（向后兼容）。
+  const sufficient = await runtime.answer("公司资产质量如何？", { topK: 3 });
+  assert.equal(sufficient.ok, true);
+  assert.equal(sufficient.data.answer.status, "answered");
+  assert.equal(typeof sufficient.data.answer.answer, "string");
+  assert.ok(Array.isArray(sufficient.data.answer.citations));
+  assert.ok(Array.isArray(sufficient.data.answer.retrievalResults));
+
+  // 证据不足：默认阈值下应得到 "insufficient_evidence"，仍是同一形状。
+  const insufficient = await runtime.answer("公司海外新能源业务收入是多少？", { topK: 3 });
+  assert.equal(insufficient.ok, true);
+  assert.equal(insufficient.data.answer.status, "insufficient_evidence");
+  assert.match(insufficient.data.answer.answer, /资料不足|无法可靠回答/);
+});
+
+test("raising evidence threshold flips an answerable query to insufficient_evidence", async () => {
+  const runtime = createTestDataSourceRuntime({
+    // 注入高于默认（0.15 / 0.42）的阈值，使原本可答的边界样本翻转为拒答。
+    evidenceSufficiencyThreshold: { minQueryTermCoverage: 0.9, minFinalScore: 0.95 }
+  });
+  await runtime.ingest({
+    source: "demo",
+    fileName: "annual-report.md",
+    contentType: "text/markdown",
+    content: "# 资产质量\n公司不良率保持稳定。\n\n# 盈利能力\n公司净利润同比增长。"
+  });
+
+  const answerResult = await runtime.answer("公司资产质量如何？", { topK: 3 });
+  assert.equal(answerResult.ok, true);
+  // 阈值可观测：调高后原本 "answered" 的样本变成 "insufficient_evidence"。
+  assert.equal(answerResult.data.answer.status, "insufficient_evidence");
+});
+
+test("synthesizeRagAnswer default threshold preserves original behavior and status", () => {
+  // 构造一条命中词充分、覆盖率过线的检索结果，验证默认阈值下返回 "answered"。
+  const chunk = {
+    chunkId: "doc1_chunk_0000",
+    id: "doc1_chunk_0000",
+    documentId: "doc1",
+    source: "demo",
+    chunkIndex: 0,
+    text: "公司资产质量保持稳定，不良率同比下降。",
+    charStart: 0,
+    charEnd: 20,
+    startOffset: 0,
+    endOffset: 20,
+    heading: "资产质量",
+    metadata: {}
+  };
+  const result = {
+    chunk: { ...chunk, embedding: [], embeddingModel: "mock" },
+    rank: 0,
+    score: 0.8,
+    scoreBreakdown: {
+      vectorScore: 0.8,
+      keywordScore: 0.7,
+      hybridScore: 0.75,
+      finalScore: 0.6,
+      vectorWeight: 0.65,
+      keywordWeight: 0.35,
+      matchedTerms: ["资产质量", "不良率"],
+      queryTermCoverage: 0.5,
+      headingMatch: true
+    }
+  };
+
+  // 不传阈值：沿用默认 0.15 / 0.42，应可答。
+  const defaultAnswer = synthesizeRagAnswer("公司资产质量如何？", [result]);
+  assert.equal(defaultAnswer.status, "answered");
+
+  // 调高阈值：覆盖率 0.5 < 0.9 且 finalScore 0.6 < 0.95，翻转为拒答（阈值可观测）。
+  const strictAnswer = synthesizeRagAnswer("公司资产质量如何？", [result], {
+    minQueryTermCoverage: 0.9,
+    minFinalScore: 0.95
+  });
+  assert.equal(strictAnswer.status, "insufficient_evidence");
+
+  // 只调高 finalScore、保留覆盖率缺省 0.15：覆盖率仍过线，维持可答。
+  const partialAnswer = synthesizeRagAnswer("公司资产质量如何？", [result], {
+    minFinalScore: 0.95
+  });
+  assert.equal(partialAnswer.status, "answered");
 });
 
 test("re-ingesting identical content is deduplicated without new versions or chunks", async () => {

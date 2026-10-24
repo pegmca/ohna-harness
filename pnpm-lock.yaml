@@ -59,6 +59,9 @@ importers:
       '@aiagent/database':
         specifier: workspace:^
         version: link:../../packages/database
+      '@aiagent/eval-core':
+        specifier: workspace:*
+        version: link:../../packages/eval-core
       '@aiagent/identity':
         specifier: workspace:^
         version: link:../../packages/identity
@@ -181,6 +184,9 @@ importers:
       '@aiagent/coding':
         specifier: workspace:*
         version: link:../../packages/coding
+      '@aiagent/eval-core':
+        specifier: workspace:*
+        version: link:../../packages/eval-core
       '@aiagent/mcp':
         specifier: workspace:*
         version: link:../../packages/mcp
@@ -337,26 +343,15 @@ importers:
         specifier: 0.31.5
         version: 0.31.5
 
-  packages/eval:
+  packages/eval-core:
     dependencies:
-      '@aiagent/agent':
-        specifier: workspace:^
-        version: link:../agent
-      '@aiagent/ai':
-        specifier: workspace:^
-        version: link:../ai
-      '@aiagent/rag':
-        specifier: workspace:^
-        version: link:../rag
       '@aiagent/types':
-        specifier: workspace:^
+        specifier: workspace:*
         version: link:../types
+    devDependencies:
       '@types/node':
         specifier: ^22.10.5
         version: 22.20.0
-      zod:
-        specifier: ^4.4.3
-        version: 4.4.3
 
   packages/identity: {}
 

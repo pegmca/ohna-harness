@@ -55,23 +55,24 @@
 ```
 packages/eval-core/
   src/
-    contract.ts    # EvalReportDto / BaselineDiff / GateResult / exit code 语义
     gate.ts        # diffBaseline / evaluateGate（泛化到 Record<string, number>）
     report.ts      # renderMarkdown / writeReports（EvalReportDto 驱动）
     judge.ts       # parseJudgeJson / roundScore / majorityVote / sampleAndAverage / NEUTRAL_SCORE
     calibration.ts # calibrateJudgeScores（原样迁移）
-    trajectory.ts  # matchTrajectory / extractToolTrajectory（入参抽象为 ToolCallStep[]）
+    trajectory.ts  # matchTrajectory（入参抽象为 ToolCallStep[]）
     index.ts
 ```
 
-**依赖方向**：`eval-core → types`（仅 `import type` 引用 primitives）。零 `@aiagent/agent` / `@aiagent/ai` / `@aiagent/rag` 依赖——这是内核的硬边界。
+> `EvalReportDto`/`BaselineDiff`/`GateResult` 三个跨边界 DTO 定义在 `packages/types/src/eval-report.ts`（见 §2.1），不进 `eval-core`；`eval-core` 以 `import type` 引用，并 re-export 便于调用方。
+
+**依赖方向**：`eval-core → types`（仅 `import type` 引用 `EvalReportDto` 等跨边界 DTO）。零 `@aiagent/agent` / `@aiagent/ai` / `@aiagent/rag` / `@aiagent/trace` 运行时依赖——这是内核的硬边界。
 
 ### 2.1 唯一跨 app 契约：`EvalReportDto`
 
-> 归属修正：`EvalReportDto` **定义在 `eval-core/contract.ts`（拥有包）**，不进 `packages/types`。它是内核的运行时输入契约，不是跨边界线格式；仓库规范「types 只收跨边界 DTO」下它应归属拥有包，与 `Message` 归 `@aiagent/ai` 同范式。
+> 归属修正（评审修订）：`EvalReportDto` **定义在 `packages/types`（跨边界线格式）**，`eval-core` 用 `import type` 引用。理由：它是「跨进程 / 跨包 / 跨 app 边界消费」的线格式——§5 规定它输出 `<app>/eval/report.json`、被 CI 门禁消费、未来可能进 Web `/eval` 路由；这与 `LlmCallRecordDto`（`packages/agent` 运行时产出、却定义在 `packages/types`、供 serve/SSE/ohna-web 三方共用）是同一范式。若 `EvalReportDto` 留在 `eval-core` 拥有包，Web 要消费报告就**只能直接依赖 `@aiagent/eval-core`**，违反「app 只依赖浏览器库 + `@aiagent/types`」的硬约束。
 
 ```ts
-// packages/eval-core/src/contract.ts
+// packages/types/src/eval-report.ts —— 跨边界线格式，eval-core 用 import type 引用
 export interface EvalMetricValue {
   name: string;
   value: number;
@@ -104,6 +105,8 @@ export type BaselineDiff = {
 export type GateResult = { passed: boolean; reasons: string[]; exitCode: 0 | 1 };
 ```
 
+> 与 §4.2 的关系：`packages/types/src/eval.ts` 的执行 DTO（`EvalCaseDto`/`EvalResultDto`/`RagEvalReportDto`）仍删；新增 `eval-report.ts` 收纳 `EvalReportDto`/`BaselineDiff`/`GateResult` 三个跨边界 DTO。若 Web 要展示评测报告，消费的就是这里的 `EvalReportDto` 线格式，不再另设「展示 DTO」，二者合一。
+
 ### 2.2 内核 API（纯函数，无副作用）
 
 ```ts
@@ -125,11 +128,17 @@ export function sampleAndAverage(
 ): Promise<{ score: number; reason: string }>;
 export const NEUTRAL_SCORE = 0.5;
 
-// trajectory.ts —— 入参抽象为 ToolCallStep[]，不依赖金融 fixture
-export interface ToolCallStep { tool: string; args?: Record<string, unknown>; }
-export function extractToolTrajectory(events: RunEvent[]): ToolCallStep[];
+// trajectory.ts —— 入参抽象为 ToolCallStep[]，不依赖金融 fixture，也不依赖 run 事件形状
+export interface ToolCallStep {
+  tool: string;
+  args?: Record<string, unknown>;
+  /** 工具调用是否失败——工具检索/few-shot「调用成败」评测需要；薄内核可空但须保留字段位。 */
+  isError?: boolean;
+}
 export function matchTrajectory(actual: ToolCallStep[], expected: ToolCallStep[], mode: "strict" | "subset"): TrajectoryMatch;
 ```
+
+> 评审修订：**删掉 `extractToolTrajectory(events: RunEvent[])`**。真实 `RunEvent` 的 `tool_execution_*` 事件 `payload` 是 `unknown`，无法静态取出 `toolName/args/isError`；现有 `packages/eval` 之所以能投影，靠的是私有 `LoopEvalRunEvent`（`loop-projection.ts`），不是 `RunEvent`。若内核以 `RunEvent[]` 为入参，就会引入 `@aiagent/trace` 运行时依赖，违反 §2「零 `@aiagent/*` 依赖」边界。**投影留在各 app eval 域**（`<app>/eval/run.ts` 把 run 事件投影成 `ToolCallStep[]`），内核只做「匹配」，不做「从 run 事件投影轨迹」。这正好是「期望推导留 finance-api」的同一原则。
 
 ### 2.3 关键边界修正（评审结论）
 
@@ -156,7 +165,7 @@ apps/finance-api/eval/
 
 apps/ohna-cli/eval/
   dataset.ts        # coding schema（workspace 种子、expectedFileChanges、expectedPermissionDenials）
-  run.ts            # coding 执行器（真 coding tools + mock 模型 + 临时工作区）
+  run.ts            # coding 执行器（真 provider 最小驱动 + mock 工具副作用 + 临时工作区）
   metrics.ts        # fileChangeCorrectness / permissionCompliance / turnEfficiency
   adapter.ts        # 装配 coding tools + permission policy
   judge-rubrics.ts  # answerCorrectness coding rubric
@@ -165,12 +174,16 @@ apps/ohna-cli/eval/
 
 ### 3.1 执行档位（各 app 内部策略，不进内核）
 
-| Tier | 模型 | 工具 | 检索 | 用途 |
-|---|---|---|---|---|
-| `replay` | mock streamFn | fixture 回放 | fixture 回放 | CI 门禁、零成本回归 |
-| `mock-llm` | mock streamFn | **真工具** | 内存 adapter 真检索 | 验证工具接线与权限闸门 |
-| `live` | 真 provider | 真工具 | 真检索（PG） | 发布前验收、judge 校准 |
-| `shadow` | 不执行 | — | — | 线上采样重放打分 |
+> **无 mock 模型定调（评审修订）**：已删除 mock 模型——评测**不允许注入 mock `streamFn` 回放固定模型输出**。允许 mock 的只有**工具副作用**（write/edit/bash/search 的 execute 返回固定值），模型这层要么走纯函数（零模型）、要么走真 provider。红线的判据：mock「动作对外部世界的效果」✅，mock「模型下一步选什么工具/说什么话」❌。
+
+| Tier | 模型 | 工具 | 检索 | 用途 | CI 门禁 |
+|---|---|---|---|---|---|
+| `deterministic` | 零模型（纯函数） | — | — | 纯函数投影 + 纯状态迁移：护栏估算、成本投影、工具子集/摘要解析、轨迹匹配、归因聚合 | **硬门禁（block）** |
+| `integration` | 真 provider（最小化：低温、小 `maxTokens`、单轮收敛） | **mock 工具副作用**（execute 返回固定值） | 内存 adapter | 验证工具接线、权限闸门通道、控制流（断言只指流程，不指模型决策） | **硬门禁（block，断言只指控制流）** |
+| `live` | 真 provider | 真工具 | 真检索（PG） | 发布前验收、judge 校准、编排决策正确性 | **趋势门禁（不 block）** |
+| `shadow` | 不执行 | — | — | 线上采样重放打分 | 趋势门禁（不 block） |
+
+**与 team 场景的关系**：team/Supervisor 评测在此通用档位基础上细化为 `T-L1 / T-L2a / T-L2b / T-L4`（见 `03-team-eval.md`），其中 `deterministic` 拆为纯函数（T-L1）与纯状态迁移（T-L2a），`integration` 对应 mock 工具控制流（T-L2b），`live` 对应真模型 + judge 编排决策（T-L4）。
 
 ### 3.2 `packages/eval` 模块去向（完整映射）
 
@@ -202,34 +215,59 @@ apps/ohna-cli/eval/
 
 | 指标 | 类型 | 数据源 | 进内核? | 备注 |
 |---|---|---|---|---|
-| retrievalHitRate | 确定性 | source/document 命中 topK | 否 | binary 召回；**砍掉 `expectedChunkIds`**（chunk 边界漂移、不可维护） |
-| MRR | 确定性 | 期望命中的 rank | 否 | **补**：弥补召回无视排序的盲区 |
-| NDCG | 确定性 | rank + score | 否 | **补**：同上，可复现 |
+| retrievalHitRate | 确定性 | source/document 命中 topK | 否 | binary 召回；**砍掉 `expectedChunkIds`**（chunk 边界漂移、不可维护，见下） |
+| MRR | 确定性 | **document 级**命中的 rank | 否 | **补**：弥补召回无视排序的盲区；rank 口径 = 期望命中文档在 topK 中的位置，**不锚 chunk** |
+| NDCG | 确定性 | **document 级** rank + score | 否 | **补**：同上，可复现 |
 | citationCoverage | 确定性 | `citations ≥ minCitations` × 证据覆盖 | 否 | 与 deterministic faithfulness 合并（见下） |
 | answerCorrectness | 确定性 | `expectedKeywords`/`expectedAnswer` 覆盖 | 否 | 关键词级近似，语义等价靠 judge |
-| faithfulness（deterministic） | 确定性 | citation 证据支撑 | 否 | **降级合并**：现与 citationCoverage 语义重叠，是绕 `createQuote` 截断 bug 的重复信号 |
-| llmFaithfulness | judge | RAGAS faithfulness | 否 | 校准信号，不进门禁 |
-| llmContextRecall | judge | RAGAS context recall | 否 | 校准信号，不进门禁 |
-| 拒答率 | 确定性 | `RagAnswerDto.status` | 否 | **前置**：需先给 `RagAnswerDto` 加 `status` 结构化字段 |
+| faithfulness（deterministic） | 确定性 | citation 证据支撑 | 否 | **删除合并进 citationCoverage**：现二者语义重叠，是绕 `createQuote` 截断 bug 的重复信号 |
+| llmFaithfulness | judge | RAGAS faithfulness | 否 | 校准信号，不进门禁；**合并后成为唯一 faithfulness 信号，故保留作为门禁的 faithfulness 校准参考** |
+| llmContextRecall | judge | RAGAS context recall（输入 `goldEvidence`） | 否 | 校准信号，不进门禁；输入必须是真正的期望证据文本，见前置修正 4 |
+| contextPrecision | judge | RAGAS context precision（逐 chunk 相关性） | 否 | 校准信号，不进门禁；见下「保留 context precision」 |
+| 拒答率 | 确定性 | `RagAnswerDto.status` | 否 | **前置**：需先给 `RagAnswerDto` 加 `status` 结构化字段；**须与 topK 耦合评测**（见下） |
 
-**明确不引入**：`context precision`（本质逐 chunk 语义相关性判定，需 judge rubric，与 `llmContextRecall` 定位重叠，重复造 rubric）。
+**保留 `context precision`（评审修订，推翻原「明确不引入」）**：`context recall`（期望证据召没召回）与 `context precision`（召回的东西纯不纯净）是正交维度。对金融 RAG 尤其关键——手写的中文单字 tokenizer（`tokenizeForRetrieval` 把「不良率」「毛利率」拆成单字）会让「率」「毛」「不」互相命中，召回噪声天然偏高；缺 precision 就测不出 keyword 权重调高带来的噪声惩罚。它确实需要 judge rubric，但那是**与 `llmContextRecall` 同一 judge 基础设施下的另一个 rubric**，不是「重复造 rubric」。**降级为 judge 校准信号（不进门槛）保留**，与 `llmContextRecall`/`llmFaithfulness` 并列。
 
-**三个前置修正（RAG 落地前必须做）**：
+**六个前置修正（RAG 落地前必须做）**：
 
-1. **给拒答补结构化信号**。`RagAnswerDto` 增加 `status?: "answered" | "insufficient_evidence"`（或 `refused: boolean`），`synthesizeRagAnswer` 两条分支分别打标。否则「拒答率」只能匹配魔法字符串或 `citations.length === 0` 这种脆弱代理，是假指标。这是唯一需要动 `packages/rag` 的前置项。
+1. **给拒答补结构化信号 + 暴露证据充分性阈值**。`RagAnswerDto` 增加 `status?: "answered" | "insufficient_evidence"`（或 `refused: boolean`），`synthesizeRagAnswer` 两条分支分别打标。注意：拒答分支当前**并非** `citations.length === 0`（`answer.ts` 里拒答时 `citations: retrievalResults.slice(0, 2)` 有值），真正的现状是只能匹配 `answer` 文本里的魔法字符串「当前资料不足，无法可靠回答」——这才是要消灭的脆弱代理。**同时**把 `isEvidenceSufficient`（`answer.ts` 硬编码 `queryTermCoverage >= 0.15 || finalScore >= 0.42`）的阈值做成可注入/可观测参数：否则「拒答率」只能测「拒没拒」，测不了「该拒的拒没拒、不该拒的误拒没拒」（拒答的 precision/recall 才是金融 RAG 的核心风险点）。
 
-2. **收敛命中字段并迁出 types**。`EvalCaseDto` 的 `requiredDocumentIds`/`requiredSources`/`expectedChunkIds` 三套命中约束中，**删 `expectedChunkIds`**（chunk 级命中不可维护），统一为「source 级命中 + 可选 documentId 级命中」。同时把 `EvalCaseDto` 从 `packages/types` 迁到 `finance-api/eval/dataset.ts`（兑现「领域 case 类型不进 types」）。
+2. **收敛命中字段并迁出 types**。`EvalCaseDto` 的 `requiredDocumentIds`/`requiredSources`/`expectedChunkIds` 三套命中约束中，**删 `expectedChunkIds`**（chunk 级命中不可维护，见前置修正 4），统一为「source 级命中 + 可选 documentId 级命中」。同时把 `EvalCaseDto` 从 `packages/types` 迁到 `finance-api/eval/dataset.ts`（兑现「领域 case 类型不进 types」）。
 
 3. **写死 `EvalMetricDto → EvalReportDto` 映射契约**。现有 `EvalMetricDto` 是 `{name, score, passed, details?}`，与 `EvalReportDto.metrics` 的 `{name, value, unit?}` 不同构：
    - `metrics[].value` = 各指标跨 case 聚合均值（复用 `averageMetric`）；
    - `cases[].passed` = `metrics.every(m => m.passed)`；
    - **`cases[].failedMetrics`** 承载「哪几个指标挂了」，否则逐 case 归因在扁平化时丢失、内核失败归因退化。
 
+4. **给 dataset 增加与切块解耦的语义级期望证据 `goldEvidence`**。`expectedChunkIds` 之所以砍，除了「边界漂移」，真正的坑是 `chunking.ts` 的 `heading_aware` 与 `fixed_size` 两种策略对同一文档 `chunkIndex` 递增语义不同（block 顺序 vs 字符窗口）、chunk id 命名空间却相同——切块策略一换，chunk 级 golden label 整体作废。因此：**命中约束只用 document/source 级（deterministic 指标），语义级「期望证据」用独立于切块参数的 `goldEvidence` 文本表达，让 judge 判语义覆盖**。同时修掉 `llmContextRecall` 现状的语义 bug：`runner.ts` 现用 `expectedAnswer + expectedKeywords` 冒充「期望证据」，judge 拿答案比检索结果，测出来既不是 context recall 也不是 answer correctness——必须改喂 `goldEvidence`。
+
+5. **把 `ChunkingOptions` 贯穿到 runtime ingest**。`chunkIngestedDocument(document, options)` 接受 `ChunkingOptions`，但 `data-source-runtime.ts` 调用时不传 options、永远用 `DEFAULT_CHUNKING_OPTIONS`（heading_aware/1200/150）。§3.3 想测「切片评测维度（maxChars 800 vs 1200 的 ablation）」，当前 ingest 路径**根本没有切块参数注入点**——要么绕过 runtime 直接调底层函数（不算测真实系统，撞上 G1 要修的坑），要么死路。把 `ChunkingOptions` 作为 `DataSourceRuntimeOptions` 的一部分可注入（或在 ingest 请求里透传）。
+
+6. **正视 `RagAnswer = RagAnswerDto` 的隐性耦合**。`packages/rag/src/types.ts` 里 `export type RagAnswer = RagAnswerDto`——rag 领域类型直接别名了 types 跨边界 DTO。给 `RagAnswerDto` 加 `status` 会同时改 `synthesizeRagAnswer` 返回、`DataSourceRuntime.answer` 返回、`packages/types` 线格式，「动一处改三处」。这不是「轻量加一个可选字段」，需在 Step 3 验收时明确这条前置项同时触及三处，并据此决定是否要把 rag 领域类型与跨边界 DTO 拆开（`RagAnswer` 为领域类型、`RagAnswerDto` 为线格式）。
+
 **shadow 衔接**：`ShadowResult`（`{caseId, query, answerCorrectness, faithfulness, ...}`）与 `EvalReportDto` 无法直接衔接，且其 `faithfulness` 是 judge 判定、与 runner 的 deterministic `faithfulness` **同名不同源**。需补 `ShadowResult → EvalReportDto` 适配器，并将 shadow 的 `faithfulness` 改名 `llmFaithfulness`（或独立 dataset `finance/rag-shadow`）。
+
+**rerank 回退层级可观测性（补强）**：rerank 当前是三层回退（`HeuristicReranker` → cross-encoder `/rerank` → LLM-judge → hybridScore 兜底），且 `reranking-providers.ts` 明确「rerank 永远 ok、绝不抛异常」——live 环境 rerank provider 未配好时 NDCG 会**无声退化回 heuristic**。当前 `RetrievalTraceSummary` 只记录 `rerankScore/finalScore`，不记录走了哪层。**评测 rerank 维度时，trace 必须能区分「走了 /rerank / judge / heuristic / hybrid 兜底」哪一层**，否则精排静默失效会被误判为「rerank 本身不行」。
+
+**topK 与拒答耦合（补强）**：topK 不是孤立参数——`synthesizeRagAnswer` 的拒答分支在 `sufficientResults.length === 0` 时触发，而 `sufficientResults` 来自 topK 召回经 `isEvidenceSufficient` 过滤，**topK 越小越容易误拒**。金融场景拒答是安全网（不编造数据），topK 太小会误杀可答问题、太大塞噪声。**topK 的评测应做成「topK × 拒答率 × 答案正确性」的三元权衡**，而非孤立测「topK=3/5/8/10 的 NDCG」；默认 topK=5 对需要跨段证据的金融答案可能偏小。
+
+**失败样例回灌闭环（补强，原文档缺失）**：现有 `collectFailures` 只把失败 case 打进报告，`fail-001/002/003` 是手写死的 demo，`rootCause()/improvement()` 是硬编码字符串映射——v2 删掉重建后**没有替代的回灌机制**，shadow 又「只读不写回」，线上累积的检索 miss 永远进不了评测集。补一个最小闭环（不进 `eval-core`，留各 app）：
+
+```
+线上/评测失败 case → 归因（failedMetrics + failedTaxonomy）
+  → 按失败类别分流（检索缺失→切片/topK/embedding；幻觉→rerank/prompt；工具误用→工具检索）
+  → 修复后把 case 回灌 dataset 作回归护栏 → 重跑 baseline
+```
+
+落点：`<app>/eval/dataset.ts` 的 loader 支持「从上次报告 `failures + failedTaxonomy` 反推生成/追加候选 case」，或至少声明「回灌 = 手写入 `<app>/eval/dataset.json` + 提交 git，不进 eval-core」；shadow 采样的 `{query, 检索 miss 标记, 期望证据}` 沉淀为候选 case，走显式「promote to golden」动作（哪怕 v2 范围只做「导出候选 + 人工确认」，也要定下接口位置）。
 
 ### 3.4 编码 Agent 侧（ohna）
 
-首批指标：`fileChangeCorrectness`（mustContain/diff 匹配）、`permissionCompliance`（拒绝/批准行为符合 `expectedPermissionDenials`）、`turnEfficiency`（实际 turn vs 预算）。证据来自 run_events + workspace 快照。从 `--tier mock-llm`（真 coding tools + mock 模型 + 临时工作区）起步。
+首批指标：`fileChangeCorrectness`（mustContain/diff 匹配）、`permissionCompliance`（拒绝/批准行为符合 `expectedPermissionDenials`）、`turnEfficiency`（实际 turn vs 预算）。证据来自 run_events + workspace 快照。从 `--tier integration`（真 provider 最小驱动 + mock 工具副作用 + 临时工作区）起步。
+
+**控制类 RAG 指标（补强，原文档缺失）**：上述三项都是「单 agent 执行结果」视角，漏了「工具检索 / few-shot 选择」这条控制类链路——对编码 Agent，工具选择正确性比文件改动正确性更靠前的回归点。补一个 `toolSelectionCorrectness`（期望工具序列 vs 实际 `ToolCallStep[]`，含 `isError`），证据源是 `agentLoop` 的 `tool_execution_*` run 事件（经 app eval 域投影成 `ToolCallStep[]`，不进内核投影）。**这依赖「模型自主选择工具」而非已删除的 Intent Router**——评测以 run 事件为唯一事实源，不重建任何路由分支。
+
+**评测范围声明（补强）**：v2.0 评测范围 = **单 agent 闭环**。`team`/Supervisor 多智能体编排（`ARCHITECTURE §8` 的 `TeamController`、`projectTeamCostSummary`、`cost_summary.team` 段）**不在本期评测覆盖内，作为明确 gap 记录**。原因：① team 的 15× token 成本收口是 P0 但属独立评测面；② `permissionCompliance` 需扩展到「supervisor 派发的子代理是否继承权限策略（`beforeToolCall` 继承）」；③ team 成本归因有现成的 `projectTeamCostSummary` 投影可复用。三者单列一节（建议 v2.1）再补，本期不混入单 agent 指标。
 
 ---
 
@@ -241,23 +279,30 @@ GAIA/TAU 是通用 benchmark，非金融专属，但当前 `benchmarkCaseToUnifi
 
 ### 4.2 `packages/types/src/eval.ts` 去留
 
-删除执行 DTO（`EvalCaseDto`/`EvalResultDto`/`RagEvalReportDto`）；若 Web 仍消费 `ProductEvalReportDto`（`report.ts`），保留展示 DTO，否则一并删。
+删除执行 DTO（`EvalCaseDto`/`EvalResultDto`/`RagEvalReportDto`）；新增 `eval-report.ts` 收纳 `EvalReportDto`/`BaselineDiff`/`GateResult`（见 §2.1），供 `eval-core` 与 Web 共用同一线格式，不再设独立的「展示 DTO」。若 Web 仍消费旧 `ProductEvalReportDto`（`report.ts`），迁移到 `eval-report.ts` 后一并删除旧 `report.ts`。
 
 ---
 
 ## 5. CI 约定（唯一跨 app 的强制接口）
 
 1. **命令**：每个 app 暴露 `pnpm eval:<app>`（`eval:finance-api` / `eval:ohna`）。
-2. **产物**：跑完输出 `<app>/eval/report.json`（`EvalReportDto`），调用 `eval-core.evaluateGate` 决定 exit code（门禁非零即 1）。
+2. **产物**：跑完输出 `<app>/eval/report.json`（`EvalReportDto`，定义在 `packages/types`），调用 `eval-core.evaluateGate` 决定 exit code（门禁非零即 1）。
 
 ```bash
-pnpm eval:finance-api --tier replay          # CI 门禁
-pnpm eval:ohna         --tier mock-llm
-pnpm eval:finance-api --tier live --judge    # 发布前
+pnpm eval:finance-api --tier deterministic   # CI 硬门禁（纯函数 + 纯状态）
+pnpm eval:ohna         --tier integration    # CI 硬门禁（真 provider + mock 工具）
+pnpm eval:finance-api --tier live --judge    # 趋势门禁 / 发布前验收
 pnpm eval:finance-api --update-baseline      # 只写 <app>/eval/baseline.json
 ```
 
-未来 app 若连「跑→打分→出报告」节奏都不同，可完全不引入 `eval-core`——薄内核是「可选共享」，不是「强制框架」。
+**强制接口 vs 可选共享的澄清（评审修订）**：原「薄内核是可选共享，不是强制框架」与「产物/门禁是强制接口」自相矛盾——若某 app 完全不引入 `eval-core`，就无法产出 `EvalReportDto` 形状的 report.json、也无法调 `evaluateGate`。澄清为二选一：
+
+- **`report.json` 的形状约定（`EvalReportDto`）是「可选」的**：app 可自定报告形状，只要 CI 能判 exit code；不强制所有 app 都用 `eval-core`。
+- **`EvalReportDto` 与 `evaluateGate` 对「已采用 `eval-core` 的 app」是「事实强制」的**：一旦引入 `eval-core`，产物形状与门禁语义就固定。
+
+即：**薄内核是可选共享；但「CI 门禁 exit code」是强制约定**——app 可用 `eval-core` 实现，也可自实现等价门禁，只要「门禁失败 → 非零退出」成立。二者不再互斥。
+
+**`evaluateGate(null baseline)` 语义写死（补强）**：首次跑（`baseline === null`）时，`evaluateGate` 的判定**强制为「先建 baseline，不判 pass/fail」**——返回 `GateResult{ passed: false, reasons: ["无 baseline，需先 --update-baseline"], exitCode: 1 }`（或用独立 exit code 语义如「0 但提示待建基线」，需在契约里明确）。避免两个 app 各自解释「无 baseline 是放行还是拦停」。Step 3 验收「首次产出报告并建基线，不是保持一致」正对应此语义。
 
 ---
 
@@ -270,11 +315,11 @@ pnpm eval:finance-api --update-baseline      # 只写 <app>/eval/baseline.json
 - **验收**：删除清单无外部引用（grep 无 app 消费方）。
 
 ### Step 1 — 抽薄内核 `packages/eval-core`
-- **产出**：`packages/eval-core/{contract,gate,report,judge,calibration,trajectory,index}.ts`。
+- **产出**：`packages/eval-core/{gate,report,judge,calibration,trajectory,index}.ts`；`packages/types/src/eval-report.ts`（`EvalReportDto`/`BaselineDiff`/`GateResult`）。
 - **接口**：见 §2.1、§2.2。
 - **命令**：`pnpm --filter @aiagent/eval-core build && pnpm --filter @aiagent/eval-core test`。
-- **验收**：`calibration.ts` 原样迁移测试全绿；`judge.ts` 60 行核心测试全绿；`gate.ts`/`report.ts` 对 `Record<string, number>` 输入单测通过；`trajectory.ts` 入参为 `ToolCallStep[]` 的单测通过。
-- **关键**：本步只**新增** `eval-core`，不动 `packages/eval`。
+- **验收**：`calibration.ts` 原样迁移测试全绿；`judge.ts` 60 行核心测试全绿；`gate.ts`/`report.ts` 对 `Record<string, number>` 输入单测通过；`trajectory.ts` 入参为 `ToolCallStep[]`（无 `extractToolTrajectory`，投影留 app）的单测通过；`eval-core` 以 `import type` 引用 `packages/types` 的 `EvalReportDto` 且无任何 `@aiagent/agent/ai/rag/trace` 运行时依赖。
+- **关键**：本步只**新增** `eval-core` + `packages/types/src/eval-report.ts`，不动 `packages/eval`。
 
 ### Step 2 — 修 G5（applicable）
 - **产出**：`EvalMetricValue.applicable?: boolean`；`evaluateGate` 聚合跳过 `applicable === false`。
@@ -283,15 +328,15 @@ pnpm eval:finance-api --update-baseline      # 只写 <app>/eval/baseline.json
 ### Step 3 — finance-api 领域自治化
 - **产出**：`apps/finance-api/eval/{dataset,run,metrics,adapter,judge-rubrics,index}.ts`；`datasets/finance/rag-v1.json`（迁原 `datasets/eval-financial-v1.json`）。
 - **接口**：`run.ts` 导出 `runFinanceEval(dataset, {tier, judge?, baseline?}): Promise<EvalReportDto>`；`metrics.ts` 导出 `scoreCaseWithEvidence`（金融指标）；`index.ts` 调 `eval-core.evaluateGate` 判 exit code。
-- **前置**：先完成 §3.3 的 `RagAnswerDto.status` 结构化字段 + `EvalCaseDto` 迁出 types + 删 `expectedChunkIds` + `EvalMetricDto → EvalReportDto` 映射。
+- **前置**：先完成 §3.3 的六个前置修正（`RagAnswerDto.status` + 阈值暴露、`EvalCaseDto` 迁出 types、删 `expectedChunkIds`、`goldEvidence`、`ChunkingOptions` 贯穿、`RagAnswer`/`RagAnswerDto` 拆解决策、`EvalMetricDto → EvalReportDto` 映射）。
 - **命令**：根 `package.json` 增 `"eval:finance-api": "pnpm --filter finance-api eval"`。
-- **验收**：`--tier replay` 跑通并**新建 baseline**（RAG 线当前无 baseline，验收是「首次产出 `EvalReportDto` 并建基线」，不是「保持一致」）；`eval-core` 只被 `finance-api/eval` 依赖。
+- **验收**：`--tier deterministic` 跑通并**新建 baseline**（RAG 线当前无 baseline，验收是「首次产出 `EvalReportDto` 并建基线」，不是「保持一致」）；`eval-core` 只被 `finance-api/eval` 依赖。
 
 ### Step 4 — ohna 接入（完全自治）
 - **产出**：`apps/ohna-cli/eval/{dataset,run,metrics,adapter,judge-rubrics,index}.ts`；`datasets/ohna/coding-v1.json`（首批 ≥20 cases：read/edit/bash 闭环、权限拒绝、超预算收敛）。
 - **接口**：`metrics.ts` 导出 `fileChangeCorrectness`/`permissionCompliance`；`run.ts` 导出 `runOhnaEval(dataset, {tier, judge?, baseline?})`。
 - **命令**：根增 `"eval:ohna": "pnpm --filter ohna-cli eval"`。
-- **验收**：`--tier mock-llm` 跑通 ≥20 cases，产出 `EvalReportDto` 判门禁；ohna-cli 增 `@aiagent/eval-core` 依赖声明。
+- **验收**：`--tier integration` 跑通 ≥20 cases，产出 `EvalReportDto` 判门禁；ohna-cli 增 `@aiagent/eval-core` 依赖声明。
 
 ### Step 5 — live / judge / shadow / benchmark（各 app 内部）
 - **产出**：`finance-api/eval/run.ts` 增 `--tier live`（真 provider + PG 检索）；`judge-rubrics.ts` 接校准；`shadow.ts`（迁 online-eval + `ShadowResult → EvalReportDto` 适配器 + faithfulness 改名）；benchmark 走通用 `BenchmarkCase`，case 校验放宽为 dataset 级 `minCases`（修 G8）。
@@ -307,7 +352,13 @@ pnpm eval:finance-api --update-baseline      # 只写 <app>/eval/baseline.json
 
 ## 7. 依赖合规
 
-- `eval-core` 只 `import type` 引用 `@aiagent/types` 的 primitives；零 `agent/ai/rag` 依赖。
+- `eval-core` 只 `import type` 引用 `@aiagent/types` 的 `EvalReportDto`/`BaselineDiff`/`GateResult`（新增 `eval-report.ts`）；零 `agent/ai/rag/trace` 依赖。
 - 各 app `eval/` 新增 `@aiagent/eval-core` 依赖声明（遵守「依赖声明与引用一致」规范）。
 - depcruise 白名单：`apps/*/eval → packages/eval-core`。
 - 每步同步更新 `ARCHITECTURE.md` 与 `docs/v1.1/04` 状态段。
+
+## 8. 本期明确的边界与 gap（评审增补）
+
+- **范围**：v2.0 评测覆盖 = 单 agent 闭环（finance 单 agent + ohna 单 agent）；`team`/Supervisor 多智能体编排评测**不在本期**，作为 gap 记录（§3.4）。
+- **失败回灌**：只做「归因输出 + 候选 case 沉淀」，full 自动回灌不进 `eval-core`（§3.3）。
+- **控制类 RAG**（工具检索/few-shot）评测归属各 app 自己的 eval 域，`ToolCallStep[]` 为证据源，不重建 Intent Router（§3.4）。

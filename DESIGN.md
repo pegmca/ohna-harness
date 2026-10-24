@@ -101,8 +101,8 @@ Keywords:
 Avoid:
 
 - Marketing-page hero layouts for tool surfaces.
-- Decorative gradient blobs, bokeh, novelty backgrounds, or purely atmospheric visuals.
-- Excessive glassmorphism, heavy neon, exaggerated shadows, or large rounded cards.
+- Decorative gradient blobs, bokeh, novelty backgrounds, or purely atmospheric visuals (a restrained ambient glow behind the canvas is acceptable; avoid content-level blobs).
+- **Unrestrained** glassmorphism, heavy neon, or exaggerated shadows — glass blur is allowed, but only on floating layers (sidebar / drawer / dialog / toast), never on scrolling content surfaces.
 - One-color interfaces where every highlight is a variation of the same hue.
 - Low-contrast text used to fake sophistication.
 - Layout shifts caused by hover, loading text, long IDs, or dynamic content.
@@ -379,7 +379,8 @@ Use the Immersive Workbench visual system:
 - Stable panels, borders, and compact controls
 - Primary color only for actions, focus, current state, and key icons
 - No marketing hero layout unless the product document explicitly asks for one
-- No decorative gradient blobs, excessive glassmorphism, oversized round cards, or low-contrast text
+- No decorative gradient blobs on content surfaces, no oversized round cards, or low-contrast text
+- Glassmorphism (backdrop blur) is allowed on floating layers only — sidebar, drawer, dialog, toast — not on scrolling content
 
 Use existing project technology and component boundaries.
 Prefer reusable local UI components over repeated class strings.

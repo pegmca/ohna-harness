@@ -137,6 +137,16 @@ export interface ToolCallStep {
 }
 export function matchTrajectory(actual: ToolCallStep[], expected: ToolCallStep[], mode: "strict" | "subset"): TrajectoryMatch;
 ```
+> **`not_applicable` 不算回归（两域共用的门禁语义，v2.0 team-eval 落地时的共享内核变更）**：
+> `diffBaseline` 只比较**两侧都 `applicable !== false`** 的指标（G5 对称性）——之前只过滤当前侧，
+> 导致 baseline 侧标记不适用的指标被当成 `missing` 或以 `current=0` 参与判定。此外，**baseline 有值、
+> 当前侧不适用**的指标会以 `status: "not_applicable"` 保留在 diff 中（可观测），`evaluateGate` 显式
+> 跳过它：既不算通过也不算失败。
+>
+> 语义依据：`applicable === false` 表示「**本次没有产出该指标的证据**」（典型场景：整档位因缺 provider
+> 凭据被跳过），**不是「测出来是 0」**。因此它不得触发 `min` 下限失败，也不得计入 `maxRegression`
+> 回归。该规则对 **finance-api 的 RAG 域与 ohna 的 coding / team 域同样生效**，不是 team 专属修复；
+> 各域若要「某指标必须存在」，应通过 case 级断言或报告说明表达，而不是靠 baseline 门禁。
 
 > 评审修订：**删掉 `extractToolTrajectory(events: RunEvent[])`**。真实 `RunEvent` 的 `tool_execution_*` 事件 `payload` 是 `unknown`，无法静态取出 `toolName/args/isError`；现有 `packages/eval` 之所以能投影，靠的是私有 `LoopEvalRunEvent`（`loop-projection.ts`），不是 `RunEvent`。若内核以 `RunEvent[]` 为入参，就会引入 `@aiagent/trace` 运行时依赖，违反 §2「零 `@aiagent/*` 依赖」边界。**投影留在各 app eval 域**（`<app>/eval/run.ts` 把 run 事件投影成 `ToolCallStep[]`），内核只做「匹配」，不做「从 run 事件投影轨迹」。这正好是「期望推导留 finance-api」的同一原则。
 
@@ -321,7 +331,7 @@ pnpm eval:finance-api --update-baseline      # 只写 <app>/eval/baseline.json
 - **验收**：删除清单无外部引用（grep 无 app 消费方）。
 
 ### Step 1 — 抽薄内核 `packages/eval-core`
-- **产出**：`packages/eval-core/{gate,report,judge,calibration,trajectory,index}.ts`；`packages/types/src/eval-report.ts`（`EvalReportDto`/`BaselineDiff`/`GateResult`）。
+- **产出**：`packages/eval-core/src/{gate,report,judge,calibration,trajectory,index}.ts`；`packages/types/src/eval-report.ts`（`EvalReportDto`/`BaselineDiff`/`GateResult`）。
 - **接口**：见 §2.1、§2.2。
 - **命令**：`pnpm --filter @aiagent/eval-core build && pnpm --filter @aiagent/eval-core test`。
 - **验收**：`calibration.ts` 原样迁移测试全绿；`judge.ts` 60 行核心测试全绿；`gate.ts`/`report.ts` 对 `Record<string, number>` 输入单测通过；`trajectory.ts` 入参为 `ToolCallStep[]`（无 `extractToolTrajectory`，投影留 app）的单测通过；`eval-core` 以 `import type` 引用 `packages/types` 的 `EvalReportDto` 且无任何 `@aiagent/agent/ai/rag/trace` 运行时依赖。
@@ -329,18 +339,19 @@ pnpm eval:finance-api --update-baseline      # 只写 <app>/eval/baseline.json
 
 ### Step 2 — 修 G5（applicable）
 - **产出**：`EvalMetricValue.applicable?: boolean`；`evaluateGate` 聚合跳过 `applicable === false`。
-- **验收**：单测覆盖「无期望字段的 chat case 其 citationCoverage 不进聚合」。
+- **补充（v2.0 team-eval 落地时回改内核）**：`applicable` 的语义在**门禁**层补齐为对称过滤——`diffBaseline` 两侧都过滤，新增 `BaselineDiff.status` 的 `"not_applicable"` 取值，`evaluateGate` 跳过它（详见 §2.2「`not_applicable` 不算回归」）。这是**跨域行为变更**（同时影响 finance-api 的 RAG 域与 ohna 的 coding / team 域），不是 team 专属修复；两域基线若含历史 `applicable=false` 指标，重跑 baseline 后不再产生假失败。
+- **验收**：单测覆盖「无期望字段的 chat case 其 citationCoverage 不进聚合」，以及 `gate.test.mjs` 的「当前侧 `applicable=false` 记 `not_applicable` 而非 `missing`」「`not_applicable` 不触发 `min` 失败」。
 
 ### Step 3 — finance-api 领域自治化
-- **产出**：`apps/finance-api/eval/{dataset,run,metrics,adapter,judge-rubrics,index}.ts`；`datasets/finance/rag-v1.json`（迁原 `datasets/eval-financial-v1.json`）。
+- **产出**：`apps/finance-api/src/eval/{dataset,run,metrics,adapter,judge-rubrics,index}.ts`；`datasets/finance/rag-v1.json`（迁原 `datasets/eval-financial-v1.json`）。
 - **接口**：`run.ts` 导出 `runFinanceEval(dataset, {tier, judge?, baseline?}): Promise<EvalReportDto>`；`metrics.ts` 导出 `scoreCaseWithEvidence`（金融指标）；`index.ts` 调 `eval-core.evaluateGate` 判 exit code。
-- **数据集生成器唯一性（provenance 约束，跨工作项对齐）**：`datasets/finance/rag-v1.json` 的**唯一权威生成器是 `test/generate-finance-rag-v1.mjs`**（幂等、字节级可复现，输出自描述 `generatedBy` 字段）。该生成器**不写 `expectedDocumentIds`**（仅 source 级命中），且 `minCitations=2`。**禁止**改用旧 `test/migrate-finance-eval-dataset.mjs` 重跑——它会按 source 列表回填 `expectedDocumentIds`，而真实 `citation.documentId` 是 ingest 生成的 UUID，会让 `metrics.ts` 的 documentId 优先匹配分支恒为 0，导致 `retrievalHitRate`/`mrr`/`ndcg` 跌至 ~0、破坏 CI 门禁。若需调整数据集，一律改 `generate-finance-rag-v1.mjs` 后重跑。
+- **数据集生成器唯一性（provenance 约束，跨工作项对齐）**：`datasets/finance/rag-v1.json` 的**唯一权威生成器是 `test/generate-finance-rag-v1.mjs`**（幂等、字节级可复现，输出自描述 `generatedBy` 字段）。该生成器**不写 `expectedDocumentIds`**（仅 source 级命中），且 `minCitations=2`。**禁止**改用已被取代的旧迁移脚本（`test/migrate-finance-eval-dataset.mjs`，v2.0 落地时已删除；本文档若再引用该名字均指这一历史脚本）重跑——它会按 source 列表回填 `expectedDocumentIds`，而真实 `citation.documentId` 是 ingest 生成的 UUID，会让 `metrics.ts` 的 documentId 优先匹配分支恒为 0，导致 `retrievalHitRate`/`mrr`/`ndcg` 跌至 ~0、破坏 CI 门禁。若需调整数据集，一律改 `generate-finance-rag-v1.mjs` 后重跑。
 - **前置**：先完成 §3.3 的六个前置修正（`RagAnswerDto.status` + 阈值暴露、`EvalCaseDto` 迁出 types、删 `expectedChunkIds`、`goldEvidence`、`ChunkingOptions` 贯穿、`RagAnswer`/`RagAnswerDto` 拆解决策、`EvalMetricDto → EvalReportDto` 映射）。
 - **命令**：根 `package.json` 增 `"eval:finance-api": "pnpm --filter finance-api eval"`。
 - **验收**：`--tier deterministic` 跑通并**新建 baseline**（RAG 线当前无 baseline，验收是「首次产出 `EvalReportDto` 并建基线」，不是「保持一致」）；`eval-core` 只被 `finance-api/eval` 依赖。
 
 ### Step 4 — ohna 接入（完全自治）
-- **产出**：`apps/ohna-cli/eval/{dataset,run,metrics,adapter,judge-rubrics,index}.ts`；`datasets/ohna/coding-v1.json`（首批 ≥20 cases：read/edit/bash 闭环、权限拒绝、超预算收敛）。
+- **产出**：`apps/ohna-cli/src/eval/{dataset,run,metrics,adapter,judge-rubrics,index}.ts`（v2.0/03 追加 `src/eval/team/` 子域）；`datasets/ohna/coding-v1.json`（首批 ≥20 cases：read/edit/bash 闭环、权限拒绝、超预算收敛）。
 - **接口**：`metrics.ts` 导出 `fileChangeCorrectness`/`permissionCompliance`；`run.ts` 导出 `runOhnaEval(dataset, {tier, judge?, baseline?})`。
 - **命令**：根增 `"eval:ohna": "pnpm --filter ohna-cli eval"`。
 - **验收**：`--tier integration` 跑通 ≥20 cases，产出 `EvalReportDto` 判门禁；ohna-cli 增 `@aiagent/eval-core` 依赖声明。

@@ -1,6 +1,10 @@
 /**
  * `llm_call` 的一等公民展示（W4）：摘要行 + 三个 tab（请求参数 / 响应 / 原始 JSON）。
  *
+ * v2.0 渲染预算：整块可「进入视口才挂载」（`LlmCallBlock.virtual.tsx` 的包装器），
+ * 本文件同时提供轻量的摘要行视图（`LlmCallSummaryRow`），让视口外只渲染一行摘要——
+ * 500+ 事件的 live run 不会一次挂载全部 raw JSON。
+ *
  * 设计取舍：
  * - 摘要行严格按「#callIndex · model · 耗时 · tokens · cost」排列，便于纵向对比多次调用；
  * - 请求与响应拆 tab，是因为排查时的提问不同（「我发了什么」vs「模型回了什么」）；
@@ -76,6 +80,66 @@ function copyText(text: string): void {
 }
 
 /**
+ * 摘要行（不含展开体）——供视口外占位使用。
+ *
+ * @param props.record 采集记录。
+ * @param props.open 是否已展开（只决定箭头朝向）。
+ * @param props.onToggle 点击回调；不传时渲染为静态行（占位态，不可交互）。
+ * @param props.summaryRef 已废弃、不再挂到 DOM 上（保留形参只为旧调用方零改动）。
+ * @returns 摘要行元素。
+ */
+export function LlmCallSummaryRow(props: {
+  record: LlmCallRecordDto;
+  open?: boolean;
+  onToggle?: () => void;
+  summaryRef?: (node: HTMLElement | null) => void;
+}) {
+  const { record } = props;
+  const usage = record.response?.usage;
+  const summary = formatLlmSummary(record);
+  const inner = (
+    <>
+      <ChevronDown className={`icon-size details-chevron ${props.open ? "is-open" : ""}`} />
+      <span className="trace-llm-index">#{record.callIndex}</span>
+      <span className="trace-llm-model">{record.request.modelId}</span>
+      <span className="trace-llm-metric">{record.durationMs ?? 0}ms</span>
+      <span className="trace-llm-metric">in {usage?.input ?? 0}</span>
+      <span className="trace-llm-metric">out {usage?.output ?? 0}</span>
+      <span className="trace-llm-metric">{formatCost(usage?.cost.total ?? 0)}</span>
+      {record.attemptCount > 1 ? (
+        <span className="md-badge md-badge-warning" title="adapter 构造/重放 payload 的次数">
+          <RotateCw className="icon-size" />×{record.attemptCount}
+        </span>
+      ) : null}
+      {record.error ? (
+        <span className="md-badge md-badge-danger" title={record.error.message}>
+          <AlertTriangle className="icon-size" />
+          {record.error.stopReason ?? "error"}
+        </span>
+      ) : null}
+    </>
+  );
+  if (!props.onToggle) {
+    return (
+      <div aria-label={summary} className="trace-llm-summary" role="group">
+        {inner}
+      </div>
+    );
+  }
+  return (
+    <button
+      aria-expanded={props.open === true}
+      aria-label={summary}
+      className="trace-llm-summary"
+      onClick={props.onToggle}
+      type="button"
+    >
+      {inner}
+    </button>
+  );
+}
+
+/**
  * 渲染单条 LLM 调用记录。
  *
  * @param props.record 采集记录（payload 即 LlmCallRecordDto）。
@@ -85,6 +149,7 @@ function copyText(text: string): void {
 export function LlmCallBlock(props: { record: LlmCallRecordDto; idSuffix?: string }) {
   const { record } = props;
   const [open, setOpen] = useState(false);
+  /** 主 tab：请求参数 / 响应 / 原始 JSON（原始 JSON 含 providerPayload 全量，最重）。 */
   const [tab, setTab] = useState<TabKey>("request");
   const [requestTab, setRequestTab] = useState<RequestTabKey>("payload");
 
@@ -152,32 +217,7 @@ export function LlmCallBlock(props: { record: LlmCallRecordDto; idSuffix?: strin
 
   return (
     <section className={`trace-llm ${record.error ? "has-error" : ""}`} aria-label="LLM 调用">
-      <button
-        aria-expanded={open}
-        aria-label={formatLlmSummary(record)}
-        className="trace-llm-summary"
-        onClick={() => setOpen((value) => !value)}
-        type="button"
-      >
-        <ChevronDown className={`icon-size details-chevron ${open ? "is-open" : ""}`} />
-        <span className="trace-llm-index">#{record.callIndex}</span>
-        <span className="trace-llm-model">{record.request.modelId}</span>
-        <span className="trace-llm-metric">{record.durationMs ?? 0}ms</span>
-        <span className="trace-llm-metric">in {response?.usage?.input ?? 0}</span>
-        <span className="trace-llm-metric">out {response?.usage?.output ?? 0}</span>
-        <span className="trace-llm-metric">{formatCost(response?.usage?.cost.total ?? 0)}</span>
-        {record.attemptCount > 1 ? (
-          <span className="md-badge md-badge-warning" title="adapter 构造/重放 payload 的次数">
-            <RotateCw className="icon-size" />×{record.attemptCount}
-          </span>
-        ) : null}
-        {record.error ? (
-          <span className="md-badge md-badge-danger" title={record.error.message}>
-            <AlertTriangle className="icon-size" />
-            {record.error.stopReason ?? "error"}
-          </span>
-        ) : null}
-      </button>
+      <LlmCallSummaryRow open={open} record={record} onToggle={() => setOpen((value) => !value)} />
 
       {open ? (
         <div className="trace-llm-body">

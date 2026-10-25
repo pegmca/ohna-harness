@@ -116,3 +116,46 @@ test("evaluateGate 全部满足则通过 exitCode 0", () => {
   assert.equal(pass.exitCode, 0);
   assert.deepEqual(pass.reasons, []);
 });
+
+// ===== G5 对称性回归（team eval 无凭据档实测复现的两个假失败）=====
+test("diffBaseline：baseline 侧 applicable=false 视为无 baseline 值（记 new，不再记 regression）", () => {
+  // 口径：baseline 侧不适用 = 「基线没有该指标的有效值」。因此当前侧有值时记 `new`
+  // （不算退化、不参与 maxRegression），而不是拿 0 当基线比较。关键是**不得**出现
+  // regression/missing —— 那会虚构一次退化。
+  const curr = report([{ name: "m", value: 0.9 }]);
+  const base = report([{ name: "m", value: 1, applicable: false }]);
+  const diff = diffBaseline(curr, base);
+  assert.equal(diff.length, 1);
+  assert.equal(diff[0].status, "new");
+  assert.equal(diff[0].baseline, 0, "不适用的基线值不得被当作真实基线");
+});
+
+test("diffBaseline：两侧都 applicable=false 时 diff 为空", () => {
+  const curr = report([{ name: "m", value: 0, applicable: false }]);
+  const base = report([{ name: "m", value: 1, applicable: false }]);
+  assert.deepEqual(diffBaseline(curr, base), []);
+});
+
+test("diffBaseline：当前侧 applicable=false 记 not_applicable，而非 missing/current=0", () => {
+  const curr = report([{ name: "m", value: 0, applicable: false }]);
+  const base = report([{ name: "m", value: 1 }]);
+  const diff = diffBaseline(curr, base);
+  assert.equal(diff.length, 1);
+  assert.equal(diff[0].status, "not_applicable");
+});
+
+test("evaluateGate：not_applicable 不触发 min 失败（缺凭据跳过 ≠ 指标归零）", () => {
+  const curr = report([{ name: "m", value: 0, applicable: false }]);
+  const base = report([{ name: "m", value: 1 }]);
+  const gate = gateReport(curr, base, [{ metric: "m", min: 1 }]);
+  assert.equal(gate.exitCode, 0);
+  assert.equal(gate.passed, true);
+});
+
+test("evaluateGate：真实退化（applicable=true 且值下跌）仍必须拦截", () => {
+  const curr = report([{ name: "m", value: 0.5, applicable: true }]);
+  const base = report([{ name: "m", value: 1, applicable: true }]);
+  const gate = gateReport(curr, base, [{ metric: "m", min: 1 }]);
+  assert.equal(gate.exitCode, 1);
+  assert.match(gate.reasons.join(), /低于 SLO 下限/);
+});

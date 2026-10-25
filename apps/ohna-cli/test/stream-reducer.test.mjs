@@ -39,6 +39,27 @@ function thinkingDelta(delta) {
   return { type: "message_update", message: {}, assistantMessageEvent: { type: "thinking_delta", delta } };
 }
 
+/**
+ * v2.0 边界事件身份（docs/v2.0/04 §1.3）：agent_start / agent_end / turn_start / turn_end
+ * 一律携带身份字段，归约器不得因为「多出字段」改变行为。
+ *
+ * @param patch 覆盖字段。
+ * @returns 根身份。
+ */
+function identity(patch = {}) {
+  return { agentId: "supervisor", label: "supervisor", role: "supervisor", modelId: "stub-model", ...patch };
+}
+
+/** 构造带身份的 agent_start 事件。 */
+function agentStart(patch = {}) {
+  return { type: "agent_start", ...identity(patch) };
+}
+
+/** 构造带身份的 agent_end 事件。 */
+function agentEnd(patch = {}) {
+  return { type: "agent_end", agentId: "supervisor", messages: [], ...patch };
+}
+
 /** 构造 assistant message_end 事件。 */
 function messageEnd(stopReason = "stop") {
   return {
@@ -117,7 +138,7 @@ test("reasoning 在 message_end 兜底收尾为 done（纯思考消息）", () =
 });
 
 test("reasoning 在 agent_end 兜底收尾为 done（异常事件序）", () => {
-  const { reducer } = run([messageStart(), thinkingStart(), thinkingDelta("想想"), { type: "agent_end", messages: [] }]);
+  const { reducer } = run([messageStart(), thinkingStart(), thinkingDelta("想想"), agentEnd()]);
   assert.equal(reducer.entries().find((entry) => entry.kind === "reasoning").status, "done");
 });
 
@@ -178,7 +199,7 @@ test("message_end stopReason=error → assistant status=error 且保存 errorMes
 });
 
 test("agent_end：先 run-end，再产出 usage notice（纯文本数字骨架）", () => {
-  const { reducer, changes } = run([messageStart(), textDelta("hi"), messageEnd(), { type: "agent_end", messages: [] }]);
+  const { reducer, changes } = run([messageStart(), textDelta("hi"), messageEnd(), agentEnd()]);
   const notices = reducer.entries().filter((entry) => entry.kind === "notice");
   assert.equal(notices.length, 1, "有 usage 时应产出一条 notice");
   assert.match(notices[0].text, /累计 token: 2/);
@@ -190,7 +211,7 @@ test("agent_end：先 run-end，再产出 usage notice（纯文本数字骨架�
 });
 
 test("agent_end.error → 产出 error 条目（code + message）", () => {
-  const { reducer } = run([{ type: "agent_end", messages: [], error: { code: "agent_loop_aborted", message: "已中断" } }]);
+  const { reducer } = run([agentEnd({ error: { code: "agent_loop_aborted", message: "已中断" } })]);
   const error = reducer.entries().find((entry) => entry.kind === "error");
   assert.ok(error);
   assert.equal(error.status, "error");
@@ -230,4 +251,35 @@ test("appendUser：产出 user 语义条目（M3）", () => {
   assert.equal(entry.status, "done");
   assert.equal(entry.text, "你好");
   assert.equal(reducer.entries()[0], entry);
+});
+
+test("v2.0 身份事件：带 agentId/turnIndex 的边界事件不改变归约行为", () => {
+  // 同一个 run 里出现 supervisor 与子代理两种身份的边界事件（子代理事件经
+  // TeamControllerOptions.onSubagentEvent 透传到同一总线后形态完全相同）。
+  const { reducer, changes } = run([
+    agentStart(),
+    { type: "turn_start", agentId: "supervisor", turnIndex: 0 },
+    messageStart(),
+    textDelta("主线回复"),
+    messageEnd(),
+    { type: "turn_end", agentId: "supervisor", turnIndex: 0, message: { role: "assistant", content: [] }, toolResults: [] },
+    // 子代理的边界事件：CLI 终端不单列（只有 llm_call 以 notice 形态展示），不得产生额外条目。
+    agentStart({ agentId: "analyst", parentId: "supervisor", label: "analyst", role: "研究员" }),
+    { type: "turn_start", agentId: "analyst", turnIndex: 0 },
+    { type: "turn_end", agentId: "analyst", turnIndex: 0, message: { role: "assistant", content: [] }, toolResults: [] },
+    agentEnd({ agentId: "analyst" }),
+    agentEnd(),
+  ]);
+
+  const entries = reducer.entries();
+  // 当前 presenter 语义：每次 agent_end 都产出一条 usage notice（子代理的边界事件同样触发），
+  // 身份字段与 turn_* 本身不产生条目——这是既有行为，本用例锁「不因新增身份字段而改变」。
+  assert.deepEqual(
+    entries.map((entry) => entry.kind),
+    ["assistant", "notice", "notice"],
+  );
+  assert.equal(entries[0].text, "主线回复");
+  // run-start / run-end 各一次（子代理的 agent_start 也会触发，但那是 presenter 语义，不是条目）。
+  assert.equal(changes.filter((change) => change.type === "run-start").length, 2);
+  assert.equal(changes.filter((change) => change.type === "run-end").length, 2);
 });

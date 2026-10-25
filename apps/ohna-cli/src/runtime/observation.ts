@@ -9,7 +9,7 @@
 import type { AgentEvent, StreamFn } from "@aiagent/agent";
 import { createLlmTraceStreamFn, markTracedStreamFn } from "@aiagent/agent";
 import { streamSimple } from "@aiagent/ai";
-import type { LlmCallRecordDto } from "@aiagent/types";
+import type { LlmCallRecordDto, LlmWindowDto } from "@aiagent/types";
 
 /** 一次 LLM 采集记录（`llm_call`）——与 serve 的 `LlmCallPushEvent` 同构。 */
 export interface LlmCallPushEvent {
@@ -65,12 +65,14 @@ export interface TraceCounter {
  *
  * @param read 读取当前 run 的观测句柄。
  * @param counter 共享的 callIndex 计数器。
+ * @param window 采集窗口参数（`LlmCallRecordDto.window` 必填，docs/v2.0/04 §1.1）。
  * @param base 底层 StreamFn（缺省 `streamSimple`；测试注入 stub）。
  * @returns 可直接交给 agentLoop / TeamController 的 StreamFn。
  */
 export function createTracedStreamFn(
   read: () => ObservationHandle | undefined,
   counter: TraceCounter,
+  window: LlmWindowDto,
   base: StreamFn = streamSimple as StreamFn,
 ): StreamFn {
   let cached: { handle: ObservationHandle; fn: StreamFn } | undefined;
@@ -85,6 +87,7 @@ export function createTracedStreamFn(
           base,
           (record) => handle.push({ type: "llm_call", payload: record }),
           counter,
+          { window },
         ),
       };
     }

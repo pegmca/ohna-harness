@@ -21,7 +21,6 @@ import {
   toolSelectionCorrectness,
   turnEfficiency,
   aggregateToReport,
-  evaluateCaseOutcome,
 } from "../dist/eval/metrics.js";
 import { runOhnaEval } from "../dist/eval/run.js";
 import { loadOhnaDataset } from "../dist/eval/dataset.js";

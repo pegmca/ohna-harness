@@ -13,6 +13,7 @@ import { promises as fs } from "node:fs";
 import * as path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import type { StreamFn, TeamState } from "@aiagent/agent";
 import type { ActiveModel } from "@aiagent/ai";
 import type { AgentTool } from "@aiagent/tools";
 import { createOhnaServer, listenWithRetry, type OhnaServer } from "@aiagent/serve";
@@ -42,6 +43,26 @@ export interface HostOptions {
   conversationTitle: string;
   /** 数据目录覆盖（缺省 `~/.ohna`）；测试与多实例隔离时使用。 */
   dataDir?: string;
+  /**
+   * Team 开关（`--no-team` 时为 false/缺省）。
+   *
+   * v2.0（docs/v2.0/04 §2.2 / §7 第 1 步）：Team 的 controller 唯一归属 serve
+   * （`createServeTeamSession`），CLI 不再自建 —— 否则同一工具表会出现两份 controller、
+   * 两份 team 成本来源，而 serve 侧那套永远空转。CLI 只保留「装配参数」。
+   */
+  team?: boolean;
+  /**
+   * @deprecated v2.0 起 serve 自己持有 controller，`getTeamState` 由 serve 首取；
+   * 该字段仅在「serve 侧 Team 关闭却仍需投影外部 team 成本」的历史场景保留为 fallback。
+   */
+  getTeamState?: () => TeamState;
+  /**
+   * 底层 StreamFn 覆盖（缺省由 serve 用 `streamSimple`）。
+   *
+   * 生产中不传：serve 直接用真实 provider。存在的理由只有测试注入——离线验收
+   * 「CLI 形态下 Team 真能 spawn 子代理」必须能在无凭据环境驱动真实 `agentLoop`。
+   */
+  streamFn?: StreamFn;
 }
 
 /** 装配结果。 */
@@ -90,6 +111,11 @@ export async function hostOhnaWeb(options: HostOptions): Promise<HostResult | un
       autoApprove: options.autoApprove,
       observeOnly: options.observeOnly === true,
       ...(options.dataDir ? { dataDir: options.dataDir } : {}),
+      // Team 开关下传：controller 与成本投影都由 serve 侧一套装配产出。
+      ...(options.team ? { team: true } : {}),
+      ...(options.streamFn ? { streamFn: options.streamFn } : {}),
+      // 历史 fallback（见 HostOptions.getTeamState 注释）。
+      ...(options.getTeamState ? { getTeamState: options.getTeamState } : {}),
     });
     const listening = await listenWithRetry(server, options.port);
     // 单一形态（docs/v1.4/06 D-A1）：执行权唯一归属 serve，终端与浏览器都是它的订阅者，

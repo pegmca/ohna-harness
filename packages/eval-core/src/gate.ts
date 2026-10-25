@@ -33,10 +33,36 @@ function applicableMetrics(report: EvalReportDto): EvalReportDto["metrics"] {
 }
 
 /**
+ * 构造「baseline 有值、当前侧无适用值」的 diff 条目。
+ *
+ * 抽出成独立函数有两个理由：一是把 `diffBaseline` 的圈复杂度降回阈值内；
+ * 二是让这条**语义微妙**的判定有一处可读的实现——当前侧「不适用」（`applicable===false`，
+ * 如整个档位因缺 provider 凭据被跳过）表示「本次没有产出该指标的证据」，而**不是**
+ * 「测出来是 0」，因此记 `not_applicable` 而非 `missing`，门禁会跳过它。
+ *
+ * @param name 指标名。
+ * @param baselineValue baseline 中的值。
+ * @param currMetrics 当前报告的全部指标（含不适用的）。
+ * @returns 单条 diff。
+ */
+function missingDiff(name: string, baselineValue: number, currMetrics: EvalReportDto["metrics"]): BaselineDiff {
+  const rawCurr = currMetrics.find((metric) => metric.name === name);
+  return {
+    metric: name,
+    current: 0,
+    baseline: baselineValue,
+    delta: -baselineValue,
+    status: rawCurr?.applicable === false ? "not_applicable" : "missing",
+  };
+}
+
+/**
  * 计算当前报告相对 baseline 的逐指标 diff。
  *
- * 仅比较「applicable 的指标」；缺省 `applicable` 视为 `true`（G5）。baseline 为 null 时
- * 返回空数组——`evaluateGate` 负责在 baseline 缺失时单独返回「需先建基线」语义。
+ * 仅比较「两侧都 applicable 的指标」；缺省 `applicable` 视为 `true`（G5）。某指标在任一侧
+ * 被标为不适用时，它不参与 diff（既不算回归也不算新增）——「本次没有产出证据」不等于
+ * 「测出来是 0」。baseline 为 null 时返回空数组——`evaluateGate` 负责在 baseline 缺失时
+ * 单独返回「需先建基线」语义。
  *
  * @param curr 当前报告。
  * @param baseline 基线报告（为 null 时返回空数组）。
@@ -45,8 +71,13 @@ function applicableMetrics(report: EvalReportDto): EvalReportDto["metrics"] {
 export function diffBaseline(curr: EvalReportDto, baseline: EvalReportDto | null): BaselineDiff[] {
   if (baseline === null) return [];
 
-  const baselineByName = new Map(baseline.metrics.map((metric) => [metric.name, metric]));
+  // 两侧都必须先过滤 applicable（G5 对称性）：某指标在「某一侧」不适用时，它就不该出现在
+  // diff 里。此前只过滤 curr，导致「baseline 记为不适用、当前也无该证据」的指标被当成
+  // regression/missing 推入 current=0，再被判为低于 min=1 的假失败（team 评测域实测复现）。
+  const baselineByName = new Map(applicableMetrics(baseline).map((metric) => [metric.name, metric]));
   const currByName = new Map(applicableMetrics(curr).map((metric) => [metric.name, metric]));
+  // 名字集合同样只取「两侧 applicable 之后」的键：否则 baseline 侧显式不适用的指标
+  // 会以 `new`（baseline=0）的形态混进 diff。
   const names = new Set([...baselineByName.keys(), ...currByName.keys()]);
 
   const diffs: BaselineDiff[] = [];
@@ -55,13 +86,7 @@ export function diffBaseline(curr: EvalReportDto, baseline: EvalReportDto | null
     const baseMetric = baselineByName.get(name);
 
     if (baseMetric && !currMetric) {
-      diffs.push({
-        metric: name,
-        current: 0,
-        baseline: baseMetric.value,
-        delta: -baseMetric.value,
-        status: "missing",
-      });
+      diffs.push(missingDiff(name, baseMetric.value, curr.metrics));
       continue;
     }
     if (!baseMetric && currMetric) {
@@ -106,8 +131,12 @@ export function diffBaseline(curr: EvalReportDto, baseline: EvalReportDto | null
  * 任一 SLO 不满足即 `passed: false`、收集 reason、`exitCode: 1`；全部通过时
  * `passed: true`、`exitCode: 0`、reasons 空。
  *
- * 注意：diff 中 `applicable === false` 的指标已被 `diffBaseline` 排除，因此本函数天然不
- * 会拿无期望字段的指标去判下限 / 回归（G5 修复的第二条路径）。
+ * 注意：`applicable === false` 的指标以两条路径被排除在 SLO 判定之外（G5 修复）——
+ * 其一，两侧都适用的指标才进入 diff，任一侧不适用的指标根本不出现在 `names` 集合里；
+ * 其二，baseline 有值而当前侧不适用的指标会以 `status: "not_applicable"` 出现在 diff 中
+ * （保留可观测性），本函数显式跳过它。因此 `not_applicable` **不算回归**：缺 provider
+ * 凭据被跳过的档位不会把指标「归零」再判低于下限。这是 finance-api（RAG 域）与
+ * ohna（coding / team 域）**共用**的门禁语义，不是某一域的专属修复。
  *
  * @param diff 由 `diffBaseline` 产出的逐指标 diff（baseline 为 null 时传入空数组由调用方决定）。
  * @param slos 每指标 SLO 规约列表。
@@ -121,6 +150,8 @@ export function evaluateGate(diff: BaselineDiff[], slos: SloSpec[]): GateResult 
     const item = diffByName.get(slo.metric);
     // 未出现在 diff 中的指标（可能 applicable=false 被跳过，或 dataset 改变）→ 跳过该校验。
     if (!item) continue;
+    // 本次无证据（不适用）→ 不判 SLO：既不算通过也不算失败，由调用方在报告里显式说明。
+    if (item.status === "not_applicable") continue;
 
     if (typeof slo.min === "number" && item.current < slo.min) {
       reasons.push(`指标 ${slo.metric} 当前值 ${item.current} 低于 SLO 下限 ${slo.min}`);

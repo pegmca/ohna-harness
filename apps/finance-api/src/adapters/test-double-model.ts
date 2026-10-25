@@ -263,7 +263,11 @@ export function createTestDoubleModelRegistry() {
         provider: "mock",
         description: "离线集成测试替身，不发起外部请求",
         isDefault: true,
-        capabilities: { structuredOutput: true, toolCalling: true }
+        capabilities: { structuredOutput: true, toolCalling: true },
+        // v2.0（docs/v2.0/04 §5.6）：模型目录新增成本计量字段；测试替身费率按 0 下发。
+        contextWindow: TEST_DOUBLE_MODEL.contextWindow,
+        maxTokens: TEST_DOUBLE_MODEL.maxTokens,
+        cost: { ...TEST_DOUBLE_MODEL.cost }
       },
       runtime: createTestDoubleModelRuntime()
     }],

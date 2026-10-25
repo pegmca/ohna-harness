@@ -230,8 +230,18 @@ export async function runTurn(
     // 两层 wrapper 会各自计数，同一 run 出现重复 callIndex（S1）。
     // 无句柄且未注入时把 undefined 交给 agentLoop，走其默认 streamSimple。
     const streamFn = observation && !isTracedStreamFn(setup.streamFn)
-      ? createLlmTraceStreamFn(setup.streamFn ?? (streamSimple as StreamFn), (record) =>
-          observation.push({ type: "llm_call", payload: record }),
+      ? createLlmTraceStreamFn(
+          setup.streamFn ?? (streamSimple as StreamFn),
+          (record) => observation.push({ type: "llm_call", payload: record }),
+          undefined,
+          // 窗口参数必填（v2.0）：用与 compaction 同一 `resolveCompactionSettings` 的 reserveTokens。
+          {
+            window: {
+              contextWindow: active.model.contextWindow,
+              maxTokens: active.model.maxTokens,
+              reserveTokens: resolveCompactionSettings(active.model.contextWindow).reserveTokens,
+            },
+          },
         )
       : setup.streamFn;
 

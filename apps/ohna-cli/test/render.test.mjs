@@ -141,7 +141,12 @@ test("renderEvent：懒打点——首个 text_delta 打 ⏺，纯 tool-call 消
 
 test("renderEvent：非 TTY 输出不含任何 \\x1b 转义", () => {  const tracker = createUsageTracker();
   const out = captureStdout(() => {
-    renderEvent({ type: "agent_start" }, tracker, {});
+    // v2.0：agent_start 的四个边界事件携带必填身份字段（docs/v2.0/04 §1.3）。
+    renderEvent(
+      { type: "agent_start", agentId: "supervisor", label: "supervisor", role: "supervisor", modelId: "stub-model" },
+      tracker,
+      {},
+    );
     renderEvent({ type: "message_start", message: { role: "assistant", content: [] } }, tracker, {});
     renderEvent(
       { type: "message_update", message: {}, assistantMessageEvent: { type: "text_delta", delta: "你好" } },

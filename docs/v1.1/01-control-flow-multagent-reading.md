@@ -107,7 +107,8 @@
   - `runMember`（`team/controller.ts:160` 附近，**已修正**）：每个子代理 = **一次独立 `agentLoop([task], subContext, ...)`**——天然独立 `context.messages` + 独立 EventStream + 独立 token 预算；只把"摘要 + 产物引用"回写 team 状态（上下文隔离 + 摘要回收）。
   - `team/tools.ts`：`TeamCreate(name, role, tools, model)` 与 `SendMessage(recipient, content)` 两个 `AgentTool`，注册进 supervisor 的 `context.tools`——由 model 自行决定何时 spawn / 委派 / 汇总。
   - `team/presets.ts`：`createBullBearRiskTeam`——落地 roadmap 阶段五的 bull/bear/risk 评审（角色化 system prompt + 只读工具最小化）。
-- 关键纪律：**`agentLoop` 内核零改动**；子代理失败以结构化 error 回传 supervisor，主循环不崩（失败隔离）。
+  - `team/pure.ts`（L1 纯函数投影层，docs/v2.0/03-team-eval.md §6.1）：`extractSummary`（摘要回收）/ `classifyAborted`（失败隔离判定）/ `assembleSubagentConfig`（子代理 config 静态装配 + 权限继承通道）。三条编排机契约的逻辑正确性在此零模型、零 IO 地断言；`controller.ts` 只保留运行期副作用（状态回写、护栏触发标记）。
+- 关键纪律：**`agentLoop` 控制流零改动**；唯一显式例外是 v2.0 为边界事件补身份字段（`AgentLoopConfig.identity` + `SUPERVISOR_AGENT_ID` 兜底 + `turnIndex`），纯增量、不改任何分支判定（docs/v2.0/04 §1.3）；子代理失败以结构化 error 回传 supervisor，主循环不崩（失败隔离）。
 
 **pi 对应物**：pi 的多智能体是"子进程委派"（每个 subagent 跑独立 `pi` 进程 + JSON 行协议，`packages/coding-agent/examples/extensions/subagent/`）；其 `mapWithConcurrencyLimit`（`:219`）是并发受限 worker 池范式。我们此处是单进程拓扑，先把"隔离上下文 + 消息总线"跑通，未来可丢进 `05-P1` 的 worker 队列做真后台并发。
 

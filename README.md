@@ -32,9 +32,11 @@ TypeScript Agent 工程 monorepo：一套可复用的 Agent 内核（`packages/a
 │   ├── tools/
 │   ├── workflow/
 │   ├── report/
-│   ├── eval/
+│   ├── eval-core/          # 评测薄内核（纯函数：gate / report / judge / calibration / trajectory）
+│   ├── memory/
 │   ├── mcp/
 │   ├── security/
+│   ├── term/               # 整屏 TUI 渲染原语（零外部依赖）
 │   └── trace/
 ├── datasets/
 ├── package.json
@@ -63,7 +65,8 @@ TypeScript Agent 工程 monorepo：一套可复用的 Agent 内核（`packages/a
 - `packages/types`：前后端共享类型边界，承载 API contract、DTO、结构化错误和稳定枚举。
 - `packages/parsing`：文档解析边界，负责文件来源、document metadata 和原始文本来源信息。
 - `packages/rag`：RAG 运行时边界，负责 chunking、embedding 抽象、检索、引用和 grounded answer 的稳定类型入口。
-- `packages/eval`：RAG/Agent 评测边界，负责 eval case、metrics、runner 输入和报告输出结构。
+- `packages/eval-core`：**评测薄内核**（docs/v2.0/02）：只放跨产品线不变的纯函数——`gate`（趋势/硬门禁）、`report`（Markdown/JSON 报告渲染）、`judge`、`calibration`、`trajectory`。**零 `@aiagent/*` 运行时依赖**（仅 `import type` 引用 `@aiagent/types`），不装任何产品的 case / metric / runner：金融 RAG 评测在 `apps/finance-api/src/eval/`、ohna 的 agent 与 team 评测在 `apps/ohna-cli/src/eval/`，各自领域自治。
+- `packages/memory`：长期情节记忆（`EpisodeMemory`）与 `MemoryStore` 适配（进程内 / JSONL / pgvector）。
 - `packages/workflow`：通用顺序 workflow runtime，负责节点 schema 校验、状态流转、max steps、结构化错误和节点事件 sink。
 - `packages/report`：研报领域边界，`generate_report` 工具实现、真实 PDF renderer、Workflow/Artifact repository port 与本地 ArtifactStorage port。
 - `packages/tools`：内置 mock 工具注册与执行边界（calculator、financial_metric_mock、filing_search_mock 等）。
@@ -336,7 +339,7 @@ AIAGENT_MCP_ENABLED=true pnpm dev  # 可选 AIAGENT_MCP_COMMAND / AIAGENT_MCP_AR
 
 - `@aiagent/parsing`：保存文档来源、document metadata、原始文本来源和 document parsing pipeline。`ingestDocument()` 支持 Markdown、TXT 与 PDF 解析，输出 `IngestedDocument` 和带 `heading`、`lineStart`、`lineEnd` 的 blocks；解析失败返回 `parse_failed` 结构化错误，不静默生成文档。
 - `@aiagent/rag`：保存 `RagDocument`、`RagChunk`、`EmbeddedChunk`、`Citation`、`RetrievalResult`、`RagAnswer`、embedding/vector store/retriever/reranker 抽象和结构化错误类型，并导出 `chunkText()`、`chunkDocumentBlocks()`、`chunkIngestedDocument()`、`createDeterministicMockEmbeddingClient()`、`createInMemoryVectorStore()`、`createHybridRetriever()` 和 `createHeuristicReranker()` 等入口。
-- `@aiagent/eval`：保存 `EvalCase`、`EvalMetric`、`EvalResult`、`RagEvalMetrics`、`RagEvalReport`，并导出 `runRagEval()` runner、`createRagEvalReport()` 报告生成、`computeRagMetrics()` 指标计算、`RAG_EVAL_CASES` 30 条评测用例、`DEMO_DOCUMENTS` demo 文档和 `createDemoRagRuntime()` 预加载 runtime。
+- `@aiagent/finance-api` 的 `src/eval/` 域：保存 `EvalCase`、`EvalMetric`、`EvalResult`、`RagEvalMetrics`、`RagEvalReport`，并导出 `runRagEval()` runner、`createRagEvalReport()` 报告生成、`computeRagMetrics()` 指标计算、`RAG_EVAL_CASES` 30 条评测用例、`DEMO_DOCUMENTS` demo 文档和 `createDemoRagRuntime()` 预加载 runtime（v2.0/02 起评测 case / metric 归应用域，`packages/eval-core` 只留纯函数内核）。
 
 跨 API 边界会复用的 DTO 放在 `packages/types`，包括 document source/document、ingested document/block、RAG document/chunk/embedded chunk/vector search match/retrieval score breakdown/citation/retrieval/answer、retrieval trace event 和 eval case/metric/result。只属于运行时 package 的抽象，例如 ingestion options、chunking options、embedding client、vector store、retriever、reranker、package summary 和 runner input，保留在对应 package 内部导出。
 
@@ -370,7 +373,7 @@ RAG hybrid retrieval 和 rerank 当前规则：
 ```bash
 pnpm --filter @aiagent/parsing test
 pnpm --filter @aiagent/rag test
-pnpm --filter @aiagent/eval test
+pnpm --filter @aiagent/finance-api eval
 pnpm typecheck
 pnpm test
 pnpm build
@@ -419,8 +422,8 @@ curl -X POST http://localhost:3001/api/rag/answer \
 
 已完成 RAG eval 闭环：30 条 QA case、eval runner、四个指标、报告输出和失败案例分析。
 
-- **评测用例**：`packages/eval/src/cases.ts` 的 `RAG_EVAL_CASES` 包含 30 条 case，覆盖 4 份 demo 文档（平安银行年报、宁德时代三季报、招商银行资产质量公告、新能源汽车行业研究）。
-- **评测入口**：`pnpm --filter @aiagent/eval test` 会自动 ingest demo 文档、运行 runner、输出报告。
+- **评测用例**：`apps/finance-api/src/eval/` 的 `RAG_EVAL_CASES` 包含 30 条 case，覆盖 4 份 demo 文档（平安银行年报、宁德时代三季报、招商银行资产质量公告、新能源汽车行业研究）。
+- **评测入口**：`pnpm eval:finance-api` 会自动 ingest demo 文档、运行 runner、输出报告。
 - **四个指标**：
   - `retrievalHitRate`：期望 source 是否进入 topK。
   - `answerCorrectness`：答案是否覆盖 `expectedKeywords`。
@@ -530,21 +533,24 @@ pnpm --filter @aiagent/tools test
 pnpm --filter @aiagent/finance-api test
 pnpm --filter @aiagent/parsing test
 pnpm --filter @aiagent/rag test
-pnpm --filter @aiagent/eval test
+pnpm --filter @aiagent/eval-core test
 pnpm --filter @aiagent/workflow test
 pnpm --filter @aiagent/report test
+pnpm --filter @aiagent/serve test
+pnpm --filter @aiagent/ohna-cli test
+pnpm --filter @aiagent/ohna-web test
 ```
 
 ## 自动化 Eval 基线
 
-`datasets/eval-financial-v1.json` 是版本 `financial-research-v1.0.0` 的固定评测集，共 31 条：18 条 RAG、5 条 Chat、5 条 Report Mode、3 条失败路径。runner（`packages/eval/src/loop-runner.ts` 的 `runLoopEval`）用 fixture 作为确定性种子推导 mock streamFn 与 mock 工具，跑真 `agentLoop`，从 run_events（loop 事件 + retrieval / workflow_node / pdf_export）投影证据后用既有确定性指标打分；预算按 mode 走 `shouldStopAfterTurn`（maxTurns + token）与 runner 硬上限双层。不读取 API key，也未使用 LLM-as-judge。
+`datasets/eval-financial-v1.json` 是版本 `financial-research-v1.0.0` 的固定评测集，共 31 条：18 条 RAG、5 条 Chat、5 条 Report Mode、3 条失败路径。runner（`apps/finance-api/src/eval/` 的 `runLoopEval`）用 fixture 作为确定性种子推导 mock streamFn 与 mock 工具，跑真 `agentLoop`，从 run_events（loop 事件 + retrieval / workflow_node / pdf_export）投影证据后用既有确定性指标打分；预算按 mode 走 `shouldStopAfterTurn`（maxTurns + token）与 runner 硬上限双层。不读取 API key，也未使用 LLM-as-judge。
 
 ```bash
 # 运行回归，生成 docs/eval/latest-report.json 和 latest-report.md
-pnpm eval
+pnpm eval:finance-api
 
 # 只有此显式命令会更新 docs/eval/baseline-v1.json
-pnpm eval:update-baseline
+pnpm eval:finance-api:update-baseline
 ```
 
 当前 baseline：citation coverage `0.935`、financial accuracy `0.968`、source groundedness `0.968`、成功率 `0.903`、workflow 完成度 `0.984`、平均延迟 `22.839ms`、P95 `45ms`。成功率、引用覆盖、财务准确性、来源 groundedness、workflow 完成度分别不得低于 `0.80/0.85/0.80/0.85/0.90`；任一质量指标低于 baseline，或 P95 比 baseline 增加超过 `50ms`，命令以非零状态退出。
@@ -558,6 +564,48 @@ pnpm eval:update-baseline
 机器报告、Markdown 逐条结果和 baseline diff 位于 `docs/eval/`。确定性检查适合 CI 和演示，但不能识别所有语义等价表达；真实模型或人工校准应作为后续补充，不能替代这些硬约束。
 
 根目录脚本会通过 workspace 执行各应用和 package 的对应命令。`pnpm dev` 会同时启动 `apps/finance-api` 和 `apps/finance-web`；web 的 Vite dev server 会把 `/api` 代理到 `http://localhost:3001`。如果 `5173` 被占用，Vite 会自动选择下一个可用端口。
+
+## ohna 评测（v2.0：agent + team）
+
+`apps/ohna-cli` 自带两条评测域（case / metric / runner 都归应用域，`packages/eval-core` 只提供纯函数内核）：
+
+```bash
+# agent 域（既有）：单智能体任务集
+pnpm eval:ohna
+
+# team 域（v2.0/03）：dispatch / 权限继承 / 预算 / 并发 / 失败隔离
+pnpm eval:ohna --dataset team                      # 跑全部可判定档位
+pnpm eval:ohna --dataset team --tier T-L1          # L1 纯函数硬门禁（零 provider 依赖）
+pnpm eval:ohna --dataset team --tier T-L2a         # L2a 真 agentLoop + 桩模型
+pnpm eval:ohna --dataset team --tier T-L2b         # L2b 需真 provider 凭据
+pnpm eval:ohna --dataset team --tier T-L4          # L4 端到端趋势（只观察，永不 block）
+
+# 只有显式命令会更新 baseline（team 域：apps/ohna-cli/eval/team/baseline.json）
+pnpm eval:ohna --dataset team --tier T-L2a --update-baseline
+```
+
+- **`--update-baseline` 在「本档不可判定」时会被拒绝**（0 条 case 执行 → exit 2 且不写 baseline），避免产出一份全 `applicable=false` 的空基线、让后续门禁恒绿。
+
+- 数据集：`datasets/ohna/team-v1.json`（tier = `T-L1 | T-L2a | T-L2b | T-L4`）。**趋势门禁永不 block**——L4 只产出观测报告，硬门禁只由 L1/L2a 的确定性指标承担。
+- 报告目录：`apps/ohna-cli/eval/team/`（`report.json` / `report.md` / `baseline.json` / `trend.json` / `trend.md`，已 gitignore）。
+- **凭据缺失时的行为是「显式不可判定」，不是静默通过**：需要 provider 的档位会向 stderr 写 `[team-skip]` 与 `[gate] 无任何 case 执行，本档不可判定`，并按非零状态退出；报告里对应档位标「本档不可判定：0 条 case 执行」。
+- 指标口径与已知限制见 `docs/v2.0/03-team-eval.md`；薄内核分层见 `docs/v2.0/02-eval-system-v2.md`。
+
+## ohna Trace（v2.0：`llm_call` 一等公民 + 上下文可视化）
+
+`ohna` 的 Trace 抽屉是**同一份 run 事件流**的投影，不另开采集通道：
+
+- 采集层：`packages/agent` 的 `createLlmTraceStreamFn` 每条流式调用产出一条 `LlmCallRecordDto`（必填 `window`，`composition` 在 `onPayload` 现算，`agentId` 在调用入口读取）；serve 负责 `llm_call` / `context_event` 的发射与落盘。
+- `context_event` 只有 `kind:"compaction"` 一种，且只在 run 前压缩**真的发生**时发射，位置在 `user_message` 之后、`agent_start` 之前，断线重连可 replay。
+- Web 侧：`features/trace/` 把事件投影成执行地图（`ExecutionRibbon` + 仅 Team run 的 `TraceTeamCards` + 按 turn 分桶的 `TurnGroup`）与三个上下文面板（`ContextComposition` / `ContextTrend` / `ContextEvents`）。列与 ✂ 的定位键是事件 `sequence`（Team run 内 `callIndex` 不唯一）。
+- 端到端自检（本地桩模型，不需要真实 key）：
+
+```bash
+pnpm build
+node test/verify-ohna-web-trace.mjs
+```
+
+完整数据流与跨层契约见 `ARCHITECTURE.md` §4.1.1，设计取舍见 `docs/v2.0/04-trace-context-visualization.md`。
 
 ## 许可证
 

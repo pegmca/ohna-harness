@@ -11,6 +11,11 @@
  *   toolCalls、usage、stopReason），wrapper 只做透传 + 一次聚合，不缓冲流式增量。
  * - **不改失败语义**：上游 throw 先记账再原样 rethrow 同一个错误对象；sink 抛错被吞掉，
  *   观测链路故障不得打断 run。
+ *
+ * v2.0 扩展（docs/v2.0/04 §1.1 / §1.2 / §1.4）：
+ * - 每次调用额外记录 `window`（必填，构造 wrapper 时注入）与 `agentId`（读 options.observer）；
+ * - `composition`（五分类 token 构成）在 onPayload 拿到**最终** context 后现算，
+ *   不缓存、不跨调用复用——同一 wrapper 的多次调用各自计算。
  */
 import { randomUUID } from "node:crypto";
 import { AssistantMessageEventStream } from "@aiagent/ai";
@@ -18,11 +23,19 @@ import type {
   Api,
   AssistantMessage,
   Context,
+  Message,
   Model,
   SimpleStreamOptions,
   Usage,
 } from "@aiagent/ai";
-import type { LlmCallRecordDto, LlmCallRequestDto, LlmCallResponseDto, LlmCallUsageDto } from "@aiagent/types";
+import type {
+  LlmCallRecordDto,
+  LlmCallRequestDto,
+  LlmCallResponseDto,
+  LlmCallUsageDto,
+  LlmCompositionDto,
+  LlmWindowDto,
+} from "@aiagent/types";
 import type { StreamFn } from "./types.js";
 
 /** 采集结果的出口：serve 侧转成 `llm_call` run 事件（单一形态下 CLI 与 Web 共用此执行线）。 */
@@ -60,6 +73,127 @@ export function isTracedStreamFn(streamFn: StreamFn | undefined): boolean {
 }
 
 /**
+ * 估算系数：每 token 折算的字符数（ASCII 主导假设）。
+ *
+ * 偏差方向：CJK 字符每字约占 1 个 token 甚至更多（远高于 ASCII 的 ~1/4），因此
+ * `chars ÷ 4` 对中文内容会**低估** token 数（即真实 token 比估算值更多）。这是刻意的
+ * 固定口径——不做语言感知，三面板图例统一按「低估」表述（docs/v2.0/04 §1.4）。
+ */
+const CHARS_PER_TOKEN = 4;
+
+/**
+ * 估算一次 LLM 请求的窗口构成：五分类 token 数（docs/v2.0/04 §1.4 的固定系数表）。
+ *
+ * 口径（全部是**估算**，与 provider 回报的 usage 是两套账，展示时并列不对齐）：
+ * - `system`：`systemPrompt` 字符串长度 ÷ 4；
+ * - `tools`：每个工具 `JSON.stringify({ name, description, inputSchema })` 长度 ÷ 4 求和；
+ * - `user` / `assistant` / `toolResult`：按消息 role 归三类，逐条 content blocks 求和后 ÷ 4：
+ *   - 文本块：chars ÷ 4（thinking 块按同一文本口径计入 assistant）；
+ *   - toolCall 块：`JSON.stringify(block)` 长度 ÷ 4（含名字、参数与 id）；
+ *   - 其余块（image 等）：其 JSON 序列化长度 ÷ 4；
+ *   - `content` 为纯字符串时按一个文本块处理（user 消息可为字符串形态）。
+ * - `total`：上述五项之和。
+ *
+ * 为什么在采集层算而不是 web 现算：onPayload 已拿到 convertToLlm 之后的最终形态，
+ * 三部分齐全；在此算一次即成为单一事实源，web 不重复推导、不依赖任何估算器。
+ *
+ * @param systemPrompt 系统提示词（可为 undefined，按 0 计）。
+ * @param messages convertToLlm 之后的最终 LLM 消息序列（结构来源：`@aiagent/ai` 的 `Message`）。
+ * @param tools 本次请求携带的工具列表（name / description / parameters）。
+ * @returns 五分类构成与合计；非有限值一律按 0 计，绝不抛错。
+ */
+export function estimateComposition(
+  systemPrompt: string | undefined,
+  messages: readonly Message[],
+  tools: readonly Pick<ModelTool, "name" | "description" | "parameters">[] | undefined,
+): LlmCompositionDto {
+  const system = charsToTokens(systemPrompt?.length ?? 0);
+
+  let toolsChars = 0;
+  for (const tool of tools ?? []) {
+    toolsChars += jsonLength({ name: tool.name, description: tool.description, inputSchema: tool.parameters });
+  }
+
+  let userChars = 0;
+  let assistantChars = 0;
+  let toolResultChars = 0;
+  for (const message of messages) {
+    const chars = messageContentChars(message);
+    if (message.role === "user") userChars += chars;
+    else if (message.role === "assistant") assistantChars += chars;
+    else toolResultChars += chars;
+  }
+
+  const user = charsToTokens(userChars);
+  const assistant = charsToTokens(assistantChars);
+  const toolResult = charsToTokens(toolResultChars);
+  const toolsTokens = charsToTokens(toolsChars);
+  return {
+    system,
+    tools: toolsTokens,
+    user,
+    assistant,
+    toolResult,
+    total: system + toolsTokens + user + assistant + toolResult,
+  };
+}
+
+/** 最小工具形状：只取 @aiagent/ai `Tool` 里参与估算的三个字段（避免不必要的类型耦合）。 */
+type ModelTool = { name: string; description: string; parameters: unknown };
+
+/**
+ * 字符数 → token 估算值（向上取整，保证非零内容不因舍入消失）。
+ *
+ * @param chars 字符数。
+ * @returns 估算 token 数。
+ */
+function charsToTokens(chars: number): number {
+  if (!Number.isFinite(chars) || chars <= 0) return 0;
+  return Math.ceil(chars / CHARS_PER_TOKEN);
+}
+
+/**
+ * 单条消息的字符数（按 content blocks 分块口径，见 `estimateComposition`）。
+ *
+ * @param message 一条 LLM 消息。
+ * @returns 该消息参与估算的字符总数。
+ */
+function messageContentChars(message: Message): number {
+  const content: unknown = message.content;
+  if (typeof content === "string") return content.length;
+  if (!Array.isArray(content)) return 0;
+  let chars = 0;
+  for (const block of content as Array<Record<string, unknown>>) {
+    if (!block || typeof block !== "object") continue;
+    if (block.type === "text" && typeof block.text === "string") {
+      chars += block.text.length;
+      continue;
+    }
+    if (block.type === "thinking" && typeof block.thinking === "string") {
+      chars += block.thinking.length;
+      continue;
+    }
+    // toolCall 与 image 等其余块：按 JSON 序列化长度计量（含 name / arguments / id / mimeType）。
+    chars += jsonLength(block);
+  }
+  return chars;
+}
+
+/**
+ * JSON 序列化长度；不可序列化（循环引用等）时退回 String 化，绝不让估算抛错。
+ *
+ * @param value 待计量值。
+ * @returns 字符长度。
+ */
+function jsonLength(value: unknown): number {
+  try {
+    return JSON.stringify(value)?.length ?? 0;
+  } catch {
+    return String(value).length;
+  }
+}
+
+/**
  * 把任意 StreamFn 包装成「每次调用产出一条 LlmCallRecordDto」的 StreamFn。
  *
  * 一次返回的函数被多次调用时（同一 run 内的多轮 LLM 调用），`callIndex` 由闭包计数器
@@ -78,15 +212,21 @@ export function isTracedStreamFn(streamFn: StreamFn | undefined): boolean {
  * @param base 被包装的底层 StreamFn（通常是 `streamSimple`）。
  * @param sink 记录出口；实现方需自行保证不阻塞（serve 侧入队、文件侧 append）。
  * @param counter 可选共享计数器（`{ value }`）；缺省时 wrapper 自持闭包计数。
+ * @param options 采集选项；`window` **必填**（构造 wrapper 时注入模型窗口与压缩预留）。
+ *                这里刻意不提供缺省值/向后兼容：`LlmCallRecordDto.window` 是必填字段，
+ *                让缺省悄悄造一个假窗口，比编译期报错危险得多（docs/v2.0/04 §1.1）。
  * @returns 具备相同签名、附带采集能力的 StreamFn。
  */
 export function createLlmTraceStreamFn(
   base: StreamFn,
   sink: LlmTraceSink,
-  counter?: { value: number }
+  counter: { value: number } | undefined,
+  options: { window: LlmWindowDto }
 ): StreamFn {
   /** run 内 LLM 调用序号（从 1 起）。只统计本 wrapper 实例发起的调用（未传 counter 时）。 */
   let localCallIndex = 0;
+  // 闭包捕获构造参数：内层同名 `options` 是**单次调用**的流式选项，两者不可混用。
+  const window = options.window;
 
   const streamFn: StreamFn = (model, context, options) => {
     const index = counter ? (counter.value += 1) : (localCallIndex += 1);
@@ -102,8 +242,24 @@ export function createLlmTraceStreamFn(
     let responseStatus: number | undefined;
     /** 防重复上报：终态只上报一次（例如 done 之后误再推 error）。 */
     let reported = false;
+    /**
+     * onPayload 现算的窗口构成。
+     *
+     * 只有「最终 context 被适配器观察过」时才存在；错误早退（同步 throw / 未到 onPayload）
+     * 时保持 undefined——这是对运行时事实的忠实建模，消费侧据此不渲染构成占比。
+     */
+    let composition: LlmCompositionDto | undefined;
 
     const request: LlmCallRequestDto = snapshotRequest(model, context, options);
+
+    /**
+     * 调用方注入的 agent 身份（`options.observer`，docs/v2.0/04 §1.2）。
+     *
+     * 为什么在调用入口取一次而不是在 onPayload 里取：身份是**发起方**的属性，
+     * 与 provider 是否接受本次请求无关——同步 throw 的错误记录同样需要归因到发起的 agent
+     * （否则 Trace 森林里会出现一批无主的失败调用）。可空仅表示调用方未注入。
+     */
+    const agentId = options?.observer?.agentId;
 
     /**
      * 上报一条记录（幂等）；sink 异常一律吞掉，观测不得打断 run。
@@ -124,9 +280,16 @@ export function createLlmTraceStreamFn(
         // retryProviderRequest 内不重建 payload，生产恒为 1；逐次 attempt 见计划 §8 开放项。
         attemptCount: payloadObservations > 0 ? payloadObservations : 1,
         request,
+        // window 与请求成败无关：构造 wrapper 时即注入，任何错误早退路径都带着它落盘。
+        window,
       };
       if (tail.response) record.response = tail.response;
       if (tail.error) record.error = tail.error;
+      // 可空两字段只写「确实有值」的项，避免落盘出现 undefined 噪声。
+      // agentId 来自调用方注入的 options.observer，与请求是否发出无关（同步 throw 路径同样有值）；
+      // composition 依赖适配器回灌最终 context，错误早退时缺省。
+      if (agentId !== undefined) record.agentId = agentId;
+      if (composition !== undefined) record.composition = composition;
 
       try {
         // sink 契约是同步的，但实现方可能返回 Promise（文件 append / 入队）：
@@ -190,6 +353,9 @@ export function createLlmTraceStreamFn(
         // 请求体在 provider 侧可能被重试复用（retryProviderRequest），只能快照，
         // 否则记录会指向被后续重试改写的同一对象。
         request.providerPayload = snapshot(finalPayload);
+        // 窗口构成在此现算：此刻 systemPrompt / messages / tools 已是最终形态（convertToLlm 之后）。
+        // 重试会重复进入本钩子，直接用最新一次覆盖即可（终态上报只读最后一次的值）。
+        composition = estimateComposition(context.systemPrompt, context.messages, context.tools);
         return finalPayload;
       },
       onResponse: async (providerResponse, responseModel) => {

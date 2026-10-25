@@ -12,6 +12,8 @@ const record: LlmCallRecordDto = {
   startedAt: 1_700_000_000_000,
   durationMs: 120,
   attemptCount: 2,
+  // v2.0：window 是必填字段（serve 构造 wrapper 时注入），fixture 随 DTO 同步升级。
+  window: { contextWindow: 128000, maxTokens: 4096, reserveTokens: 16384 },
   request: {
     provider: "mock",
     api: "openai-completions",

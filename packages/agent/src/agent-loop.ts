@@ -11,6 +11,12 @@
  *
  * 与 pi 的差异：工具执行拆到 tool-execution.ts（单文件行数约束）；zod 校验替代
  * typebox validateToolArguments；默认 streamFn 是 @aiagent/ai 的 streamSimple。
+ *
+ * **v2.0 例外声明（docs/v2.0/04 §1.3）**：本文件此前被 doc 03 §11 定为「不改」，
+ * 本次是**明确列出的例外**——AgentEvent 的 agent_start / agent_end / turn_start /
+ * turn_end 补身份字段（agentId/parentId/label/role/modelId/turnIndex），因此 emit 点
+ * 必须填入当前身份。改动仅限「加字段」：控制流、事件顺序、钩子调用时机一律不动；
+ * 身份缺省（config.identity 未传）时兜底为根身份，事件里 agentId 永远必填。
  */
 import { type AssistantMessage, type Context, EventStream, streamSimple } from "@aiagent/ai";
 import { toLlmTools } from "./convert.js";
@@ -19,9 +25,11 @@ import {
   executeToolCalls,
   failToolCallsFromTruncatedMessage,
 } from "./tool-execution.js";
+import { SUPERVISOR_AGENT_ID } from "./types.js";
 import type {
   AgentContext,
   AgentEvent,
+  AgentIdentity,
   AgentLoopConfig,
   AgentLoopError,
   AgentMessage,
@@ -60,6 +68,7 @@ export function agentLoop(
     // （不静默 stream.end，调用方靠 agent_end.error 区分正常结束与兜底结束）。
     (caught) => stream.push({
       type: "agent_end",
+      agentId: resolveIdentity(config).agentId,
       messages: context.messages.slice(),
       error: toAgentLoopError(caught),
     }),
@@ -101,6 +110,7 @@ export function agentLoopContinue(
     (messages) => stream.end(messages),
     (caught) => stream.push({
       type: "agent_end",
+      agentId: resolveIdentity(config).agentId,
       messages: [],
       error: toAgentLoopError(caught),
     }),
@@ -125,8 +135,11 @@ export async function runAgentLoop(
   const newMessages: AgentMessage[] = [...prompts];
   const currentContext: AgentContext = { ...context, messages: [...context.messages, ...prompts] };
 
-  await emit({ type: "agent_start" });
-  await emit({ type: "turn_start" });
+  const identity = resolveIdentity(config);
+  await emit({ type: "agent_start", ...identity });
+  // 首个 turn 的 turnIndex 恒为 0，且这里是本 run 的**唯一**一次首个 turn_start
+  // （runLoop 内的 firstTurn 分支不再发事件），因此 runLoop 从 0 起算即可无缝续接。
+  await emit({ type: "turn_start", agentId: identity.agentId, turnIndex: 0 });
   for (const prompt of prompts) {
     await emit({ type: "message_start", message: prompt });
     await emit({ type: "message_end", message: prompt });
@@ -151,11 +164,33 @@ export async function runAgentLoopContinue(
   const newMessages: AgentMessage[] = [];
   const currentContext: AgentContext = { ...context };
 
-  await emit({ type: "agent_start" });
-  await emit({ type: "turn_start" });
+  const identity = resolveIdentity(config);
+  await emit({ type: "agent_start", ...identity });
+  await emit({ type: "turn_start", agentId: identity.agentId, turnIndex: 0 });
 
   await runLoop(currentContext, newMessages, config, signal, emit, streamFn ?? streamSimple);
   return newMessages;
+}
+
+/**
+ * 解析本次 loop 的 agent 身份：显式 `config.identity` 优先，缺省兜底为 supervisor 根身份。
+ *
+ * 为什么兜底在 kernel 而不是每个调用方：AgentEvent 的身份字段是**必填**的（v2.0 §1.3），
+ * 若让缺省分支省略字段，事件消费方就要写 optional 兼容分支——这正是 04 明令禁止的。
+ * 兜底后 agentId 恒存在，单智能体宿主零改动也满足契约。
+ *
+ * @param config loop 配置（model 提供 modelId 兜底）。
+ * @returns 本次 run 生效的 agent 身份（新对象，可安全随事件外传）。
+ */
+function resolveIdentity(config: AgentLoopConfig): AgentIdentity {
+  const given = config.identity;
+  if (given) return { ...given };
+  return {
+    agentId: SUPERVISOR_AGENT_ID,
+    label: SUPERVISOR_AGENT_ID,
+    role: SUPERVISOR_AGENT_ID,
+    modelId: config.model.id,
+  };
 }
 
 /** 创建 agent_end 为终止事件的 EventStream。 */
@@ -213,6 +248,10 @@ async function runLoop(
   let currentContext = initialContext;
   let config = initialConfig;
   let firstTurn = true;
+  // 身份与轮次序号：身份在 run 内稳定（prepareNextTurn 只换 context/model），
+  // turnIndex 与 agent_start 前的首个 turn_start 对齐——从 0 开始、每次 turn_start 自增（docs/v2.0/04 §1.3）。
+  const identity = resolveIdentity(config);
+  let turnIndex = 0;
   // 开局先查一次 steering（用户可能在等待期间输入了新消息）。
   let pendingMessages: AgentMessage[] = (await config.getSteeringMessages?.()) || [];
 
@@ -223,7 +262,8 @@ async function runLoop(
     // 内层循环：处理 toolCall 与 steering 消息。
     while (hasMoreToolCalls || pendingMessages.length > 0) {
       if (!firstTurn) {
-        await emit({ type: "turn_start" });
+        turnIndex += 1;
+        await emit({ type: "turn_start", agentId: identity.agentId, turnIndex });
       } else {
         firstTurn = false;
       }
@@ -251,7 +291,13 @@ async function runLoop(
           currentContext.messages.push(result);
           newMessages.push(result);
         }
-        await emit({ type: "turn_end", message: resumeTurn.assistant, toolResults: executedBatch.messages });
+        await emit({
+          type: "turn_end",
+          agentId: identity.agentId,
+          turnIndex,
+          message: resumeTurn.assistant,
+          toolResults: executedBatch.messages,
+        });
         // 重放的工具结果不计为新 turn 的 LLM 调用，直接进入下一轮 assistant 生成。
         continue;
       }
@@ -260,8 +306,8 @@ async function runLoop(
       newMessages.push(message);
 
       if (message.stopReason === "error" || message.stopReason === "aborted") {
-        await emit({ type: "turn_end", message, toolResults: [] });
-        await emit({ type: "agent_end", messages: newMessages });
+        await emit({ type: "turn_end", agentId: identity.agentId, turnIndex, message, toolResults: [] });
+        await emit({ type: "agent_end", agentId: identity.agentId, messages: newMessages });
         return;
       }
 
@@ -284,7 +330,7 @@ async function runLoop(
         }
       }
 
-      await emit({ type: "turn_end", message, toolResults });
+      await emit({ type: "turn_end", agentId: identity.agentId, turnIndex, message, toolResults });
 
       const nextTurnContext = { message, toolResults, context: currentContext, newMessages };
       const nextTurnSnapshot = await config.prepareNextTurn?.(nextTurnContext);
@@ -303,7 +349,7 @@ async function runLoop(
       }
 
       if (await config.shouldStopAfterTurn?.({ message, toolResults, context: currentContext, newMessages })) {
-        await emit({ type: "agent_end", messages: newMessages });
+        await emit({ type: "agent_end", agentId: identity.agentId, messages: newMessages });
         return;
       }
 
@@ -320,7 +366,7 @@ async function runLoop(
     break;
   }
 
-  await emit({ type: "agent_end", messages: newMessages });
+  await emit({ type: "agent_end", agentId: identity.agentId, messages: newMessages });
 }
 
 /**

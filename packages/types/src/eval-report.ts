@@ -79,7 +79,9 @@ export interface EvalReportDto {
  *
  * `status` 由 eval-core 的 `diffBaseline` 推导：
  * - `"new"`：baseline 中无该指标（首次出现）；
- * - `"missing"`：当前报告缺失 baseline 中存在的指标；
+ * - `"missing"`：当前报告缺失 baseline 中存在的指标（该指标本次既未产出、也未声明不适用）；
+ * - `"not_applicable"`：baseline 有该指标，但当前报告把它标为 `applicable === false`
+ *   （如整个评测档位因缺 provider 凭据被跳过）——**不算回归**，门禁不据此判定；
  * - `"regression"`：当前值相对 baseline 退化（delta 为负且超过回归阈值，由门禁 SloSpec 判定）；
  * - `"improvement"`：当前值相对 baseline 改善（delta 为正）；
  * - `"unchanged"`：变化在可接受范围内。
@@ -94,7 +96,7 @@ export type BaselineDiff = {
   /** current - baseline。 */
   delta: number;
   /** 差异状态标签。 */
-  status: "regression" | "improvement" | "unchanged" | "new" | "missing";
+  status: "regression" | "improvement" | "unchanged" | "new" | "missing" | "not_applicable";
 };
 
 /**

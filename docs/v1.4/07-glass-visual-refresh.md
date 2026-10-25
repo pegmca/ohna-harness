@@ -1,5 +1,7 @@
 # 07 · Glass Depths 视觉刷新落地方案（设计稿 → 代码）
 
+> **⚠️ 本文中关于 Trace 抽屉的「视觉描述 / 样式归属」部分已被 `docs/v2.0/04-trace-context-visualization.md` 取代（2026-10-24）**：v2.0/04 在不新增配色、继续复用 Glass Depths 令牌（`--md-glass-inspector` / `--md-glass-sunken` / 强调色 `#89D7B7`）的前提下，重构了抽屉内部的**信息结构与组件**（`ExecutionRibbon` / `TurnGroup` / `TraceTeamCards` / `ContextComposition` / `ContextTrend` / `ContextEvents`，详见 04 §5.5、§6），并新增了 `llm_call` 的窗口构成与 `context_event` 的可视化面。**Trace 相关的「哪些组件存在、各区域用什么令牌」以 04 为准**，本文对应段落仅作历史留档。本文的**非 Trace 部分**（G1 token 自持、G2 CLI 色板平移、语法色双档、focus-ring / 玻璃浮层别名）不受影响，仍然有效。
+>
 > **来源**：`docs/design/` 下三份已评审通过的高保真设计稿——
 > - `docs/design/glass-tokens.md`：收敛后的**唯一颜色/尺度权威来源**（2026-10-24 评审通过）；
 > - `docs/design/ohna-glass-web.html`：Web 双主题高保真交互稿（含 token 面板、侧栏分组、transcript、权限卡、Trace 抽屉、JsonViewer、设置弹窗）；

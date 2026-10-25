@@ -4,7 +4,8 @@
  * 覆盖：run 列表六字段语义（status / mode / source / 相对时间 + title 全 id）、事件行、
  * `LlmCallBlock` 一等公民（LLM 调用可展开）、空态文案、收起时不渲染、错误态。
  */
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import type { RunStreamEventDtoV2 } from "@aiagent/types";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TraceDrawer } from "./TraceDrawer";
 import {
@@ -12,6 +13,9 @@ import {
   liveRun,
   realOrderEvents,
   runEvent,
+  singleAgentEvents,
+  teamRun,
+  teamRunEvents,
   terminalRun
 } from "./trace-fixtures";
 
@@ -170,5 +174,61 @@ describe("TraceDrawer", () => {
     renderDrawer();
     expect(await screen.findByText("run failed")).toBeTruthy();
     expect(screen.getByText("loop 抛出异常")).toBeTruthy();
+  });
+
+  it("v2.0：单 run 渲染执行地图 + 上下文三面板，不渲染编队区", async () => {
+    listConversationRuns.mockResolvedValue({ ok: true, requestId: "r", data: [terminalRun] });
+    replayRunEvents.mockImplementation(
+      async (_runId: string, options: { onEvent: (event: RunStreamEventDtoV2) => void }) => {
+        for (const event of singleAgentEvents()) options.onEvent(event);
+      }
+    );
+    renderDrawer();
+
+    await waitFor(() => expect(screen.getByRole("region", { name: "执行摘要" })).toBeTruthy());
+    expect(screen.getByRole("region", { name: "Current Context" })).toBeTruthy();
+    expect(screen.getByRole("region", { name: "Context Trend" })).toBeTruthy();
+    expect(screen.getByRole("region", { name: "Context Events" })).toBeTruthy();
+    // 单 run 退化为单 root：没有编队区；turn 分组默认展开。
+    expect(screen.queryByRole("region", { name: "Team 成员" })).toBeNull();
+    await waitFor(() => expect(screen.getAllByRole("button", { name: /Turn \d/ }).length).toBe(2));
+    expect(screen.getAllByRole("button", { name: /Turn \d/ })[0].getAttribute("aria-expanded")).toBe("true");
+  });
+
+  it("v2.0：Team run 渲染编队卡，点击卡片只高亮不隐藏其他行", async () => {
+    listConversationRuns.mockResolvedValue({ ok: true, requestId: "r", data: [teamRun] });
+    replayRunEvents.mockImplementation(
+      async (_runId: string, options: { onEvent: (event: RunStreamEventDtoV2) => void }) => {
+        for (const event of teamRunEvents()) options.onEvent(event);
+      }
+    );
+    const { container } = renderDrawer();
+
+    await waitFor(() => expect(screen.getByRole("region", { name: "Team 成员" })).toBeTruthy());
+    // 只取编队区里的成员卡（run 选择条同样是 listitem）。
+    const fleet = within(screen.getByRole("region", { name: "Team 成员" }));
+    const cards = fleet.getAllByRole("listitem");
+    expect(cards.length).toBe(3);
+    const rowsBefore = container.querySelectorAll(".trace-map-row").length;
+    fireEvent.click(cards[1]);
+    expect(cards[1].getAttribute("aria-pressed")).toBe("true");
+    // 归因联动 = 行级提亮 + 滚动，绝不隐藏行：行数不变。
+    expect(container.querySelectorAll(".trace-map-row").length).toBe(rowsBefore);
+    expect(container.querySelector(".trace-turn.is-active")).toBeTruthy();
+
+    // 行级高亮必须真的落到 DOM（否则 `.trace-map-row.is-agent-active` 又是一条死样式）：
+    // 选中 researcher 后，只有它的行提亮，且这些行一定混在同一 turn 桶里与主线程行并存。
+    const activeRows = container.querySelectorAll(".trace-map-row.is-agent-active");
+    expect(activeRows.length).toBeGreaterThan(0);
+    for (const row of activeRows) {
+      expect(row.getAttribute("data-agent-key")).toBe("researcher");
+      expect(row.getAttribute("aria-current")).toBe("true");
+    }
+    // 其他 agent 的行仍在（不隐藏），只是不高亮。
+    const otherRows = [...container.querySelectorAll(".trace-map-row")].filter(
+      (row) => row.getAttribute("data-agent-key") !== "researcher"
+    );
+    expect(otherRows.length).toBeGreaterThan(0);
+    expect(otherRows.some((row) => row.classList.contains("is-agent-active"))).toBe(false);
   });
 });

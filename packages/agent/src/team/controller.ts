@@ -31,6 +31,9 @@ import type { Api, Model } from "@aiagent/ai";
 import { createSendMessageTool, createTeamCreateTool } from "./tools.js";
 import { createBudgetGuard, createMemberStopHook, type MemberBudgetHook } from "./budget.js";
 import { AsyncMutex, mapWithConcurrencyLimit, Semaphore } from "./concurrency.js";
+// L1 纯函数（docs/v2.0/03 §6.1）：摘要回收 / 失败判定 / 子代理 config 静态装配。
+// 抽离后这三条编排机契约可脱离 agentLoop 直接断言，controller 只保留运行期副作用。
+import { assembleSubagentConfig, classifyAborted, deriveSubagentIdentity, extractSummary } from "./pure.js";
 
 /** TeamController 公开接口（orchestrator 之后会 re-export）。 */
 export interface TeamController {
@@ -79,34 +82,6 @@ export interface TeamController {
 /** 生成一个简单唯一 id（学习版，不引入额外依赖）。 */
 function nextId(prefix: string): string {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-}
-
-/**
- * 从子代理的最终消息集中提取「摘要 + 产物引用」。
- * 摘要取最后一条 assistant 文本；产物收集所有 toolResult 的工具名 + 短摘要。
- *
- * @param messages 子代理 agentLoop 最终回写的消息集（含 prompt 与工具结果）。
- * @returns 摘要文本与产物引用列表。
- */
-function extractSummary(messages: AgentMessage[]): { summary: string; artifacts: string[] } {
-  let summary = "";
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const m = messages[i];
-    if (m.role === "assistant") {
-      const text = m.content.filter((c) => c.type === "text").map((c) => c.text).join("\n");
-      if (text) {
-        summary = text;
-        break;
-      }
-    }
-  }
-  const artifacts = messages
-    .filter((m) => m.role === "toolResult")
-    .map((m) => {
-      const text = m.content.filter((c) => c.type === "text").map((c) => c.text).join(" ").slice(0, 120);
-      return `${m.toolName}:${text || "(空)"}`;
-    });
-  return { summary: summary || "(子代理无文本输出)", artifacts };
 }
 
 /**
@@ -201,6 +176,36 @@ export function createTeamController(options: TeamControllerOptions): TeamContro
   }
 
   /**
+   * 把子代理的边界事件透传给宿主（`TeamControllerOptions.onSubagentEvent`）。
+   *
+   * 只转发 agent_start / agent_end / turn_start / turn_end；其余事件直接返回（不转发）。
+   * 回调抛错一律吞掉——转发链路故障不得打断子代理（同 `LlmTraceSink` 语义）。
+   * `identity` 取事件自带的 agentId/parentId（事件已身份化），与 member 派生身份同源。
+   *
+   * @param event 子代理 agentLoop 产出的单个事件。
+   */
+  function forwardBoundaryEvent(event: AgentEvent): void {
+    const hook = options.onSubagentEvent;
+    if (!hook) return;
+    if (
+      event.type !== "agent_start" &&
+      event.type !== "agent_end" &&
+      event.type !== "turn_start" &&
+      event.type !== "turn_end"
+    ) {
+      return;
+    }
+    try {
+      // parentId 只存在于 agent_start（其余边界事件只有 agentId）；身份归属靠 agentId 键，
+      // parentId 是 agent_start 专属的编队信息。
+      const parentId = event.type === "agent_start" ? event.parentId : undefined;
+      hook(event, { agentId: event.agentId, ...(parentId !== undefined ? { parentId } : {}) });
+    } catch {
+      // 宿主的转发实现故障（队列满 / 落盘失败）不能让子代理失败：事件丢失优于编排中断。
+    }
+  }
+
+  /**
    * 运行某成员的 subagent（一次独立 agentLoop），回收摘要到 team 状态。
    * 并发受信号量限制（maxConcurrentMembers）；成本护栏（若配置）通过 shouldStopAfterTurn
    * 钩子注入，触发时干净停止并回写部分摘要。失败返回结构化 error，不抛异常（失败隔离）。
@@ -287,34 +292,50 @@ export function createTeamController(options: TeamControllerOptions): TeamContro
       budgetHook = budgetConfig
         ? createMemberStopHook(member.model, budgetConfig, accumulator, budgetMutex, deadlineAt)
         : undefined;
+      // 静态装配下沉到 L1 纯函数（见 team/pure.ts）：model / convertToLlm / beforeToolCall
+      // 均为同一引用透传，无预算时 config 不含 shouldStopAfterTurn 键。runMember 只在本层
+      // 叠加运行期副作用（捕获 stoppedByBudget 回写 member.budgetExceeded）。
       const hook = budgetHook;
-      const subConfig: AgentLoopConfig = {
-        model: member.model,
+      const staticConfig = assembleSubagentConfig({
+        member,
+        budgetHook: hook,
+        beforeToolCall: options.beforeToolCall,
         convertToLlm,
-        // K3 策略继承：把 supervisor 的 beforeToolCall 原样透传给子代理。
-        // 子代理的 `context.tools` 是它自己的工具子集，权限闸门从该上下文解析 effect，
-        // 因此 write/edit/bash 在子代理内部同样会走 ask/deny，并写入共享 PolicyState。
-        // 仅在调用方提供时注入，保持「无权限装配」场景（如纯离线测试）零多余钩子。
-        ...(options.beforeToolCall ? { beforeToolCall: options.beforeToolCall } : {}),
-        // A-2 修复：不再向 subConfig 注入 deadlineMs——agent-loop 从不消费它，
-        // 真正生效的是护栏闭包内的墙钟自查（见 ）。
-        ...(hook
-          ? {
-              shouldStopAfterTurn: async (ctx: ShouldStopAfterTurnContext): Promise<boolean> => {
-                // 钩子内部已用 mutex 串行化读-判-写；此处仅捕获是否被护栏停止以标记 budgetExceeded。
-                const stop = await hook.shouldStopAfterTurn(ctx);
-                if (stop) stoppedByBudget = true;
-                return stop;
-              },
-            }
-          : {}),
-      };
+      });
+      const subConfig: AgentLoopConfig = hook
+        ? {
+            ...staticConfig,
+            shouldStopAfterTurn: async (ctx: ShouldStopAfterTurnContext): Promise<boolean> => {
+              // 钩子内部已用 mutex 串行化读-判-写；此处仅捕获是否被护栏停止以标记 budgetExceeded。
+              const stop = await hook.shouldStopAfterTurn(ctx);
+              if (stop) stoppedByBudget = true;
+              return stop;
+            },
+          }
+        : staticConfig;
 
-      const stream = agentLoop([taskMessage], subContext, subConfig, signal, streamFn);
+      // v2.0（docs/v2.0/04 §2.2 第 3 条）：子代理的 StreamFn 薄转发补 `observer.agentId`。
+      //
+      // 为什么必须在这里包：`observer` 只能由**调用线程**注入，而子代理的 `agentLoop`
+      // 由本函数发起（主线程的调用点在宿主侧）。若不包，子代理轮次的 `llm_call`
+      // 会丢掉或错拿身份（宿主 wrapper 读到的永远是宿主注入的那个 agentId）。
+      // 只补 identity，不替换 streamFn 本体：采集标记、callIndex 计数器、window 全部沿用
+      // 宿主传入的实现，因此「一次构造、两链共用」的 S1 契约不受影响。
+      const memberIdentity = deriveSubagentIdentity(member);
+      const memberStreamFn: StreamFn = (model, context, streamOptions) =>
+        streamFn(model, context, {
+          ...streamOptions,
+          observer: { ...streamOptions?.observer, agentId: memberIdentity.agentId },
+        });
+
+      const stream = agentLoop([taskMessage], subContext, subConfig, signal, memberStreamFn);
 
       // 消费事件流：捕获 agent_end.error（错误即数据，不抛），其余仅投影。
+      // v2.0（docs/v2.0/04 §2.1）：四类边界事件先透传给宿主 onSubagentEvent，再继续本地投影；
+      // message_* / tool_execution_* 不转发（控制 JSONL 体积与 SSE 流量）。
       let endError: { code: string; message: string } | undefined;
       for await (const event of stream) {
+        forwardBoundaryEvent(event);
         if (event.type === "agent_end" && event.error) {
           endError = { code: event.error.code, message: event.error.message };
         }
@@ -326,15 +347,11 @@ export function createTeamController(options: TeamControllerOptions): TeamContro
       usage = budgetHook ? { ...budgetHook.usage } : undefined;
 
       // 失败判定：agent_end.error（兜底收尾）或最终 assistant 的 stopReason 为 error/aborted。
+      // 判定逻辑下沉到 L1 纯函数（见 team/pure.ts）：此处只负责把结构化结果回写到 team 状态。
       const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant");
-      const aborted =
-        endError || (lastAssistant && (lastAssistant.stopReason === "error" || lastAssistant.stopReason === "aborted"));
-      if (aborted) {
-        const error =
-          endError ??
-          (lastAssistant
-            ? { code: "subagent_failed", message: `stopReason: ${lastAssistant.stopReason}` }
-            : { code: "subagent_failed", message: "unknown" });
+      const verdict = classifyAborted({ endError, lastAssistant });
+      if (verdict.aborted) {
+        const error = verdict.error ?? { code: "subagent_failed", message: "unknown" };
         member.status = "failed";
         member.summary = summary;
         member.artifacts = artifacts;

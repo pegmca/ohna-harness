@@ -46,13 +46,16 @@ export type {
   ShouldStopAfterTurnContext,
   StreamFn,
 } from "./types.js";
+// v2.0 身份常量与类型（docs/v2.0/04 §1.3）：supervisor 根 agentId 冻结为 "supervisor"。
+export { SUPERVISOR_AGENT_ID } from "./types.js";
+export type { AgentIdentity } from "./types.js";
 // AgentTool 契约定义在 @aiagent/tools（工具契约属于工具包），此处原样 re-export，
 // 对外仍从 @aiagent/agent 拿到 AgentTool，命名与 pi 对齐。
 export type { AgentTool, AgentToolResult, AgentToolUpdateCallback, ToolExecutionMode } from "./types.js";
 
 // W1 观测采集层（docs/v1.4/02-web-llm-trace.md）：调用方包一层 streamFn 即可把每次 LLM
 // 调用变成 LlmCallRecordDto，agent-loop 本体零改动；sink 决定记录去向（SSE 事件 / 本地 JSONL）。
-export { createLlmTraceStreamFn, isTracedStreamFn, markTracedStreamFn } from "./llm-trace.js";
+export { createLlmTraceStreamFn, estimateComposition, isTracedStreamFn, markTracedStreamFn } from "./llm-trace.js";
 export type { LlmTraceSink } from "./llm-trace.js";
 
 // ---- v1.1 控制流增强（docs/v1.1/01-control-flow-multagent.md）----

@@ -15,6 +15,9 @@ import {
   managedRun,
   realOrderEvents,
   runEvent,
+  singleAgentEvents,
+  teamRun,
+  teamRunEvents,
   terminalRun
 } from "./trace-fixtures";
 import { useTraceStream } from "./use-trace-stream";
@@ -49,6 +52,14 @@ function Probe(props: { conversationId: string | undefined; enabled?: boolean })
       <p data-testid="runs">{trace.runs.map((run) => run.runId).join(",")}</p>
       <p data-testid="active">{trace.activeRunId}</p>
       <p data-testid="kinds">{trace.rows.map((row) => row.kind).join(",")}</p>
+      <p data-testid="agent-rows">{trace.rows.map((row) => row.agentId).join(",")}</p>
+      <p data-testid="sequences">{trace.events.map((event) => event.sequence).join(",")}</p>
+      <p data-testid="agents">{[...trace.traceSpans.agents.keys()].join(",")}</p>
+      <p data-testid="root">{trace.traceSpans.rootAgentId}</p>
+      <p data-testid="turns">{trace.traceSpans.turns.map((turn) => `${turn.agentId}#${turn.turnIndex}`).join(",")}</p>
+      <p data-testid="points">{trace.contextPoints.map((point) => `${point.agentId ?? "-"}#${point.callIndex}`).join(",")}</p>
+      <p data-testid="context-events">{trace.contextEvents.map((event) => `${event.kind}:${event.tokensBefore}>${event.tokensAfter}`).join(",")}</p>
+      <p data-testid="live">{String(trace.isLive)}</p>
       <p data-testid="loading">{String(trace.isLoading)}</p>
       <p data-testid="error">{trace.error ?? ""}</p>
       {trace.runs.map((run) => (
@@ -199,6 +210,8 @@ describe("useTraceStream", () => {
     replayRunEvents.mockImplementation(async (_runId: string, options: { signal?: AbortSignal }) => {
       // 阻塞到被中止：模拟「用户切换 run 时旧流仍在传输」。
       await new Promise((resolve) => options.signal?.addEventListener("abort", resolve, { once: true }));
+      // 本用例之后不再需要这个实现：若留给后续用例，它们的事件投递会被永久挂起（假阴性）。
+      replayRunEvents.mockReset();
     });
     followRunEvents.mockResolvedValue(undefined);
 
@@ -215,6 +228,60 @@ describe("useTraceStream", () => {
     expect(listConversationRuns).not.toHaveBeenCalled();
     expect(replayRunEvents).not.toHaveBeenCalled();
     expect(followRunEvents).not.toHaveBeenCalled();
+  });
+
+  it("v2.0：暴露 spans / contextPoints / contextEvents，且单 run 退化为单 root", async () => {
+    listConversationRuns.mockResolvedValue({ ok: true, requestId: "r", data: [terminalRun] });
+    replayRunEvents.mockImplementation(async (_runId: string, options: { onEvent: (event: RunStreamEventDtoV2) => void }) => {
+      for (const event of singleAgentEvents()) options.onEvent(event);
+    });
+
+    render(<Probe conversationId="conv-1" />);
+    await waitFor(() => expect(stateText("root")).toBe("supervisor"));
+    await waitFor(() => expect(stateText("turns")).toBe("supervisor#0,supervisor#1"));
+    expect(stateText("agents")).toBe("supervisor");
+    expect(stateText("points")).toBe("supervisor#1,supervisor#2");
+    expect(stateText("context-events")).toBe("compaction:62000>12000");
+    // 每行都带归属（含 context 行）。
+    expect(stateText("agent-rows").split(",").every((agentId) => agentId === "supervisor")).toBe(true);
+  });
+
+  it("v2.0：Team run 的事件流给出 forest 与各 agent 的上下文点", async () => {
+    listConversationRuns.mockResolvedValue({ ok: true, requestId: "r", data: [teamRun] });
+    replayRunEvents.mockImplementation(async (_runId: string, options: { onEvent: (event: RunStreamEventDtoV2) => void }) => {
+      for (const event of teamRunEvents()) options.onEvent(event);
+    });
+
+    render(<Probe conversationId="conv-1" />);
+    await waitFor(() => expect(stateText("agents")).toBe("supervisor,researcher,spawn-agent"));
+    expect(stateText("live")).toBe("false");
+    expect(stateText("points")).toBe("supervisor#1,researcher#1,spawn-agent#1,supervisor#2");
+  });
+
+  it("增量归并：live 流 sequence 单调时事件顺序不变、不去重不排序", async () => {
+    // 列表始终报 running：live 状态为「服务端快照仍显示运行中」，与流何时结束无关。
+    listConversationRuns.mockResolvedValue({ ok: true, requestId: "r", data: [liveRun] });
+    followRunEvents.mockImplementation(async (_runId: string, options: { onEvent: (event: RunStreamEventDtoV2) => void }) => {
+      for (const event of singleAgentEvents()) options.onEvent({ ...event, runId: "run-live-2" });
+    });
+
+    render(<Probe conversationId="conv-1" />);
+    await waitFor(() => expect(stateText("sequences")).toBe("1,2,3,4,5,6,7,8,9,10,11,12,13,14"));
+    expect(stateText("live")).toBe("true");
+  });
+
+  it("增量归并：乱序回填（迟到帧）仍归到正确位置", async () => {
+    listConversationRuns.mockResolvedValue({ ok: true, requestId: "r", data: [terminalRun] });
+    replayRunEvents.mockImplementation(async (_runId: string, options: { onEvent: (event: RunStreamEventDtoV2) => void }) => {
+      // 2 在 3 之后到达：走二分插入而非丢弃。
+      options.onEvent(runEvent(1, "message_start", { message: { role: "user", content: "a" } }));
+      options.onEvent(runEvent(3, "run_status", { status: "failed" }));
+      options.onEvent(runEvent(2, "message_end", { message: { role: "user", content: "a" } }));
+    });
+
+    render(<Probe conversationId="conv-1" />);
+    await waitFor(() => expect(stateText("sequences")).toBe("1,2,3"));
+    expect(stateText("kinds")).toBe("message,terminal");
   });
 });
 

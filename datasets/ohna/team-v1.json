@@ -1,0 +1,1411 @@
+{
+  "schemaVersion": "2.0.0",
+  "datasetVersion": "team-v1",
+  "seed": 20241024,
+  "domain": "ohna",
+  "minCases": 20,
+  "description": "ohna team/Supervisor 编排评测数据集（docs/v2.0/03-team-eval.md §8）。与 coding-v1.json 完全独立：不含文件改动类期望，指标名全带 team 前缀。",
+  "cases": [
+    {
+      "id": "team-01-dispatch-basic",
+      "prompt": "创建一个多头评审成员并向其派发「评估看涨逻辑」任务。",
+      "mode": "dispatch",
+      "availableTools": [
+        "read",
+        "write"
+      ],
+      "members": [
+        {
+          "name": "bull",
+          "role": "多头评审",
+          "allowedTools": [
+            "read"
+          ]
+        }
+      ],
+      "expectedSpawns": [],
+      "expectedSends": [
+        {
+          "recipient": "bull",
+          "content": "评估看涨逻辑"
+        }
+      ],
+      "expectedToolCalls": [
+        {
+          "tool": "TeamCreate",
+          "args": {
+            "name": "bull"
+          }
+        },
+        {
+          "tool": "SendMessage",
+          "args": {
+            "recipient": "bull"
+          }
+        }
+      ],
+      "expectedMemberStatus": {
+        "bull": "done"
+      },
+      "expectedResultStatus": "done",
+      "maxTurns": 2,
+      "expectedOutcome": "成员被创建、派发成功、终态 done"
+    },
+    {
+      "id": "team-02-dispatch-spawn",
+      "prompt": "先建成员再派发：spawn 一个只读的 bear 成员。",
+      "mode": "dispatch",
+      "availableTools": [
+        "read",
+        "write"
+      ],
+      "expectedSpawns": [
+        {
+          "name": "bear",
+          "role": "空头评审",
+          "allowedTools": [
+            "read"
+          ]
+        }
+      ],
+      "expectedSends": [
+        {
+          "recipient": "bear",
+          "content": "列出三条看空理由"
+        }
+      ],
+      "expectedToolCalls": [
+        {
+          "tool": "TeamCreate",
+          "args": {
+            "name": "bear"
+          }
+        },
+        {
+          "tool": "SendMessage",
+          "args": {
+            "recipient": "bear"
+          }
+        }
+      ],
+      "expectedMemberStatus": {
+        "bear": "done"
+      },
+      "expectedResultStatus": "done",
+      "maxTurns": 2,
+      "expectedOutcome": "spawn 与派发链走通"
+    },
+    {
+      "id": "team-03-dispatch-two-members",
+      "prompt": "两个成员各领一份分析任务。",
+      "mode": "dispatch",
+      "availableTools": [
+        "read",
+        "write"
+      ],
+      "members": [
+        {
+          "name": "alpha",
+          "role": "分析员",
+          "allowedTools": [
+            "read"
+          ]
+        },
+        {
+          "name": "beta",
+          "role": "分析员",
+          "allowedTools": [
+            "read"
+          ]
+        }
+      ],
+      "expectedSends": [
+        {
+          "recipient": "alpha",
+          "content": "分析 A 段落"
+        },
+        {
+          "recipient": "beta",
+          "content": "分析 B 段落"
+        }
+      ],
+      "expectedToolCalls": [
+        {
+          "tool": "TeamCreate",
+          "args": {
+            "name": "alpha"
+          }
+        },
+        {
+          "tool": "TeamCreate",
+          "args": {
+            "name": "beta"
+          }
+        },
+        {
+          "tool": "SendMessage",
+          "args": {
+            "recipient": "alpha"
+          }
+        },
+        {
+          "tool": "SendMessage",
+          "args": {
+            "recipient": "beta"
+          }
+        }
+      ],
+      "expectedMemberStatus": {
+        "alpha": "done",
+        "beta": "done"
+      },
+      "expectedResultStatus": "done",
+      "maxTurns": 2,
+      "expectedOutcome": "多成员顺序派发全部完成"
+    },
+    {
+      "id": "team-04-dispatch-summary",
+      "prompt": "派发一条需要汇总的任务并回收摘要。",
+      "mode": "dispatch",
+      "availableTools": [
+        "read"
+      ],
+      "members": [
+        {
+          "name": "summarizer",
+          "role": "摘要员",
+          "allowedTools": [
+            "read"
+          ]
+        }
+      ],
+      "expectedSends": [
+        {
+          "recipient": "summarizer",
+          "content": "总结材料要点"
+        }
+      ],
+      "expectedToolCalls": [
+        {
+          "tool": "TeamCreate",
+          "args": {
+            "name": "summarizer"
+          }
+        },
+        {
+          "tool": "SendMessage",
+          "args": {
+            "recipient": "summarizer"
+          }
+        }
+      ],
+      "expectedMemberStatus": {
+        "summarizer": "done"
+      },
+      "expectedResultStatus": "done",
+      "maxTurns": 2,
+      "expectedOutcome": "摘要回收通道走通（只断言非空）"
+    },
+    {
+      "id": "team-05-dispatch-zero-tools",
+      "prompt": "建一个零工具成员：allowedTools 显式为空数组。",
+      "mode": "dispatch",
+      "availableTools": [
+        "read",
+        "write",
+        "bash"
+      ],
+      "members": [
+        {
+          "name": "blind",
+          "role": "纯推理员",
+          "allowedTools": []
+        }
+      ],
+      "expectedSends": [
+        {
+          "recipient": "blind",
+          "content": "只靠推理给结论"
+        }
+      ],
+      "expectedToolCalls": [
+        {
+          "tool": "TeamCreate",
+          "args": {
+            "name": "blind"
+          }
+        },
+        {
+          "tool": "SendMessage",
+          "args": {
+            "recipient": "blind"
+          }
+        }
+      ],
+      "expectedPermission": {
+        "deniedTools": [],
+        "grantedTools": []
+      },
+      "expectedMemberStatus": {
+        "blind": "done"
+      },
+      "expectedResultStatus": "done",
+      "maxTurns": 2,
+      "expectedOutcome": "allowedTools=[] 表示零工具（不被误判为全量池）"
+    },
+    {
+      "id": "team-06-member-not-found-ghost",
+      "prompt": "误把任务派发给不存在的成员 ghost。",
+      "mode": "member_not_found",
+      "availableTools": [
+        "read",
+        "write"
+      ],
+      "members": [
+        {
+          "name": "real",
+          "role": "真实成员",
+          "allowedTools": [
+            "read"
+          ]
+        }
+      ],
+      "expectedSends": [
+        {
+          "recipient": "ghost",
+          "content": "请处理这批任务"
+        }
+      ],
+      "expectedToolCalls": [
+        {
+          "tool": "TeamCreate",
+          "args": {
+            "name": "real"
+          }
+        },
+        {
+          "tool": "SendMessage",
+          "args": {
+            "recipient": "ghost"
+          }
+        }
+      ],
+      "expectedMemberStatus": {
+        "real": "done"
+      },
+      "expectedResultStatus": "failed",
+      "maxTurns": 1,
+      "expectedOutcome": "runMember 早退返回 member_not_found，supervisor 不崩溃"
+    },
+    {
+      "id": "team-07-member-not-found-nobody",
+      "prompt": "误把任务派发给不存在的成员 nobody。",
+      "mode": "member_not_found",
+      "availableTools": [
+        "read",
+        "write"
+      ],
+      "members": [
+        {
+          "name": "real",
+          "role": "真实成员",
+          "allowedTools": [
+            "read"
+          ]
+        }
+      ],
+      "expectedSends": [
+        {
+          "recipient": "nobody",
+          "content": "请处理这批任务"
+        }
+      ],
+      "expectedToolCalls": [
+        {
+          "tool": "TeamCreate",
+          "args": {
+            "name": "real"
+          }
+        },
+        {
+          "tool": "SendMessage",
+          "args": {
+            "recipient": "nobody"
+          }
+        }
+      ],
+      "expectedMemberStatus": {
+        "real": "done"
+      },
+      "expectedResultStatus": "failed",
+      "maxTurns": 1,
+      "expectedOutcome": "runMember 早退返回 member_not_found，supervisor 不崩溃"
+    },
+    {
+      "id": "team-08-member-not-found-typo-member",
+      "prompt": "误把任务派发给不存在的成员 typo_member。",
+      "mode": "member_not_found",
+      "availableTools": [
+        "read",
+        "write"
+      ],
+      "members": [
+        {
+          "name": "real",
+          "role": "真实成员",
+          "allowedTools": [
+            "read"
+          ]
+        }
+      ],
+      "expectedSends": [
+        {
+          "recipient": "typo_member",
+          "content": "请处理这批任务"
+        }
+      ],
+      "expectedToolCalls": [
+        {
+          "tool": "TeamCreate",
+          "args": {
+            "name": "real"
+          }
+        },
+        {
+          "tool": "SendMessage",
+          "args": {
+            "recipient": "typo_member"
+          }
+        }
+      ],
+      "expectedMemberStatus": {
+        "real": "done"
+      },
+      "expectedResultStatus": "failed",
+      "maxTurns": 1,
+      "expectedOutcome": "runMember 早退返回 member_not_found，supervisor 不崩溃"
+    },
+    {
+      "id": "team-09-member-not-found-missing-reviewer",
+      "prompt": "误把任务派发给不存在的成员 missing_reviewer。",
+      "mode": "member_not_found",
+      "availableTools": [
+        "read",
+        "write"
+      ],
+      "members": [
+        {
+          "name": "real",
+          "role": "真实成员",
+          "allowedTools": [
+            "read"
+          ]
+        }
+      ],
+      "expectedSends": [
+        {
+          "recipient": "missing_reviewer",
+          "content": "请处理这批任务"
+        }
+      ],
+      "expectedToolCalls": [
+        {
+          "tool": "TeamCreate",
+          "args": {
+            "name": "real"
+          }
+        },
+        {
+          "tool": "SendMessage",
+          "args": {
+            "recipient": "missing_reviewer"
+          }
+        }
+      ],
+      "expectedMemberStatus": {
+        "real": "done"
+      },
+      "expectedResultStatus": "failed",
+      "maxTurns": 1,
+      "expectedOutcome": "runMember 早退返回 member_not_found，supervisor 不崩溃"
+    },
+    {
+      "id": "team-10-over-budget-token-ceiling",
+      "prompt": "团队 token ceiling 很小，派发必须先被预检拦住。",
+      "mode": "over_budget",
+      "availableTools": [
+        "read"
+      ],
+      "members": [
+        {
+          "name": "costly",
+          "role": "重分析员",
+          "allowedTools": [
+            "read"
+          ]
+        }
+      ],
+      "expectedSends": [
+        {
+          "recipient": "costly",
+          "content": "做一次深度分析",
+          "estimatedTokens": 100000
+        }
+      ],
+      "expectedToolCalls": [
+        {
+          "tool": "TeamCreate",
+          "args": {
+            "name": "costly"
+          }
+        },
+        {
+          "tool": "SendMessage",
+          "args": {
+            "recipient": "costly"
+          }
+        }
+      ],
+      "maxTokensTotal": 10,
+      "expectedResultStatus": "failed",
+      "maxTurns": 1,
+      "expectedOutcome": "createBudgetGuard 预检拒绝，团队累计严格 ≤ ceiling"
+    },
+    {
+      "id": "team-11-over-budget-tight",
+      "prompt": "ceiling 极紧：任何派发的估算都超限。",
+      "mode": "over_budget",
+      "availableTools": [
+        "read",
+        "write"
+      ],
+      "members": [
+        {
+          "name": "tight",
+          "role": "容错测试员",
+          "allowedTools": [
+            "read"
+          ]
+        }
+      ],
+      "expectedSends": [
+        {
+          "recipient": "tight",
+          "content": "试着跑一轮",
+          "estimatedTokens": 5000
+        }
+      ],
+      "expectedToolCalls": [
+        {
+          "tool": "TeamCreate",
+          "args": {
+            "name": "tight"
+          }
+        },
+        {
+          "tool": "SendMessage",
+          "args": {
+            "recipient": "tight"
+          }
+        }
+      ],
+      "maxTokensTotal": 1,
+      "expectedResultStatus": "failed",
+      "maxTurns": 1,
+      "expectedOutcome": "护栏 pre-commit 语义：累计不突破 ceiling"
+    },
+    {
+      "id": "team-12-over-budget-per-member",
+      "prompt": "单成员成本上限极低，派发前即被拒绝。",
+      "mode": "over_budget",
+      "availableTools": [
+        "read"
+      ],
+      "members": [
+        {
+          "name": "expensive",
+          "role": "高成本分析",
+          "allowedTools": [
+            "read"
+          ]
+        }
+      ],
+      "expectedSends": [
+        {
+          "recipient": "expensive",
+          "content": "写一份长篇分析",
+          "estimatedTokens": 200000
+        }
+      ],
+      "expectedToolCalls": [
+        {
+          "tool": "TeamCreate",
+          "args": {
+            "name": "expensive"
+          }
+        },
+        {
+          "tool": "SendMessage",
+          "args": {
+            "recipient": "expensive"
+          }
+        }
+      ],
+      "maxCostPerMember": 1e-06,
+      "expectedResultStatus": "failed",
+      "maxTurns": 1,
+      "expectedOutcome": "per-member 成本上限触发预检拒绝"
+    },
+    {
+      "id": "team-13-over-budget-no-run",
+      "prompt": "预算拒绝后不应再产生第二笔派发。",
+      "mode": "over_budget",
+      "availableTools": [
+        "read"
+      ],
+      "members": [
+        {
+          "name": "r1",
+          "role": "分析员",
+          "allowedTools": [
+            "read"
+          ]
+        }
+      ],
+      "expectedSends": [
+        {
+          "recipient": "r1",
+          "content": "第一轮分析",
+          "estimatedTokens": 50000
+        }
+      ],
+      "expectedToolCalls": [
+        {
+          "tool": "TeamCreate",
+          "args": {
+            "name": "r1"
+          }
+        },
+        {
+          "tool": "SendMessage",
+          "args": {
+            "recipient": "r1"
+          }
+        }
+      ],
+      "maxTokensTotal": 2,
+      "expectedMemberStatus": {
+        "r1": "failed"
+      },
+      "expectedResultStatus": "failed",
+      "maxTurns": 1,
+      "expectedOutcome": "成员标记 failed + budgetExceeded，不再重试"
+    },
+    {
+      "id": "team-14-permission-deny-write",
+      "prompt": "只读成员试图调用 write，继承闸门必须拒绝。",
+      "mode": "permission_deny",
+      "availableTools": [
+        "read",
+        "write",
+        "bash"
+      ],
+      "members": [
+        {
+          "name": "reader",
+          "role": "只读评审",
+          "allowedTools": [
+            "read"
+          ]
+        }
+      ],
+      "expectedSends": [
+        {
+          "recipient": "reader",
+          "content": "读材料并总结"
+        }
+      ],
+      "expectedToolCalls": [
+        {
+          "tool": "TeamCreate",
+          "args": {
+            "name": "reader"
+          }
+        },
+        {
+          "tool": "SendMessage",
+          "args": {
+            "recipient": "reader"
+          }
+        }
+      ],
+      "expectedPermission": {
+        "deniedTools": [
+          "write"
+        ],
+        "grantedTools": [
+          "read"
+        ]
+      },
+      "expectedPermissionDenials": [
+        "write"
+      ],
+      "expectedResultStatus": "done",
+      "maxTurns": 2,
+      "expectedOutcome": "子代理按自身 allowedTools 子集裁决，write 被继承闸门拒绝"
+    },
+    {
+      "id": "team-15-permission-deny-bash",
+      "prompt": "只给 read 工具的成员尝试 bash，必须拒绝。",
+      "mode": "permission_deny",
+      "availableTools": [
+        "read",
+        "write",
+        "bash"
+      ],
+      "members": [
+        {
+          "name": "safe",
+          "role": "安全评审",
+          "allowedTools": [
+            "read"
+          ]
+        }
+      ],
+      "expectedSends": [
+        {
+          "recipient": "safe",
+          "content": "检查仓库状态"
+        }
+      ],
+      "expectedToolCalls": [
+        {
+          "tool": "TeamCreate",
+          "args": {
+            "name": "safe"
+          }
+        },
+        {
+          "tool": "SendMessage",
+          "args": {
+            "recipient": "safe"
+          }
+        }
+      ],
+      "expectedPermission": {
+        "deniedTools": [
+          "bash"
+        ],
+        "grantedTools": [
+          "read"
+        ]
+      },
+      "expectedPermissionDenials": [
+        "bash"
+      ],
+      "expectedResultStatus": "done",
+      "maxTurns": 2,
+      "expectedOutcome": "bash 在子代理内部同样受审（继承通道）"
+    },
+    {
+      "id": "team-16-permission-minimal-subset",
+      "prompt": "工具池有四件，成员只授权 read+grep。",
+      "mode": "permission_deny",
+      "availableTools": [
+        "read",
+        "write",
+        "bash",
+        "grep"
+      ],
+      "members": [
+        {
+          "name": "scoped",
+          "role": "受限分析员",
+          "allowedTools": [
+            "read",
+            "grep"
+          ]
+        }
+      ],
+      "expectedSends": [
+        {
+          "recipient": "scoped",
+          "content": "检索并阅读"
+        }
+      ],
+      "expectedToolCalls": [
+        {
+          "tool": "TeamCreate",
+          "args": {
+            "name": "scoped"
+          }
+        },
+        {
+          "tool": "SendMessage",
+          "args": {
+            "recipient": "scoped"
+          }
+        }
+      ],
+      "expectedPermission": {
+        "deniedTools": [
+          "write"
+        ],
+        "grantedTools": [
+          "read",
+          "grep"
+        ]
+      },
+      "expectedResultStatus": "done",
+      "maxTurns": 2,
+      "expectedOutcome": "权限最小化：授予集合严格等于池 ∩ allowedTools"
+    },
+    {
+      "id": "team-17-permission-deny-edit",
+      "prompt": "只读成员试图 edit 既有文件，必须拒绝。",
+      "mode": "permission_deny",
+      "availableTools": [
+        "read",
+        "edit"
+      ],
+      "members": [
+        {
+          "name": "auditor",
+          "role": "审计员",
+          "allowedTools": [
+            "read"
+          ]
+        }
+      ],
+      "expectedSends": [
+        {
+          "recipient": "auditor",
+          "content": "审计配置"
+        }
+      ],
+      "expectedToolCalls": [
+        {
+          "tool": "TeamCreate",
+          "args": {
+            "name": "auditor"
+          }
+        },
+        {
+          "tool": "SendMessage",
+          "args": {
+            "recipient": "auditor"
+          }
+        }
+      ],
+      "expectedPermission": {
+        "deniedTools": [
+          "edit"
+        ],
+        "grantedTools": [
+          "read"
+        ]
+      },
+      "expectedPermissionDenials": [
+        "edit"
+      ],
+      "expectedResultStatus": "done",
+      "maxTurns": 2,
+      "expectedOutcome": "edit 被拒，fail-closed 是安全语义"
+    },
+    {
+      "id": "team-18-concurrency-2",
+      "prompt": "两成员并发扇出，在飞峰值不得超过 2。",
+      "mode": "concurrency",
+      "availableTools": [
+        "read"
+      ],
+      "members": [
+        {
+          "name": "c1",
+          "role": "并发员",
+          "allowedTools": [
+            "read"
+          ]
+        },
+        {
+          "name": "c2",
+          "role": "并发员",
+          "allowedTools": [
+            "read"
+          ]
+        }
+      ],
+      "expectedSends": [
+        {
+          "recipient": "c1",
+          "content": "并发任务 1"
+        },
+        {
+          "recipient": "c2",
+          "content": "并发任务 2"
+        }
+      ],
+      "expectedToolCalls": [
+        {
+          "tool": "TeamCreate",
+          "args": {
+            "name": "c1"
+          }
+        },
+        {
+          "tool": "TeamCreate",
+          "args": {
+            "name": "c2"
+          }
+        },
+        {
+          "tool": "SendMessage",
+          "args": {
+            "recipient": "c1"
+          }
+        },
+        {
+          "tool": "SendMessage",
+          "args": {
+            "recipient": "c2"
+          }
+        }
+      ],
+      "maxConcurrentMembers": 2,
+      "expectedMemberStatus": {
+        "c1": "done",
+        "c2": "done"
+      },
+      "expectedResultStatus": "done",
+      "maxTurns": 2,
+      "expectedOutcome": "信号量限制在飞数，峰值 ≤ 2"
+    },
+    {
+      "id": "team-19-concurrency-3",
+      "prompt": "三成员扇出，并发上限 3。",
+      "mode": "concurrency",
+      "availableTools": [
+        "read"
+      ],
+      "members": [
+        {
+          "name": "d1",
+          "role": "并发员",
+          "allowedTools": [
+            "read"
+          ]
+        },
+        {
+          "name": "d2",
+          "role": "并发员",
+          "allowedTools": [
+            "read"
+          ]
+        },
+        {
+          "name": "d3",
+          "role": "并发员",
+          "allowedTools": [
+            "read"
+          ]
+        }
+      ],
+      "expectedSends": [
+        {
+          "recipient": "d1",
+          "content": "任务 1"
+        },
+        {
+          "recipient": "d2",
+          "content": "任务 2"
+        },
+        {
+          "recipient": "d3",
+          "content": "任务 3"
+        }
+      ],
+      "expectedToolCalls": [
+        {
+          "tool": "TeamCreate",
+          "args": {
+            "name": "d1"
+          }
+        },
+        {
+          "tool": "TeamCreate",
+          "args": {
+            "name": "d2"
+          }
+        },
+        {
+          "tool": "TeamCreate",
+          "args": {
+            "name": "d3"
+          }
+        }
+      ],
+      "maxConcurrentMembers": 3,
+      "expectedResultStatus": "done",
+      "maxTurns": 2,
+      "expectedOutcome": "三成员并发峰值 ≤ 3"
+    },
+    {
+      "id": "team-20-concurrency-serial-limit",
+      "prompt": "四成员但并发上限 2：峰值仍不得超 2。",
+      "mode": "concurrency",
+      "availableTools": [
+        "read"
+      ],
+      "members": [
+        {
+          "name": "e1",
+          "role": "并发员",
+          "allowedTools": [
+            "read"
+          ]
+        },
+        {
+          "name": "e2",
+          "role": "并发员",
+          "allowedTools": [
+            "read"
+          ]
+        },
+        {
+          "name": "e3",
+          "role": "并发员",
+          "allowedTools": [
+            "read"
+          ]
+        },
+        {
+          "name": "e4",
+          "role": "并发员",
+          "allowedTools": [
+            "read"
+          ]
+        }
+      ],
+      "expectedSends": [
+        {
+          "recipient": "e1",
+          "content": "任务 1"
+        },
+        {
+          "recipient": "e2",
+          "content": "任务 2"
+        },
+        {
+          "recipient": "e3",
+          "content": "任务 3"
+        },
+        {
+          "recipient": "e4",
+          "content": "任务 4"
+        }
+      ],
+      "expectedToolCalls": [
+        {
+          "tool": "TeamCreate",
+          "args": {
+            "name": "e1"
+          }
+        },
+        {
+          "tool": "TeamCreate",
+          "args": {
+            "name": "e2"
+          }
+        }
+      ],
+      "maxConcurrentMembers": 2,
+      "expectedResultStatus": "done",
+      "maxTurns": 2,
+      "expectedOutcome": "worker 池排队：峰值恒 ≤ 上限"
+    },
+    {
+      "id": "team-21-concurrency-peak-single",
+      "prompt": "并发上限 1 时退化为顺序执行，峰值仍为 1。",
+      "mode": "concurrency",
+      "availableTools": [
+        "read"
+      ],
+      "members": [
+        {
+          "name": "f1",
+          "role": "串行员",
+          "allowedTools": [
+            "read"
+          ]
+        },
+        {
+          "name": "f2",
+          "role": "串行员",
+          "allowedTools": [
+            "read"
+          ]
+        }
+      ],
+      "expectedSends": [
+        {
+          "recipient": "f1",
+          "content": "串行 1"
+        },
+        {
+          "recipient": "f2",
+          "content": "串行 2"
+        }
+      ],
+      "expectedToolCalls": [
+        {
+          "tool": "TeamCreate",
+          "args": {
+            "name": "f1"
+          }
+        },
+        {
+          "tool": "TeamCreate",
+          "args": {
+            "name": "f2"
+          }
+        }
+      ],
+      "maxConcurrentMembers": 2,
+      "expectedResultStatus": "done",
+      "maxTurns": 2,
+      "expectedOutcome": "顺序执行仍在飞峰值 ≤ 上限"
+    },
+    {
+      "id": "team-22-failure-isolation-boom",
+      "prompt": "子代理工具副作用出口抛错，supervisor 不得崩溃。",
+      "mode": "failure_isolation",
+      "availableTools": [
+        "read",
+        "write"
+      ],
+      "members": [
+        {
+          "name": "boom",
+          "role": "故障成员",
+          "allowedTools": [
+            "read",
+            "write"
+          ]
+        }
+      ],
+      "expectedSends": [
+        {
+          "recipient": "boom",
+          "content": "执行一次写操作"
+        }
+      ],
+      "expectedToolCalls": [
+        {
+          "tool": "TeamCreate",
+          "args": {
+            "name": "boom"
+          }
+        },
+        {
+          "tool": "SendMessage",
+          "args": {
+            "recipient": "boom"
+          }
+        }
+      ],
+      "expectedResultStatus": "failed",
+      "maxTurns": 1,
+      "expectedOutcome": "异常收敛为结构化 SubagentResult.error，主循环继续",
+      "failedMember": "boom",
+      "failTool": "write"
+    },
+    {
+      "id": "team-23-failure-isolation-crash",
+      "prompt": "子代理工具副作用出口抛错，supervisor 不得崩溃。",
+      "mode": "failure_isolation",
+      "availableTools": [
+        "read",
+        "write"
+      ],
+      "members": [
+        {
+          "name": "crash",
+          "role": "故障成员",
+          "allowedTools": [
+            "read",
+            "write"
+          ]
+        }
+      ],
+      "expectedSends": [
+        {
+          "recipient": "crash",
+          "content": "执行一次写操作"
+        }
+      ],
+      "expectedToolCalls": [
+        {
+          "tool": "TeamCreate",
+          "args": {
+            "name": "crash"
+          }
+        },
+        {
+          "tool": "SendMessage",
+          "args": {
+            "recipient": "crash"
+          }
+        }
+      ],
+      "expectedResultStatus": "failed",
+      "maxTurns": 1,
+      "expectedOutcome": "异常收敛为结构化 SubagentResult.error，主循环继续",
+      "failedMember": "crash",
+      "failTool": "write"
+    },
+    {
+      "id": "team-24-failure-isolation-broken-tool",
+      "prompt": "子代理工具副作用出口抛错，supervisor 不得崩溃。",
+      "mode": "failure_isolation",
+      "availableTools": [
+        "read",
+        "write"
+      ],
+      "members": [
+        {
+          "name": "broken_tool",
+          "role": "故障成员",
+          "allowedTools": [
+            "read",
+            "write"
+          ]
+        }
+      ],
+      "expectedSends": [
+        {
+          "recipient": "broken_tool",
+          "content": "执行一次写操作"
+        }
+      ],
+      "expectedToolCalls": [
+        {
+          "tool": "TeamCreate",
+          "args": {
+            "name": "broken_tool"
+          }
+        },
+        {
+          "tool": "SendMessage",
+          "args": {
+            "recipient": "broken_tool"
+          }
+        }
+      ],
+      "expectedResultStatus": "failed",
+      "maxTurns": 1,
+      "expectedOutcome": "异常收敛为结构化 SubagentResult.error，主循环继续",
+      "failedMember": "broken_tool",
+      "failTool": "write"
+    },
+    {
+      "id": "team-25-failure-isolation-faulty",
+      "prompt": "子代理工具副作用出口抛错，supervisor 不得崩溃。",
+      "mode": "failure_isolation",
+      "availableTools": [
+        "read",
+        "write"
+      ],
+      "members": [
+        {
+          "name": "faulty",
+          "role": "故障成员",
+          "allowedTools": [
+            "read",
+            "write"
+          ]
+        }
+      ],
+      "expectedSends": [
+        {
+          "recipient": "faulty",
+          "content": "执行一次写操作"
+        }
+      ],
+      "expectedToolCalls": [
+        {
+          "tool": "TeamCreate",
+          "args": {
+            "name": "faulty"
+          }
+        },
+        {
+          "tool": "SendMessage",
+          "args": {
+            "recipient": "faulty"
+          }
+        }
+      ],
+      "expectedResultStatus": "failed",
+      "maxTurns": 1,
+      "expectedOutcome": "异常收敛为结构化 SubagentResult.error，主循环继续",
+      "failedMember": "faulty",
+      "failTool": "write"
+    },
+    {
+      "id": "team-26-l1-probe-end-error",
+      "prompt": "L1 纯函数探针：endError 必须被如实透传（不吞成 unknown）。",
+      "mode": "dispatch",
+      "l1ProbeMode": "end_error",
+      "availableTools": [
+        "read"
+      ],
+      "members": [
+        {
+          "name": "probe",
+          "role": "L1 探针成员",
+          "allowedTools": [
+            "read"
+          ]
+        }
+      ],
+      "expectedSends": [
+        {
+          "recipient": "probe",
+          "content": "探针"
+        }
+      ],
+      "expectedToolCalls": [
+        {
+          "tool": "TeamCreate",
+          "args": {
+            "name": "probe"
+          }
+        },
+        {
+          "tool": "SendMessage",
+          "args": {
+            "recipient": "probe"
+          }
+        }
+      ],
+      "expectedOutcome": "classifyAborted 透传 agent_loop_aborted"
+    },
+    {
+      "id": "team-27-l1-probe-stop-reason",
+      "prompt": "L1 纯函数探针：lastAssistant.stopReason='error' 必须判 aborted 并带 stopReason。",
+      "mode": "dispatch",
+      "l1ProbeMode": "stop_reason_error",
+      "availableTools": [
+        "read"
+      ],
+      "members": [
+        {
+          "name": "probe2",
+          "role": "L1 探针成员",
+          "allowedTools": [
+            "read"
+          ]
+        }
+      ],
+      "expectedSends": [
+        {
+          "recipient": "probe2",
+          "content": "探针"
+        }
+      ],
+      "expectedToolCalls": [
+        {
+          "tool": "TeamCreate",
+          "args": {
+            "name": "probe2"
+          }
+        },
+        {
+          "tool": "SendMessage",
+          "args": {
+            "recipient": "probe2"
+          }
+        }
+      ],
+      "expectedOutcome": "classifyAborted 识别 stopReason=error"
+    },
+    {
+      "id": "team-28-l1-probe-with-hooks",
+      "prompt": "L1 纯函数探针：有 budgetHook + beforeToolCall 时 config 必须注入两个键。",
+      "mode": "dispatch",
+      "l1ProbeMode": "with_hooks",
+      "availableTools": [
+        "read"
+      ],
+      "members": [
+        {
+          "name": "probe3",
+          "role": "L1 探针成员",
+          "allowedTools": [
+            "read"
+          ]
+        }
+      ],
+      "expectedSends": [
+        {
+          "recipient": "probe3",
+          "content": "探针"
+        }
+      ],
+      "expectedToolCalls": [
+        {
+          "tool": "TeamCreate",
+          "args": {
+            "name": "probe3"
+          }
+        },
+        {
+          "tool": "SendMessage",
+          "args": {
+            "recipient": "probe3"
+          }
+        }
+      ],
+      "expectedOutcome": "assembleSubagentConfig 双向契约（有钩子必注入）"
+    },
+    {
+      "id": "team-29-l1-probe-misuse",
+      "prompt": "L1 纯函数探针：误传非 assistant 时不为 fail-closed（aborted:false 且无 error 键）。",
+      "mode": "dispatch",
+      "l1ProbeMode": "misuse",
+      "availableTools": [
+        "read"
+      ],
+      "members": [
+        {
+          "name": "probe",
+          "role": "L1 探针成员",
+          "allowedTools": [
+            "read"
+          ]
+        }
+      ],
+      "expectedSends": [
+        {
+          "recipient": "probe",
+          "content": "探针"
+        }
+      ],
+      "expectedToolCalls": [
+        {
+          "tool": "TeamCreate",
+          "args": {
+            "name": "probe"
+          }
+        },
+        {
+          "tool": "SendMessage",
+          "args": {
+            "recipient": "probe"
+          }
+        }
+      ],
+      "expectedOutcome": "classifyAborted 对非 assistant 输入返回 aborted:false、无 error（契约 6.1.2）"
+    }
+  ]
+}

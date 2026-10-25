@@ -1,5 +1,7 @@
 # 03 · ohna-web 布局对齐：工作区分组会话 + Trace 右侧抽屉 + 设置入口
 
+> **⚠️ 本文的「Trace」章节（Phase L2「Trace 右侧抽屉」及一切关于抽屉内形态的验收条目）已被 `docs/v2.0/04-trace-context-visualization.md` 取代（2026-10-24）**：v2.0/04 在保留「Trace 抽屉为家、`/trace` 路由删除、与 `RunDetailPanel` 右侧位互斥」的前提下，把抽屉内部升级为「执行地图（Ribbon + TurnGroup + TeamCards）+ 上下文/Token 三面板（`ContextComposition` / `ContextTrend` / `ContextEvents`）」，并新增 `trace-spans.ts` / `trace-context.ts` 两个纯函数投影层。**Trace 相关验收条目以 04 为准，本文对应段落仅作历史留档**；本文的**非 Trace 部分**（L1 工作区分组会话、L3 设置入口、L4 验证同步）不受影响，仍然有效。
+>
 > **需求来源**（用户决策，2026-10-20）：ohna-web 与预想有三处出入——
 > ① 左侧会话需要展示 CLI 在**不同目录**产生的会话，并**按工作区分组**；
 > ② 中间时间线**暂不调整**；

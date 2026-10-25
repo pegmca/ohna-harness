@@ -54,7 +54,7 @@ export interface TeamBudgetAccumulator {
  *
  * @param model 成员模型（提供 input/output 费率）。
  * @param estimatedTokens 调用方按任务规模估算的 token 数。
- * @param config 护栏配置（取 per-member / team 成本上限）。
+ * @param config 护栏配置（取 per-member / team 的 token 与成本上限）。
  * @param accumulator 团队聚合累加器（只读，用于判断团队总余量）。
  * @returns true 表示预算允许派发；false 表示会突破上限，应拒绝。
  */
@@ -67,6 +67,17 @@ export function createBudgetGuard(
   const perMillion = model.cost.input + model.cost.output;
   const estimatedCost = (estimatedTokens / TOKENS_PER_MILLION) * perMillion;
 
+  // token 上限必须与成本上限对称判定：`model.cost` 为 0 的模型（评测占位模型、
+  // 本地小模型、缓存全命中）成本恒为 0，若只比成本，纯 token ceiling 将永不生效，
+  // 派发前的预检形同虚设（运行时钩子仍会拦住，但「派发前拒绝」这一层被静默跳过）。
+  // 判定口径对齐运行时钩子的 `maxTokensPerMember` / `maxTokensTotal`。
+  if (config.maxTokensPerMember !== undefined && estimatedTokens >= config.maxTokensPerMember) {
+    return false;
+  }
+  if (config.maxTokensTotal !== undefined) {
+    const remainingTokens = config.maxTokensTotal - accumulator.totalTokens;
+    if (estimatedTokens >= remainingTokens) return false;
+  }
   // per-member 成本上限：估算成本本身已超单成员预算。
   if (config.maxCostPerMember !== undefined && estimatedCost > config.maxCostPerMember) {
     return false;

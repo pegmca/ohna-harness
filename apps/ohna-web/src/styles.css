@@ -3383,3 +3383,615 @@ textarea:disabled {
   .settings-dialog,
   .settings-dialog-backdrop { animation: none; }
 }
+
+/* ---------- Trace v2.0：执行地图 + 上下文/Token 三面板（docs/v2.0/04 §5.5/§6） ---------- */
+
+/*
+ * 视觉约束：只复用既有 token（--md-glass-inspector / --md-glass-sunken / --md-color-* 语义色），
+ * 不新增配色。分类段的五个色槽由既有语义色承担（primary / info / warning / danger / success 的
+ * soft 底色 + 同族实色）。
+ *
+ * 为什么本块还要补 `.md-badge*` / `.md-label` / `.md-button*` 三个**基类**：ohna-web 在 Glass
+ * Depths 迁移（docs/v1.4/07）时断开 system.css 并把 `--md-*` token 自持到本文件，但只搬了 token
+ * 没搬这三组组件类；组件侧（settings-primitives / run-details / composer-controls / trace 各面板）
+ * 一直在用它们，原先只靠 `.trace-*` 与 `.settings-*` 的**派生规则**被 Tailwind 间接扫到——
+ * 结果 `md-badge-success`、`md-button-secondary` 这类只出现在三目表达式与模板串里的类名在产物里
+ * 完全缺失（失败 turn 的 failed 徽标、run 状态徽标、「再显示 N 行」按钮因此无样式）。
+ * 这里按 system.css 同名块用本文件 token 平移补齐，属于修复既有回归，不是新增视觉语言：
+ * 圆角/间距写死在本文件的 spacing 刻度上，颜色一律走语义 token，不硬编码色值。
+ */
+
+.md-glass {
+  border: 1px solid var(--md-hairline);
+  border-radius: var(--md-radius-lg);
+  background: var(--md-glass-sunken);
+  box-shadow: var(--md-inset-highlight);
+}
+
+.trace-drawer-body {
+  /* 顶部（run 选择 + 摘要）与底部（脚注）固定，中间整段可滚：执行地图与三面板共享同一滚动区。 */
+  grid-template-rows: auto minmax(0, 1fr) auto;
+}
+
+.trace-drawer-top {
+  display: grid;
+  gap: var(--md-space-2);
+  min-width: 0;
+}
+
+.trace-drawer-scroll {
+  display: grid;
+  align-content: start;
+  gap: var(--md-space-3);
+  padding-right: var(--md-space-1);
+}
+
+.trace-ribbon {
+  display: grid;
+  gap: var(--md-space-2);
+}
+
+.trace-ribbon .md-label {
+  color: var(--md-color-text-muted);
+}
+
+.trace-ribbon-status {
+  font-family: var(--md-font-mono);
+  font-size: 0.8125rem;
+}
+
+.trace-summary-grid > span > strong {
+  color: var(--md-color-text-primary);
+  font-family: var(--md-font-mono);
+  font-size: 1rem;
+  font-weight: 650;
+}
+
+.trace-team-cards {
+  display: grid;
+  gap: var(--md-space-2);
+}
+
+.trace-team-card-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--md-space-2);
+}
+
+.trace-team-card {
+  display: grid;
+  gap: 1px;
+  min-width: 120px;
+  max-width: 220px;
+  padding: var(--md-space-2) var(--md-space-3);
+  border: 1px solid var(--md-hairline);
+  border-radius: var(--md-radius-md);
+  background: var(--md-glass-sunken);
+  color: var(--md-color-text-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color var(--md-motion-base) var(--md-ease), background-color var(--md-motion-base) var(--md-ease);
+}
+
+.trace-team-card:hover {
+  border-color: var(--md-color-border);
+}
+
+.trace-team-card.is-active {
+  border-color: var(--md-color-primary);
+  background: var(--md-color-primary-soft);
+}
+
+.trace-team-card-label {
+  display: flex;
+  align-items: center;
+  gap: var(--md-space-1);
+  overflow: hidden;
+  font-size: 0.8125rem;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.trace-team-card-role {
+  color: var(--md-color-text-muted);
+  font-size: 0.6875rem;
+  overflow-wrap: anywhere;
+}
+
+.trace-team-card-model {
+  color: var(--md-color-text-disabled);
+  font-family: var(--md-font-mono);
+  font-size: 0.625rem;
+  overflow-wrap: anywhere;
+}
+
+.trace-turns {
+  display: grid;
+  gap: var(--md-space-3);
+}
+
+.trace-turn {
+  display: grid;
+  gap: var(--md-space-2);
+  border-left: 2px solid transparent;
+  padding-left: var(--md-space-2);
+}
+
+.trace-turn.is-failed {
+  border-left-color: var(--md-color-danger);
+}
+
+.trace-turn.is-active {
+  border-left-color: var(--md-color-primary);
+}
+
+.trace-turn-head {
+  display: flex;
+  align-items: center;
+  gap: var(--md-space-2);
+  width: 100%;
+  border: 0;
+  background: transparent;
+  padding: var(--md-space-1) 0;
+  color: var(--md-color-text-primary);
+  font: inherit;
+  text-align: left;
+}
+
+.trace-turn-title {
+  font-size: 0.8125rem;
+  font-weight: 650;
+}
+
+.trace-turn-meta {
+  color: var(--md-color-text-muted);
+  font-family: var(--md-font-mono);
+  font-size: 0.6875rem;
+}
+
+.trace-turn-head .details-chevron.is-open {
+  transform: rotate(180deg);
+}
+
+.trace-turn-more {
+  justify-self: start;
+}
+
+/*
+ * 行级归因联动（Team 卡点击）：只提亮、不隐藏。
+ * 底色用 primary-soft 的极弱一档（40%），保证与相邻行在密集行距下也能一眼区分；
+ * outline 保留给键盘/读屏用户的可辨识轮廓。
+ */
+.trace-map-row.is-agent-active {
+  border-radius: var(--md-radius-sm);
+  outline: 1px solid var(--md-color-primary);
+  outline-offset: 2px;
+  background: color-mix(in srgb, var(--md-color-primary-soft) 40%, transparent);
+}
+
+.trace-row-agent {
+  color: var(--md-color-text-muted);
+  font-family: var(--md-font-mono);
+  font-size: 0.625rem;
+  opacity: 0.85;
+}
+
+/* 视口惰性挂载的占位：未挂载时只占一行摘要的高度，避免滚动条跳动。 */
+.trace-row-slot {
+  content-visibility: auto;
+  /* 未挂载时的高度按摘要行算（`.trace-llm-summary` 实测约 30px），避免预取区滚动条跳动。 */
+  contain-intrinsic-size: auto 32px;
+  min-width: 0;
+}
+
+/*
+ * 上下文事件行（执行地图里的 compaction 横条）：与 Events 面板同源同文案，
+ * 复用 .md-badge 语义色 + --md-color-info-soft 的弱底色。
+ */
+.trace-context-row {
+  display: flex;
+  align-items: center;
+  gap: var(--md-space-2);
+  flex-wrap: wrap;
+  border: 1px solid var(--md-color-border-subtle);
+  border-radius: var(--md-radius-md);
+  background: var(--md-color-info-soft);
+  padding: var(--md-space-2) var(--md-space-3);
+  color: var(--md-color-text-secondary);
+  font-size: 0.75rem;
+}
+
+.trace-context-delta {
+  color: var(--md-color-primary);
+  font-family: var(--md-font-mono);
+  font-size: 0.75rem;
+}
+
+.trace-context-detail {
+  color: var(--md-color-text-muted);
+  font-family: var(--md-font-mono);
+  font-size: 0.6875rem;
+  overflow-wrap: anywhere;
+}
+
+.trace-context-fold {
+  border: 1px solid var(--md-hairline);
+  border-radius: var(--md-radius-lg);
+  background: var(--md-glass-inspector);
+}
+
+.trace-context-fold > summary {
+  display: flex;
+  align-items: center;
+  gap: var(--md-space-2);
+  padding: var(--md-space-2) var(--md-space-3);
+  color: var(--md-color-text-secondary);
+  cursor: pointer;
+  list-style: none;
+}
+
+.trace-context-fold > summary::-webkit-details-marker {
+  display: none;
+}
+
+.trace-context-fold[open] > summary .details-chevron {
+  transform: rotate(180deg);
+}
+
+.trace-context-panels {
+  display: grid;
+  gap: var(--md-space-3);
+  border-top: 1px solid var(--md-color-border-subtle);
+  padding: var(--md-space-3);
+}
+
+.trace-panel {
+  display: grid;
+  gap: var(--md-space-2);
+  min-width: 0;
+  padding: var(--md-space-3);
+}
+
+.trace-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--md-space-2);
+  flex-wrap: wrap;
+}
+
+.trace-panel-head .md-label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--md-space-1);
+}
+
+.trace-panel-note {
+  margin: 0;
+  color: var(--md-color-text-muted);
+  font-family: var(--md-font-mono);
+  font-size: 0.6875rem;
+}
+
+/* 五分类色槽：全部取自既有语义 token，不引入新色。 */
+.trace-stack-seg.seg-system,
+.trace-trend-seg.seg-system,
+.trace-legend-swatch.seg-system {
+  background: var(--md-color-primary);
+}
+
+.trace-stack-seg.seg-tools,
+.trace-trend-seg.seg-tools,
+.trace-legend-swatch.seg-tools {
+  background: color-mix(in srgb, var(--md-color-primary) 62%, var(--md-color-surface));
+}
+
+.trace-stack-seg.seg-user,
+.trace-trend-seg.seg-user,
+.trace-legend-swatch.seg-user {
+  background: var(--md-color-info);
+}
+
+.trace-stack-seg.seg-assistant,
+.trace-trend-seg.seg-assistant,
+.trace-legend-swatch.seg-assistant {
+  background: var(--md-color-warning);
+}
+
+.trace-stack-seg.seg-toolResult,
+.trace-trend-seg.seg-toolResult,
+.trace-legend-swatch.seg-toolResult {
+  background: var(--md-color-danger);
+}
+
+/* 尾部掩码：斜纹 = 预留 / 不可用于历史消息的窗口，而不是「已占用」。 */
+.trace-stack-seg.is-hatch,
+.trace-legend-swatch.is-hatch {
+  background-color: var(--md-color-muted);
+  background-image: repeating-linear-gradient(
+    135deg,
+    var(--md-color-text-disabled) 0 1px,
+    transparent 1px 5px
+  );
+  opacity: 0.9;
+}
+
+.trace-stack-bar.is-vertical {
+  display: flex;
+  flex-direction: column-reverse;
+  gap: 1px;
+  width: 100%;
+  margin-top: var(--md-space-1);
+  overflow: hidden;
+  border: 1px solid var(--md-hairline);
+  border-radius: var(--md-radius-md);
+  background: var(--md-glass-sunken);
+}
+
+.trace-stack-seg {
+  display: block;
+  width: 100%;
+  min-height: 0;
+}
+
+.trace-legend {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.trace-legend > li {
+  display: grid;
+  grid-template-columns: 10px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--md-space-2);
+  color: var(--md-color-text-secondary);
+  font-size: 0.6875rem;
+}
+
+.trace-legend-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+}
+
+.trace-legend-value {
+  color: var(--md-color-text-muted);
+  font-family: var(--md-font-mono);
+}
+
+.trace-trend {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--md-space-1);
+  overflow-x: auto;
+  padding-bottom: var(--md-space-1);
+}
+
+.trace-trend-col {
+  display: grid;
+  gap: 2px;
+  justify-items: center;
+  flex: 0 0 auto;
+  min-width: 28px;
+}
+
+.trace-trend-bar {
+  display: flex;
+  align-items: flex-end;
+  width: 18px;
+}
+
+.trace-trend-fill {
+  display: flex;
+  flex-direction: column-reverse;
+  width: 100%;
+  min-height: 2px;
+  overflow: hidden;
+  border-radius: 3px 3px 0 0;
+  background: var(--md-color-muted);
+}
+
+.trace-trend-seg {
+  display: block;
+  width: 100%;
+}
+
+.trace-trend-index,
+.trace-trend-agent {
+  color: var(--md-color-text-muted);
+  font-family: var(--md-font-mono);
+  font-size: 0.625rem;
+}
+
+.trace-trend-agent {
+  max-width: 56px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ✂：钉在柱列之间的 compaction 标记（与 Events 面板同源）。 */
+.trace-trend-mark {
+  display: grid;
+  justify-items: center;
+  align-self: center;
+  gap: 1px;
+  flex: 0 0 auto;
+  color: var(--md-color-primary);
+  border-left: 1px dashed var(--md-color-primary);
+  padding-left: 2px;
+}
+
+.trace-trend-mark-delta {
+  font-family: var(--md-font-mono);
+  font-size: 0.5625rem;
+  color: var(--md-color-primary);
+}
+
+.trace-event-list {
+  display: grid;
+  gap: var(--md-space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.trace-event-list > li {
+  display: grid;
+  gap: 2px;
+}
+
+.trace-event-chip {
+  display: flex;
+  align-items: center;
+  gap: var(--md-space-2);
+  flex-wrap: wrap;
+  border: 1px solid var(--md-color-border-subtle);
+  border-radius: var(--md-radius-md);
+  background: var(--md-color-info-soft);
+  padding: var(--md-space-2);
+  color: var(--md-color-text-secondary);
+  font-size: 0.75rem;
+}
+
+.trace-event-delta {
+  color: var(--md-color-primary);
+  font-family: var(--md-font-mono);
+  font-weight: 650;
+}
+
+.trace-event-range {
+  color: var(--md-color-text-muted);
+  font-family: var(--md-font-mono);
+  font-size: 0.6875rem;
+}
+
+.trace-event-detail {
+  margin: 0;
+  color: var(--md-color-text-muted);
+  font-size: 0.6875rem;
+  overflow-wrap: anywhere;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .trace-team-card { transition: none; }
+}
+
+/* ---------- 基础组件类补齐（Glass Depths 迁移遗留，见上方说明） ---------- */
+
+.md-label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--md-space-1);
+  margin: 0;
+  color: var(--md-color-text-muted);
+  font-size: var(--md-text-label-size);
+  font-weight: var(--md-text-label-weight);
+  letter-spacing: var(--md-text-label-tracking);
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+.md-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--md-space-1);
+  min-height: 22px;
+  padding: 0 var(--md-space-2);
+  border: var(--md-border-width) solid var(--md-color-border-subtle);
+  border-radius: var(--md-radius-md);
+  background: var(--md-color-muted);
+  color: var(--md-color-text-secondary);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.md-badge-success {
+  border-color: color-mix(in srgb, var(--md-color-success) 46%, var(--md-color-border));
+  background: var(--md-color-success-soft);
+  color: var(--md-color-success);
+}
+
+.md-badge-warning {
+  border-color: color-mix(in srgb, var(--md-color-warning) 46%, var(--md-color-border));
+  background: var(--md-color-warning-soft);
+  color: var(--md-color-warning);
+}
+
+.md-badge-danger {
+  border-color: color-mix(in srgb, var(--md-color-danger) 46%, var(--md-color-border));
+  background: var(--md-color-danger-soft);
+  color: var(--md-color-danger);
+}
+
+.md-badge-info {
+  border-color: color-mix(in srgb, var(--md-color-info) 46%, var(--md-color-border));
+  background: var(--md-color-info-soft);
+  color: var(--md-color-primary);
+}
+
+.md-button {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--md-space-2);
+  min-height: 36px;
+  padding: 0 var(--md-space-4);
+  border: var(--md-border-width) solid transparent;
+  border-radius: var(--md-radius-md);
+  background: transparent;
+  color: var(--md-color-text-primary);
+  font: inherit;
+  font-size: 0.8125rem;
+  font-weight: 650;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+  transition:
+    background-color var(--md-motion-base) var(--md-ease),
+    border-color var(--md-motion-base) var(--md-ease),
+    color var(--md-motion-base) var(--md-ease);
+}
+
+.md-button:focus-visible {
+  outline: none;
+  box-shadow: var(--md-focus-ring);
+}
+
+.md-button:disabled,
+.md-button[aria-disabled="true"] {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.md-button svg {
+  width: 1rem;
+  height: 1rem;
+  flex: 0 0 auto;
+}
+
+.md-button-secondary {
+  border-color: var(--md-color-border);
+  background: var(--md-color-surface);
+  color: var(--md-color-text-primary);
+}
+
+.md-button-secondary:hover:not(:disabled) {
+  border-color: var(--md-color-border-strong);
+  background: var(--md-color-elevated);
+}
+
+.md-button-sm {
+  min-height: 28px;
+  padding-inline: var(--md-space-3);
+  border-radius: var(--md-radius-sm);
+}

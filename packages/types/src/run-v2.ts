@@ -62,7 +62,13 @@ export type RunEventTypeDto =
    * 对齐 CodeBuddy「与终端交互完全一致」的双端同步体验。payload 为
    * `UserMessagePayloadDto`。在 `agent_start` 之前广播（sequence 更早）。
    */
-  | "user_message";
+  | "user_message"
+  /**
+   * 上下文结构变化事件（docs/v2.0/04 §3.1）：v2.0 仅有 compaction 一种 kind，
+   * payload 为 `ContextEventPayloadDto`。发射点在编排层（`RunManager.createRun`
+   * 的 run 前会话级压缩），不在内核压缩纯函数里；可持久化，非瞬态。
+   */
+  | "context_event";
 
 /**
  * SSE 与 run_events 共用的 canonical 事件 envelope。
@@ -79,6 +85,23 @@ export interface RunStreamEventDtoV2 {
   type: RunEventTypeDto;
   payload: unknown;
   createdAt: string;
+}
+
+/**
+ * `context_event` 事件的 payload（docs/v2.0/04 §3.1）。
+ *
+ * 收敛为 compaction 单 kind：prune / inject / mode / model_switch 对应的运行时动作
+ * 当前不存在（模型在 run 创建时固定、记忆/检索无统一注入点），待管线出现再扩枚举。
+ */
+export interface ContextEventPayloadDto {
+  /** 事件种类；v2.0 仅「run 前会话级压缩」。 */
+  kind: "compaction";
+  /** 压缩前会话 token 估算（`compactHistoryForRun` 的双基准估算）。 */
+  tokensBefore: number;
+  /** 压缩后 token 估算；与 tokensBefore 的差即净回收量。 */
+  tokensAfter: number;
+  /** 可读说明（摘要长度、保留轮数等）。 */
+  detail?: string;
 }
 
 /** appendEvent 的输入：由存储分配 eventId 与 sequence。 */

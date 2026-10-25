@@ -165,6 +165,42 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
   afterToolCall?: (context: AfterToolCallContext, signal?: AbortSignal) => Promise<AfterToolCallResult | undefined>;
   /** 本项目新增（pi 无）：run 总 deadline 毫秒数，由 run 层换算成截止时刻并在钩子里检查。 */
   deadlineMs?: number;
+  /**
+   * 当前 agent 的身份（docs/v2.0/04 §1.3）：由 `agent_start` / `turn_*` / `agent_end`
+   * 边界事件携带，是跨 Agent 归因的锚点。
+   *
+   * 可选但**事件里永远必填**：缺省时 agentLoop 兜底为根身份（`agentId = "supervisor"`，
+   * `label` / `role` = "supervisor"，`modelId = config.model.id`）。这样单智能体宿主
+   * （未装配 Team）零改动也能产出完整身份，而 Team 子代理显式传入自己的身份。
+   */
+  identity?: AgentIdentity;
+}
+
+/**
+ * supervisor 根 agent 的固定 id（命名冻结，见 docs/v2.0/04 §1.3 与 W0 约束）。
+ *
+ * 为什么是常量而非配置项：web 端 Trace 森林需要一个**稳定可预测**的根节点键
+ * （单个 run 内唯一、与 TeamMember.name 不冲突），所以根身份不交给调用方随意命名。
+ */
+export const SUPERVISOR_AGENT_ID = "supervisor";
+
+/**
+ * agent 身份（跨 Agent 归因锚点）。
+ *
+ * 命名冻结（docs/v2.0/04 / W0）：supervisor 根节点的 `agentId` 恒为 {@link SUPERVISOR_AGENT_ID}；
+ * 子代理 `agentId` = `TeamMember.name`（消息总线寻址键，稳定），`parentId` = "supervisor"。
+ */
+export interface AgentIdentity {
+  /** 本 agent 的稳定 id（根节点为 "supervisor"，子代理为成员名）。 */
+  agentId: string;
+  /** 父 agent id；根节点无父级。 */
+  parentId?: string;
+  /** 展示名（面板/编队卡片标题）。 */
+  label: string;
+  /** 角色描述（如「多头评审」）。 */
+  role: string;
+  /** 本次运行使用的模型 id。 */
+  modelId: string;
 }
 
 /**
@@ -181,12 +217,31 @@ export interface AgentLoopError {
  * Agent loop 事件流契约（对齐 pi AgentEvent）。
  * `agent_end` 是 run 的终止事件，携带本次 run 新产生的全部消息；
  * `error` 仅在兜底收尾（钩子抛错）时出现，正常结束为 undefined。
+ *
+ * v2.0 身份化（docs/v2.0/04 §1.3）是**破坏性**改动：四类边界事件
+ * （agent_start / agent_end / turn_start / turn_end）一律携带身份字段，
+ * 不保留「无身份」旧形状、不加 optional 兼容分支——所有 emit 点与消费方同一批改完。
  */
 export type AgentEvent =
-  | { type: "agent_start" }
-  | { type: "agent_end"; messages: AgentMessage[]; error?: AgentLoopError }
-  | { type: "turn_start" }
-  | { type: "turn_end"; message: AgentMessage; toolResults: ToolResultMessage[] }
+  /** 身份字段必填：缺省 config.identity 时由 agentLoop 兜底为根身份（见 AgentIdentity）。 */
+  | {
+      type: "agent_start";
+      agentId: string;
+      parentId?: string;
+      label: string;
+      role: string;
+      modelId: string;
+    }
+  | { type: "agent_end"; agentId: string; messages: AgentMessage[]; error?: AgentLoopError }
+  /** turnIndex 从 0 起，每次 turn_start 自增；与 agentId 组成 TurnSpan 的键（docs/v2.0/04 §2.3）。 */
+  | { type: "turn_start"; agentId: string; turnIndex: number }
+  | {
+      type: "turn_end";
+      agentId: string;
+      turnIndex: number;
+      message: AgentMessage;
+      toolResults: ToolResultMessage[];
+    }
   | { type: "message_start"; message: AgentMessage }
   /** 仅 assistant 流式期间发出。 */
   | { type: "message_update"; message: AgentMessage; assistantMessageEvent: AssistantMessageEvent }

@@ -2,10 +2,14 @@
 /**
  * ohna 观测台（Trace）端到端验证：不联网、不碰真实 `~/.ohna`。
  *
- * 覆盖两条生产路径（docs/v1.4/02-web-llm-trace.md §5 TC-W5-01/02/03）：
+ * 覆盖三条生产路径（docs/v1.4/02 §5 TC-W5-01/02/03；v2.0 见 docs/v2.0/04 §3/§8）：
  * 1. 托管 run：`createOhnaServer` + stub streamFn，在 `options.onPayload` 回填模拟请求体 →
- *    `createRun` → 事件流里必须出现完整的 `llm_call`（providerPayload + response + durationMs）。
- * 2. 静态托管：`apps/ohna-web/dist` 存在时 `GET /trace` 必须 200（不存在则跳过，不算失败）。
+ *    `createRun` → 事件流里必须出现完整的 `llm_call`（providerPayload + response + durationMs +
+ *    v2.0 的 window / agentId / composition）与带身份的 agent_start / turn_start。
+ * 2. 压缩路径：同一个桩模型，把 `contextWindow` 调到能触发 run 前压缩的小窗 + 预置超长历史 →
+ *    run 事件里必须出现 `context_event`（compaction 单 kind），且 sequence 落在 agent_start 之前。
+ *    这条只证明「serve 发射的链路成立」，**不是**「真实 provider 下压缩行为正确」的证据。
+ * 3. 静态托管：`apps/ohna-web/dist` 存在时 `GET /trace` 必须 200（不存在则跳过，不算失败）。
  *
  * 注：原「observe run」路径（CLI 镜像 + 合成事件句柄）已在 06 A3-B 退役，
  * 单一形态下执行权唯一归属 serve，故该脚本只验证托管 run 与静态托管两条路径。
@@ -22,7 +26,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createAssistantMessageEventStream } from "../packages/ai/dist/index.js";
-import { createOhnaServer } from "../packages/serve/dist/index.js";
+import { createOhnaServer, LocalMessageStore } from "../packages/serve/dist/index.js";
 
 const repoRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const webDist = path.join(repoRoot, "apps/ohna-web/dist");
@@ -181,10 +185,79 @@ function assertLlmRecord(record, label) {
   assert.ok(record.response.finishReason, `${label}: finishReason 必须存在`);
   assert.equal(typeof record.durationMs, "number", `${label}: durationMs 必须是数字`);
   assert.ok(Number.isFinite(record.durationMs) && record.durationMs >= 0, `${label}: durationMs 必须 ≥ 0`);
+  // v2.0（docs/v2.0/04 §1/§2）：Web 执行地图与上下文三面板直接消费这些字段，缺一项就画不出比例尺——
+  // 因此线格式契约在这里断言，而不是只靠前端 fixture 自证。
+  assert.ok(record.window, `${label}: window 必须存在（v2.0 必填）`);
+  assert.equal(record.window.contextWindow, MODEL.contextWindow, `${label}: window.contextWindow 应来自模型配置`);
+  assert.equal(record.window.maxTokens, MODEL.maxTokens, `${label}: window.maxTokens 应来自模型配置`);
+  assert.equal(typeof record.window.reserveTokens, "number", `${label}: window.reserveTokens 必须是数字`);
+  assert.ok(record.window.reserveTokens > 0, `${label}: window.reserveTokens 必须为正（压缩预留）`);
+  assert.equal(record.agentId, "supervisor", `${label}: 主线程 llm_call 应归因 supervisor（v2.0 §2）`);
+  assert.ok(record.composition, `${label}: composition 必须在 onPayload 阶段现算并落盘`);
+  for (const key of ["system", "tools", "user", "assistant", "toolResult"]) {
+    assert.equal(typeof record.composition[key], "number", `${label}: composition.${key} 必须是数字`);
+  }
+  assert.equal(
+    typeof record.composition.total,
+    "number",
+    `${label}: composition.total 必须是数字`
+  );
 }
 
 /**
- * 主流程：托管 run → observe run → 静态托管。
+ * 断言 run 事件带上 v2.0 的身份与 turn 锚点（执行地图的归属依据）。
+ *
+ * @param {object[]} events canonical run event 列表。
+ * @param {string} label 断言标签。
+ */
+function assertAgentAttribution(events, label) {
+  const agentStart = events.find((event) => event.type === "agent_start");
+  assert.ok(agentStart, `${label}: 事件流必须包含 agent_start`);
+  assert.equal(agentStart.payload.agentId, "supervisor", `${label}: agent_start.agentId 应为 supervisor`);
+  const turnStart = events.find((event) => event.type === "turn_start");
+  assert.ok(turnStart, `${label}: 事件流必须包含 turn_start`);
+  assert.equal(typeof turnStart.payload.turnIndex, "number", `${label}: turn_start.turnIndex 必须是数字`);
+  assert.equal(turnStart.payload.agentId, "supervisor", `${label}: turn_start.agentId 应为 supervisor`);
+  // 执行地图按 (agentId, turnIndex) 键归属，anchor 必须单调递增（用于 ✂ / turn 分桶定位）。
+  const sequences = events.map((event) => event.sequence);
+  assert.deepEqual(
+    sequences,
+    [...sequences].sort((left, right) => left - right),
+    `${label}: 事件 sequence 必须单调递增`
+  );
+}
+
+/**
+ * 断言 context_event（compaction）的形状与位置。
+ *
+ * 口径（docs/v2.0/04 §3.2）：压缩真的发生才发射；位置在 user_message 之后、agent_start 之前；
+ * payload 是 `ContextEventPayloadDto`（kind / tokensBefore / tokensAfter / detail?）。
+ * 注意 serve 发射的是 run-v2 信封上的 `user_message`（不是 loop 的 `message_end`）——
+ * 「消息之后」必须按信封类型断言，否则会拿一个更晚的序号去比，得到假的失败。
+ *
+ * @param {object[]} events canonical run event 列表。
+ * @param {string} label 断言标签。
+ * @returns {object} 该事件，供调用方继续断言。
+ */
+function assertContextEvent(events, label) {
+  const contextEvents = events.filter((event) => event.type === "context_event");
+  assert.equal(contextEvents.length, 1, `${label}: 压缩发生时应恰好发射一条 context_event`);
+  const [contextEvent] = contextEvents;
+  const payload = contextEvent.payload;
+  assert.equal(payload.kind, "compaction", `${label}: v2.0 只有 compaction 一种 kind`);
+  assert.equal(typeof payload.tokensBefore, "number", `${label}: tokensBefore 必须是数字`);
+  assert.equal(typeof payload.tokensAfter, "number", `${label}: tokensAfter 必须是数字`);
+  assert.ok(payload.tokensAfter < payload.tokensBefore, `${label}: 压缩后应少于压缩前`);
+  const agentStartSeq = events.find((event) => event.type === "agent_start")?.sequence ?? Number.POSITIVE_INFINITY;
+  const userMessageSeq = events.find((event) => event.type === "user_message")?.sequence ?? -1;
+  assert.ok(userMessageSeq > 0, `${label}: 事件流必须包含 user_message（run-v2 信封）`);
+  assert.ok(contextEvent.sequence > userMessageSeq, `${label}: context_event 应在首条消息之后`);
+  assert.ok(contextEvent.sequence < agentStartSeq, `${label}: context_event 应在 agent_start 之前`);
+  return contextEvent;
+}
+
+/**
+ * 主流程：托管 run → 压缩路径 → 静态托管。
  */
 async function main() {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "ohna-trace-verify-"));
@@ -222,9 +295,58 @@ async function main() {
     assert.equal(managedCall.payload.request.providerPayload.stubMarker, "verify-trace", "providerPayload 应包含 stub 回填字段");
     assert.equal(managedCall.payload.response.usage.totalTokens, 21, "usage 应来自最终 AssistantMessage");
     assert.equal(managedCall.payload.response.message.content[0].text, "托管回复", "response.message 应透传内容");
+    assertAgentAttribution(managedEvents, "托管路径");
+    pass("托管 run：agent_start / turn_start 带 agentId + turnIndex（执行地图归属依据）");
     pass(`托管 run：llm_call 完整（providerPayload + response.usage.cost + durationMs=${managedCall.payload.durationMs}）`);
 
-    // ---- 路径 2：静态托管 ----
+    // ---- 路径 2：压缩路径（run 前会话级压缩 → context_event） ----
+    //
+    // 用同一个桩 streamFn、换一个只够装下很小窗口的模型：serve 的 run 前压缩按
+    // contextWindow 判定，极小窗口 + 预置超长历史 → 压缩必然发生。这里验证的是「发射链路」，
+    // 真实 provider 下的压缩质量另有 serve 单测覆盖（packages/serve/test/context-event.test.mjs）。
+    const smallWindowRoot = path.join(root, "small-window");
+    await fs.mkdir(smallWindowRoot, { recursive: true });
+    const compactionServer = await createOhnaServer({
+      workspaceRoot: smallWindowRoot,
+      dataDir: path.join(root, "data-small"),
+      model: { ...MODEL, id: "stub-small", name: "Stub Small", contextWindow: 512, maxTokens: 256 },
+      apiKey: "test-key",
+      systemPrompt: "verify system prompt",
+      tools: [],
+      staticDir: webDist,
+      streamFn: createTraceableStream()
+    });
+    const compactionUrl = (await compactionServer.listen(0)).url;
+    try {
+      const conversation = await compactionServer.createConversation("verify-compaction");
+      // 预置超长历史：HTTP 侧没有「写消息」路由，直接写线性消息存储（与 serve 单测同法）。
+      // 与 server 共用同一个 dataDir 下的 conversations 目录，因此 store 实例不冲突。
+      const messageStore = new LocalMessageStore(path.join(root, "data-small", "conversations"));
+      const long = "这是一段用于撑爆上下文窗口的历史内容。".repeat(40);
+      for (let index = 0; index < 6; index += 1) {
+        await messageStore.append(conversation.conversationId, {
+          role: index % 2 === 0 ? "user" : "assistant",
+          // 线性格式的 assistant.content 是内容块数组，写成字符串会让 token 估算器拿不到块。
+          content: index % 2 === 0 ? `${index} ${long}` : [{ type: "text", text: `${index} ${long}` }]
+        });
+      }
+      const created = await compactionServer.createRun({
+        conversationId: conversation.conversationId,
+        message: "压缩路径验证",
+        requestId: "verify-compaction"
+      });
+      await waitForTerminal(compactionUrl, created.accepted.runId);
+      const events = await readRunEvents(compactionUrl, created.accepted.runId);
+      const contextEvent = assertContextEvent(events, "压缩路径");
+      pass(
+        `压缩路径：context_event compaction ${contextEvent.payload.tokensBefore} → ${contextEvent.payload.tokensAfter} tokens（sequence ${contextEvent.sequence}，在 agent_start 之前）`
+      );
+    } finally {
+      await compactionServer.shutdown().catch(() => undefined);
+      await compactionServer.close().catch(() => undefined);
+    }
+
+    // ---- 路径 3：静态托管 ----
     if (existsSync(path.join(webDist, "index.html"))) {
       const traceResponse = await fetch(`${url}/trace`);
       assert.equal(traceResponse.status, 200, "GET /trace 应返回 200");

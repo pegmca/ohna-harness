@@ -7,10 +7,11 @@
  * - loop 事件 payload 用 unknown，由消费侧按 AgentEvent 断言；
  * -  capability 扩展事件保留最小字段，方便 run_events 直接序列化。
  * - `llm_call` 的 payload 是 `@aiagent/types` 的线格式 DTO（SSE 落盘/web 反序列化共用），
- *   因此本包对 @aiagent/types 只有 **类型级** 依赖（`import type`，运行时零符号），
- *   仍保持「运行时零 @aiagent 依赖」的红线。
+ * - `llm_call` / `context_event` 的 payload 同理引用 `@aiagent/types` 的线格式 DTO
+ *   （`LlmCallRecordDto` / `ContextEventPayloadDto`），因此本包对 @aiagent/types 只有
+ *   **类型级** 依赖（`import type`，运行时零符号），仍保持「运行时零 @aiagent 依赖」的红线。
  */
-import type { LlmCallRecordDto } from "@aiagent/types";
+import type { ContextEventPayloadDto, LlmCallRecordDto } from "@aiagent/types";
 
 /** run_events 生命周期与 loop 事件类型枚举。 */
 export type RunEventType =
@@ -31,7 +32,12 @@ export type RunEventType =
   | "pdf_export"
   | "mcp_tool_discovered"
   | "cost_summary"
-  | "llm_call";
+  | "llm_call"
+  /**
+   * 上下文结构变化事件（docs/v2.0/04 §3.1）：v2.0 仅 compaction 一种 kind。
+   * 与 `RunEventTypeDto`（packages/types/src/run-v2.ts）**必须逐字同步**，两枚举是独立定义。
+   */
+  | "context_event";
 
 /** 所有运行事件共有的 envelope 字段。 */
 interface RunEventBase {
@@ -385,6 +391,18 @@ export interface LlmCallTraceEvent extends RunEventBase {
   payload: LlmCallRecordDto;
 }
 
+/**
+ * 上下文结构变化事件（docs/v2.0/04 §3.1）：payload 类型级引用 `@aiagent/types` 的
+ * `ContextEventPayloadDto`，serve 落盘 / SSE / web 反序列化三方共用同一形状。
+ *
+ * 发射点在编排层（`RunManager.createRun` 的 run 前会话级压缩），不在内核压缩纯函数里——
+ * `compaction-enforce.ts` 保持无 sink、无 run 上下文。
+ */
+export interface ContextEvent extends RunEventBase {
+  type: "context_event";
+  payload: ContextEventPayloadDto;
+}
+
 /** Run 事件联合类型；消费侧按 type 收窄。 */
 export type RunEvent =
   | AgentStartEvent
@@ -404,7 +422,8 @@ export type RunEvent =
   | PdfExportEvent
   | McpToolDiscoveredEvent
   | CostSummaryEvent
-  | LlmCallTraceEvent;
+  | LlmCallTraceEvent
+  | ContextEvent;
 
 const MAX_TRACE_STRING_LENGTH = 500;
 

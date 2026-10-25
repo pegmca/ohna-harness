@@ -8,7 +8,7 @@
  */
 import type { Api, Message, Model } from "@aiagent/ai";
 import type { AgentTool } from "@aiagent/tools";
-import type { AgentLoopConfig, AgentMessage, StreamFn } from "../types.js";
+import type { AgentEvent, AgentIdentity, AgentLoopConfig, AgentMessage, StreamFn } from "../types.js";
 import type { BudgetGuardConfig, TeamBudgetAccumulator } from "./budget.js";
 
 export type { BudgetGuardConfig, TeamBudgetAccumulator } from "./budget.js";
@@ -172,4 +172,28 @@ export interface TeamControllerOptions {
    * 仍由组合根装配，team 包保持「只管编排、不感知审批实现」的边界。
    */
   beforeToolCall?: AgentLoopConfig["beforeToolCall"];
+  /**
+   * 子代理事件转发钩子（docs/v2.0/04 §2.1）：`runMember` 消费子 `agentLoop` 流时，把
+   * 四类边界事件（agent_start / agent_end / turn_start / turn_end）透传给宿主。
+   *
+   * 职责边界：内核只出**挂载点**——打 sequence、落盘、广播全部由宿主（serve）负责，
+   * controller 不感知 run 事件协议，也不做任何二次加工。
+   *
+   * 语义约定：
+   * - 事件已带身份（`agentId` 等，见 AgentEvent），`identity` 参数是冗余保险，
+   *   防未来事件形状漂移时宿主仍能拿到归属；
+   * - `message_*` / `tool_execution_*` **不转发**（控制 JSONL 体积与 SSE 流量；
+   *   子代理的 LLM 调用已通过共享 tracedStreamFn 以 `llm_call` 记录流出）；
+   * - 回调抛错被吞掉（同 `LlmTraceSink` 语义：转发链路故障不得打断子代理）。
+   */
+  onSubagentEvent?: (event: SubagentBoundaryEvent, identity: SubagentEventIdentity) => void;
 }
+
+/** 可转发的子代理边界事件：只取 AgentEvent 的四类生命周期边界。 */
+export type SubagentBoundaryEvent = Extract<
+  AgentEvent,
+  { type: "agent_start" | "agent_end" | "turn_start" | "turn_end" }
+>;
+
+/** 供转发回调复用的身份视图（与 AgentEvent 身份同源，避免宿主再拼一次）。 */
+export type SubagentEventIdentity = Pick<AgentIdentity, "agentId" | "parentId">;

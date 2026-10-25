@@ -1,5 +1,7 @@
 # 02 · ohna CLI 自动启动 Web 观测台 + LLM 请求/响应全程追踪
 
+> **⚠️ 已被 `docs/v2.0/04-trace-context-visualization.md` 取代（2026-10-24）**：本文的 Trace 数据模型与 Web 可视化面（`LlmCallRecordDto` 字段、`llm_call` 事件形状、Trace 抽屉内的展示形态、「五分类 composition / 上下文窗口 / compaction 事件」相关部分）以 v2.0/04 为**唯一权威**——04 给 `LlmCallRecordDto` 增加 `window`（必填）与 `composition?` / `agentId?`、新增 `context_event` 事件（compaction 单 kind）、并把 Trace 升级为「执行地图 + 上下文三面板」。本文以下内容**仅作历史留档**，不再据此实现；本文中仍成立的部分（采集层用 `onPayload`/`onResponse` 钩子、`llm_call` 一等公民、Trace 抽屉为家）在 04 中已继承。
+>
 > **需求来源**（用户决策，2026-10-20）：`ohna-cli` 启动时同步启动 ohna-web；web 是完整 agent client，核心目标是**在 web 上观测完整 trace**，尤其每次 LLM 请求的**请求参数**与**返回的响应参数**。
 > 与 `01-cli-optimization-plan.md` 的关系：01 是 CLI/TUI 表现层改造（C 系），本文是新的观测能力（W 系），两线独立，不共享交付物。
 >

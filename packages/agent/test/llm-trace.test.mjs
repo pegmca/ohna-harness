@@ -7,7 +7,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { AssistantMessageEventStream } from "@aiagent/ai";
-import { createLlmTraceStreamFn } from "../dist/index.js";
+import { createLlmTraceStreamFn, estimateComposition } from "../dist/index.js";
 
 /** 构造 assistant 消息（测试用最小形状）。 */
 function assistantMessage(content, stopReason = "stop", extra = {}) {
@@ -57,6 +57,19 @@ const CONTEXT = {
   tools: [{ name: "echo", description: "echo tool", parameters: { type: "object", properties: { value: { type: "string" } } } }],
 };
 
+/** v2.0 采集窗口参数（构造 wrapper 时注入；`window` 必填，docs/v2.0/04 §1.1）。 */
+const WINDOW = { contextWindow: 128000, maxTokens: 4096, reserveTokens: 16384 };
+
+/**
+ * 构造采集选项：`window` 自 v2.0 起必填。
+ *
+ * @param extra 额外选项（如 observer）。
+ * @returns 可直接传给 createLlmTraceStreamFn 的 options。
+ */
+function traceOptions(extra = {}) {
+  return { window: WINDOW, ...extra };
+}
+
 /**
  * 每个用例拿独立上下文：runner 可能把 context 交给被测代码并发生突变，
  * 共享同一对象会让用例之间互相污染（TC-W1-06 就是刻意突变它）。
@@ -98,7 +111,7 @@ test("TC-W1-01: done 收尾时记录请求/响应完整形状", async () => {
     return stream;
   };
 
-  const wrapped = createLlmTraceStreamFn(base, (record) => records.push(record));
+  const wrapped = createLlmTraceStreamFn(base, (record) => records.push(record), undefined, traceOptions());
   const events = await drain(wrapped(MODEL, freshContext(), OPTIONS));
 
   // 透传：事件数量与顺序保持（start / text_start / done），done 之后 result() 可解析。
@@ -162,7 +175,7 @@ test("TC-W1-02: 链式 onPayload 先执行调用方钩子，再观察替换后�
     return stream;
   };
 
-  const wrapped = createLlmTraceStreamFn(base, (record) => records.push(record));
+  const wrapped = createLlmTraceStreamFn(base, (record) => records.push(record), undefined, traceOptions());
   await drain(
     wrapped(MODEL, freshContext(), {
       onPayload: async (payload) => {
@@ -191,7 +204,7 @@ test("TC-W1-03: error 终态聚合 error 与响应摘要", async () => {
     return stream;
   };
 
-  const wrapped = createLlmTraceStreamFn(base, (record) => records.push(record));
+  const wrapped = createLlmTraceStreamFn(base, (record) => records.push(record), undefined, traceOptions());
   await drain(wrapped(MODEL, freshContext()));
 
   assert.equal(records.length, 1);
@@ -210,7 +223,9 @@ test("TC-W1-04: 上游同步 throw 先记账再原样重抛同一错误对象", 
     () => {
       throw boom;
     },
-    (record) => records.push(record)
+    (record) => records.push(record),
+    undefined,
+    traceOptions()
   );
 
   assert.throws(
@@ -233,7 +248,7 @@ test("TC-W1-05: 无终态事件即结束（abort）时发出 error 记录且不�
     return stream;
   };
 
-  const wrapped = createLlmTraceStreamFn(base, (record) => records.push(record));
+  const wrapped = createLlmTraceStreamFn(base, (record) => records.push(record), undefined, traceOptions());
   const events = await drain(wrapped(MODEL, freshContext(), { signal: undefined }));
 
   assert.deepEqual(events.map((e) => e.type), ["start"]);
@@ -254,7 +269,7 @@ test("TC-W1-05b: abort 且无终态事件时 error.stopReason 标记 aborted", a
     return stream;
   };
 
-  const wrapped = createLlmTraceStreamFn(base, (record) => records.push(record));
+  const wrapped = createLlmTraceStreamFn(base, (record) => records.push(record), undefined, traceOptions());
   controller.abort();
   await drain(wrapped(MODEL, freshContext(), { signal: controller.signal }));
 
@@ -267,7 +282,9 @@ test("TC-W1-05c: StreamFn 返回 rejected Promise 时补 error 终态并记账�
   const records = [];
   const wrapped = createLlmTraceStreamFn(
     () => Promise.reject(new Error("connector exploded")),
-    (record) => records.push(record)
+    (record) => records.push(record),
+    undefined,
+    traceOptions()
   );
 
   const events = await drain(wrapped(MODEL, freshContext()));
@@ -291,7 +308,7 @@ test("TC-W1-02b: 调用方 onResponse 链式生效，wrapper 记录最终 status
     return stream;
   };
 
-  const wrapped = createLlmTraceStreamFn(base, (record) => records.push(record));
+  const wrapped = createLlmTraceStreamFn(base, (record) => records.push(record), undefined, traceOptions());
   await drain(
     wrapped(MODEL, freshContext(), {
       onResponse: (response) => {
@@ -320,7 +337,7 @@ test("TC-W1-06: request 快照深拷贝，流式期突变不污染已记录内�
     return stream;
   };
 
-  const wrapped = createLlmTraceStreamFn(base, (record) => records.push(record));
+  const wrapped = createLlmTraceStreamFn(base, (record) => records.push(record), undefined, traceOptions());
   await drain(wrapped(MODEL, freshContext()));
 
   const request = records[0].request;
@@ -341,7 +358,7 @@ test("sink 抛错不打断流，且 callIndex 在同一 wrapper 内递增", asyn
   const wrapped = createLlmTraceStreamFn(base, (record) => {
     indices.push(record.callIndex);
     throw new Error("sink failure");
-  });
+  }, undefined, traceOptions());
 
   const first = await drain(wrapped(MODEL, freshContext()));
   const second = await drain(wrapped(MODEL, freshContext()));
@@ -365,7 +382,7 @@ test("N-b①: async sink reject 不产生 unhandledRejection", async () => {
     };
     const wrapped = createLlmTraceStreamFn(base, async () => {
       throw new Error("async sink failure");
-    });
+    }, undefined, traceOptions());
 
     const events = await drain(wrapped(MODEL, freshContext()));
     // 给 unhandledRejection 检测留一个事件循环轮次。
@@ -388,7 +405,9 @@ test("N-b②: baseUrl 内嵌凭据/查询串在落盘前被剥除", async () => 
       });
       return stream;
     },
-    (record) => records.push(record)
+    (record) => records.push(record),
+    undefined,
+    traceOptions()
   );
 
   await drain(

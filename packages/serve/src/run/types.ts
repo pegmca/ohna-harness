@@ -1,7 +1,7 @@
 /**
  * RunManager 的公共输入/依赖与内部活跃状态类型。
  */
-import type { StreamFn } from "@aiagent/agent";
+import type { StreamFn, TeamState } from "@aiagent/agent";
 import type { Model } from "@aiagent/ai";
 import type { AgentTool } from "@aiagent/tools";
 import type {
@@ -12,6 +12,7 @@ import type {
 } from "@aiagent/types";
 import type { AsyncConfirmGate } from "../confirm-gate.js";
 import type { LocalMessageStore, LocalRunStore, LocalSessionStore } from "../store/index.js";
+import type { ServeTeamSession } from "./team-session.js";
 
 /** SSE / 快照错误的最小结构化形状。 */
 export interface RunErrorPayload {
@@ -122,4 +123,24 @@ export interface RunManagerOptions {
    * 测试可注入桩以避免真实标题调用。
    */
   titleGenerator?: (text: string, signal?: AbortSignal) => Promise<string | undefined>;
+  /**
+   * 团队状态读取器（G-T1 单一路径，docs/v2.0/03-team-eval.md §9.1）：由组合根把
+   * `TeamController.getTeamState` 绑定后透传，run 收尾时用于投影 `cost_summary.payload.team`。
+   * 未注入（如 --no-team / 非 team 宿主）时不产生 team 段，事件形状与接入前一致。
+   *
+   * v2.0（docs/v2.0/04 §2.2）：`team: true` 时 serve 侧 TeamController 的 `getTeamState`
+   * 优先；本字段退为 fallback，仍保留 03 已接通的组合根参数链（不得删除）。
+   */
+  getTeamState?: () => TeamState;
+  /**
+   * Team 开关（docs/v2.0/04 §2.2）：缺省 false 保持既有单智能体行为——不注册 Team 工具、
+   * 不注入 observer、不转发子代理事件、不产生 run 级 Team 状态。
+   */
+  team?: boolean;
+  /**
+   * serve 侧 Team 会话（`createServeTeamSession` 的产物）。`team: true` 时必须提供；
+   * 拆成注入项而非在 RunManager 内构造，是为了让 Team 装配（controller / 工具池 / 窗口）
+   * 集中在组合根一处，RunManager 只做接线。
+   */
+  teamSession?: ServeTeamSession;
 }

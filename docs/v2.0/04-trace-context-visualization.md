@@ -25,11 +25,11 @@
 | serve 托管 run 的 Team 接线 | `run-manager.ts` 只跑单层 `agentLoop`；Team wiring 目前仅存在于 CLI（`apps/ohna-cli/src/runtime/team-wiring.ts`） | ❌ **缺**（缺口 B：serve 无 TeamController，web 端 Team 场景不可达） |
 | 每类别 token 构成 | **无**——只有整段 input 总数，没有 system/tools/user/assistant/toolResult 五分类 | ❌ **缺**（缺口 1） |
 | 窗口占用百分比 | **无**——web 拿不到 `contextWindow` | ❌ **缺**（缺口 2） |
-| 上下文事件 | **无**——compaction 只在会话消息流里是 `messageType:"compaction"`，从未作为 run 事件发射；实际的会话级压缩发生在 `RunManager.createRun` 内（run 前），而非内核 `compaction-enforce` 纯函数 | ❌ **缺**（缺口 3：发射点在编排层，见 §3） |
+| 上下文事件 | **无**——compaction 只在会话消息流里是 `messageType:"compaction"`，从未作为 run 事件发射。发射点归 serve：`RunManager.createRun` 在 run 前会话级压缩**真的发生**（`compacted === true`）时经 `run/context-event.ts` 投影发射 `context_event`，位置在 `user_message` 之后、`agent_start` 之前（可 replay）；web 侧 `trace-context.ts` 的 `buildContextEvents` 只做投影，不派生、不重估压缩前后的 token | ❌ **缺**（缺口 3：发射点在编排层，见 §3） |
 | 跨 Agent 归因 | `agent_start` 是 `{ type:"agent_start" }`（`packages/agent/src/types.ts`）；`LlmCallRecordDto` 无 `agentId`；`StreamFn` 签名无身份通道 | ❌ **缺**（缺口 4） |
-| 执行轨迹投影 | `trace-projection.ts` 压 4 种扁平行（message/tool/llm/terminal），**丢弃** agent/turn 边界与归属 | ⚠️ 半成品 |
-| 成长曲线 / 堆叠条可视化 | 无 | ❌ **缺**（缺口 5） |
-| 口径标注（估算 vs 实际） | 无 | ❌ **缺**（缺口 6） |
+| 执行轨迹投影 | `trace-projection.ts` 保留 message/tool/llm/terminal 四类行并**逐行打 `agentId`**；`trace-spans.ts` 按键归属 Agent/Turn 森林（W3 已落地） | ✅ 已具备 |
+| 成长曲线 / 堆叠条可视化 | `ContextComposition`（五分类堆叠条 + reserve/maxTokens 斜纹掩码）/ `ContextTrend`（per-call 柱 + ✂ 定位）/ `ContextEvents`（compaction chip） | ✅ 已具备（W3） |
+| 口径标注（估算 vs 实际） | 三面板共用 `CONTEXT_ESTIMATE_NOTE`（写明 chars÷4 对 CJK 是**低估**）+ 实际用量取自 `response.usage` | ✅ 已具备（W3） |
 | run 事件枚举双套 | `RunEventTypeDto`（`packages/types/src/run-v2.ts`）与 `RunEventType`（`packages/trace/src/index.ts`）是两份独立枚举，任何新增 kind 必须**三处同步**（两枚举 + serve 侧类型窄化映射） | ⚠️ 已知约束，落地清单须显式列出 |
 
 **一句话结论**：Token/成本/窗口的**原始数据几乎全在**（子代理的 `llm_call` 也已在总线上），真正缺的是四条管线——「子代理生命周期事件转发」「serve 的 Team 接线」「每类别 token 构成采集」「上下文压缩事件发射」，以及「成长曲线 + 编队森林」这层可视化。
@@ -121,7 +121,7 @@ export interface SimpleStreamOptions {
 
 | 构成类 | 估算方法 |
 |---|---|
-| `system` | `systemPrompt` 字符串长度 ÷ 4（ASCII 主导假设；CJK 密度更高，按 chars/4 会高估中文占比，图例注明） |
+| `system` | `systemPrompt` 字符串长度 ÷ 4（ASCII 主导假设；CJK 字符每字约占 1 token 甚至更多，按 chars/4 会**低估**中文的 token 数——注意是「token 被低估」，不是占比被高估；图例注明） |
 | `tools` | 每个工具 `JSON.stringify({ name, description, inputSchema })` 长度 ÷ 4 |
 | `user` / `assistant` | 按消息 content blocks 分块加权：文本块 chars ÷ 4；toolCall 块 `JSON.stringify` 长度 ÷ 4；其余块（image 等）按其 JSON 序列化长度 ÷ 4 |
 | `toolResult` | 同上分块口径（toolResult 消息的 content blocks） |
@@ -130,6 +130,21 @@ export interface SimpleStreamOptions {
 实现为 `packages/agent/src/llm-trace.ts` 内的纯函数 `estimateComposition(systemPrompt, messages, tools)`，可单测（固定输入 → 固定构成）。
 
 **口径统一（缺口 6）**：composition 是估算（上述系数表），provider 回报的 `usage.input/output/cacheRead/cacheWrite` 是实际；web 展示时估算与实际并列、不强行对齐，估算用于「构成占比」，实际用于「总账」。三个面板共享同一份固定脚注文案，不各写一套。
+
+### 1.5 实现落点与冻结约定（W1 已落地，后续工作项必须遵守）
+
+> 本节记录 §1/§2 的实现确定值，防止后续工作项按草稿自行发挥。
+
+- **`createLlmTraceStreamFn` 的签名是 `(base, sink, counter, options)`**：第 3 参仍是共享计数器（可传 `undefined`），第 4 参 `{ window: LlmWindowDto }` **必填**，无重载、无缺省兜底——要让缺省悄悄造一个假窗口，比编译期报错危险得多。所有调用方（serve `run-manager.ts`、CLI `runtime/observation.ts` / `runtime/turn.ts`）已同批改完。
+- **`window.reserveTokens` 的唯一算法**：`resolveCompactionSettings(contextWindow).reserveTokens`（`@aiagent/agent` 导出），即与 run 前压缩共用同一函数，禁止另写一套预留口径。serve 与 CLI 两侧都用它。
+- **`composition` 与 `agentId` 的可空时机不同**（§1.1 只说了「都可能为空」，实现上更精确）：
+  - `composition` 依赖 adapter 回灌最终 context（onPayload），**仅在到达 onPayload 后存在**；
+  - `agentId` 是**发起方属性**，在 streamFn 调用入口读取 `options.observer`，因此**同步 throw 的错误记录同样带 agentId**——否则 Trace 森林里会出现一批无主的失败调用。
+- **`observer` 不写入任何落盘/请求体字段**：只存在于 `options`，adapter 零改动。
+- **身份常量**：`SUPERVISOR_AGENT_ID = "supervisor"` 由 `@aiagent/agent` 导出；`AgentLoopConfig.identity` 缺省时 agentLoop 兜底为该根身份（`modelId = config.model.id`），因此事件里 `agentId` 永远必填。
+- **`turnIndex` 计数规约**：首个 turn 的 `turn_start` 由 `runAgentLoop` 在 `agent_start` 之后立即发出、`turnIndex = 0`；`runLoop` 内首个 `firstTurn` 分支不发事件，后续每次 `turn_start` 自增。`turn_end` 复用当前 turn 的序号。
+- **`onSubagentEvent(event, identity)`**：`identity` 是 `Pick<AgentIdentity, "agentId" | "parentId">`；`parentId` 只在 `agent_start` 上有值（其余边界事件不含该字段）。回调抛错被吞掉。
+- **serve / CLI 的 Team 接线（§7 第 1 步）不在 W1 范围**：本项只保证钩子存在且语义正确；observer 注入与 `context_event` 发射随各自工作项落地。
 
 ---
 

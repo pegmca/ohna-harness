@@ -16,12 +16,14 @@ import {
   type AgentLoopConfig,
   type AgentMessage,
   agentLoop,
-  createLlmTraceStreamFn,
-  defaultConvertToLlm
+  defaultConvertToLlm,
+  resolveCompactionSettings
 } from "@aiagent/agent";
 import { streamSimple } from "@aiagent/ai";
 import type { Model } from "@aiagent/ai";
 import type {
+  LlmCallRecordDto,
+  LlmWindowDto,
   RunEventTypeDto,
   RunMetaDtoV2,
   RunSnapshotDtoV2,
@@ -41,8 +43,12 @@ import {
   dropBeforeLastCompaction,
   extractCompactionSummary,
 } from "./run/compaction.js";
+import { toContextEventPayload } from "./run/context-event.js";
+import { TeamRunBinding, createSupervisorTracedStreamFn, type TeamRunner } from "./run/team-runner.js";
 import { createTitleGenerator } from "./run/title.js";
 import { persistRunMessage } from "./run/persist.js";
+import { RunCostTracker } from "./run/cost-summary.js";
+
 import { isPersistableRunEvent } from "./store/index.js";
 import { cloneSnapshot, delay, toRunErrorPayload } from "./run/helpers.js";
 import { linearMessageToAgentMessage } from "./run/message-mapping.js";
@@ -84,10 +90,40 @@ export class RunManager {
    */
   private readonly conversationCost = new Map<string, number>();
   /**
+   * 成本观测协作者（G-T1）：按 run 建立聚合、逐事件累加、终态投影 `cost_summary`。
+   * 独立成对象以把「成本产线」与 run 状态机解耦（run-manager 已接近单文件行数上限）。
+   */
+  private readonly costTracker: RunCostTracker;
+  /**
+   * 本实例的采集窗口参数（docs/v2.0/04 §1.5）：`reserveTokens` 的唯一算法是
+   * `resolveCompactionSettings(contextWindow).reserveTokens`，与 run 前压缩共用同一函数。
+   * 构造期算一次即可（模型窗口在实例生命周期内不变），随每次 llm_call 落盘。
+   */
+  private readonly runWindow: LlmWindowDto;
+  /** Team 开关的 run 级装配（关时零开销：begin 直接返回 undefined）。 */
+  private readonly teamBinding: TeamRunBinding;
+  /**
    * @param options 模型、工具、store、确认闸门与可选 streamFn（测试注入）。
    */
   constructor(private readonly options: RunManagerOptions) {
     this.model = options.model;
+    this.runWindow = {
+      contextWindow: options.model.contextWindow,
+      maxTokens: options.model.maxTokens,
+      reserveTokens: resolveCompactionSettings(options.model.contextWindow).reserveTokens
+    };
+    this.teamBinding = new TeamRunBinding({
+      ...(options.team ? { team: true } : {}),
+      ...(options.teamSession ? { session: options.teamSession } : {}),
+      base: options.streamFn ?? streamSimple,
+      window: this.runWindow
+    });
+    // serve 侧 controller 是团队状态的**首选**来源；组合根注入的 getTeamState 保留为
+    // fallback（03 已接通的参数链不回退，docs/v2.0/04 §2.2）。
+    this.costTracker = new RunCostTracker(
+      options.model.id,
+      options.getTeamState ?? this.teamBinding.getTeamState()
+    );
     this.confirmGate = options.confirmGate;
     this.summarizer = options.summarizer;
     this.titleGenerator = options.titleGenerator;
@@ -204,6 +240,11 @@ export class RunManager {
     const runId = randomUUID();
     const createdAt = new Date().toISOString();
 
+    // 窗口参数不在此重算：`this.runWindow`（构造期一次算出，见字段注释）就是本 run 注入
+    // tracedStreamFn 的 `window`，而 compactHistoryForRun 内部用同一个
+    // `resolveCompactionSettings(contextWindow)` 决定压缩阈值——两侧因此同源恒等。
+    // 将来若模型窗口可在会话中途切换，必须同时改这两处（而不是在这里再取一次）。
+
     // 先取历史再追加本轮 prompt：agentLoop 会自行追加 prompt，避免重复。
     const storedHistory = await this.options.messageStore.list(input.conversationId);
     const mapped = storedHistory
@@ -213,7 +254,7 @@ export class RunManager {
       input.conversationId,
       mapped
     );
-    // 压缩审计写 stderr：serve 无 CLI 落盘日志，这是「run 前发生了压缩」的唯一观测点。
+    // 压缩审计写 stderr：serve 无 CLI 落盘日志，这是「run 前发生了压缩」的唯一日志观测点。
     if (compaction.compacted) {
       process.stderr.write(
         `[ohna] 会话 ${input.conversationId} 载入历史超窗，已压缩：约 ${compaction.tokensBefore} → ${compaction.tokensAfter} token\n`
@@ -275,6 +316,12 @@ export class RunManager {
     };
     this.active.set(runId, run);
 
+    // G-T1：成本聚合状态必须在**任何可能收尾的入口**之前建立。cancel / shutdown 可以在
+    // execute 尚未启动（run 前压缩、workspace 解析期间）就调 finishStatus；若把 begin 放在
+    // execute 入口，这些 run 会静默缺失 cost_summary，被下游误读为「零成本」。
+    // 工具表此时还未知（execute 会按会话 workspace 重新解析），故先在 execute 内补种 byTool。
+    this.costTracker.begin(runId);
+
     // 会话级订阅（--web 共享事件流）：新 run 必须先接到其会话的订阅者上，
     // 再广播 user_message（否则订阅者会漏掉 sequence 最早的 user_message 帧）。
     const conversationListeners = this.conversationSubscribers.get(input.conversationId);
@@ -291,6 +338,16 @@ export class RunManager {
       runId,
       source: input.source === "report_button" || input.source === "composer" ? "web" : "cli"
     });
+
+    // context_event（docs/v2.0/04 §3.2，缺口 3）：只在压缩**真的发生**时发射。
+    //
+    // 为什么在此处（而非压缩刚结束处）：run 帧需要一个已建立的 ActiveRun 来分配 sequence
+    // 并落盘。`runStore.create` 在其后、`emitFrame(user_message)` 之前完成，因此这里
+    // ① run 已落盘（replay 有主）、② sequence 可分配且已从 1 起连续、③ 事件早于 agent_start
+    // （消费侧读到「本轮上下文被换过」再看到首次 LLM 调用，语义顺序正确）。
+    // 未压缩（compacted=false）不发射——估算过了但没超窗不是上下文结构变化。
+    const contextEvent = toContextEventPayload(compaction);
+    if (contextEvent) await this.emitFrame(run, "context_event", contextEvent);
 
     // BUG-002 方案 2：按会话持久化的 workspaceRoot 动态装配上下文（编码工具 + 系统提示词）。
     // 解析失败回退 undefined（execute 内退回构造时的单工作区语义），不阻断本次 run。
@@ -415,7 +472,16 @@ export class RunManager {
   private async compactHistoryForRun(
     conversationId: string,
     messages: AgentMessage[]
-  ): Promise<{ messages: AgentMessage[]; compaction: { compacted: boolean; tokensBefore: number; tokensAfter: number } }> {
+  ): Promise<{
+    messages: AgentMessage[];
+    compaction: {
+      compacted: boolean;
+      tokensBefore: number;
+      tokensAfter: number;
+      retainedMessages: number;
+      summary?: string;
+    };
+  }> {
     // 压缩摘要请求发生在 runId 分配前、不挂 trace（见计划 §8-7 开放项）。
     const summarizer =
       this.summarizer ??
@@ -432,7 +498,12 @@ export class RunManager {
     if (!result.compacted) {
       return {
         messages: dropBeforeLastCompaction(result.messages),
-        compaction: { compacted: false, tokensBefore: result.tokensBefore, tokensAfter: result.tokensAfter }
+        compaction: {
+          compacted: false,
+          tokensBefore: result.tokensBefore,
+          tokensAfter: result.tokensAfter,
+          retainedMessages: 0
+        }
       };
     }
     const summary = extractCompactionSummary(result.messages);
@@ -449,7 +520,11 @@ export class RunManager {
       compaction: {
         compacted: true,
         tokensBefore: result.tokensBefore,
-        tokensAfter: result.tokensAfter
+        tokensAfter: result.tokensAfter,
+        // 「保留轮数」口径 = 压缩后进入本次 run 的历史消息条数（含摘要自身）：
+        // 它正是模型这一轮实际看到的前缀长度，比「摘要覆盖了多少条」更贴近消费侧的疑问。
+        retainedMessages: result.messages.length,
+        ...(summary ? { summary: summary.summary } : {})
       }
     };
   }
@@ -538,6 +613,64 @@ export class RunManager {
     };
     const runId = run.snapshot.runId;
     const confirmHook = this.confirmGate?.createHook(runId);
+    // Team 接线（docs/v2.0/04 §2.2）：装配细节全部收在 run/team-runner.ts，本处只做 begin/release。
+    const teamRunner = this.teamBinding.begin(
+      {
+        runId,
+        ...(confirmHook ? { beforeToolCall: confirmHook } : {}),
+        emit: {
+          subagent: (event) => {
+            void this.emitTypedFrame(run, event.type, event).catch(() => undefined);
+          },
+          llmCall: (record) => {
+            void this.emitLlmCall(run, record).catch(() => undefined);
+          }
+        }
+      },
+      context.tools ?? []
+    );
+    try {
+      await this.continueRun(run, context, prompt, confirmHook, teamRunner);
+    } finally {
+      teamRunner?.release();
+    }
+  }
+
+  /**
+   * `llm_call` 的单一发射点：累计会话成本 + 写 run 事件流（Team 开 / 关两条路径共用）。
+   *
+   * @param run 活跃 run。
+   * @param record 采集层产出的调用记录。
+   */
+  private async emitLlmCall(run: ActiveRun, record: LlmCallRecordDto): Promise<void> {
+    // 累计本会话成本：每轮 LLM 调用的 usage.cost.total 累加到会话级护栏。
+    const cost = record.response?.usage?.cost?.total;
+    if (typeof cost === "number" && Number.isFinite(cost)) {
+      this.addConversationCost(run.snapshot.conversationId, cost);
+    }
+    await this.emitTypedFrame(run, "llm_call", record);
+  }
+
+  /**
+   * 执行 loop 并消费事件流（`execute` 的实体：Team 绑定在其前建立、在其后释放）。
+   *
+   * @param run 活跃 run 状态。
+   * @param context 本轮 agent 上下文（工具表已按会话 workspace 解析）。
+   * @param prompt 本轮用户输入。
+   * @param confirmHook 本 run 的权限闸门钩子。
+   * @param teamRunner Team 开关打开时的 run 级句柄；关闭时 undefined。
+   */
+  private async continueRun(
+    run: ActiveRun,
+    context: AgentContext,
+    prompt: string,
+    confirmHook: ReturnType<NonNullable<RunManagerOptions["confirmGate"]>["createHook"]> | undefined,
+    teamRunner?: TeamRunner
+  ): Promise<void> {
+    const runId = run.snapshot.runId;
+    // 本 run 实际生效的工具表此时才确定（会话级 workspace 可能与实例主工作区不同），
+    // 用它补种 cost_summary 的 byTool 桶；聚合器本身在 createRun 已建立。
+    this.costTracker.seedTools(runId, context.tools ?? []);
     // A1：预算护栏（deadline / max-turns），与 CLI 侧 createConfig 语义对齐（内核零改动）。
     const deadlineAt =
       run.deadlineMs !== undefined ? Date.now() + run.deadlineMs : undefined;
@@ -580,20 +713,21 @@ export class RunManager {
     };
     const userMessage: AgentMessage = { role: "user", content: prompt, timestamp: Date.now() };
 
-    // 每次 run 独立包一层采集：callIndex 是 run 内序号，wrapper 的闭包计数器不能跨 run 共享。
-    // sink 是同步契约——emitFrame 在第一个 await 之前同步分配 sequence，因此 llm_call
-    // 与紧随其后的 agent 事件不会乱序；异步失败一律吞掉（观测不得打断 run）。
-    const tracedStreamFn = createLlmTraceStreamFn(
-      this.options.streamFn ?? streamSimple,
-      (record) => {
-        // 累计本会话成本：每轮 LLM 调用的 usage.cost.total 累加到会话级护栏。
-        const cost = record.response?.usage?.cost?.total;
-        if (typeof cost === "number" && Number.isFinite(cost)) {
-          this.addConversationCost(run.snapshot.conversationId, cost);
-        }
-        void this.emitTypedFrame(run, "llm_call", record).catch(() => undefined);
-      }
-    );
+    // 每个 run 独立包一层采集：callIndex 是 run 内序号，wrapper 的闭包计数器不能跨 run 共享。
+    // Team 打开时用 teamRunner 的 streamFn（与子代理共用同一 wrapper → callIndex 连续，S1）；
+    // 关闭时主线程同样带 supervisor 身份，两分支不产生归因口径分裂（04 §1.3）。
+    const tracedStreamFn =
+      teamRunner?.streamFn ??
+      createSupervisorTracedStreamFn(
+        this.options.streamFn ?? streamSimple,
+        // sink 同步契约：emitFrame 在第一个 await 前分配 sequence，llm_call 不会与后续
+        // agent 事件乱序；异步失败一律吞掉（观测不得打断 run）。
+        (record) => {
+          void this.emitLlmCall(run, record).catch(() => undefined);
+        },
+        // v2.0（docs/v2.0/04 §1.1 / §3.2）：window 在构造 wrapper 时注入，与 run 前压缩同源。
+        this.runWindow
+      );
 
     try {
       // A1：run 前检查成本预算；零预算（maxCost=0）或已超预算则不调用模型，直接终态。
@@ -606,7 +740,10 @@ export class RunManager {
         return;
       }
 
-      const stream = agentLoop([userMessage], context, config, run.controller.signal, tracedStreamFn);
+      // Team 打开时工具表已并入 TeamCreate / SendMessage；关闭时原样进入 loop。
+      const tools = teamRunner?.tools;
+      const loopContext: AgentContext = tools ? { ...context, tools: [...tools] } : context;
+      const stream = agentLoop([userMessage], loopContext, config, run.controller.signal, tracedStreamFn);
       for await (const event of stream) {
         // A1：每轮结束后若已超成本预算，干净收尾（单轮内可能超出，故轮后再查一次）。
         if (!run.terminal && run.maxCost !== undefined
@@ -646,6 +783,9 @@ export class RunManager {
   /**
    * 处理单个 loop 事件：agent_end 决定终态，其余事件映射为 run-v2 帧。
    *
+   * 成本观测（G-T1）：`turn_end` 累加模型 usage、`tool_execution_end` 记录工具调用；
+   * 终态前由 `finishStatus` 统一发 `cost_summary`，避免 completed / failed 两条分支各写一份。
+   *
    * @param run 活跃 run。
    * @param event loop 事件。
    */
@@ -670,6 +810,9 @@ export class RunManager {
       await this.finishStatus(run, "completed");
       return;
     }
+
+    // 成本累加发生在发帧之前：即便后续广播失败，聚合数据也已就位（观测数据不依赖 IO 成功）。
+    this.costTracker.observe(run.snapshot.runId, event);
 
     if (event.type === "message_end") {
       await persistRunMessage(this.options, run, event.message);
@@ -738,7 +881,11 @@ export class RunManager {
   }
 
   /**
-   * 收尾终态：发 run_status、更新快照、标记 store 状态。并发调用复用同一 Promise。
+   * 收尾终态：发 cost_summary、run_status、更新快照、标记 store 状态。并发调用复用同一 Promise。
+   *
+   * 顺序（important）：`cost_summary` 在 `run_status` **之前**发——客户端以 run_status 作为
+   * 「run 已结束」的判据，先发成本汇总保证订阅者在终态帧到达时已持有团队成本段。
+   * 这条事件是 best-effort：投影或落盘失败都不得改变 run 的终态（观测数据不能拖垮执行）。
    *
    * @param run 活跃 run。
    * @param status 终态。
@@ -753,6 +900,20 @@ export class RunManager {
     if (run.finishPromise) return run.finishPromise;
 
     run.finishPromise = (async () => {
+      // G-T1：成本汇总先于终态帧发出（客户端以 run_status 判「run 结束」，届时须已持有团队成本段）。
+      // 投影 / 发帧失败一律吞掉——成本是观测性数据，绝不能把一次成功的 run 变成 failed。
+      try {
+        const costPayload = this.costTracker.project(run.snapshot.runId, status);
+        if (costPayload) await this.emitFrame(run, "cost_summary", costPayload);
+      } catch (error) {
+        // 不改变终态（观测数据不能拖垮执行），但必须留下诊断线索：getTeamState 抛错、
+        // payload 序列化失败、runStore.appendEvent 写失败都会走到这里，静默吞掉会让
+        // 「成本段缺失」在排障时无从归因。serve 无 CLI 日志通道，stderr 是既有惯例。
+        const reason = error instanceof Error ? error.message : String(error);
+        process.stderr.write(
+          `[ohna] run ${run.snapshot.runId} 的 cost_summary 投影/落盘失败（终态仍为 ${status}）：${reason}\n`
+        );
+      }
       const payload: Record<string, unknown> = { status };
       if (error) payload.error = error;
       await this.emitFrame(run, "run_status", payload);

@@ -97,17 +97,6 @@ export type ContextAssemblyTransform = (
   recordBudgetMetric?: (report: unknown) => void,
 ) => Promise<AgentMessage[]>;
 
-/**
- * SendMessage 工具结果的 details 宽松形状（team 的 SubagentResult），仅用于 run-service 受控读取。
- * 用宽松类型避免 run-service 反向依赖 agent 的 TeamState；字段缺失/类型不符时按 0 或 false 处理。
- */
-interface SubagentResultLike {
-  member?: unknown;
-  usage?: { tokens?: unknown; cost?: unknown };
-  budgetExceeded?: unknown;
-  model?: unknown;
-}
-
 export interface RunServiceDependencies {
   store: RunStore;
   messageStore: MessageStore;
@@ -482,12 +471,17 @@ export function createRunApplicationService(dependencies: RunServiceDependencies
       let assistantTurns = completedTurns;
       // 运行期间观测到的活跃 run 峰值：事件循环内周期采样 executionRegistry 计数；初值取起点快照。
       let peakConcurrency = dependencies.executionRegistry.list().length;
-      // 受控团队成本收集（P3 可观测）：仅当 run 真实使用了 team/SendMessage 子代理才填充；
-      // 默认 Map 为空，不影响既有 byModel/byTool/totalTokens/totalCost 逻辑。
-      const teamMembers = new Map<string, { model: string; tokens: number; cost: number; budgetExceeded: boolean }>();
+      // 团队成本**不在本文件累加**（G-T1 单一路径，docs/v2.0/03-team-eval.md §9.1）：
+      // `cost_summary.payload.team` 只能由「创建 TeamController 并托管 run 的那条产线」经
+      // `@aiagent/agent` 的 `projectTeamCostSummary` 投影产出（当前落点是 packages/serve 的
+      // `run/manager` 收尾）。finance-api 不创建 TeamController，也没有 TeamState，任何在本文件
+      // 手工累加 SendMessage 结果的做法都会形成「字段口径不同的第二份真相源」（缺 durationMs /
+      // 缺 0 用量成员），故这里只做防御性告警，绝不组装 team 段。
       // 受控上下文预算收集（P3 可观测）：仅当集成方提供 budgetMetricSink 时才填充；
       // 当前 app 默认未装配 context-assembly，故数组恒为空、contextBudget 段省略。
       const contextBudgetReports: ContextBudgetReport[] = [];
+      // 第二口径告警去重标记（每 run 只告警一次，见 SendMessage 分支）。
+      let teamCostWarned = false;
       // 预算指标 sink：转发给调用方并本地收集；未提供 budgetMetricSink 时为 undefined（装配器不 emit）。
       const recordBudgetMetric = dependencies.budgetMetricSink
         ? (report: unknown): void => {
@@ -564,36 +558,17 @@ export function createRunApplicationService(dependencies: RunServiceDependencies
               // 去重落库失败忽略，不影响 run 本身。
             }
           }
-          // 受控团队成本投影（P3 可观测）：仅当工具为 SendMessage 且其 result.details 是 team 的
-          // SubagentResult（带 member/usage/budgetExceeded/model）时才并入 team 段；常规工具不受影响。
+          // 受控团队成本（G-T1）：**明确禁用第二口径**。若未来 finance-api 真的装配了 team 工具，
+          // 这里会显式告警而不是静默产出半成品 team 段——team 成本只能由 serve 经
+          // `projectTeamCostSummary` 投影，字段口径（durationMs / 0 用量成员 / peakConcurrency）
+          // 必须唯一。告警按 run 只打一次，避免 SendMessage 多次派发刷屏。
           if (event.toolName === "SendMessage") {
-            const sendResult = event.result as { details?: SubagentResultLike } | undefined;
-            const sub = sendResult?.details;
-            const usage = sub?.usage;
-            if (
-              sub &&
-              typeof sub.member === "string" &&
-              usage &&
-              Number.isFinite(usage.tokens) &&
-              Number.isFinite(usage.cost)
-            ) {
-              // 已通过 Number.isFinite 校验，故转 number 安全；防御式读取缺失/非有限 → 0（成本统计为观测数据）。
-              const tokens = Number(usage.tokens);
-              const cost = Number(usage.cost);
-              const prev = teamMembers.get(sub.member);
-              if (prev) {
-                // 同一成员可能被多次派发：累加 tokens/cost，budgetExceeded 取或。
-                prev.tokens += tokens;
-                prev.cost += cost;
-                prev.budgetExceeded = prev.budgetExceeded || sub.budgetExceeded === true;
-              } else {
-                teamMembers.set(sub.member, {
-                  model: typeof sub.model === "string" ? sub.model : "",
-                  tokens,
-                  cost,
-                  budgetExceeded: sub.budgetExceeded === true,
-                });
-              }
+            if (!teamCostWarned) {
+              teamCostWarned = true;
+              process.emitWarning(
+                "finance-api 观测到 SendMessage 子代理调用，但 team 成本只由 serve 的 projectTeamCostSummary 投影；本次 run 的 cost_summary 不含 team 段。",
+                { code: "OHNA_TEAM_COST_SECOND_SOURCE_DISABLED" }
+              );
             }
             // SendMessage 的子代理成本经 team 段单独归因，不进入 byTool（避免产生误导性的 0 行）。
           } else {
@@ -648,20 +623,8 @@ export function createRunApplicationService(dependencies: RunServiceDependencies
               totalTokens,
               totalCost,
             };
-            // 受控团队成本段：仅当 teamMembers 真实存在（run 用了 SendMessage 子代理）才并入。
-            if (teamMembers.size > 0) {
-              const members = [...teamMembers.entries()].map(([name, m]) => ({
-                name,
-                model: m.model,
-                tokens: m.tokens,
-                cost: m.cost,
-                budgetExceeded: m.budgetExceeded,
-              }));
-              // totalTokens/totalCost 在 run-service 内自累加（与 byTool 一致口径），不依赖 agent 投影。
-              const teamTotalTokens = members.reduce((sum, m) => sum + m.tokens, 0);
-              const teamTotalCost = members.reduce((sum, m) => sum + m.cost, 0);
-              costSummaryPayload.team = { members, totalTokens: teamTotalTokens, totalCost: teamTotalCost };
-            }
+            // 不写 `team` 段（G-T1）：该段唯一真相源是 serve 经 `projectTeamCostSummary` 的投影，
+            // finance-api 没有 TeamState，任何本地组装都会与 serve 口径分叉。见上方 SendMessage 分支告警。
             // 受控上下文预算段：仅当 budgetMetricSink 收集到 report 才并入（当前 app 默认未装配）。
             if (contextBudgetReports.length > 0) {
               costSummaryPayload.contextBudget = projectContextBudgetSummary(contextBudgetReports);

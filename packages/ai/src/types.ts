@@ -74,6 +74,17 @@ export interface SimpleStreamOptions extends StreamOptions {
 	thinkingBudgets?: ThinkingBudgets;
 	/** 工具选择策略（透传给支持的协议 adapter，如 openai-completions 的 tool_choice）。 */
 	toolChoice?: unknown;
+	/**
+	 * 观测扩展：调用方（RunManager / TeamController）注入的 agent 身份，采集层读取
+	 * （`createLlmTraceStreamFn` 写进 `LlmCallRecordDto.agentId`，docs/v2.0/04 §1.2）。
+	 *
+	 * **不进 provider 请求体**：adapter 层一律忽略该字段，也不得把它拼进 payload；
+	 * 它只是 loop 选项对象上的旁路通道，因此不需要穿透 `StreamFn` / `Context` 签名。
+	 */
+	observer?: {
+		/** 发起本次调用的 agent 身份；supervisor 根节点为 "supervisor"。 */
+		agentId?: string;
+	};
 }
 
 /**

@@ -55,7 +55,11 @@ describe("Workbench conversation history", () => {
             provider: "mock",
             description: "Test model",
             isDefault: true,
-            capabilities: { structuredOutput: true, toolCalling: true }
+            capabilities: { structuredOutput: true, toolCalling: true },
+            // v2.0（docs/v2.0/04 §5.6）：模型目录新增成本计量字段，mock 值按 0 下发。
+            contextWindow: 128_000,
+            maxTokens: 4_096,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
           }]
         }
       });

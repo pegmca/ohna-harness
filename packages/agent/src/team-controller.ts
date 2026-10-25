@@ -9,6 +9,10 @@ export {
   getTeamView,
   type TeamController,
 } from "./team/controller.js";
+// L1 纯函数投影层（docs/v2.0/03-team-eval.md §6.1）：摘要回收 / 失败判定 / 子代理 config
+// 静态装配。导出供 T-L1 硬门禁直接断言，也是「删除 createMockStreamFn」迁移的真实落点。
+// v2.0 增补 deriveSubagentIdentity：子代理身份派生同样由纯函数承载，可脱离 agentLoop 断言。
+export { assembleSubagentConfig, classifyAborted, deriveSubagentIdentity, extractSummary } from "./team/pure.js";
 export {
   createTeamCreateTool,
   createSendMessageTool,
@@ -22,6 +26,8 @@ export type {
   TeamEvent,
   TeamCreateParams,
   SendMessageParams,
+  SubagentBoundaryEvent,
+  SubagentEventIdentity,
   SubagentResult,
   TeamControllerOptions,
 } from "./team/types.js";

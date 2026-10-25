@@ -14,7 +14,7 @@ import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { StreamFn } from "@aiagent/agent";
+import { resolveCompactionSettings, type StreamFn, type TeamState } from "@aiagent/agent";
 import type { Model } from "@aiagent/ai";
 import type { AgentTool } from "@aiagent/tools";
 import { buildCodingSystemPrompt, createCodingToolRegistry } from "@aiagent/coding";
@@ -36,6 +36,7 @@ import { RunManager } from "./run-manager.js";
 import { toConversationDto } from "./routes/conversations.js";
 import { registerRoutes } from "./routes/index.js";
 import { createSingleModelCatalog } from "./routes/models.js";
+import { createServeTeamSession } from "./run/team-session.js";
 import { registerStaticFallback } from "./static.js";
 import { LocalMessageStore, LocalRunStore, LocalSessionStore } from "./store/index.js";
 
@@ -70,6 +71,18 @@ export interface OhnaServerOptions {
   streamFn?: StreamFn;
   /** 模型目录；缺省根据 model 生成单模型目录。 */
   modelCatalog?: ModelCatalogDto;
+  /**
+   * 团队状态读取器（G-T1 单一路径，docs/v2.0/03-team-eval.md §9.1）：组合根把
+   * `TeamController.getTeamState` 透传进来后，run 收尾会用 `projectTeamCostSummary`
+   * 把结果并入 `cost_summary.payload.team`。缺省不产生 team 段。
+   */
+  getTeamState?: () => TeamState;
+  /**
+   * Team 开关（docs/v2.0/04 §2.2）：缺省 false 保持既有单智能体行为。
+   * true 时 serve 侧自建 TeamController，把 TeamCreate / SendMessage 并入 supervisor 工具表，
+   * 子代理与主线程共用同一确认闸门与 traced streamFn，并把四类边界事件写进 run 事件流。
+   */
+  team?: boolean;
 }
 
 /** 装配后的服务句柄。 */
@@ -220,6 +233,21 @@ export async function createOhnaServer(options: OhnaServerOptions): Promise<Ohna
     }
   });
 
+  // v2.0（docs/v2.0/04 §2.2，缺口 B）：Team 开关打开时由 serve 自建 TeamController。
+  // 窗口参数与 run 前压缩共用 `resolveCompactionSettings`（唯一预留口径）：这里只把
+  // contextWindow / maxTokens 交给同一函数现算，不另写预留算法。
+  const teamSession = options.team
+    ? createServeTeamSession({
+        model: options.model,
+        window: {
+          contextWindow: options.model.contextWindow,
+          maxTokens: options.model.maxTokens,
+          reserveTokens: resolveCompactionSettings(options.model.contextWindow).reserveTokens
+        },
+        ...(options.streamFn ? { streamFn: options.streamFn } : {})
+      })
+    : undefined;
+
   const runManager = new RunManager({
     workspaceRoot,
     model: options.model,
@@ -231,7 +259,10 @@ export async function createOhnaServer(options: OhnaServerOptions): Promise<Ohna
     sessionStore,
     confirmGate,
     resolveWorkspace,
-    ...(options.streamFn ? { streamFn: options.streamFn } : {})
+    ...(options.streamFn ? { streamFn: options.streamFn } : {}),
+    // G-T1：team 成本投影的组合根通道——注入的 controller.getTeamState 原样下传（保留为 fallback）。
+    ...(options.getTeamState ? { getTeamState: options.getTeamState } : {}),
+    ...(teamSession ? { team: true, teamSession } : {})
   });
   emitHolder.emit = (runId, payload) =>
     runManager.emitConfirmationRequested(runId, payload);

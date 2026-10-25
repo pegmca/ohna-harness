@@ -6,14 +6,23 @@
  * - `message_start` 开一条消息行，`message_update` 原地 patch（流式增长），`message_end` 定稿；
  * - `tool_execution_start/end` 按 toolCallId 合成一行（参数 + 结果 + 是否报错）；
  * - `llm_call` 独立成行（一等公民）；
- * - `run_status` / `run_error` 生成终态横条。
+ * - `run_status` / `run_error` 生成终态横条；
+ * - `context_event` 独立成行（v2.0 上下文事件日志，供三面板联动定位）。
+ *
+ * agentId 归属（docs/v2.0/04 §5.1 / §2.3）：每行都带 `agentId`。取值优先来自事件 payload
+ * （v2.0 的 `message_*` / `tool_execution_*` 随 agentLoop 发射并携带身份），其次来自
+ * `llm_call.agentId`；两者都没有时归 supervisor 根节点——这是**归属语义**（扁平行归根），
+ * 不是对缺失形状的降级分支。
  */
 import type { LlmCallRecordDto, RunStreamEventDtoV2 } from "@aiagent/types";
+import { SUPERVISOR_AGENT_ID } from "./trace-labels";
 
 /** 助手/用户消息行。 */
 export interface TraceMessageRow {
   kind: "message";
   key: string;
+  /** 发起/承载该行的 agent（未打标归 supervisor 根节点）。 */
+  agentId: string;
   role: string;
   text: string;
   /** true 表示仍在流式接收（message_end 尚未到达）。 */
@@ -24,6 +33,8 @@ export interface TraceMessageRow {
 export interface TraceToolRow {
   kind: "tool";
   key: string;
+  /** 发起该工具调用的 agent。 */
+  agentId: string;
   toolName: string;
   args?: unknown;
   result?: unknown;
@@ -35,6 +46,8 @@ export interface TraceToolRow {
 export interface TraceLlmRow {
   kind: "llm";
   key: string;
+  /** 发起该次调用的 agent（record.agentId 缺省归 supervisor）。 */
+  agentId: string;
   record: LlmCallRecordDto;
 }
 
@@ -42,15 +55,40 @@ export interface TraceLlmRow {
 export interface TraceTerminalRow {
   kind: "terminal";
   key: string;
+  /** 终态属于 run 本身，归 supervisor 根节点。 */
+  agentId: string;
   status?: string;
   message?: string;
 }
 
-export type TraceRow = TraceMessageRow | TraceToolRow | TraceLlmRow | TraceTerminalRow;
+/** 上下文结构变化行（v2.0：compaction）。 */
+export interface TraceContextRow {
+  kind: "context";
+  key: string;
+  agentId: string;
+  eventKind: string;
+  /** 净增量（tokensAfter - tokensBefore，回收为负）。 */
+  delta: number;
+  before: number;
+  after: number;
+  detail?: string;
+}
+
+export type TraceRow =
+  | TraceMessageRow
+  | TraceToolRow
+  | TraceLlmRow
+  | TraceTerminalRow
+  | TraceContextRow;
+
+/** 行种类字符串联合（供测试与统计使用）。 */
+export type TraceRowKind = TraceRow["kind"];
 
 /** AgentEvent 的最小结构（web 侧不依赖 @aiagent/agent，只用事件字段）。 */
 interface AgentEventLike {
-  type: string;
+  type?: string;
+  /** v2.0 身份字段：AgentEvent 边界与消息事件均携带。 */
+  agentId?: string;
   message?: { role?: string; content?: unknown };
   assistantMessageEvent?: { partial?: { role?: string; content?: unknown } };
   toolCallId?: string;
@@ -58,6 +96,11 @@ interface AgentEventLike {
   args?: unknown;
   result?: unknown;
   isError?: boolean;
+  /** context_event payload。 */
+  kind?: string;
+  tokensBefore?: number;
+  tokensAfter?: number;
+  detail?: string;
 }
 
 /**
@@ -80,6 +123,22 @@ export function textOfMessageContent(content: unknown): string {
 }
 
 /**
+ * 解析一帧事件的 agentId 归属。
+ *
+ * 优先级：`payload.agentId` > `payload.record.agentId`（llm_call）> supervisor 根节点。
+ * 空串与非法值同样归 supervisor，避免出现「无名 agent」这种不可点击的归属。
+ *
+ * @param payload 事件 payload（未知形状，由调用方保证已解包）。
+ * @returns 归属的 agentId。
+ */
+export function resolveAgentId(payload: unknown): string {
+  const typed = (payload ?? {}) as AgentEventLike;
+  const fromPayload = typeof typed.agentId === "string" && typed.agentId !== "" ? typed.agentId : undefined;
+  if (fromPayload) return fromPayload;
+  return SUPERVISOR_AGENT_ID;
+}
+
+/**
  * 把事件序列投影成渲染行。
  *
  * @param events 按 sequence 升序的 run 事件。
@@ -94,12 +153,21 @@ export function projectTraceRows(events: readonly RunStreamEventDtoV2[]): TraceR
 
   for (const event of events) {
     const payload = (event.payload ?? {}) as AgentEventLike;
+    // llm_call 的归属来自 record.agentId（采集层在 streamFn 入口读取 observer 写入）；
+    // run_status / run_error 是 run 级终态，固定归 supervisor 根节点。
+    const agentId =
+      event.type === "llm_call"
+        ? resolveAgentId(event.payload)
+        : event.type === "run_status" || event.type === "run_error"
+          ? SUPERVISOR_AGENT_ID
+          : resolveAgentId(payload);
     switch (event.type) {
       case "message_start": {
         const text = textOfMessageContent(payload.message?.content);
         rows.push({
           kind: "message",
           key: `msg-${event.sequence}`,
+          agentId,
           role: payload.message?.role ?? "assistant",
           text,
           live: true,
@@ -116,6 +184,7 @@ export function projectTraceRows(events: readonly RunStreamEventDtoV2[]): TraceR
           rows.push({
             kind: "message",
             key: `msg-${event.sequence}`,
+            agentId,
             role: partial?.role ?? "assistant",
             text,
             live: true,
@@ -137,6 +206,7 @@ export function projectTraceRows(events: readonly RunStreamEventDtoV2[]): TraceR
           rows.push({
             kind: "message",
             key: `msg-${event.sequence}`,
+            agentId,
             role: payload.message?.role ?? "assistant",
             text,
             live: false,
@@ -150,6 +220,7 @@ export function projectTraceRows(events: readonly RunStreamEventDtoV2[]): TraceR
         rows.push({
           kind: "tool",
           key: `tool-${toolCallId}`,
+          agentId,
           toolName: payload.toolName ?? "tool",
           args: payload.args,
           done: false,
@@ -162,6 +233,7 @@ export function projectTraceRows(events: readonly RunStreamEventDtoV2[]): TraceR
         const finished: TraceToolRow = {
           kind: "tool",
           key: `tool-${toolCallId || event.sequence}`,
+          agentId,
           toolName: payload.toolName ?? "tool",
           args: index !== undefined ? (rows[index] as TraceToolRow).args : payload.args,
           result: payload.result,
@@ -179,18 +251,36 @@ export function projectTraceRows(events: readonly RunStreamEventDtoV2[]): TraceR
         rows.push({
           kind: "llm",
           key: `llm-${event.sequence}`,
+          agentId,
           record,
         });
         break;
       }
+      case "context_event": {
+        const context = payload;
+        const before = typeof context.tokensBefore === "number" ? context.tokensBefore : 0;
+        const after = typeof context.tokensAfter === "number" ? context.tokensAfter : 0;
+        rows.push({
+          kind: "context",
+          key: `context-${event.sequence}`,
+          agentId,
+          eventKind: context.kind ?? "context",
+          delta: after - before,
+          before,
+          after,
+          detail: typeof context.detail === "string" ? context.detail : undefined,
+        });
+        break;
+      }
       case "run_status": {
-        const payload = event.payload as { status?: string; error?: { message?: string } } | null;
+        const statusPayload = event.payload as { status?: string; error?: { message?: string } } | null;
         rows.push({
           kind: "terminal",
           key: `status-${event.sequence}`,
-          status: payload?.status,
+          agentId,
+          status: statusPayload?.status,
           // observe 型 run 的失败只有 run_status（没有 run_error），错误文案在这里（N2）。
-          message: payload?.error?.message,
+          message: statusPayload?.error?.message,
         });
         break;
       }
@@ -199,6 +289,7 @@ export function projectTraceRows(events: readonly RunStreamEventDtoV2[]): TraceR
         rows.push({
           kind: "terminal",
           key: `error-${event.sequence}`,
+          agentId,
           status: "failed",
           message: error?.message,
         });
@@ -215,6 +306,8 @@ export function projectTraceRows(events: readonly RunStreamEventDtoV2[]): TraceR
 
 /**
  * 追加事件并重新投影（页面用：事件数组是不可变 state）。
+ *
+ * live 路径的增量归并在 `event-stream-merge.ts`，这里保留最朴素的不可变追加语义。
  *
  * @param events 已有事件。
  * @param incoming 新到事件。

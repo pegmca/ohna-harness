@@ -36,7 +36,7 @@ The repository has two product lines that share only `packages/` and never impor
 - `packages/coding` owns coding tools (read/write/edit/bash/grep/find/ls), path/command policy, project-context loading, and `buildCodingSystemPrompt` (coding prompt template + project context, with an injected `onContextError` so packages never write to stderr); it is consumed by `apps/ohna-cli` and `packages/serve`.
 - `packages/tools`, `packages/rag`, `packages/workflow`, `packages/report`, and `packages/mcp` own their bounded contexts.
 - `packages/eval-core` is the v2.0 eval **thin kernel**: pure functions + pure mechanism only (`gate` / `report` / `judge` / `calibration` / `trajectory`). It recognizes no app, depends only on `@aiagent/types` via `import type`, and has zero `@aiagent/agent|ai|rag|trace` runtime dependency. The cross-boundary `EvalReportDto` / `BaselineDiff` / `GateResult` live in `@aiagent/types` (not here), so any consumer — including Web — can read the report without pulling in the kernel.
-- `packages/trace` owns the minimal run-event type contract and cross-boundary value redaction; it no longer owns a separate recorder/store.
+- `packages/trace` owns the minimal run-event type contract and cross-boundary value redaction; it no longer owns a separate recorder/store. v2.0 起 `RunEventType` 含 `llm_call` 与 `context_event`（后者当前仅 `kind:"compaction"`），payload 经 `import type` 引用 `@aiagent/types` 的 DTO，不引入运行时依赖；**与 `RunEventTypeDto` 必须同步增删**。Trace 的完整数据流（采集 → 身份 → 发射 → 投影）与三条跨层契约见 §4.1.1。
 - `packages/term` owns the ohna CLI's full-screen TUI rendering primitives (zero external dependencies): `RawTerminal` (raw mode / bracketed paste / resize listener / cursor and clear primitives) and `Screen` (throttled + idempotent whole-screen redraw — it clears the screen then writes the current frame, so resize triggers at most one throttled redraw and can never cause a redraw storm), plus the `box` border component, `visibleWidth`, and `truncateToWidth` (visible-column truncation, ANSI-aware / CJK=2). It provides only ANSI primitives; the semantic palette (Amberwood) stays in `apps/ohna-cli/src/ui/theme.ts`, and it must not depend on any app.
 - `packages/security` owns prompt-injection assessment and untrusted-context encapsulation; it has no business dependencies and can be used by agent, rag, tools, and report boundaries.
 - `packages/types` owns transport contracts only and has no runtime dependencies.
@@ -77,6 +77,39 @@ The Web is feature-first: `app`, `features`, `entities`, and `shared`. A feature
 并入 `cost_summary.contextBudget` 段（契约见 trace 的 `CostSummaryEvent.payload`）。run-service 不自行创建
 context-assembly（调用方显式注入 `contextAssemblyTransform` 才启用），故常规 run 省略该段——有意的分层，非缺陷。
 
+## 4.1.1 Trace 与上下文可视化（v2.0，docs/v2.0/04）
+
+Trace 的数据流一条线贯穿四层，**每一层只做一件事**，越界即视为契约破坏：
+
+| 层 | 拥有者 | 职责（且仅此） |
+|---|---|---|
+| 采集 | `packages/agent` 的 `llm-trace.ts` | `createLlmTraceStreamFn(base, sink, counter, options)` 包裹一次 stream 调用产出一条 `LlmCallRecordDto`；`options.window` **构造期必填**，`options.observer.agentId` 于调用入口读取（错误记录同样可归因）；`composition` 在 `onPayload` 时**现算**（`estimateComposition` 五分类，口径见 docs/v2.0/04 §1.4），未到达 payload 时为 `undefined` |
+| 身份 | `packages/agent` 的 `agent-loop.ts` + `team/pure.ts` | `AgentEvent` 的四类边界事件（`agent_start` / `agent_end` / `turn_start` / `turn_end`）**必带** `agentId`；`AgentLoopConfig.identity` 由 `deriveSubagentIdentity` 派生，缺省兜底为根身份 `SUPERVISOR_AGENT_ID`；`turnIndex` 与 `agentId` 组成 TurnSpan 的键。这是内核相对 v1.x 的**唯一**改动（补身份，不改控制流） |
+| 发射 | `packages/serve` | `llm_call` 由托管 run 自动发射；`context_event`（**单 kind `compaction`**）只在 run 前压缩真的发生（`compacted === true`）时发射，位置在 `user_message` 之后、`agent_start` 之前，可 replay。serve 负责 sequence 分配与落盘，**不感知 payload 形状** |
+| 投影 | `apps/ohna-web` 的 `features/trace/` | `trace-projection`（四类扁平行 + 逐行 `agentId`）→ `trace-spans`（Agent/Turn 跨度森林，**按键归属不按区间切**）与 `trace-context`（上下文点 / 事件，**只读采集值、不重估**）→ `TraceDrawer` 编排 `ExecutionRibbon` + `TraceTeamCards`（仅 Team run）+ `TurnGroup` 与 `ContextComposition` / `ContextTrend` / `ContextEvents` 三面板 |
+
+三条**必须遵守**的契约：
+
+1. **`window` 必填、`composition` / `agentId` 可空**：前者由 serve 在构造 wrapper 时注入，与请求成败无关；
+   后者在错误路径（同步 throw、流提前结束）下物理上不存在。可空是**对运行时事实的忠实建模**，消费侧
+   因此**不需要也不允许**写「缺字段降级分支」——缺 `window` 的记录直接不进上下文视图（docs/v2.0/04 §1.1）。
+2. **Team 归因分两条链、各持一条 callIndex 序列**：子代理侧由 `team/controller.ts` 的 `runMember` 薄转发
+   `observer.agentId = deriveSubagentIdentity(member).agentId`，主线程侧由 serve 的 `run/trace-stream.ts`
+   转发为 `SUPERVISOR_AGENT_ID`。因此 **`callIndex` 在 Team run 内不唯一**，唯一配对键是事件 `sequence`
+   （`ContextPoint.sequence` 随点自带，web 不得另起一遍 `type === "llm_call"` 过滤来配对）。
+   **`turnIndex` 同理**：它是 `agentLoop` **每个实例**的回合计数（`agent-loop.ts` 里给首个 `turn_start` 发
+   `turnIndex: 0`、之后逐轮自增），子代理与主线程各跑一次 `agentLoopContinue`，所以 supervisor / researcher /
+   spawn-agent 可以**同时存在 `turnIndex: 0`**。Turn 跨度的唯一键是 **(agentId, turnIndex) 这一对**
+   （web 侧 `trace-spans.ts` 的 `turnKey` 用 `JSON.stringify([agentId, turnIndex])` 编码，避免 agentId 含 `:`
+   时分隔符冲突），**不是单独一个 `turnIndex`**；`TurnBucket.key` 与 `data-agent-key` 的归属联调都依赖它。
+3. **Team controller 唯一归 serve**：开关只有一条来源——CLI 的 `--no-team` 经 `hostOhnaWeb` 透传为
+   `createOhnaServer({ team })`，`packages/serve/src/run/team-session.ts` 建唯一实例；CLI 组合根
+   （`runtime/team-wiring.ts`）**不再自建** controller，只保留 `createTeamGateForwarder` 的 fail-closed
+   范例与单测入口。`run/team-runner.ts` 管 run 级 begin/release：`team` 关闭时零开销。
+
+`RunEventType`（`packages/trace`）与 `RunEventTypeDto`（`packages/types`）是两份**独立枚举**，新增 kind
+必须两处同步（docs/v2.0/04 §0 已把它列为已知约束）。
+
 ## 4.2 Workflow 顺序运行时（入口瘦身）
 
 `packages/workflow` 的顺序节点运行时原本集中在 `src/index.ts`（772 行，且为包内唯一源文件），超出「单文件 ≤500 行」
@@ -84,7 +117,7 @@ context-assembly（调用方显式注入 `contextAssemblyTransform` 才启用）
 `events.ts`（事件构造、sink 发射、输入/输出低风险摘要）、`runtime-helpers.ts`（执行/超时/终止/预算/耗时等引擎原语
 与 `DEFAULT_MAX_STEPS`）、`run-engine.ts`（`runSequentialWorkflow` 编排 + `createWorkflowPackageSummary`），`index.ts`
 退化为 barrel 再导出。外部消费方（`@aiagent/report` 的 `run-report-workflow`、workflow 测试）只依赖公共符号，
-拆分对它们透明。详见 ``。
+拆分对它们透明（各文件职责即上方列举，无独立 ADR）。
 
 ## 4.3 ohna-cli 长任务治理（M2）
 
@@ -156,7 +189,9 @@ Architecture-significant decisions live in `docs/decisions/`. Run snapshots/even
 
 ## 8. Multi-Agent Team & Cost Guardrail
 
-`packages/agent/src/team/` 实现 Supervisor 编排（多窗口拓扑：TeamCreate 建子代理、SendMessage 派发任务）。每个子代理 = 一次独立 `agentLoop`（独立 context + EventStream + 独立 token 预算），复用内核零改动。
+`packages/agent/src/team/` 实现 Supervisor 编排（多窗口拓扑：TeamCreate 建子代理、SendMessage 派发任务）。每个子代理 = 一次独立 `agentLoop`（独立 context + EventStream + 独立 token 预算），复用内核零改动（唯一例外是 v2.0 给 `AgentEvent` 边界事件补身份，见 docs/v2.0/04 §1.3）。
+
+- **子代理事件出口**：`TeamControllerOptions.onSubagentEvent(event, identity)` 让四类边界事件（`agent_start` / `agent_end` / `turn_start` / `turn_end`）逃出 `runMember`，`identity` 为 `{ agentId, parentId? }`（`agentId` = `TeamMember.name`、`parentId` = `supervisor`）；`message_*` / `tool_*` 不转发，回调抛错被吞掉（观测失败不得影响执行）。子代理身份由 `team/pure.ts` 的 `deriveSubagentIdentity(member)` 统一派生并写入 `assembleSubagentConfig` 的 `identity`。
 
 多代理 token 成本约单体 15×，必须有成本收口证据（对应 `docs/v1.2/01-agent-engineering-philosophy.md` §4 P0）：
 

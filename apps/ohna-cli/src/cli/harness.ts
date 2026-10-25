@@ -12,11 +12,10 @@ import type { ActiveModel } from "@aiagent/ai";
 import { resolveActiveModelFromEnv } from "@aiagent/ai";
 import type { AgentTool } from "@aiagent/tools";
 import { createCodingToolRegistry } from "@aiagent/coding";
-import { createTeamToolset } from "../runtime/team-wiring.js";
 import { loadMcpTools } from "../runtime/mcp-config.js";
 import { resolveSystemPrompt } from "../runtime/mode.js";
 import { createUsageTracker } from "../ui/render.js";
-import { createLlmSummarizer } from "../runtime/summarizer.js";
+import { createLlmSummarizer, resolveCompactionSettings } from "../runtime/summarizer.js";
 import { createObservationRef, createTracedStreamFn, type TraceCounter } from "../runtime/observation.js";
 import { runRepl } from "../input/repl.js";
 import { runSingleTurn } from "../runtime/single-turn.js";
@@ -68,24 +67,20 @@ export async function runCli(options: CliOptions): Promise<void> {
   // 唯一的采集 streamFn：Team 子代理与主线程共用同一个 counter，避免同 run 出现两条 callIndex。
   const observationRef = createObservationRef();
   const traceCounter: TraceCounter = { value: 0 };
-  const tracedStreamFn = createTracedStreamFn(() => observationRef.current, traceCounter);
+  // 采集窗口参数（v2.0）：window 是 LlmCallRecordDto 的必填字段，构造 wrapper 时注入；
+  // reserveTokens 与 compaction 使用同一 `resolveCompactionSettings`，保证两侧口径一致。
+  const traceWindow = {
+    contextWindow: active.model.contextWindow,
+    maxTokens: active.model.maxTokens,
+    reserveTokens: resolveCompactionSettings(active.model.contextWindow).reserveTokens,
+  };
+  const tracedStreamFn = createTracedStreamFn(() => observationRef.current, traceCounter, traceWindow);
 
-  // K3 策略继承：team controller 先建，真实闸门（依赖 TUI/readline）后建，经 onGateReady 回填。
-  let gateRef: ConfirmHook | undefined;
-  const team = createTeamToolset({
-    enabled: options.team,
-    codingTools,
-    defaultModel: active.model,
-    getGate: () => gateRef,
-    streamFn: tracedStreamFn,
-  });
-  tools.push(...team.tools);
-  if (team.teamToolNames.size > 0) {
-    mcpContext.teamToolNames = team.teamToolNames;
-    mcpContext.onGateReady = (gate) => {
-      gateRef = gate;
-    };
-  }
+  // Team 唯一装配点在 serve（v2.0，docs/v2.0/04 §2.2 / §7 第 1 步）：CLI 不再自建
+  // controller，只把 `--no-team` 开关下传。serve 侧 `createServeTeamSession` 产出的
+  // TeamCreate / SendMessage 会并入 agent 工具表，子代理的确认闸门来自 serve 自己的
+  // confirm-gate（按 run 建 hook），因此这里也不再有 gateRef 回填链路。
+  const teamEnabled = options.team === true;
 
   const dataDir = resolveDataDir();
   const tracker = createUsageTracker();
@@ -116,6 +111,8 @@ export async function runCli(options: CliOptions): Promise<void> {
     port: options.webPort,
     conversationTitle: `CLI · ${(options.resume ?? cwd).slice(0, 8)}`,
     dataDir,
+    // v2.0：Team 开关下传，controller 与 team 成本投影由 serve 一套装配产出。
+    ...(teamEnabled ? { team: true } : {}),
   });
   const server = hosted?.server;
   if (hosted) mcpContext.traceUrl = hosted.url;
@@ -127,9 +124,8 @@ export async function runCli(options: CliOptions): Promise<void> {
         process.exitCode = 1;
         return;
       }
-      await runSingleTurn(options.prompt, active, tools, setup, tracker, server, dataDir, (gate) => {
-        gateRef = gate;
-      });
+      // `teamEnabled` 下 serve 侧 controller 自持权限闸门，CLI 不再回填 gate 引用。
+      await runSingleTurn(options.prompt, active, tools, setup, tracker, server, dataDir);
     } else if (server) {
       await runRepl(active, tools, setup, tracker, server, dataDir, mcpContext);
     } else {

@@ -13,6 +13,7 @@
     "@aiagent/types": "workspace:^",
     "@radix-ui/react-popover": "^1.1.23",
     "@tailwindcss/vite": "^4.3.1",
+    "lottie-web": "^5.12.2",
     "lucide-react": "^1.21.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",

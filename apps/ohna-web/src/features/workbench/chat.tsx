@@ -12,6 +12,10 @@ import {
   Wrench
 } from "lucide-react";
 import { type FormEvent, type ReactNode, useEffect, useRef, useState } from "react";
+import agentActivityAnimation from "../../assets/lottie/agent-activity.json";
+import emptyCanvasAnimation from "../../assets/lottie/infinity-collision.json";
+import taskCompleteAnimation from "../../assets/lottie/task-complete.json";
+import { LottiePlayer } from "../animation";
 import { formatApiError, formatRunStatus, formatTime } from "./format";
 import { projectLiveRun } from "./live-run-projection";
 import { JsonDetails, RunDetails, StatusBadge } from "./run-details";
@@ -143,7 +147,14 @@ export function ChatTimeline(props: ChatTimelineProps) {
   }, [props.messages, props.conversationId]);
 
   if (props.isLoading && props.messages.length === 0) {
-    return <section className="chat-timeline empty-timeline" aria-label="消息列表"><p className="muted-row">正在加载会话历史…</p></section>;
+    return (
+      <section className="chat-timeline empty-timeline" aria-label="消息列表">
+        <p className="muted-row empty-loading-row">
+          <LottiePlayer animationData={agentActivityAnimation} size={26} loop fallback={null} />
+          <span>正在加载会话历史…</span>
+        </p>
+      </section>
+    );
   }
   if (props.error && props.messages.length === 0) {
     return <section className="chat-timeline empty-timeline" aria-label="消息列表"><div className="error-block"><AlertTriangle className="icon-size" /><span>{props.error}</span></div></section>;
@@ -152,7 +163,14 @@ export function ChatTimeline(props: ChatTimelineProps) {
     return (
       <section className="chat-timeline empty-timeline" aria-label="消息列表">
         <div className="empty-state">
-          <span className="empty-brand-logo" aria-hidden="true"><span className="brand-mark empty-brand-mark" /></span>
+          <span className="empty-brand-logo" aria-hidden="true">
+            <LottiePlayer
+              animationData={emptyCanvasAnimation}
+              size={144}
+              loop={false}
+              fallback={<img className="empty-brand-svg" src="/infinity-icon.svg" alt="" />}
+            />
+          </span>
           <h2>从一个编码任务开始</h2>
           <p>Agent 直接读写当前工作目录；写与执行操作会先弹出待确认卡片。</p>
           {props.showCliHint ? (
@@ -206,8 +224,18 @@ export function ChatMessage(props: {
   const [copied, setCopied] = useState(false);
   const [copyFailed, setCopyFailed] = useState(false);
   const isPending = message.status === "pending";
+  // 完成微动画（方向 C）：仅在 pending → complete 的那一次切换播放，播完静止为对勾。
+  const prevStatusRef = useRef(message.status);
+  const [justCompleted, setJustCompleted] = useState(false);
   const liveProjection = isPending ? projectLiveRun(message.liveEvents ?? []) : undefined;
   const blocks = isPending ? liveProjection?.blocks ?? [] : message.blocks;
+
+  useEffect(() => {
+    if (prevStatusRef.current === "pending" && message.status === "complete") {
+      setJustCompleted(true);
+    }
+    prevStatusRef.current = message.status;
+  }, [message.status]);
 
   /**
    * 复制当前回答正文，并用短暂状态反馈替代额外 toast。
@@ -238,6 +266,16 @@ export function ChatMessage(props: {
           {isPending ? <StatusBadge tone="info">running</StatusBadge> : null}
           {message.status === "failed" ? <StatusBadge tone="danger">failed</StatusBadge> : null}
           {message.status === "cancelled" ? <StatusBadge tone="neutral">cancelled</StatusBadge> : null}
+          {justCompleted && !isUser ? (
+            <span className="message-complete-burst">
+              <LottiePlayer
+                animationData={taskCompleteAnimation}
+                size={20}
+                loop={false}
+                fallback={<Check className="icon-size" />}
+              />
+            </span>
+          ) : null}
         </div>
         {isPending && liveProjection ? <LiveRunProcess label={liveProjection.progressLabel} /> : null}
         {!isUser && !isPending && (blocks.some((block) => block.type !== "text") || message.runId) ? (
@@ -397,7 +435,12 @@ function LiveRunProcess(props: { label: string }) {
   return (
     <div className="run-process live-run-process">
       <span className="run-process-trigger">
-        <Loader2 className="icon-size spin" />
+        <LottiePlayer
+          animationData={agentActivityAnimation}
+          size={20}
+          loop
+          fallback={<Loader2 className="icon-size spin" />}
+        />
         <span>{props.label}</span>
       </span>
     </div>

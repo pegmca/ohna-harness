@@ -44,3 +44,6 @@ apps/ohna-cli/eval/team/report.md
 apps/ohna-cli/eval/team/baseline.json
 apps/ohna-cli/eval/team/trend.json
 apps/ohna-cli/eval/team/trend.md
+
+# pnpm 本地内容寻址存储（pnpm-store 本地缓存，非源码）
+.pnpm-store/

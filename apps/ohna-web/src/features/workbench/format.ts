@@ -120,8 +120,13 @@ export function createConversationTitle(message: string): string {
  */
 export function toUiMessages(items: LinearMessageDto[]): UiMessage[] {
   const messages: UiMessage[] = [];
+  // 同一 run 的中间助手消息（工具调用消息 + 总结消息等）归并到「一条用户消息 → 一条助手消息」，
+  // 避免 Agent 调用循环产生的多段 assistant 在时间线渲染成多个头像（BUG-006）。
+  // 归并以 runId 为锚：一个 run 对应一次用户回合，因此同一个 runId 的全部 assistant 段合并为一个气泡。
+  let activeRun: { runId: string; message: UiMessage } | undefined;
   for (const item of items) {
     if (item.messageType === "compaction") {
+      activeRun = undefined;
       messages.push({
         id: item.messageId,
         role: "user",
@@ -141,7 +146,16 @@ export function toUiMessages(items: LinearMessageDto[]): UiMessage[] {
     }
     if (item.role === "assistant") {
       const blocks = parseAssistantBlocks(item.content);
-      messages.push({
+      const runId = item.runId ?? "";
+      // 同 runId 的 assistant 段：累积块到当前归并气泡，不新建气泡（首个段确定气泡位置/id）。
+      if (activeRun && activeRun.runId === runId) {
+        activeRun.message.blocks = [...activeRun.message.blocks, ...blocks];
+        activeRun.message.content = textOfBlocks(activeRun.message.blocks);
+        // 任一段失败即判定整条失败，但保留已累积内容。
+        if (item.stopReason === "error") activeRun.message.ok = false;
+        continue;
+      }
+      const merged: UiMessage = {
         id: item.messageId,
         role: "assistant",
         content: textOfBlocks(blocks),
@@ -151,9 +165,13 @@ export function toUiMessages(items: LinearMessageDto[]): UiMessage[] {
         ok: item.stopReason !== "error",
         runId: item.runId,
         modelId: item.modelId
-      });
+      };
+      activeRun = { runId, message: merged };
+      messages.push(merged);
       continue;
     }
+    // 用户消息结束当前 run 的归并（新一轮换 runId，或回退到无 runId 的历史用户消息）。
+    if (item.role === "user") activeRun = undefined;
     messages.push({
       id: item.messageId,
       role: "user",

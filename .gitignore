@@ -36,3 +36,6 @@ apps/finance-api/eval/baseline.json
 apps/ohna-cli/eval/report.json
 apps/ohna-cli/eval/report.md
 apps/ohna-cli/eval/baseline.json
+
+# pnpm 本地内容寻址存储（pnpm-store 本地缓存，非源码）
+.pnpm-store/

@@ -1,8 +1,10 @@
 /**
- * format.ts 纯函数单测：重点是 `applyFailure` 承载的「错误落点唯一化」不变量（BUG-001）。
+ * format.ts 纯函数单测：重点是 `applyFailure` 承载的「错误落点唯一化」不变量（BUG-001），
+ * 以及 `toUiMessages` 的「一条用户消息 → 一条助手消息」归并不变量（BUG-006）。
  */
 import { describe, expect, it } from "vitest";
-import { applyFailure, formatApiError } from "./format";
+import { applyFailure, formatApiError, toUiMessages } from "./format";
+import type { LinearMessageDto } from "@aiagent/types";
 import type { UiContentBlock } from "./types";
 
 /** 带诊断字段的失败错误（status / cause 参与格式化）。 */
@@ -75,3 +77,59 @@ describe("applyFailure", () => {
     expect(withoutResidual.error).toBeUndefined();
   });
 });
+
+describe("toUiMessages（BUG-006：单条用户消息对应单条助手消息）", () => {
+  /** 构造一条线性消息行（按服务端 LinearMessageDto 形状裁剪）。 */
+  function line(partial: Partial<LinearMessageDto> & Pick<LinearMessageDto, "messageId" | "role">): LinearMessageDto {
+    return {
+      conversationId: "c1",
+      createdAt: "2026-10-24T00:00:00Z",
+      messageType: "normal",
+      content: "",
+      ...partial
+    } as LinearMessageDto;
+  }
+
+  it("同一 runId 的多段 assistant 消息合并为一条（不出现多个头像）", () => {
+    const items: LinearMessageDto[] = [
+      line({ messageId: "u1", role: "user", content: "帮我查一下", runId: "r1" }),
+      line({ messageId: "a1", role: "assistant", content: [{ type: "toolCall", id: "t1", name: "read", arguments: {} }], runId: "r1" }),
+      line({ messageId: "a2", role: "assistant", content: [{ type: "text", text: "查到了结果。" }], runId: "r1" })
+    ];
+    const messages = toUiMessages(items);
+    const assistants = messages.filter((m) => m.role === "assistant");
+    expect(assistants).toHaveLength(1);
+    // 合并后块顺序保留：先工具调用、后总结文本。
+    expect(messages.map((m) => m.id)).toEqual(["u1", "a1"]);
+    expect(assistants[0].blocks.map((b: UiContentBlock) => b.type)).toEqual(["toolCall", "text"]);
+    expect(assistants[0].content).toBe("查到了结果。");
+    expect(firstAssistantRunId(messages)).toBe("r1");
+  });
+
+  it("不同 runId 的助手消息各自独立成条（多轮对话不被错误归并）", () => {
+    const items: LinearMessageDto[] = [
+      line({ messageId: "u1", role: "user", content: "第一轮", runId: "r1" }),
+      line({ messageId: "a1", role: "assistant", content: [{ type: "text", text: "答1" }], runId: "r1" }),
+      line({ messageId: "u2", role: "user", content: "第二轮", runId: "r2" }),
+      line({ messageId: "a2", role: "assistant", content: [{ type: "text", text: "答2" }], runId: "r2" })
+    ];
+    const messages = toUiMessages(items);
+    expect(messages.filter((m) => m.role === "assistant")).toHaveLength(2);
+  });
+
+  it("任一段 assistant 失败时整条 ok=false，但保留已累积内容", () => {
+    const items: LinearMessageDto[] = [
+      line({ messageId: "u1", role: "user", content: "执行", runId: "r1" }),
+      line({ messageId: "a1", role: "assistant", content: [{ type: "text", text: "半截" }], runId: "r1" }),
+      line({ messageId: "a2", role: "assistant", content: [{ type: "text", text: "崩溃" }], runId: "r1", stopReason: "error" })
+    ];
+    const assistants = toUiMessages(items).filter((m) => m.role === "assistant");
+    expect(assistants).toHaveLength(1);
+    expect(assistants[0].ok).toBe(false);
+  });
+});
+
+/** 取合并后助手消息的 runId（测试辅助，避免重复解构）。 */
+function firstAssistantRunId(messages: ReturnType<typeof toUiMessages>): string | undefined {
+  return messages.find((m) => m.role === "assistant")?.runId;
+}

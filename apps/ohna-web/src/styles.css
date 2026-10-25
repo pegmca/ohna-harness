@@ -172,6 +172,119 @@
   --md-color-border-subtle: rgba(0,0,0,.07);
 }
 
+/* —— 自持组件类（07 · D1 补位）：原由 system.css 提供、实际 TSX 直接引用的工具类。
+   断开 system.css import 后这些类必须自持，否则按钮/卡片/徽章会失样。
+   一律引用上方已自持的 --md-* token，不重新 import system.css。 —— */
+.md-card {
+  background: var(--md-color-surface);
+  border: var(--md-border-width) solid var(--md-color-border-subtle);
+  border-radius: var(--md-radius-lg);
+  padding: var(--md-space-5);
+}
+
+.md-button {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--md-space-2);
+  min-height: 40px;
+  padding: 0 var(--md-space-4);
+  border: var(--md-border-width) solid transparent;
+  border-radius: var(--md-radius-lg);
+  background: transparent;
+  color: var(--md-color-text-primary);
+  font-size: var(--md-text-body-sm-size);
+  font-weight: 650;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+  transition:
+    background-color var(--md-motion-base) var(--md-ease),
+    border-color var(--md-motion-base) var(--md-ease),
+    color var(--md-motion-base) var(--md-ease),
+    box-shadow var(--md-motion-base) var(--md-ease),
+    transform var(--md-motion-fast) var(--md-ease);
+}
+.md-button:focus-visible {
+  outline: none;
+  box-shadow: var(--md-focus-ring);
+}
+.md-button:disabled,
+.md-button[aria-disabled="true"] {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+.md-button:active:not(:disabled) {
+  transform: translateY(1px);
+}
+.md-button svg {
+  width: 1rem;
+  height: 1rem;
+  flex: 0 0 auto;
+}
+.md-button-secondary {
+  background: var(--md-color-surface);
+  border-color: var(--md-color-border);
+  color: var(--md-color-text-primary);
+}
+.md-button-secondary:hover:not(:disabled) {
+  background: var(--md-color-elevated);
+  border-color: var(--md-color-border-strong);
+}
+.md-button-sm {
+  min-height: 32px;
+  padding-inline: var(--md-space-3);
+  border-radius: var(--md-radius-md);
+}
+
+.md-label {
+  margin: 0;
+  color: var(--md-color-text-muted);
+  font-size: var(--md-text-label-size);
+  font-weight: var(--md-text-label-weight);
+  letter-spacing: var(--md-text-label-tracking);
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+.md-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--md-space-1);
+  min-height: 24px;
+  padding: 0 var(--md-space-2);
+  border: var(--md-border-width) solid var(--md-color-border);
+  border-radius: var(--md-radius-md);
+  background: var(--md-color-muted);
+  color: var(--md-color-text-secondary);
+  font-size: var(--md-text-body-sm-size);
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+}
+.md-badge-success {
+  border-color: var(--md-color-border);
+  background: var(--md-color-success-soft);
+  color: var(--md-color-success);
+}
+.md-badge-warning {
+  border-color: var(--md-color-border);
+  background: var(--md-color-warning-soft);
+  color: var(--md-color-warning);
+}
+.md-badge-danger {
+  border-color: var(--md-color-border);
+  background: var(--md-color-danger-soft);
+  color: var(--md-error-fg);
+}
+.md-badge-info {
+  border-color: var(--md-color-border);
+  background: var(--md-color-info-soft);
+  color: var(--md-color-info);
+}
+
 * {
   box-sizing: border-box;
 }
@@ -1194,12 +1307,53 @@ textarea:disabled {
 
 .empty-brand-logo {
   display: grid;
-  width: 72px;
-  height: 44px;
+  width: 96px;
+  height: 96px;
   place-items: center;
   border-radius: var(--md-radius-xl);
   border: 1px solid color-mix(in srgb, var(--md-color-primary) 24%, var(--md-color-border-subtle));
   background: var(--md-color-primary-soft);
+}
+
+/* 碰撞入场预留两侧运动空间；固定画布不引起空状态布局位移。 */
+.empty-brand-logo .lottie-player {
+  width: 144px;
+  height: 144px;
+}
+
+.empty-brand-svg {
+  display: block;
+  width: 64px;
+  height: auto;
+}
+
+.empty-loading-row {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--md-space-2);
+}
+
+/* Lottie 播放器通用容器：inline-grid 避免行高抖动，svg 由播放器填充。 */
+.lottie-player {
+  display: inline-grid;
+  flex: 0 0 auto;
+  place-items: center;
+  line-height: 0;
+}
+
+.lottie-player > svg {
+  display: block;
+}
+
+.lottie-static-fallback {
+  display: inline-block;
+}
+
+/* 完成微动画（方向 C）：紧贴状态徽标，不撑开列表行高。 */
+.message-complete-burst {
+  display: inline-flex;
+  align-items: center;
+  margin-left: var(--md-space-1);
 }
 
 .empty-brand-mark {
@@ -1301,9 +1455,12 @@ textarea:disabled {
   overflow: visible;
 }
 
+/* 用户气泡：Glass 设计稿用「实色浮起面 + 描边」，而非旧版整块绿。
+   见 docs/design/ohna-glass-web.html §消息气泡（.is-user .message-text 用 --solid-2 + stroke）。 */
 .is-user .message-content {
-  background: var(--md-color-primary);
-  color: var(--md-color-text-inverse);
+  border-color: var(--md-color-border);
+  background: var(--md-color-elevated);
+  color: var(--md-color-text-primary);
 }
 
 .message-meta {
@@ -1315,7 +1472,8 @@ textarea:disabled {
 }
 
 .is-user .message-meta {
-  color: color-mix(in srgb, var(--md-color-text-inverse) 78%, transparent);
+  /* 用户气泡已改为实色浮起面 + 正常文本，meta 恢复中性 muted（不再沿用旧绿底的反色文本）。 */
+  color: var(--md-color-text-muted);
 }
 
 .message-text {
@@ -1414,9 +1572,11 @@ textarea:disabled {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: var(--md-space-3);
-  border: 1px solid var(--md-color-border);
+  /* Glass 设计稿：composer-box 用浮起实色面 + 强描边（--solid-2 / --stroke-strong），
+     融入画布而非独立卡片。见 ohna-glass-web.html .composer-box。 */
+  border: 1px solid var(--md-color-border-strong);
   border-radius: var(--md-radius-lg);
-  background: var(--md-color-surface);
+  background: var(--md-color-elevated);
   padding: var(--md-space-3);
 }
 

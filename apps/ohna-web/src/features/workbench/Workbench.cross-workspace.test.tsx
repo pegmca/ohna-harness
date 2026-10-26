@@ -130,7 +130,7 @@ describe("Workbench 跨工作区会话", () => {
     await screen.findByText("其他工作区历史消息");
     await waitFor(() => expect(requests.some((url) => url.startsWith("/api/health"))).toBe(true));
 
-    const textarea = screen.getByPlaceholderText("描述一个编码任务…") as HTMLTextAreaElement;
+    const textarea = screen.getByPlaceholderText("许下你的愿望") as HTMLTextAreaElement;
     expect(textarea.disabled).toBe(false);
     expect(screen.queryByText(/该会话属于其他工作区/)).toBeNull();
     // 列表查询只保留侧栏全量拉取，不再按 ?workspaceRoot= 追加本工作区会话。
@@ -187,6 +187,6 @@ describe("Workbench 跨工作区会话", () => {
     render(<MemoryRouter initialEntries={["/?conversation=c-same"]}><Workbench /></MemoryRouter>);
     await screen.findByText("本工作区历史消息");
     expect(screen.queryByText(/该会话属于其他工作区/)).toBeNull();
-    expect((screen.getByPlaceholderText("描述一个编码任务…") as HTMLTextAreaElement).disabled).toBe(false);
+    expect((screen.getByPlaceholderText("许下你的愿望") as HTMLTextAreaElement).disabled).toBe(false);
   });
 });

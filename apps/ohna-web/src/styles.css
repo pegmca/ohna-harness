@@ -1290,32 +1290,14 @@ textarea:disabled {
   text-align: center;
 }
 
-.empty-state h2 {
-  margin: 0;
-  color: var(--md-color-text-primary);
-  font-size: 1.375rem;
-  font-weight: 650;
-  line-height: 1.25;
-}
-
-.empty-state p {
-  max-width: 560px;
-  margin: 0;
-  color: var(--md-color-text-muted);
-  line-height: 1.6;
-}
-
 .empty-brand-logo {
   display: grid;
   width: 96px;
   height: 96px;
   place-items: center;
-  border-radius: var(--md-radius-xl);
-  border: 1px solid color-mix(in srgb, var(--md-color-primary) 24%, var(--md-color-border-subtle));
-  background: var(--md-color-primary-soft);
 }
 
-/* 碰撞入场预留两侧运动空间；固定画布不引起空状态布局位移。 */
+/* 旋涡入场预留外圈环运动空间；固定画布不引起空状态布局位移。 */
 .empty-brand-logo .lottie-player {
   width: 144px;
   height: 144px;
@@ -1359,37 +1341,6 @@ textarea:disabled {
 .empty-brand-mark {
   width: 52px;
   height: 26px;
-}
-
-.starter-prompts {
-  display: grid;
-  width: 100%;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--md-space-3);
-}
-
-.starter-prompts.is-compact {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-}
-
-.starter-prompts button {
-  min-height: 44px;
-  border: 1px solid var(--md-color-border-subtle);
-  border-radius: var(--md-radius-lg);
-  background: var(--md-color-surface);
-  padding: var(--md-space-3);
-  color: var(--md-color-text-secondary);
-  text-align: left;
-  font-size: var(--md-text-body-sm-size);
-  line-height: 1.4;
-  transition:
-    background-color var(--md-motion-base) var(--md-ease),
-    border-color var(--md-motion-base) var(--md-ease);
-}
-
-.starter-prompts button:hover:not(:disabled) {
-  border-color: var(--md-color-border);
-  background: var(--md-color-elevated);
 }
 
 .chat-message {
@@ -2292,12 +2243,6 @@ textarea:disabled {
   }
 }
 
-@media (max-width: 1120px) {
-  .starter-prompts.is-compact {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
-
 @media (max-width: 760px) {
   .metric-grid,
   .architecture-grid { grid-template-columns: 1fr; }
@@ -2383,11 +2328,6 @@ textarea:disabled {
   .chat-main-footer {
     gap: var(--md-space-1);
     padding: var(--md-space-3) var(--md-space-4);
-  }
-
-  .starter-prompts,
-  .starter-prompts.is-compact {
-    grid-template-columns: 1fr;
   }
 
   .chat-message,

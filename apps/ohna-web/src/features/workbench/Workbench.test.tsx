@@ -212,7 +212,7 @@ describe("Workbench conversation history", () => {
     expect(await screen.findByText(/暂时失败/)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "重试" }));
     expect(await screen.findByRole("heading", { name: "首个会话" })).toBeTruthy();
-    expect(await screen.findByText("从一个编码任务开始")).toBeTruthy();
+    await waitFor(() => expect(document.querySelector(".empty-state")).toBeTruthy());
     fireEvent.click(screen.getByRole("button", { name: "加载更多" }));
     expect(await screen.findByText("更多会话")).toBeTruthy();
   });

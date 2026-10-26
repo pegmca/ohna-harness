@@ -85,17 +85,10 @@ interface ChatTimelineProps {
   onLoadMore: () => void;
   onOpenRunDetail: (detail: SelectedRunDetail) => void;
   onRetryMessage: (message: UiMessage) => void;
-  onUsePrompt: (prompt: string) => void;
-  /** 当前会话是 CLI 镜像会话（标题以 `CLI ·` 开头）时，空态提示改用 Trace 观测台（N5）。 */
-  showCliHint?: boolean;
-  /**
-   * 只读观测实例（docs/v1.4/06 D-A7）：true 时禁用空态示例任务按钮。
-   */
-  observeOnly?: boolean;
 }
 
 /**
- * 渲染中央对话时间线；空状态只显示紧凑 starter prompts。
+ * 渲染中央对话时间线；空状态只显示品牌 Logo。
  *
  * @param props 组件属性。
  * @returns 对话消息列表。
@@ -168,15 +161,10 @@ export function ChatTimeline(props: ChatTimelineProps) {
               animationData={emptyCanvasAnimation}
               size={144}
               loop={false}
+              preserveOriginalColors
               fallback={<img className="empty-brand-svg" src="/infinity-icon.svg" alt="" />}
             />
           </span>
-          <h2>从一个编码任务开始</h2>
-          <p>Agent 直接读写当前工作目录；写与执行操作会先弹出待确认卡片。</p>
-          {props.showCliHint ? (
-            <p className="muted-row">CLI 会话（默认 `ohna`）只镜像 run 事件、不写入对话消息，请到 Trace 观测台查看。</p>
-          ) : null}
-          <StarterPrompts disabled={props.isSubmitting || props.observeOnly === true} onUsePrompt={props.onUsePrompt} />
         </div>
       </section>
     );
@@ -481,25 +469,3 @@ export function ChatComposer(props: ChatComposerProps) {
 }
 
 export type { ChatComposerProps };
-
-/**
- * 展示示例任务，空状态和 composer 复用同一组真实请求入口。
- *
- * @param props 组件属性。
- * @returns 示例任务按钮组。
- */
-export function StarterPrompts(props: {
-  compact?: boolean;
-  disabled: boolean;
-  onUsePrompt: (prompt: string) => void;
-}) {
-  return (
-    <div className={`starter-prompts ${props.compact ? "is-compact" : ""}`}>
-      {demoPrompts.map((prompt) => (
-        <button disabled={props.disabled} key={prompt} onClick={() => props.onUsePrompt(prompt)} type="button">
-          {prompt}
-        </button>
-      ))}
-    </div>
-  );
-}

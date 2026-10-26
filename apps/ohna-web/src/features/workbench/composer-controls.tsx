@@ -94,7 +94,7 @@ export function ComposerControls(props: ComposerControlsProps) {
           disabled={props.isSubmitting || props.observeOnly === true}
           onChange={(event) => props.onInputChange(event.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder={props.observeOnly ? "只读观测实例：不可发送消息。" : "描述一个编码任务…"}
+          placeholder={props.observeOnly ? "只读观测实例：不可发送消息。" : "许下你的愿望"}
           ref={textareaRef}
           rows={1}
           value={props.input}

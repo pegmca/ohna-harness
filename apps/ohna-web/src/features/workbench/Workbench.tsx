@@ -855,9 +855,6 @@ export function Workbench() {
             }}
             onOpenRunDetail={openRunDetail}
             onRetryMessage={(message) => void retryFailedMessage(message)}
-            onUsePrompt={setInput}
-            showCliHint={activeConversation?.title.startsWith("CLI ·") ?? false}
-            observeOnly={localMode?.observeOnly === true ? true : undefined}
           />
         )}
         composer={(
@@ -876,7 +873,6 @@ export function Workbench() {
             onSubmit={handleSubmit}
             onUsePrompt={setInput}
             selectedModelId={composer.selectedModelId}
-            observeOnly={localMode?.observeOnly === true ? true : undefined}
           />
         )}
         composerFormId={COMPOSER_FORM_ID}

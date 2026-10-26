@@ -97,6 +97,8 @@ interface LottiePlayerProps {
   size?: number;
   /** 覆盖着色（`#rrggbb` / `rgb()`）；缺省读取 `--md-color-primary` 跟随主题。 */
   color?: string;
+  /** 是否保留动画 JSON 中的原始配色；多色动画应启用，默认仍跟随主题强调色。 */
+  preserveOriginalColors?: boolean;
   /** 附加样式（用于对齐 / 间距，不覆盖尺寸）。 */
   style?: CSSProperties;
   /** 无障碍标签；装饰性动画应传空字符串并配合 aria-hidden。 */
@@ -114,14 +116,25 @@ interface LottiePlayerProps {
  * - 不常驻首屏关键路径：`lottie-web` 仅在组件挂载时动态 import。
  * - 尊重 `prefers-reduced-motion`：命中时直接渲染 `fallback`，不实例化播放器。
  * - 测试 / jsdom 安全：环境无 SVG 上下文时降级 fallback，不触发动画库。
- * - 主题跟随：形状颜色按 `--md-color-primary` 着色（可被 `color` 覆盖）。
+ * - 主题跟随：形状颜色默认按 `--md-color-primary` 着色，多色动画可保留原始配色。
  * - 卸载即销毁实例，避免内存泄漏与游离定时器。
  *
  * @param props 动画数据与展示选项。
  * @returns 受控 Lottie 容器或静态降级。
  */
 export function LottiePlayer(props: LottiePlayerProps) {
-  const { animationData, loop = true, autoplay = true, size, color, style, ariaLabel, fallback, showFallbackOnError = true } = props;
+  const {
+    animationData,
+    loop = true,
+    autoplay = true,
+    size,
+    color,
+    preserveOriginalColors = false,
+    style,
+    ariaLabel,
+    fallback,
+    showFallbackOnError = true
+  } = props;
   const reducedMotion = usePrefersReducedMotion();
   const containerRef = useRef<HTMLSpanElement>(null);
   const animationRef = useRef<LottieInstance | undefined>(undefined);
@@ -135,8 +148,10 @@ export function LottiePlayer(props: LottiePlayerProps) {
       if (disposed || !containerRef.current) return;
       // 深拷贝动画数据：lottie 会改写传入对象，重复挂载共享对象会报错。
       const copy = JSON.parse(JSON.stringify(animationData)) as object;
-      const rgba = parseColorToRgba01(color || readThemeAccent());
-      if (rgba) tintShapes(copy, rgba);
+      if (!preserveOriginalColors) {
+        const rgba = parseColorToRgba01(color || readThemeAccent());
+        if (rgba) tintShapes(copy, rgba);
+      }
       const config: LottieConfig = {
         container: containerRef.current,
         renderer: "svg",
@@ -156,7 +171,7 @@ export function LottiePlayer(props: LottiePlayerProps) {
       animationRef.current?.destroy();
       animationRef.current = undefined;
     };
-  }, [animationData, loop, autoplay, reducedMotion, color]);
+  }, [animationData, loop, autoplay, reducedMotion, color, preserveOriginalColors]);
 
   const shouldRenderStatic = reducedMotion || failed || !isAnimationSafeEnvironment();
   if (shouldRenderStatic) {

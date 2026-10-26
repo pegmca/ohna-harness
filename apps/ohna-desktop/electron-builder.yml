@@ -1,0 +1,21 @@
+appId: com.aiagent.ohna
+productName: ohna
+asar: true
+directories:
+  output: release
+files:
+  - dist/**
+  - package.json
+asarUnpack:
+  - dist/utility/**
+mac:
+  category: public.app-category.productivity
+  identity: null
+  target:
+    - dir
+win:
+  target:
+    - dir
+linux:
+  target:
+    - dir

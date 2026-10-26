@@ -418,6 +418,15 @@ importers:
 
   packages/ohna-runtime:
     dependencies:
+      '@aiagent/agent':
+        specifier: workspace:*
+        version: link:../agent
+      '@aiagent/ai':
+        specifier: workspace:*
+        version: link:../ai
+      '@aiagent/tools':
+        specifier: workspace:*
+        version: link:../tools
       '@aiagent/trace':
         specifier: workspace:*
         version: link:../trace

@@ -17,6 +17,9 @@
     "test": "pnpm build && node --test test/*.test.mjs"
   },
   "dependencies": {
+    "@aiagent/agent": "workspace:*",
+    "@aiagent/ai": "workspace:*",
+    "@aiagent/tools": "workspace:*",
     "@aiagent/trace": "workspace:*",
     "@aiagent/types": "workspace:*"
   }

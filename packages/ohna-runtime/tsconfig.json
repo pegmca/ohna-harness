@@ -18,6 +18,15 @@
   ],
   "references": [
     {
+      "path": "../agent"
+    },
+    {
+      "path": "../ai"
+    },
+    {
+      "path": "../tools"
+    },
+    {
       "path": "../trace"
     },
     {

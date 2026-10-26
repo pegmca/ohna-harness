@@ -8,3 +8,11 @@
  * 当前只导出 store 子模块；后续 Task 会逐步迁入更多 runtime 能力。
  */
 export * from "./store/index.js";
+
+/**
+ * 跨进程边界的错误归一与入参形状校验（spec §4.2）。
+ * `toRuntimeError` 把任意错误收敛为 `RuntimeErrorDto`；`assertProtocolVersion` /
+ * `validateString` / `validateId` 在 preload / runtime 边界做 fail-closed 形状校验。
+ */
+export * from "./errors.js";
+export * from "./validation.js";

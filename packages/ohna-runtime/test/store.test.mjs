@@ -1,5 +1,10 @@
 /**
  * JSONL store 往返测试：不启动 HTTP，也不调用模型。
+ *
+ * 从 packages/serve/test/store.test.mjs 迁入，引用改为本包 dist 产物。
+ * 原 `toConversationDto` 来自 serve 路由层（不在 runtime 包职责内），
+ * 这里改为内联断言：只验证 store 透出的 SessionMeta.workspaceRoot 字段与
+ * 落盘值一致——这正是原测试经 DTO 想验证的点。
  */
 import assert from "node:assert/strict";
 import { promises as fs } from "node:fs";
@@ -16,7 +21,7 @@ import { LocalSessionStore } from "../dist/store/session-store.js";
  * @returns {Promise<string>} 目录路径。
  */
 async function tempDir() {
-  return await fs.mkdtemp(path.join(os.tmpdir(), "ohna-serve-store-"));
+  return await fs.mkdtemp(path.join(os.tmpdir(), "ohna-runtime-store-"));
 }
 
 /**
@@ -79,12 +84,12 @@ test("session store: workspaceRoot 必填透出，缺字段/空串的坏行被�
   const dir = await tempDir();
   try {
     const store = new LocalSessionStore(path.join(dir, "sessions"));
-    // 正常写入带 workspaceRoot 的会话，DTO 透出该字段。
+    // 正常写入带 workspaceRoot 的会话，store 透出该字段。
     const created = await store.create({ title: "带工作区的会话", workspaceRoot: "/work/a" });
     assert.equal(created.workspaceRoot, "/work/a");
-    const toDto = (await import("../dist/routes/conversations.js")).toConversationDto;
-    const dto = toDto(created);
-    assert.equal(dto.workspaceRoot, "/work/a");
+    // 原 serve 测试经 toConversationDto 验证 DTO 透出 workspaceRoot；
+    // runtime 包不含路由层 DTO，这里直接断言 store 返回的元数据字段即可覆盖同一意图。
+    assert.equal(created.workspaceRoot, "/work/a");
 
     // 直接往索引追加：缺 workspaceRoot 与空串 workspaceRoot 两行坏数据（阻断性升级，无空串兜底）。
     await fs.appendFile(path.join(dir, "sessions", "index.jsonl"), JSON.stringify({

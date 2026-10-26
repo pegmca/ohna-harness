@@ -416,6 +416,15 @@ importers:
         specifier: workspace:^
         version: link:../types
 
+  packages/ohna-runtime:
+    dependencies:
+      '@aiagent/trace':
+        specifier: workspace:*
+        version: link:../trace
+      '@aiagent/types':
+        specifier: workspace:*
+        version: link:../types
+
   packages/parsing:
     dependencies:
       '@aiagent/types':
@@ -472,6 +481,9 @@ importers:
       '@aiagent/coding':
         specifier: workspace:*
         version: link:../coding
+      '@aiagent/ohna-runtime':
+        specifier: workspace:*
+        version: link:../ohna-runtime
       '@aiagent/tools':
         specifier: workspace:*
         version: link:../tools

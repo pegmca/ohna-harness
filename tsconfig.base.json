@@ -25,6 +25,7 @@
       "@aiagent/parsing": ["./packages/parsing/src/index.ts"],
       "@aiagent/mcp": ["./packages/mcp/src/index.ts"],
       "@aiagent/rag": ["./packages/rag/src/index.ts"],
+      "@aiagent/ohna-runtime": ["./packages/ohna-runtime/src/index.ts"],
       "@aiagent/report": ["./packages/report/src/index.ts"],
       "@aiagent/security": ["./packages/security/src/index.ts"],
       "@aiagent/serve": ["./packages/serve/src/index.ts"],

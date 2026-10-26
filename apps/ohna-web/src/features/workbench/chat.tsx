@@ -21,7 +21,7 @@ import { projectLiveRun } from "./live-run-projection";
 import { JsonDetails, RunDetails, StatusBadge } from "./run-details";
 import { ComposerControls } from "./composer-controls";
 import type { LocalModeInfo } from "../../shared/mode";
-import type { SelectedRunDetail, UiContentBlock, UiMessage, UiToolCallBlock } from "./types";
+import type { UiContentBlock, UiMessage, UiToolCallBlock } from "./types";
 
 export const demoPrompts = [
   "列出 src 目录结构并说明各模块职责。",
@@ -83,7 +83,6 @@ interface ChatTimelineProps {
   isSubmitting: boolean;
   messages: UiMessage[];
   onLoadMore: () => void;
-  onOpenRunDetail: (detail: SelectedRunDetail) => void;
   onRetryMessage: (message: UiMessage) => void;
 }
 
@@ -184,7 +183,6 @@ export function ChatTimeline(props: ChatTimelineProps) {
                 isSubmitting={props.isSubmitting}
                 key={message.id}
                 message={message}
-                onOpenRunDetail={props.onOpenRunDetail}
                 onRetryMessage={props.onRetryMessage}
               />
             )
@@ -204,7 +202,6 @@ export function ChatMessage(props: {
   canRetry: boolean;
   isSubmitting: boolean;
   message: UiMessage;
-  onOpenRunDetail: (detail: SelectedRunDetail) => void;
   onRetryMessage: (message: UiMessage) => void;
 }) {
   const { message } = props;
@@ -267,7 +264,7 @@ export function ChatMessage(props: {
         </div>
         {isPending && liveProjection ? <LiveRunProcess label={liveProjection.progressLabel} /> : null}
         {!isUser && !isPending && (blocks.some((block) => block.type !== "text") || message.runId) ? (
-          <RunDetails message={message} onOpen={(section) => props.onOpenRunDetail({ message, section })} />
+          <RunDetails message={message} />
         ) : null}
         <MessageBlocks blocks={blocks} live={isPending} />
         {isUser || (blocks.length === 0 && message.content) ? <p className="message-text">{message.content}</p> : null}

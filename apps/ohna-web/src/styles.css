@@ -446,55 +446,6 @@ textarea:disabled {
   transition: grid-template-columns var(--md-motion-slow) var(--md-ease);
 }
 
-.agent-app-shell.has-detail-panel {
-  /* 先保证导航与主内容的最低可读宽度，详情面板只消费剩余空间。 */
-  grid-template-columns: 280px minmax(640px, 1fr) clamp(520px, calc(100vw - 920px), 1120px);
-}
-
-.run-detail-panel {
-  position: relative;
-  z-index: 12;
-  display: grid;
-  min-width: 0;
-  height: 100vh;
-  grid-template-rows: auto minmax(0, 1fr);
-  border-left: 1px solid transparent;
-  background: var(--md-color-surface);
-  opacity: 0;
-  overflow: hidden;
-  pointer-events: none;
-  transform: translateX(24px);
-  transition: opacity var(--md-motion-slow) var(--md-ease), transform var(--md-motion-slow) var(--md-ease), border-color var(--md-motion-slow) var(--md-ease);
-}
-
-.run-detail-panel.is-open {
-  border-left-color: var(--md-color-border-subtle);
-  opacity: 1;
-  pointer-events: auto;
-  transform: translateX(0);
-}
-
-.run-detail-header {
-  display: flex;
-  min-height: 72px;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--md-space-3);
-  border-bottom: 1px solid var(--md-color-border-subtle);
-  padding: var(--md-space-4) var(--md-space-5);
-}
-
-.run-detail-header h2 { margin: var(--md-space-1) 0 0; font-size: 1rem; }
-.run-detail-scroll {
-  min-height: 0;
-  overflow: auto;
-  padding: var(--md-space-5);
-}
-.detail-lead { color: var(--md-color-text-secondary); line-height: 1.6; }
-
-.run-details-trigger { width: 100%; text-align: left; }
-.run-details-summary { display: flex; width: 100%; align-items: center; gap: var(--md-space-3); }
-
 .run-process {
   min-width: 0;
   margin-bottom: var(--md-space-3);
@@ -521,7 +472,6 @@ textarea:disabled {
 }
 
 .run-process-trigger:focus-visible,
-.developer-detail-trigger:focus-visible,
 .message-action-button:focus-visible {
   outline: 0;
   box-shadow: var(--md-focus-ring);
@@ -586,19 +536,6 @@ textarea:disabled {
   font-weight: 500;
 }
 
-.developer-detail-trigger {
-  justify-self: start;
-  border: 0;
-  background: transparent;
-  color: var(--md-color-text-muted);
-  padding: var(--md-space-1) 0;
-  font-size: var(--md-text-body-sm-size);
-}
-
-.developer-detail-trigger:hover {
-  color: var(--md-color-text-primary);
-}
-
 .run-business-actions {
   display: flex;
   flex-wrap: wrap;
@@ -650,10 +587,7 @@ textarea:disabled {
 .header-actions,
 .conversation-meta,
 .message-meta,
-.summary-title,
-.summary-badges,
 .composer-actions,
-.details-section h3,
 .json-details summary,
 .message-progress,
 .composer-error,
@@ -890,8 +824,6 @@ textarea:disabled {
 .conversation-meta,
 .chat-title,
 .message-text,
-.run-identifiers,
-.detail-row span,
 .trace-row span {
   overflow-wrap: anywhere;
 }
@@ -1092,31 +1024,15 @@ textarea:disabled {
 }
 
 @media (min-width: 901px) and (max-width: 1439px) {
-  .agent-app-shell,
-  .agent-app-shell.has-detail-panel { grid-template-columns: 280px minmax(0, 1fr); }
-  .run-detail-panel {
-    position: fixed;
-    inset: 0 0 0 auto;
-    width: min(88vw, 960px);
-    box-shadow: var(--md-shadow-lg);
-  }
+  .agent-app-shell { grid-template-columns: 280px minmax(0, 1fr); }
 }
 
 @media (max-width: 900px) {
-  .agent-app-shell,
-  .agent-app-shell.has-detail-panel { grid-template-columns: minmax(0, 1fr); }
-  .run-detail-panel {
-    position: fixed;
-    inset: 0;
-    width: 100%;
-    transform: translateY(24px);
-  }
-  .run-detail-panel.is-open { transform: translateY(0); }
+  .agent-app-shell { grid-template-columns: minmax(0, 1fr); }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .agent-app-shell,
-  .run-detail-panel { transition-duration: 1ms; }
+  .agent-app-shell { transition-duration: 1ms; }
 }
 
 .chat-main {
@@ -1212,10 +1128,9 @@ textarea:disabled {
   gap: var(--md-space-4);
 }
 
-.header-title-group,
-.header-actions,
-.summary-badges,
-.composer-actions {
+	.header-title-group,
+	.header-actions,
+	.composer-actions {
   min-width: 0;
   gap: var(--md-space-3);
 }
@@ -1959,35 +1874,8 @@ textarea:disabled {
   max-height: 128px;
 }
 
-.run-details {
-  margin-top: var(--md-space-4);
-  border: 1px solid var(--md-color-border-subtle);
-  border-radius: var(--md-radius-lg);
-  background: color-mix(in srgb, var(--md-color-elevated) 54%, transparent);
-}
-
-.run-details > summary {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  gap: var(--md-space-3);
-  align-items: center;
-  padding: var(--md-space-3);
-  list-style: none;
-}
-
-.run-details > summary::-webkit-details-marker,
 .json-details > summary::-webkit-details-marker {
   display: none;
-}
-
-.summary-title,
-.summary-badges {
-  gap: var(--md-space-2);
-}
-
-.summary-badges {
-  min-width: 0;
-  flex-wrap: wrap;
 }
 
 .details-chevron {
@@ -1997,66 +1885,6 @@ textarea:disabled {
   transition: transform var(--md-motion-base) var(--md-ease);
 }
 
-.run-details[open] .details-chevron {
-  transform: rotate(180deg);
-}
-
-.run-details-body {
-  display: grid;
-  gap: var(--md-space-4);
-  border-top: 1px solid var(--md-color-border-subtle);
-  padding: var(--md-space-3);
-}
-
-.run-identifiers {
-  display: grid;
-  gap: var(--md-space-1);
-  border: 1px solid var(--md-color-border-subtle);
-  border-radius: var(--md-radius-md);
-  background: var(--md-color-canvas);
-  padding: var(--md-space-3);
-  color: var(--md-color-text-muted);
-  font-family: var(--md-font-mono);
-  font-size: var(--md-text-code-size);
-  line-height: 1.5;
-}
-
-.details-section {
-  display: grid;
-  gap: var(--md-space-2);
-}
-
-.details-section h3 {
-  gap: var(--md-space-2);
-  margin: 0;
-  color: var(--md-color-text-primary);
-  font-size: var(--md-text-section-title-size);
-  font-weight: 650;
-}
-
-.run-activity-overview > p {
-  margin: 0;
-  color: var(--md-color-text-secondary);
-}
-
-.developer-details {
-  margin-top: var(--md-space-4);
-  border-top: 1px solid var(--md-color-border-subtle);
-  padding-top: var(--md-space-3);
-}
-
-.developer-details > summary {
-  color: var(--md-color-text-muted);
-  cursor: pointer;
-  font-size: var(--md-text-body-sm-size);
-}
-
-.developer-details[open] {
-  display: grid;
-  gap: var(--md-space-4);
-}
-
-.detail-list,
 .trace-list {
   display: grid;
   gap: var(--md-space-2);
@@ -2066,7 +1894,6 @@ textarea:disabled {
 .trace-summary-grid > span { display: grid; gap: var(--md-space-1); padding: var(--md-space-3); border: 1px solid var(--md-color-border-subtle); border-radius: var(--md-radius-md); background: var(--md-color-surface); }
 .trace-summary-grid small { color: var(--md-color-text-muted); }
 
-.detail-row,
 .trace-row,
 .muted-row {
   border: 1px solid var(--md-color-border-subtle);
@@ -2075,27 +1902,17 @@ textarea:disabled {
   padding: var(--md-space-3);
 }
 
-.detail-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: var(--md-space-3);
-  align-items: start;
-}
-
-.detail-row > div,
 .trace-row > div {
   display: grid;
   min-width: 0;
   gap: var(--md-space-1);
 }
 
-.detail-row strong,
 .trace-row strong {
   color: var(--md-color-text-primary);
   font-size: var(--md-text-body-sm-size);
 }
 
-.detail-row span,
 .trace-row span,
 .trace-row small,
 .muted-row {
@@ -2151,7 +1968,6 @@ textarea:disabled {
 
 .artifact-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--md-space-3); }
 .artifact-heading > div:first-child { display: grid; gap: var(--md-space-1); }
-.run-details-body,
 .citation-row > div { min-width: 0; max-width: 100%; }
 .markdown-preview { border: 1px solid var(--md-color-border-subtle); border-radius: var(--md-radius-md); padding: var(--md-space-3); }
 .markdown-preview summary { cursor: pointer; color: var(--md-color-text-secondary); }
@@ -2348,11 +2164,6 @@ textarea:disabled {
 
   .chat-message.is-assistant .message-content {
     width: 100%;
-  }
-
-  .run-details > summary,
-  .detail-row {
-    grid-template-columns: 1fr;
   }
 
   .details-chevron {
@@ -3124,8 +2935,8 @@ textarea:disabled {
 /* ---------- Trace 右侧抽屉（03 L2） ---------- */
 
 /*
- * 抽屉与 RunDetailPanel 共用同一列：打开时 agent-app-shell 追加 has-trace-panel，
- * 列宽与 has-detail-panel 同构（导航 + 主内容最低宽度后再分配剩余空间）。
+ * 打开时 agent-app-shell 追加 has-trace-panel：
+ * 导航 + 主内容保留最低可读宽度，抽屉只消费剩余空间。
  */
 .agent-app-shell.has-trace-panel {
   grid-template-columns: 280px minmax(640px, 1fr) clamp(420px, calc(100vw - 920px), 860px);

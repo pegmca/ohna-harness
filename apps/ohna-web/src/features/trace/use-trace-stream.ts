@@ -82,7 +82,10 @@ export interface TraceStreamState {
  * @param enabled 抽屉是否展开；收起时不发任何请求，展开时再加载（默认 true）。
  * @returns run 列表、选中 run、投影行/跨度/上下文数据与加载/错误状态。
  */
-export function useTraceStream(conversationId: string | undefined, enabled = true): TraceStreamState {
+export function useTraceStream(
+  conversationId: string | undefined,
+  enabled = true
+): TraceStreamState {
   const [runs, setRuns] = useState<RunMetaDtoV2[]>([]);
   const [activeRunId, setActiveRunId] = useState("");
   const [events, setEvents] = useState<RunStreamEventDtoV2[]>([]);

@@ -302,6 +302,8 @@ export function buildContextEvents(events: readonly RunStreamEventDtoV2[]): Cont
 
 **Trace 数据单一事实源**：三面板与执行地图只读 run 事件（per-call `window` 已随 `llm_call` 落盘、可 replay）；`ModelOptionDto` 的窗口/费率扩展（见 §5.6）仅服务设置弹窗/模型选择器，**Trace 不读 `/api/models`**。
 
+**消息级「开发者详情」入口移除（2026-10-26）**：assistant 消息内的「查看开发者详情」与 Trace 功能重复，已整体删除；消息只保留单行运行状态摘要，完整运行排查统一从头部的 Trace 开关进入抽屉（默认选中当前会话最新 run）。`RunDetailPanel` / `SelectedRunDetail` / `RunDetailSection`、消息级 `onOpenTrace` / `requestedRunId` 定位链路与 `has-detail-panel` 列位均已删除。消息时间线里仍内联渲染 thinking / toolCall 折叠块，供快速查看单条工具参数与结果。
+
 ### 5.5 可视化表面（复用 Glass Depths 令牌，不新增配色）
 
 **Trace 执行地图（改造抽屉内部，维持右侧抽屉为家）**：

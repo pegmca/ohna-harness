@@ -78,7 +78,7 @@ export interface UiMessage {
   kind?: "normal" | "compaction";
   ok?: boolean;
   runId?: string;
-  /** live 期间收到的 canonical run_event envelope，供开发者详情查看。 */
+  /** live 期间收到的 canonical run_event envelope，供 live 投影与滚动跟随派生。 */
   liveEvents?: RunStreamEventDtoV2[];
   /** 最近一次 run 状态，用于 header 徽标。 */
   runStatus?: RunStatusDtoV2;
@@ -100,11 +100,3 @@ export interface RetryRunContext {
   modelId: string;
 }
 
-export interface SelectedRunDetail {
-  message?: UiMessage;
-  event?: RunStreamEventDtoV2;
-  section?: RunDetailSection;
-}
-
-/** 运行详情面板的分区。 */
-export type RunDetailSection = "summary" | "tools";

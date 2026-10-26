@@ -1,16 +1,16 @@
-import { Activity, ChevronDown } from "lucide-react";
-import type { RunDetailSection, UiMessage } from "./types";
+import { Activity } from "lucide-react";
+import type { UiMessage } from "./types";
 
 /**
- * 已完成 run 的折叠单行摘要；过程内容已从 assistant 消息块派生，不再依赖 trace DTO。
+ * 已完成 run 的单行状态摘要。
  *
- * @param props 消息与详情入口。
- * @returns 默认折叠的运行过程。
+ * 完整运行过程由 Trace 抽屉统一承载；消息内不再提供开发者详情入口，
+ * 避免与 Trace 功能重复，也避免展开后出现空内容。
+ *
+ * @param props 消息。
+ * @returns 运行状态摘要。
  */
-export function RunDetails(props: {
-  message: UiMessage;
-  onOpen: (section: RunDetailSection) => void;
-}) {
+export function RunDetails(props: { message: UiMessage }) {
   const { message } = props;
   const toolCount = message.blocks.filter((block) => block.type === "toolCall").length;
   const processLabel = [
@@ -20,18 +20,10 @@ export function RunDetails(props: {
 
   return (
     <div className="run-process">
-      <details>
-        <summary className="run-process-trigger">
-          <Activity className="icon-size" />
-          <span>{processLabel}</span>
-          <ChevronDown className="details-chevron" />
-        </summary>
-        <div className="run-process-body">
-          <button className="developer-detail-trigger" onClick={() => props.onOpen("summary")} type="button">
-            查看开发者详情
-          </button>
-        </div>
-      </details>
+      <span className="run-process-trigger">
+        <Activity className="icon-size" />
+        <span>{processLabel}</span>
+      </span>
     </div>
   );
 }

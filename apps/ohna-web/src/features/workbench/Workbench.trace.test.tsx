@@ -3,7 +3,7 @@
  *
  * - `/trace` 路由已删除：访问该深链回落到 Workbench（router 只剩 `*` 兜底，`/settings` 亦已删除）；
  * - chat 头部 Trace 开关可展开/收起抽屉，抽屉默认收起且不读 URL（刷新后回到对话视图）；
- * - 右侧排查位互斥：打开 Trace 收起 RunDetailPanel，反之亦然。
+ * - 消息内不再提供「查看开发者详情」入口，运行排查统一走头部 Trace 开关。
  */
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
@@ -65,7 +65,7 @@ function conversation(conversationId: string, title: string) {
 }
 
 /**
- * 构造 assistant 消息（带 runId 与工具调用块，供「查看开发者详情」打开右侧面板）。
+ * 构造 assistant 消息（带 runId，供头部 Trace 开关加载当前会话的 run）。
  *
  * @param conversationId 会话 ID。
  * @returns LinearMessage 列表。
@@ -161,26 +161,34 @@ describe("Workbench Trace 抽屉（L2）", () => {
     expect(container.querySelector(".agent-app-shell")?.className).not.toContain("has-trace-panel");
   });
 
-  it("TC-L2-04: 打开 Trace 收起运行详情，反之亦然（右侧位互斥）", async () => {
-    listConversationRuns.mockResolvedValue({ ok: true, requestId: "r", data: [] });
+  it("TC-L2-04: 消息内不再展示开发者详情入口，Trace 只从头部开关打开", async () => {
+    listConversationRuns.mockResolvedValue({
+      ok: true,
+      requestId: "r",
+      data: [{
+        runId: "run-1",
+        requestId: "req-1",
+        conversationId: "c1",
+        modelId: "mock",
+        mode: "auto",
+        source: "composer",
+        status: "completed",
+        createdAt: "2026-10-20T00:00:02.000Z"
+      }]
+    });
     stubFetch();
 
     render(<MemoryRouter initialEntries={["/?conversation=c1"]}><Workbench /></MemoryRouter>);
     await screen.findByText("已经修复。");
 
-    // 打开运行详情（右侧位 A）。
-    fireEvent.click(screen.getByRole("button", { name: "查看开发者详情" }));
-    expect(await screen.findByRole("complementary", { name: "运行详情" })).toBeTruthy();
-
-    // 打开 Trace → 运行详情让位。
-    fireEvent.click(screen.getByRole("button", { name: "Trace", expanded: false }));
-    expect(await screen.findByRole("complementary", { name: "Trace" })).toBeTruthy();
-    expect(screen.queryByRole("complementary", { name: "运行详情" })).toBeNull();
-
-    // 再打开一次运行详情 → Trace 让位。
-    fireEvent.click(screen.getByRole("button", { name: "查看开发者详情" }));
-    expect(await screen.findByRole("complementary", { name: "运行详情" })).toBeTruthy();
+    // 运行状态仍以单行摘要展示，但不再有展开入口，避免与 Trace 抽屉重复。
+    expect(screen.getByText("已完成")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "查看开发者详情" })).toBeNull();
     expect(screen.queryByRole("complementary", { name: "Trace" })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Trace", expanded: false }));
+    const drawer = await screen.findByRole("complementary", { name: "Trace" });
+    expect(within(drawer).getByRole("listitem", { name: "run-1" }).getAttribute("aria-pressed")).toBe("true");
   });
 
   it("会话切换后抽屉保持展开，数据跟随新会话", async () => {

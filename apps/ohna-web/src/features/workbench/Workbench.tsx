@@ -37,9 +37,8 @@ import {
   toUiMessages
 } from "./format";
 import { projectLiveRun, projectRunUserMessages } from "./live-run-projection";
-import { RunDetailPanel } from "./run-details";
 import { ConversationSidebar } from "./sidebar";
-import type { RetryRunContext, SelectedRunDetail, UiMessage } from "./types";
+import type { RetryRunContext, UiMessage } from "./types";
 import { useComposerState } from "./use-composer-state";
 
 /** composer 表单 id：主区左下角设置按钮与发送键同处底行（FR-001）。 */
@@ -75,7 +74,6 @@ export function Workbench() {
   // 设置弹窗（FR-001）：就地弹窗、不读 URL；关闭即卸载内容，健康探针随之中止。
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [localMode, setLocalMode] = useState<LocalModeInfo | null>(null);
-  const [selectedRunDetail, setSelectedRunDetail] = useState<SelectedRunDetail>();
   const [_activeRunId, setActiveRunId] = useState<string>();
   // 确认卡片：事件流（实时 + replay）→ 推导卡片；交互状态按 toolCallId 记录。
   const [confirmationEvents, setConfirmationEvents] = useState<RunStreamEventDtoV2[]>([]);
@@ -106,27 +104,12 @@ export function Workbench() {
   const closeSettings = useCallback(() => setIsSettingsOpen(false), []);
 
   /**
-   * 切换 Trace 抽屉。右侧位互斥（L2-3 / TC-L2-04）：Trace 抽屉与 RunDetailPanel 都是
-   * 「右侧排查位」，打开其一即收起另一个，避免两套面板抢同一列。
+   * 切换 Trace 抽屉。
    *
    * @returns void。
    */
   function toggleTrace(): void {
-    setIsTraceOpen((current) => {
-      if (!current) setSelectedRunDetail(undefined);
-      return !current;
-    });
-  }
-
-  /**
-   * 打开某条 assistant 消息的运行详情；同时收起 Trace 抽屉（互斥的另一半）。
-   *
-   * @param detail 选中的消息与分区。
-   * @returns void。
-   */
-  function openRunDetail(detail: SelectedRunDetail): void {
-    setIsTraceOpen(false);
-    setSelectedRunDetail(detail);
+    setIsTraceOpen((current) => !current);
   }
 
   useEffect(() => {
@@ -803,7 +786,6 @@ export function Workbench() {
   return (
     <main className={[
       "agent-app-shell",
-      selectedRunDetail ? "has-detail-panel" : "",
       isTraceOpen ? "has-trace-panel" : ""
     ].filter(Boolean).join(" ")}>
       <ConversationSidebar
@@ -853,7 +835,6 @@ export function Workbench() {
               if (!activeConversationId) return;
               void loadMessagePage(activeConversationId, messageCursor, true);
             }}
-            onOpenRunDetail={openRunDetail}
             onRetryMessage={(message) => void retryFailedMessage(message)}
           />
         )}
@@ -876,11 +857,6 @@ export function Workbench() {
           />
         )}
         composerFormId={COMPOSER_FORM_ID}
-      />
-      {/* 右侧排查位互斥（L2-3）：Trace 抽屉与运行详情共用同一列，打开一个即收起另一个。 */}
-      <RunDetailPanel
-        detail={selectedRunDetail}
-        onClose={() => setSelectedRunDetail(undefined)}
       />
       <TraceDrawer
         conversationId={activeConversation?.conversationId}

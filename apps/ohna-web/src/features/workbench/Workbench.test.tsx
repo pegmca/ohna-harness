@@ -98,7 +98,7 @@ describe("Workbench conversation history", () => {
     expect(historyRequests).toBe(1);
   });
 
-  it("restores a persisted assistant answer with a folded process before the final answer", async () => {
+  it("restores a persisted assistant answer with a run status summary before the final answer", async () => {
     const writeText = vi.fn(async () => undefined);
     Object.defineProperty(navigator, "clipboard", {
       configurable: true,
@@ -115,18 +115,14 @@ describe("Workbench conversation history", () => {
 
     render(<MemoryRouter initialEntries={["/?conversation=c1"]}><Workbench /></MemoryRouter>);
     const processLabel = await screen.findByText("已完成");
-    const process = processLabel.closest("summary")!;
+    const process = processLabel.closest(".run-process")!;
     const answer = screen.getByText("最终研究结论");
 
     expect(process.compareDocumentPosition(answer) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "查看开发者详情" })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "复制回答" }));
     expect(writeText).toHaveBeenCalledWith("最终研究结论");
     expect(screen.getByRole("button", { name: "重新生成回答" })).toBeTruthy();
-    fireEvent.click(process);
-    fireEvent.click(screen.getByRole("button", { name: "查看开发者详情" }));
-    expect(await screen.findByRole("heading", { level: 2, name: "回答过程" })).toBeTruthy();
-    const developerDetails = screen.getByText("开发者详情").closest("details");
-    expect(developerDetails?.open).toBe(false);
   });
 
   it("renders thinking and toolCall blocks with paired toolResult, plus a compaction divider", async () => {

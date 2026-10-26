@@ -13,3 +13,5 @@ export * from "./models.js";
 export * from "./llm-trace.js";
 // 跨边界评测线格式（EvalReportDto/BaselineDiff/GateResult）。见 eval-report.ts 头注释与 docs/v2.0/02-eval-system-v2.md §2.1。
 export * from "./eval-report.js";
+// Electron main/preload/utilityProcess/runtime 共享的版本化跨进程协议与桌面线格式 DTO（spec §4.1/§4.2）。
+export * from "./runtime.js";

@@ -52,7 +52,12 @@ export function createTableAwareChunks(input: ChunkBlocksInput, options: Chunkin
       continue;
     }
 
-    if (current && block.heading === undefined && isTableContinuationBlock(block, options.tableHeaderFooterMaxChars ?? 80)) {
+    if (current && block.heading === undefined) {
+      if (isTableContinuationBlock(block, options.tableHeaderFooterMaxChars ?? 80)) {
+        continue;
+      }
+      // 表内换行的业务文本/子字段不是新表；粘回当前表组，避免一行一组的碎片。
+      current.rows.push(block);
       continue;
     }
     finishGroup();

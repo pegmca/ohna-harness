@@ -63,7 +63,7 @@
 - [ ] `latest_by` 题带 `snapshot_dependent:true` + `resolution`（按当前 manifest 重算，语料变要重抄）。
 - [ ] `validate` 脚本 0 ERROR（允许 fin-009 式稀疏行 WARN）。
 - [ ] `table` 题在 golden 回归中验证 chunk 级整表召回：summary/whole-table 命中后须通过 `tableGroupId` 覆盖全部 gold 行。
-- [ ] 运行 `node test/assert-finance-table-recall.mjs <out.json>`，确认 `tableRowCoverage`、缺行清单与 sibling 展开状态符合当前诊断基线。
+- [ ] 运行 `node test/assert-finance-table-recall.mjs <out.json>`，确认 `tableRowCoverage`、缺行清单与 sibling 展开状态符合当前诊断基线；当前 fin-008 仍缺组合计提坏账行，其余四题应完整覆盖。
 
 ## 六、与评测管线的关系
 

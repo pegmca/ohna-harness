@@ -143,6 +143,27 @@ test("a real heading ends the current table group", () => {
   assert.equal(result.chunks.filter((chunk) => chunk.metadata.isTableChunk === true).length, 2);
 });
 
+test("wrapped non-table cells stay inside the current table group", () => {
+  const result = chunkDocumentBlocks(
+    {
+      documentId: "doc_wrapped",
+      source: "mock://wrapped",
+      blocks: [
+        block(1, "公司名称  公司类型  主要业务  营业收入", 1),
+        block(2, "华美公司  子公司  稀土产品及其应用产品的  411,947.55", 1),
+        block(3, "生产与销售。", 1, false),
+        block(4, "甘肃稀土  子公司  稀土产品及相关应用产品  552,988.55", 1)
+      ]
+    },
+    TABLE_OPTIONS
+  );
+
+  assert.equal(result.ok, true);
+  const groups = result.chunks.filter((chunk) => chunk.metadata.isTableChunk === true);
+  assert.equal(groups.length, 1);
+  assert.match(groups[0].text, /生产与销售。[\s\S]*甘肃稀土/);
+});
+
 test("table column count uses a median and ignores sparse deduction rows", () => {
   const result = chunkDocumentBlocks(
     {

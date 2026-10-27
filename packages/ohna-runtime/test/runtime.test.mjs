@@ -26,11 +26,11 @@ function makeModel() {
   };
 }
 
-/** 临时数据目录，测试后清理。 */
-function withTmpDir(fn) {
+/** 临时数据目录，测试后清理（await 内部逻辑，避免 finally 抢删未完成的异步写入）。 */
+async function withTmpDir(fn) {
   const dir = mkdtempSync(join(tmpdir(), "ohna-runtime-"));
   try {
-    return fn(dir);
+    await fn(dir);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -63,6 +63,8 @@ await withTmpDir(async (dir) => {
     autoApprove: true,
     modelCatalog
   });
+  // 校验完成后再释放锁与临时目录（锁在 createOhnaRuntime 内获取）。
+  await runtime.shutdown();
 });
 
 const health = await runtime.getHealth();

@@ -28,6 +28,7 @@ import {
   jsonlPath,
   readJsonlLines
 } from "./jsonl.js";
+import { SCHEMA_VERSION, isCompatibleSchema, declaredSchemaVersion } from "./schema.js";
 
 /** run 元数据（文件首行）。 */
 export interface RunMeta {
@@ -44,6 +45,8 @@ export interface RunMeta {
 /** JSONL 首行形状。 */
 interface RunMetaLine extends RunMeta {
   type: "run_meta";
+  /** 数据格式版本号（Task 10 §8.3：读取侧据此隔离不兼容版本）。 */
+  schema: number;
 }
 
 /**
@@ -165,15 +168,21 @@ function toRunSource(value: unknown): RunSourceDtoV2 {
 /**
  * 把任意解析值收窄为 RunMetaLine。
  *
+ * 若首行 meta 声明的 schema 版本与当前 `SCHEMA_VERSION` 不兼容，返回 null（该 run
+ * 被隔离：不进入读模型，不加载事件），保持「不兼容的旧格式不静默降级」的硬约束。
+ *
  * @param value JSONL 行值。
- * @returns 元数据行或 null。
+ * @returns 元数据行或 null（类型不对 / 版本不兼容）。
  */
 function toRunMeta(value: unknown): RunMetaLine | null {
   if (typeof value !== "object" || value === null) return null;
   const record = value as Record<string, unknown>;
   if (record.type !== "run_meta" || typeof record.runId !== "string") return null;
+  // 首行必须声明兼容的 schema 版本；缺省视为不兼容（不加载）。无旧格式迁移逻辑。
+  if (!isCompatibleSchema(declaredSchemaVersion(value))) return null;
   return {
     type: "run_meta",
+    schema: SCHEMA_VERSION,
     runId: record.runId,
     requestId: typeof record.requestId === "string" ? record.requestId : "",
     conversationId: typeof record.conversationId === "string" ? record.conversationId : "",
@@ -260,7 +269,8 @@ export class LocalRunStore {
    */
   async create(meta: RunMeta): Promise<void> {
     const filePath = jsonlPath(this.dir, meta.runId);
-    const line: RunMetaLine = { type: "run_meta", ...meta };
+    // 首行写入数据格式版本，供读取侧做兼容性隔离（Task 10 §8.3）。
+    const line: RunMetaLine = { type: "run_meta", schema: SCHEMA_VERSION, ...meta };
     await this.enqueue(meta.runId, async () => {
       await ensureDir(this.dir);
       if (!(await fileExists(filePath))) await appendJsonLine(filePath, line);
@@ -449,6 +459,7 @@ export class LocalRunStore {
 
   /**
    * 索引回填（进程内一次）：按目录差集补齐缺失的 `run_index` 行。
+   * 启动期对账显式调用此方法，让读模型在首次 list 之前即一致。
    *
    * 为什么按差集而不是「索引为空才回填」：create 路径会先写一行索引，
    * 之后 list 再看到「索引非空」就跳过扫描，legacy run 会永久漏掉（先 create 再 list 的常态顺序）。
@@ -456,6 +467,19 @@ export class LocalRunStore {
   private async ensureIndexBackfilled(): Promise<void> {
     if (!this.backfill) this.backfill = this.backfillIndex();
     await this.backfill;
+  }
+
+  /**
+   * 公开对账入口：确保 run 索引已从磁盘完全差集回填（幂等、确定性）。
+   *
+   * 与私有 `ensureIndexBackfilled` 共享同一 `backfill` Promise（进程内只扫一次），
+   * 因此首次 list / create 触发的回填不会被重复执行。`reconcileOnStart` 显式调用
+   * 本方法，使「启动即一致」不依赖首次 list 的时机。
+   *
+   * @returns 回填完成的 Promise。
+   */
+  async reconcileIndex(): Promise<void> {
+    await this.ensureIndexBackfilled();
   }
 
   /**

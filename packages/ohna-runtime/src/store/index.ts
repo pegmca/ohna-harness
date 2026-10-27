@@ -31,3 +31,5 @@ export {
   serializedWrite
 } from "./jsonl.js";
 export { SCHEMA_VERSION, schemaLine } from "./schema.js";
+export { acquireDataDirLock, LOCK_FILE_NAME, type DataDirLock } from "./lock.js";
+export { reconcileOnStart, type ReconcileStores } from "./reconcile.js";

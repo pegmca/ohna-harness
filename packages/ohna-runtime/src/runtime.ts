@@ -11,6 +11,7 @@
  * - `workspaceRoot` 首版用 `dataDir` 占位，Task 6 引入工作区注册表后替换为真实根。
  */
 import { randomUUID } from "node:crypto";
+import * as path from "node:path";
 import type { Model } from "@aiagent/ai";
 import type { AgentTool, StreamFn } from "@aiagent/agent";
 import {
@@ -31,7 +32,7 @@ import {
   type ConfirmationRequestedPayload,
 } from "./confirm-gate.js";
 import { WorkspaceRegistry, WorkspaceMcpRegistry, WorkspaceContextCache } from "./workspace/index.js";
-import { LocalMessageStore, LocalRunStore, LocalSessionStore } from "./store/index.js";
+import { LocalMessageStore, LocalRunStore, LocalSessionStore, acquireDataDirLock, reconcileOnStart } from "./store/index.js";
 import { RunManager } from "./run-manager.js";
 import { createConversationScheduler } from "./scheduler/conversation.js";
 import { createRunConfigResolver } from "./model/config.js";
@@ -148,13 +149,22 @@ function buildSingleModelCatalog(model: Model<"openai-completions">): ModelCatal
 export async function createOhnaRuntime(options: OhnaRuntimeOptions): Promise<OhnaRuntime> {
   const { dataDir, model, apiKey, systemPrompt, tools = [], autoApprove, team, confirmTimeoutMs, streamFn, modelCatalog, onLog } = options;
 
+  // 单写者锁：必须在构造 store 之前获取（spec §8.1）。残留锁会抛结构化错误阻断启动，
+  // 绝不绕过——两个 writer 同时写 JSONL 会造成数据损坏。shutdown 时释放。
+  const dataDirLock = await acquireDataDirLock(dataDir);
+
   // 首版单工作区：workspaceRoot 以 dataDir 占位，Task 6 接入工作区注册表后替换。
   const workspaceRoot = dataDir;
   const effectiveSystemPrompt = systemPrompt ?? `你是一个在 ${workspaceRoot} 工作的编码助手。`;
 
-  const messageStore = new LocalMessageStore(dataDir);
-  const runStore = new LocalRunStore(dataDir);
-  const sessionStore = new LocalSessionStore(dataDir);
+  // 各 store 使用独立子目录（spec §8.3 / serve 布局对齐）；单一目录是历史 outlier。
+  const messageStore = new LocalMessageStore(path.join(dataDir, "conversations"));
+  const runStore = new LocalRunStore(path.join(dataDir, "runs"));
+  const sessionStore = new LocalSessionStore(path.join(dataDir, "sessions"));
+
+  // 启动期对账：回填索引、把非终态 run 收敛为 interrupted（依赖 getRun 既有回退）。
+  // 在 store 构造之后、执行之前运行，保证首次 list 即一致，且不重放/删除数据。
+  await reconcileOnStart(dataDir, { runStore, messageStore, sessionStore });
 
   // 工作区授权三件套：注册表（授权表 + 归属反查）、上下文缓存（按 canonical 根缓存
   // 系统提示词与工具集）、MCP 容器（按 workspace 隔离的会话生命周期）。三者都只在
@@ -301,6 +311,7 @@ export async function createOhnaRuntime(options: OhnaRuntimeOptions): Promise<Oh
     async shutdown(): Promise<void> {
       if (closed) return;
       closed = true;
+      await dataDirLock.release().catch(() => undefined);
       await workspaceMcpRegistry.closeAll();
       await runManager.shutdown();
     },

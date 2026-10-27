@@ -134,7 +134,6 @@ async function createTestServer(options = {}) {
     staticDir: path.join(root, "web-dist"),
     streamFn: createUsageTextStream(),
     ...(options.getTeamState ? { getTeamState: options.getTeamState } : {}),
-    ...(options.resolveWorkspace ? { resolveWorkspace: options.resolveWorkspace } : {})
   });
   return { server, root };
 }
@@ -331,33 +330,67 @@ test("G-T1: 投影抛错时不影响 run 终态（观测数据不得拖垮执行
   }
 });
 
-test("G-T1: execute 尚未启动就被取消（createRun 窗口内）仍有 cost_summary，不静默缺失", async () => {
-  // resolveWorkspace 卡住 → createRun 停在「ActiveRun 已建、execute 未启动」的窗口。
-  // 这种 run 由 cancel 直接 finishStatus；若成本追踪在 execute 入口才建立，会整条缺失。
-  let release = () => {};
-  const gate = new Promise((resolve) => {
-    release = () => resolve({ workspaceRoot: "", systemPrompt: "", tools: [] });
+/**
+ * 一条执行中会挂起的流：永不发 done，使 run 停留在 active（首轮进行中）。
+ *
+ * @returns {Function} StreamFn。
+ */
+function createHangingStream() {
+  return () => {
+    const stream = createAssistantMessageEventStream();
+    const message = {
+      role: "assistant",
+      content: [{ type: "text", text: "" }],
+      api: "openai-completions",
+      provider: "mock",
+      model: MODEL.id,
+      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+      stopReason: "stop",
+      timestamp: Date.now()
+    };
+    queueMicrotask(() => {
+      stream.push({ type: "start", partial: { ...message, content: [] } });
+    });
+    return stream;
+  };
+}
+
+test("G-T1: 取消仍在执行的 run 仍有 cost_summary，终态为 interrupted（不静默缺失成本）", async () => {
+  // resolveWorkspace 卡点机制已随 Task 11 退役，无法复现「execute 未启动」窗口。
+  // 改为：用挂起流让 run 进入 active（首轮进行中），确认其已激活后 cancel，断言仍发
+  // cost_summary 且终态 interrupted——本质仍是「非 completed 终态也发 cost_summary」。
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "ohna-serve-team-cost-cancel-"));
+  const workspaceRoot = path.join(root, "workspace");
+  const dataDir = path.join(root, "data");
+  await fs.mkdir(workspaceRoot, { recursive: true });
+  const server = await createOhnaServer({
+    workspaceRoot,
+    dataDir,
+    model: MODEL,
+    apiKey: "test-key",
+    systemPrompt: "test system prompt",
+    tools: [],
+    staticDir: path.join(root, "web-dist"),
+    streamFn: createHangingStream()
   });
-  const context = await createTestServer({ resolveWorkspace: () => gate });
   try {
-    const { server } = context;
-    const conversation = await server.createConversation("createRun 窗口取消");
+    const conversation = await server.createConversation("active 中取消");
     const created = await server.createRun({
       conversationId: conversation.conversationId,
-      message: "还没开始就被取消"
+      message: "一直跑被取消"
     });
 
-    // 等 ActiveRun 出现在内存里（createRun 已越过 active.set，卡在 resolveWorkspace）。
-    let created0 = false;
-    for (let attempt = 0; attempt < 200 && !created0; attempt += 1) {
+    // 等 run 进入 active（首轮已派发、尚未终态）。
+    let active = false;
+    for (let attempt = 0; attempt < 300 && !active; attempt += 1) {
       const listed = await server.listRunsByConversation(conversation.conversationId);
-      created0 = listed.some((run) => run.runId === created.accepted.runId);
-      if (!created0) await new Promise((resolve) => setTimeout(resolve, 5));
+      const run = listed.find((r) => r.runId === created.accepted.runId);
+      active = run && ["queued", "running", "active"].includes(run.status);
+      if (!active) await new Promise((resolve) => setTimeout(resolve, 5));
     }
-    assert.ok(created0, "run 必须已进入 active 表");
+    assert.ok(active, "run 必须已进入 active 表");
 
     await server.cancelRun(created.accepted.runId);
-    release();
 
     const sse = await server.app.inject({ method: "GET", url: created.accepted.eventsUrl });
     const events = parseSseEvents(sse.body);
@@ -365,13 +398,13 @@ test("G-T1: execute 尚未启动就被取消（createRun 窗口内）仍有 cost
     assert.ok(terminal, "run 必须收尾");
     const costSummary = events.find((event) => event.type === "cost_summary");
     assert.ok(costSummary, "提前取消的 run 也必须有 cost_summary（不能缺失被误读为零成本）");
-    // 终态是 interrupted（不论取消命中的是「execute 未启动」还是「首轮进行中」），
-    // 关键断言是**事件存在且终态正确**——成本值本身取决于取消时机，不做精确断言。
     assert.equal(costSummary.payload.outcome, "interrupted");
     assert.equal(typeof costSummary.payload.totalTokens, "number");
     assert.equal(typeof costSummary.payload.durationMs, "number");
   } finally {
-    await dispose(context);
+    await server.shutdown();
+    await server.close();
+    await fs.rm(root, { recursive: true, force: true });
   }
 });
 

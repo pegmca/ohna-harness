@@ -14,11 +14,12 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Model } from "@aiagent/ai";
-import type { AgentTool, StreamFn } from "@aiagent/agent";
+import type { AgentTool, StreamFn, TeamState } from "@aiagent/agent";
 import type { ConfirmationDecision, ResolveConfirmationResult } from "./confirm-gate.js";
 import type {
   WorkspaceConversationDto,
   ModelCatalogDto,
+  WorkspaceDescriptorDto,
   RunMetaDtoV2,
   RunSnapshotDtoV2,
   RunStreamEventDtoV2
@@ -69,6 +70,11 @@ export interface OhnaServerOptions {
    * true 时透传 runtime，由 runtime 自建 TeamController（单一 controller / 成本来源）。
    */
   team?: boolean;
+  /**
+   * 外部 team 状态读取器（兜底 / 测试注入）。主路径由 `team:true` 经 runtime 自建
+   * `TeamController` 产出；此字段仅作 fallback 透传，不影响主路径。
+   */
+  getTeamState?: () => TeamState;
 }
 
 /** 装配后的服务句柄。 */
@@ -127,6 +133,8 @@ export interface OhnaServer {
   isAutoApprove(): boolean;
   /** 是否只读观测实例（docs/v1.4/06 D-A7）：true 时 Web 应禁用 composer。 */
   readonly observeOnly: boolean;
+  /** 注册一个已授权工作区（绝对根目录由 main 经原生对话框选中后传入）。 */
+  registerWorkspace(workspaceId: string, workspaceRoot: string): Promise<WorkspaceDescriptorDto>;
   /** 按会话列 run 摘要（等价 GET /api/conversations/:id/runs）。 */
   listRunsByConversation(conversationId: string): Promise<RunMetaDtoV2[]>;
   readonly port: number | undefined;
@@ -166,6 +174,7 @@ export async function createOhnaServer(options: OhnaServerOptions): Promise<Ohna
     ...(options.tools !== undefined ? { tools: options.tools } : {}),
     autoApprove: isAutoApprove,
     ...(options.team ? { team: true } : {}),
+    ...(options.getTeamState ? { getTeamState: options.getTeamState } : {}),
     ...(options.confirmTimeoutMs !== undefined ? { confirmTimeoutMs: options.confirmTimeoutMs } : {}),
     ...(options.streamFn !== undefined ? { streamFn: options.streamFn } : {}),
     ...(options.modelCatalog !== undefined ? { modelCatalog: options.modelCatalog } : {})
@@ -252,7 +261,8 @@ export async function createOhnaServer(options: OhnaServerOptions): Promise<Ohna
         ...(input.maxTurns !== undefined ? { maxTurns: input.maxTurns } : {}),
         ...(input.deadlineMs !== undefined ? { deadlineMs: input.deadlineMs } : {}),
         ...(input.maxCost !== undefined ? { maxCost: input.maxCost } : {}),
-        workspaceId: workspaceRoot
+        // 不硬编码实例 workspaceRoot：runtime 会按会话持久化的 workspaceId 装配编码上下文
+        // （BUG-002 跨工作区续写），缺省回退到实例工作区。
       });
       const accepted: CreateRunResult["accepted"] = {
         runId: result.accepted.runId,
@@ -294,6 +304,10 @@ export async function createOhnaServer(options: OhnaServerOptions): Promise<Ohna
 
     get observeOnly() {
       return options.observeOnly === true;
+    },
+
+    registerWorkspace(workspaceId, workspaceRoot) {
+      return runtime.registerWorkspace(workspaceId, workspaceRoot);
     },
 
     listRunsByConversation(conversationId) {

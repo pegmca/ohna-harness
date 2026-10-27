@@ -13,7 +13,7 @@
 import { randomUUID } from "node:crypto";
 import * as path from "node:path";
 import type { Model } from "@aiagent/ai";
-import type { AgentTool, StreamFn } from "@aiagent/agent";
+import type { AgentTool, StreamFn, TeamState } from "@aiagent/agent";
 import {
   PROTOCOL_VERSION,
   type ModelCatalogDto,
@@ -68,6 +68,11 @@ export interface OhnaRuntimeOptions {
   streamFn?: StreamFn;
   /** 模型目录覆盖；缺省由 model 推导单模型目录。 */
   modelCatalog?: ModelCatalogDto;
+  /**
+   * 外部 team 状态读取器（兜底 / 测试注入）。主路径由 `team:true` 经 runtime 自建
+   * `TeamController` 产出；此字段仅作 fallback，不影响主路径。
+   */
+  getTeamState?: () => TeamState;
   /** 结构化日志出口（server 侧通常写 stderr）。 */
   onLog?: (entry: { level: "info" | "warn" | "error"; message: string }) => void;
 }
@@ -162,6 +167,7 @@ function buildSingleModelCatalog(model: Model<"openai-completions">): ModelCatal
  */
 export async function createOhnaRuntime(options: OhnaRuntimeOptions): Promise<OhnaRuntime> {
   const { dataDir, model, apiKey, systemPrompt, tools = [], autoApprove, team, confirmTimeoutMs, streamFn, modelCatalog, onLog } = options;
+  const { getTeamState } = options;
 
   // 单写者锁：必须在构造 store 之前获取（spec §8.1）。残留锁会抛结构化错误阻断启动，
   // 绝不绕过——两个 writer 同时写 JSONL 会造成数据损坏。shutdown 时释放。
@@ -213,6 +219,7 @@ export async function createOhnaRuntime(options: OhnaRuntimeOptions): Promise<Oh
     sessionStore,
     confirmGate,
     ...(streamFn ? { streamFn } : {}),
+    ...(getTeamState ? { getTeamState } : {}),
     ...(team ? { team: true } : {}),
     workspaceRegistry,
     workspaceContextCache,

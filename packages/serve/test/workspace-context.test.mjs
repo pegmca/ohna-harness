@@ -79,15 +79,14 @@ test("BUG-002: 跨工作区会话按持久化 workspaceRoot 装配编码上下�
     dataDir,
     model: MODEL,
     apiKey: "test-key",
-    // 主工作区注入明确的 systemPrompt 与空工具集：验证种子缓存复用注入项而非重建。
-    systemPrompt: "test system prompt",
-    tools: [],
+    // 新架构：主工作区按注册根从零构建（不再接受注入了 systemPrompt/tools）。
     staticDir: path.join(root, "missing-web-dist"),
     streamFn: createCapturingStream(captured)
   });
-
+  // 主工作区以绝对根注册（通过 fail-closed 授权、按自身根构建完整编码上下文）。
+  await server.registerWorkspace(workspaceRoot, workspaceRoot);
   try {
-    // 主工作区会话：resolveWorkspace 命中种子，必须复用注入的 systemPrompt / tools。
+    // 主工作区会话：按注册根构建 systemPrompt 与完整编码工具集。
     const mainConversation = await server.createConversation("主工作区");
     const mainRun = await server.createRun({
       conversationId: mainConversation.conversationId,
@@ -100,6 +99,8 @@ test("BUG-002: 跨工作区会话按持久化 workspaceRoot 装配编码上下�
     // 模拟用户此前在别的项目目录下建立、后续要续写的跨工作区会话。
     const sessionStore = new LocalSessionStore(path.join(dataDir, "sessions"));
     const otherMeta = await sessionStore.create({ title: "跨工作区会话", workspaceRoot: otherWorkspace, workspaceId: otherWorkspace });
+    // 跨工作区同样注册（通过 fail-closed 授权、按自身根构建上下文）。
+    await server.registerWorkspace(otherWorkspace, otherWorkspace);
 
     const otherRun = await server.createRun({
       conversationId: otherMeta.id,
@@ -109,10 +110,13 @@ test("BUG-002: 跨工作区会话按持久化 workspaceRoot 装配编码上下�
     assert.equal(otherSnapshot.status, "completed");
 
     assert.equal(captured.length, 2, "应有两次对话请求");
-    // 主工作区：复用注入项（systemPrompt 与空工具集不被重建）。
-    assert.equal(captured[0].systemPrompt, "test system prompt");
-    assert.equal(captured[0].tools.length, 0);
-    // 跨工作区：按其它工作区装配编码系统提示词（文案内嵌 cwd）与完整编码工具集。
+    // 主工作区：按自身根构建（systemPrompt 内嵌根），装配完整编码工具集（7 个）。
+    assert.ok(
+      captured[0].systemPrompt.includes(workspaceRoot),
+      `主工作区 systemPrompt 应内嵌 ${workspaceRoot}，实际：${captured[0].systemPrompt}`,
+    );
+    assert.equal(captured[0].tools.length, 7, "主工作区应装配完整编码工具集（7 个）");
+    // 跨工作区：按其它工作区构建编码系统提示词（文案内嵌 cwd）与完整编码工具集。
     assert.ok(
       captured[1].systemPrompt.includes(otherWorkspace),
       `跨工作区 systemPrompt 应内嵌 ${otherWorkspace}，实际：${captured[1].systemPrompt}`,

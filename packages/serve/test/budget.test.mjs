@@ -316,7 +316,7 @@ test("TC-A1-03: 写工具触发 confirmation_requested，进程内 resolveConfir
     assert.equal(confirmation.payload.toolName, "write");
 
     // 进程内句柄决议（等价 Web 的确认路由）：allow 放行，run 继续。
-    const result = server.resolveConfirmation(
+    const result = await server.resolveConfirmation(
       created.accepted.runId,
       confirmation.payload.toolCallId,
       "allow"

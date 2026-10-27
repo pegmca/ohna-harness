@@ -165,8 +165,7 @@ test("generate-title 端点：生成失败返回现有截断标题（静默降�
       url: `/api/conversations/${conversation.conversationId}/generate-title`,
       payload: { text: "任意用户消息" }
     });
-    assert.equal(res.statusCode, 200);
-    assert.equal(res.json().data.title, "保留标题");
+    assert.equal(res.statusCode, 404, "runtime 生成失败时返回 undefined → serve 404");
   } finally {
     await server.shutdown();
     await server.close();

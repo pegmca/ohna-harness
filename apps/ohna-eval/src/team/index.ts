@@ -187,7 +187,7 @@ export async function runTeamEvaluation(
     .join("；");
 
   const report: EvalReportDto = {
-    target: "ohna-cli-team",
+    target: "ohna-eval-team",
     dataset: dataset.datasetVersion,
     createdAt: new Date().toISOString(),
     metrics,

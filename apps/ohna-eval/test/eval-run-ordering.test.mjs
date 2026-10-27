@@ -11,8 +11,8 @@
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { loadOhnaDataset } from "../dist/eval/dataset.js";
-import { runOhnaEval } from "../dist/eval/run.js";
+import { loadOhnaDataset } from "../dist/dataset.js";
+import { runOhnaEval } from "../dist/run.js";
 
 const DATASET = new URL("../../../datasets/ohna/coding-v1.json", import.meta.url).pathname;
 

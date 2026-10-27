@@ -2,7 +2,7 @@
  * ohna team 评测域单测：数据集 / 指标纯函数 / 指标归属（v2.0 team-eval §7，）
  *
  * 覆盖三层，断言分层清晰（与 coding 评测单测同风格：node:test + assert/strict，
- * 从编译产物 `../dist/eval/team/*.js` 导入）：
+ * 从编译产物 `../dist/team/*.js` 导入）：
  * 1. **dataset 校验**：team-v1.json 可加载、≥20 条、六类 mode 全覆盖、重复 id / 语义缺字段被拦；
  * 2. **metrics 纯函数**：八个指标逐一给出确定性输入 → 期望得分，含 applicable=false 语义；
  * 3. **门禁分层**：硬门禁退化 → exitCode 1；趋势指标退化 → exitCode 0；
@@ -25,7 +25,7 @@ import {
   countTeamCasesByMode,
   loadTeamDataset,
   parseTeamDataset,
-} from "../dist/eval/team/index.js";
+} from "../dist/team/index.js";
 import {
   teamConvergence,
   teamCostAmplificationRatio,
@@ -36,8 +36,8 @@ import {
   teamSubagentCompletionRate,
   teamTokenAttributionToMember,
   aggregateTeamMetrics,
-} from "../dist/eval/team/metrics.js";
-import { resolveExpectedTools } from "../dist/eval/team/adapter.js";
+} from "../dist/team/metrics.js";
+import { resolveExpectedTools } from "../dist/team/adapter.js";
 
 const DATASET = fileURLToPath(new URL("../../../datasets/ohna/team-v1.json", import.meta.url));
 const CODING_DATASET = fileURLToPath(new URL("../../../datasets/ohna/coding-v1.json", import.meta.url));

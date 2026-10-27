@@ -14,7 +14,7 @@ import {
   createOhnaCodingJudge,
   FILE_CHANGE_QUALITY_SYSTEM_PROMPT,
   TOOL_CHOICE_RATIONALE_SYSTEM_PROMPT,
-} from "../dist/eval/judge-rubrics.js";
+} from "../dist/judge-rubrics.js";
 import { NEUTRAL_SCORE } from "@aiagent/eval-core";
 
 test("两个 rubric systemPrompt 常量均为非空字符串", () => {

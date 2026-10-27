@@ -11,8 +11,7 @@
     "build": "tsc -b",
     "test": "pnpm build && node --test test/*.test.mjs",
     "start": "node --env-file-if-exists=../../.env dist/index.js",
-    "typecheck": "pnpm --filter @aiagent/ai build && pnpm --filter @aiagent/agent build && pnpm --filter @aiagent/tools build && pnpm --filter @aiagent/coding build && tsc -p tsconfig.json --pretty false --noEmit",
-    "eval": "tsx src/eval/index.ts"
+    "typecheck": "pnpm --filter @aiagent/ai build && pnpm --filter @aiagent/agent build && pnpm --filter @aiagent/tools build && pnpm --filter @aiagent/coding build && tsc -p tsconfig.json --pretty false --noEmit"
   },
   "dependencies": {
     "@aiagent/agent": "workspace:*",

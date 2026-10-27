@@ -14,7 +14,7 @@ import { test } from "node:test";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-import { loadTeamDataset, parseTeamDataset, runTeamEvaluation } from "../dist/eval/team/index.js";
+import { loadTeamDataset, parseTeamDataset, runTeamEvaluation } from "../dist/team/index.js";
 
 const DATASET = fileURLToPath(new URL("../../../datasets/ohna/team-v1.json", import.meta.url));
 
@@ -48,7 +48,7 @@ function evidence(overrides = {}) {
 
 // ============ 4. 契约指标：声明必须真的被断言 ============
 test("teamContractStatuses：成员终态与声明不符 → 0 分", async () => {
-  const { contractStatuses } = await import("../dist/eval/team/metrics.js");
+  const { contractStatuses } = await import("../dist/team/metrics.js");
   const base = {
     executed: true,
     memberStatus: { a: "failed" },
@@ -72,14 +72,14 @@ test("teamContractStatuses：成员终态与声明不符 → 0 分", async () =>
 });
 
 test("teamContractStatuses：maxTurns 超限 → 0 分", async () => {
-  const { contractStatuses } = await import("../dist/eval/team/metrics.js");
+  const { contractStatuses } = await import("../dist/team/metrics.js");
   const ev = evidence({ actualTurns: { a: 5 }, subagentResults: [{ member: "a", status: "done", ran: true }] });
   assert.equal(contractStatuses({ maxTurns: 3 }, ev).score, 0);
   assert.equal(contractStatuses({ maxTurns: 5 }, ev).score, 1);
 });
 
 test("teamContractStatuses：失败注入未生效 → 0 分（不允许声明了却没触发）", async () => {
-  const { contractStatuses } = await import("../dist/eval/team/metrics.js");
+  const { contractStatuses } = await import("../dist/team/metrics.js");
   const ev = evidence({ subagentResults: [{ member: "a", status: "done", ran: true }] });
   const missing = contractStatuses({ failedMember: "a", failTool: "write" }, ev);
   assert.equal(missing.score, 0);
@@ -96,7 +96,7 @@ test("teamContractStatuses：失败注入未生效 → 0 分（不允许声明�
 });
 
 test("teamL1Contract：探针分支真实参与计分（非 T-L1 档不适用）", async () => {
-  const { contractL1 } = await import("../dist/eval/team/metrics.js");
+  const { contractL1 } = await import("../dist/team/metrics.js");
   assert.equal(contractL1({}, evidence({})).applicable, false);
 
   const good = contractL1(
@@ -175,7 +175,7 @@ test("teamL1Contract：探针分支真实参与计分（非 T-L1 档不适用）
 });
 
 test("runTeamL1Case：misuse 探针构造违约入参，证据为正（aborted:false 且无 error 键）", async () => {
-  const { runTeamL1Case } = await import("../dist/eval/team/run-l1.js");
+  const { runTeamL1Case } = await import("../dist/team/run-l1.js");
   const base = {
     mode: "dispatch",
     availableTools: ["read"],
@@ -236,7 +236,7 @@ test("loader 拦下非法 l1ProbeMode（否则探针静默退回 clean，指标�
 });
 
 test("teamCostAmplificationRatio：团队有成本但成员成本为 0 时，理由不得写成「成本为 0」", async () => {
-  const { teamCostAmplificationRatio } = await import("../dist/eval/team/metrics.js");
+  const { teamCostAmplificationRatio } = await import("../dist/team/metrics.js");
   const m = teamCostAmplificationRatio(
     evidence({ teamUsage: { totalTokens: 10, totalCost: 0.5 }, memberUsage: { a: { tokens: 0, cost: 0 } } }),
   );
@@ -252,7 +252,7 @@ test("teamCostAmplificationRatio：团队有成本但成员成本为 0 时，理
 
 // ============ 5. 契约断言不得静默跳过（review 回归） ============
 test("contractStatuses：期望 done / 实际 failed → 0 分", async () => {
-  const { contractStatuses } = await import("../dist/eval/team/metrics.js");
+  const { contractStatuses } = await import("../dist/team/metrics.js");
   const ev = evidence({
     memberStatus: { a: "failed" },
     sends: [{ recipient: "a", content: "x" }],
@@ -264,7 +264,7 @@ test("contractStatuses：期望 done / 实际 failed → 0 分", async () => {
 });
 
 test("contractStatuses：期望 failed / 实际全 done → 0 分", async () => {
-  const { contractStatuses } = await import("../dist/eval/team/metrics.js");
+  const { contractStatuses } = await import("../dist/team/metrics.js");
   const ev = evidence({
     memberStatus: { a: "done" },
     sends: [{ recipient: "a", content: "x" }],
@@ -276,7 +276,7 @@ test("contractStatuses：期望 failed / 实际全 done → 0 分", async () => 
 });
 
 test("contractStatuses：无成员真实执行时不适用（不制造假覆盖，也不伪造失败）", async () => {
-  const { contractStatuses } = await import("../dist/eval/team/metrics.js");
+  const { contractStatuses } = await import("../dist/team/metrics.js");
   const m = contractStatuses({ expectedMemberStatus: { a: "done" }, expectedResultStatus: "done" }, evidence({}));
   assert.equal(m.applicable, false);
 });

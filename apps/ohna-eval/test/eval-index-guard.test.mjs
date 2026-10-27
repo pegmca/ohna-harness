@@ -9,7 +9,7 @@
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { main } from "../dist/eval/index.js";
+import { main } from "../dist/index.js";
 
 test("index.ts 导出 main 且 import 不触发进程退出", async () => {
   assert.equal(typeof main, "function", "main 应为可调用函数");

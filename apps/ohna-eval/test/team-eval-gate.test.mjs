@@ -21,8 +21,8 @@ import {
   loadTeamDataset,
   runTeamEvaluation,
   toHardGateReport,
-} from "../dist/eval/team/index.js";
-import { appendTrendSection, buildTeamTrend } from "../dist/eval/team/trend.js";
+} from "../dist/team/index.js";
+import { appendTrendSection, buildTeamTrend } from "../dist/team/trend.js";
 
 const DATASET = fileURLToPath(new URL("../../../datasets/ohna/team-v1.json", import.meta.url));
 
@@ -72,7 +72,7 @@ function assertHardGateSatisfied(result, tier) {
 /** 构造一份最小报告（只含给定指标）。 */
 function reportOf(dataset, metrics) {
   return {
-    target: "ohna-cli-team",
+    target: "ohna-eval-team",
     dataset,
     createdAt: new Date(0).toISOString(),
     metrics,

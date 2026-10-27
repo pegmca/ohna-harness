@@ -1,5 +1,5 @@
 /**
- * ohna-cli 评测 CLI 入口（v2.0 评测体系 Step 4 / §5 强制接口；v2.0 team-eval §8 增 team 域）。
+ * ohna-eval 评测 CLI 入口（独立包 apps/ohna-eval，从 ohna-cli 迁出）（v2.0 评测体系 Step 4 / §5 强制接口；v2.0 team-eval §8 增 team 域）。
  *
  * 本文件是 `pnpm eval:ohna` 的入口：解析 process.argv → 识别**评测域**（coding / team）→
  * 加载对应数据集 → 跑对应执行器 → 落盘报告 → 判门禁。
@@ -7,8 +7,8 @@
  * ## 两个评测域的分层（team-eval §8）
  *
  * - `--dataset <path>`（缺省 coding-v1.json）→ **coding 域**：行为与 v2.0 Step 4 完全一致，
- *   报告落 `apps/ohna-cli/eval/`（report.json / baseline.json）；
- * - `--dataset team` → **team 域**：报告落 `apps/ohna-cli/eval/team/`（独立目录，**互不覆盖 baseline**）。
+ *   报告落 `apps/ohna-eval/eval/`（report.json / baseline.json）；
+ * - `--dataset team` → **team 域**：报告落 `apps/ohna-eval/eval/team/`（独立目录，**互不覆盖 baseline**）。
  *
  * team 域内部再分两层门禁：
  * - **硬门禁**（T-L1/T-L2a/T-L2b 的确定性指标）→ eval-core `gateReport` → exitCode；
@@ -43,8 +43,8 @@ const DEFAULT_DATASET = resolve(HERE, "../../../../datasets/ohna/coding-v1.json"
 /** team 数据集路径：`--dataset team` 的别名解析目标。 */
 export const TEAM_DATASET_PATH = resolve(HERE, "../../../../datasets/ohna/team-v1.json");
 
-/** coding 报告与 baseline 输出目录：<app>/eval/。 */
-const OUT_DIR = resolve(HERE, "../../eval");
+/** coding 报告与 baseline 输出目录：<app>/eval/（独立包 apps/ohna-eval/eval/）。 */
+const OUT_DIR = resolve(HERE, "../eval");
 
 /** team 报告与 baseline 输出目录：<app>/eval/team/（与 coding 互不覆盖）。 */
 const TEAM_OUT_DIR = resolve(OUT_DIR, "team");
@@ -177,7 +177,7 @@ async function runCodingDomain(parsed: ParsedEvalArgs): Promise<number> {
 /**
  * team 域主流程：加载 → 按档位执行 → 硬门禁 → 趋势段（不参与 exitCode）。
  *
- * 报告文件（`apps/ohna-cli/eval/team/`）：
+ * 报告文件（`apps/ohna-eval/eval/team/`）：
  * - `report.json` / `report.md`：完整报告（含全部指标）；
  * - `baseline.json`：`--update-baseline` 写入的硬门禁基线；
  * - `trend.md` / `trend.json`：趋势段（T-L4 决策正确率 vs 基线，**永不阻断**）。

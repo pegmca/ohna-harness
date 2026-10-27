@@ -20,17 +20,17 @@ import { test } from "node:test";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-import { loadTeamDataset, runTeamEval, runTeamEvaluation } from "../dist/eval/team/index.js";
-import { detectProviderCredentials } from "../dist/eval/team/adapter.js";
-import { buildTeamTrend } from "../dist/eval/team/trend.js";
+import { loadTeamDataset, runTeamEval, runTeamEvaluation } from "../dist/team/index.js";
+import { detectProviderCredentials } from "../dist/team/adapter.js";
+import { buildTeamTrend } from "../dist/team/trend.js";
 
 const DATASET = fileURLToPath(new URL("../../../datasets/ohna/team-v1.json", import.meta.url));
-const RUN_SRC = fileURLToPath(new URL("../src/eval/team/run.ts", import.meta.url));
+const RUN_SRC = fileURLToPath(new URL("../src/team/run.ts", import.meta.url));
 // 真 provider 执行器在 run-provider.ts（run.ts 只做分派）：红线扫描必须覆盖真正持有
 // `streamSimple` 的文件，否则「真 provider 路径存在」这条断言会因为拆文件而失去意义。
-const PROVIDER_SRC = fileURLToPath(new URL("../src/eval/team/run-provider.ts", import.meta.url));
-const L1_SRC = fileURLToPath(new URL("../src/eval/team/run-l1.ts", import.meta.url));
-const ADAPTER_SRC = fileURLToPath(new URL("../src/eval/team/adapter.ts", import.meta.url));
+const PROVIDER_SRC = fileURLToPath(new URL("../src/team/run-provider.ts", import.meta.url));
+const L1_SRC = fileURLToPath(new URL("../src/team/run-l1.ts", import.meta.url));
+const ADAPTER_SRC = fileURLToPath(new URL("../src/team/adapter.ts", import.meta.url));
 
 // ============ 1. 无凭据显式 skip ============
 test("无凭据时 T-L2b 全部 case 显式 skip（executed=false + 明确原因）", async () => {

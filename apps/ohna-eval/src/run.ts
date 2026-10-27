@@ -292,7 +292,7 @@ export async function runOhnaEval(
     scoredCases.push(scored);
   }
 
-  return aggregateToReport("ohna-cli", dataset.datasetVersion, scoredCases);
+  return aggregateToReport("ohna-eval", dataset.datasetVersion, scoredCases);
 }
 
 /**

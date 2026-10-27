@@ -21,9 +21,9 @@ import {
   toolSelectionCorrectness,
   turnEfficiency,
   aggregateToReport,
-} from "../dist/eval/metrics.js";
-import { runOhnaEval } from "../dist/eval/run.js";
-import { loadOhnaDataset } from "../dist/eval/dataset.js";
+} from "../dist/metrics.js";
+import { runOhnaEval } from "../dist/run.js";
+import { loadOhnaDataset } from "../dist/dataset.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(HERE, "../../..");
@@ -124,7 +124,7 @@ test("turnEfficiency：无预算 → applicable=false（修 G5）", () => {
 
 // ============ aggregateToReport：G5 + failedMetrics ============
 test("aggregateToReport：applicable=false 指标不进聚合分母（G5）", () => {
-  const report = aggregateToReport("ohna-cli", "coding-v1", [
+  const report = aggregateToReport("ohna-eval", "coding-v1", [
     {
       id: "c1",
       metrics: [
@@ -141,7 +141,7 @@ test("aggregateToReport：applicable=false 指标不进聚合分母（G5）", ()
 });
 
 test("aggregateToReport：cases 携带 failedMetrics 且 passed 收敛正确", () => {
-  const report = aggregateToReport("ohna-cli", "coding-v1", [
+  const report = aggregateToReport("ohna-eval", "coding-v1", [
     {
       id: "ok",
       metrics: [
@@ -212,7 +212,7 @@ test("runOhnaEval：integration 档真实跑 agentLoop，产出 EvalReportDto �
 
     const report = await runOhnaEval(dataset, { tier: "integration", tmpRoot });
 
-    assert.equal(report.target, "ohna-cli");
+    assert.equal(report.target, "ohna-eval");
     assert.equal(report.dataset, "coding-v1");
     assert.equal(report.cases.length, 3);
 

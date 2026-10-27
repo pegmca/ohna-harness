@@ -21,7 +21,17 @@
  */
 
 import type { AgentTool } from "@aiagent/tools";
-import type { ConfirmHook } from "../../permission/confirm.js";
+import type { BeforeToolCallContext, BeforeToolCallResult } from "@aiagent/agent";
+
+/**
+ * 确认钩子签名（与 `@aiagent/agent` 权限契约 `BeforeToolCallContext` / `BeforeToolCallResult` 同构）。
+ * 定义在宿主侧的 `ConfirmHook` 原属 CLI 权限层；本包是独立评测包，不依赖 CLI，故在此声明同构类型，
+ * 不引入对 `@aiagent/ohna-cli` 的耦合。
+ */
+export type ConfirmHook = (
+  context: BeforeToolCallContext,
+  signal?: AbortSignal,
+) => Promise<BeforeToolCallResult | undefined>;
 
 /**
  * 真实工具骨架工厂（`@aiagent/coding`）。

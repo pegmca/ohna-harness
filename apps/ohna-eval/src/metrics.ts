@@ -258,7 +258,7 @@ export function evaluateCaseOutcome(
  * - `cases[].passed` = `metrics.every(m => m.passed)`（所有 applicable 指标 passed）；
  * - `cases[].failedMetrics` = 失败指标名（修 RAG 归因丢失）。
  *
- * @param target 被测目标标识（如 "ohna-cli"）。
+ * @param target 被测目标标识（如 "ohna-eval"）。
  * @param dataset 数据集标识（如 "coding-v1"）。
  * @param scoredCases 逐 case 的评分结果（id + 逐指标得分 + passed/failedMetrics）。
  * @returns 聚合后的跨边界报告线格式。

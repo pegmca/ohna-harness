@@ -71,12 +71,14 @@ export class TeamRunBinding {
     input: {
       runId: string;
       conversationId: string;
+      /** 本 run 的快照 Team 开关；缺省回退构造开关（RunManager 单测直接构造时）。 */
+      team?: boolean;
       beforeToolCall?: NonNullable<AgentLoopConfig["beforeToolCall"]>;
       emit: TeamRunnerEmit;
     },
     tools: readonly AgentTool<any>[]
   ): TeamRunner | undefined {
-    if (!this.options.team || !this.options.session) return undefined;
+    if (!(input.team ?? this.options.team) || !this.options.session) return undefined;
     // 按 conversationId 取该会话的 controller，再在其下以 runId 登记独立绑定。转发器
     // 只在本会话的绑定表内路由，绝不跨 conversation 串流（spec §7.4）。
     const turn = this.options.session.getOrCreate(input.conversationId).beginRun(

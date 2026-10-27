@@ -33,6 +33,8 @@ import {
 import { WorkspaceRegistry, WorkspaceMcpRegistry, WorkspaceContextCache } from "./workspace/index.js";
 import { LocalMessageStore, LocalRunStore, LocalSessionStore } from "./store/index.js";
 import { RunManager } from "./run-manager.js";
+import { createConversationScheduler } from "./scheduler/conversation.js";
+import { createRunConfigResolver } from "./model/config.js";
 import { createServeTeamSession } from "./run/team-session.js";
 import { resolveCompactionSettings } from "@aiagent/agent";
 import { streamSimple } from "@aiagent/ai";
@@ -65,6 +67,8 @@ export interface OhnaRuntimeOptions {
 
 /** 一次 run 的启动入参（跨进程协议面向渲染端的最小子集）。 */
 export interface StartRunInput {
+  /** 客户端幂等键；缺省由 runtime 生成。 */
+  requestId?: string;
   conversationId: string;
   message: string;
   mode?: "auto" | "report";
@@ -202,6 +206,24 @@ export async function createOhnaRuntime(options: OhnaRuntimeOptions): Promise<Oh
         }
       : {}),
   });
+  const resolveRunConfig = createRunConfigResolver({
+    model,
+    apiKey,
+    autoApprove: autoApprove ?? false,
+    team: team ?? false,
+    workspaceRegistry,
+    workspaceContextCache,
+    fallback: {
+      workspaceId: "default",
+      workspaceRoot,
+      systemPrompt: effectiveSystemPrompt,
+      tools
+    }
+  });
+  const scheduler = createConversationScheduler({
+    cancelRun: (runId) => runManager.cancel(runId, { assertAuthorized }).then(() => undefined),
+    waitTerminal: (runId) => runManager.waitTerminal(runId)
+  });
   emitHolder.emit = (runId, payload) =>
     runManager.emitConfirmationRequested(runId, payload);
 
@@ -279,19 +301,23 @@ export async function createOhnaRuntime(options: OhnaRuntimeOptions): Promise<Oh
       if (input.workspaceId) {
         await workspaceRegistry.register(input.workspaceId, workspaceRoot);
       }
-      const result = await runManager.createRun({
-        requestId: randomUUID(),
-        conversationId: input.conversationId,
-        message: input.message,
-        mode: input.mode ?? "auto",
-        source: input.source ?? "composer",
-        ...(input.maxTurns !== undefined ? { maxTurns: input.maxTurns } : {}),
-        ...(input.deadlineMs !== undefined ? { deadlineMs: input.deadlineMs } : {}),
-        ...(input.maxCost !== undefined ? { maxCost: input.maxCost } : {}),
-        ...(input.workspaceId !== undefined ? { workspaceId: input.workspaceId } : {})
+      return scheduler.submit(input, async () => {
+        const config = await resolveRunConfig(input.conversationId, input);
+        const result = await runManager.createRun({
+          requestId: input.requestId ?? randomUUID(),
+          conversationId: input.conversationId,
+          message: input.message,
+          mode: input.mode ?? "auto",
+          source: input.source ?? "composer",
+          ...(input.maxTurns !== undefined ? { maxTurns: input.maxTurns } : {}),
+          ...(input.deadlineMs !== undefined ? { deadlineMs: input.deadlineMs } : {}),
+          ...(input.maxCost !== undefined ? { maxCost: input.maxCost } : {}),
+          ...(input.workspaceId !== undefined ? { workspaceId: input.workspaceId } : {}),
+          config
+        });
+        onLog?.({ level: "info", message: `startRun ${result.accepted.runId} @ ${input.conversationId}` });
+        return toRunStartResult(result);
       });
-      onLog?.({ level: "info", message: `startRun ${result.accepted.runId} @ ${input.conversationId}` });
-      return toRunStartResult(result);
     },
     getRunSnapshot(runId: string) {
       return runManager.getSnapshot(runId, { assertAuthorized });
@@ -301,7 +327,7 @@ export async function createOhnaRuntime(options: OhnaRuntimeOptions): Promise<Oh
       return runManager.listRunsByConversation(conversationId);
     },
     cancelRun(runId: string) {
-      return runManager.cancel(runId, { assertAuthorized });
+      return scheduler.cancel(runId).then(() => runManager.getSnapshot(runId, { assertAuthorized }));
     },
     async resolveConfirmation(runId, toolCallId, decision, options) {
       return runManager.resolveConfirmation(runId, toolCallId, decision, options ?? { assertAuthorized });

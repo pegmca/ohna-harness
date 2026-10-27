@@ -62,6 +62,7 @@ import type {
   RunErrorPayload,
   RunManagerOptions
 } from "./run/types.js";
+import type { RunConfigSnapshot } from "./model/config.js";
 
 export type {
   CreateRunInput,
@@ -136,7 +137,8 @@ export class RunManager {
       options.model.id,
       options.getTeamState
         ? () => options.getTeamState
-        : this.teamBinding.getTeamStateFor
+        : (conversationId: string) =>
+            options.team ? this.teamBinding.getTeamStateFor(conversationId) : undefined
     );
     this.confirmGate = options.confirmGate;
     this.summarizer = options.summarizer;
@@ -192,6 +194,21 @@ export class RunManager {
    */
   isAutoApprove(): boolean {
     return this.confirmations.isAutoApprove();
+  }
+
+  /**
+   * 等待 run 进入终态（调度器释放会话链的依据）。
+   *
+   * 只等待终态信号，不等待终态后的广播/落盘清理：下一个同会话 run 可以在前一个 run
+   * 已确定结束后启动，但不会与它的执行重叠。
+   *
+   * @param runId run id。
+   * @returns 终态达成。
+   */
+  async waitTerminal(runId: string): Promise<void> {
+    const run = this.active.get(runId);
+    if (!run || run.terminal) return;
+    await run.terminalDone;
   }
 
   /**
@@ -261,6 +278,9 @@ export class RunManager {
     const message = input.message.trim();
     const runId = randomUUID();
     const createdAt = new Date().toISOString();
+    const config = input.config;
+    const model = config?.model ?? this.model;
+    const apiKey = config?.apiKey ?? this.options.apiKey;
 
     // 窗口参数不在此重算：`this.runWindow`（构造期一次算出，见字段注释）就是本 run 注入
     // tracedStreamFn 的 `window`，而 compactHistoryForRun 内部用同一个
@@ -270,11 +290,12 @@ export class RunManager {
     // 先取历史再追加本轮 prompt：agentLoop 会自行追加 prompt，避免重复。
     const storedHistory = await this.options.messageStore.list(input.conversationId);
     const mapped = storedHistory
-      .map((dto) => linearMessageToAgentMessage(dto, this.model))
+      .map((dto) => linearMessageToAgentMessage(dto, model))
       .filter((message): message is AgentMessage => message !== null);
     const { messages: compactedHistory, compaction } = await this.compactHistoryForRun(
       input.conversationId,
-      mapped
+      mapped,
+      config
     );
     // 压缩审计写 stderr：serve 无 CLI 落盘日志，这是「run 前发生了压缩」的唯一日志观测点。
     if (compaction.compacted) {
@@ -295,7 +316,7 @@ export class RunManager {
       runId,
       requestId: input.requestId,
       conversationId: input.conversationId,
-      modelId: this.model.id,
+      modelId: model.id,
       mode: input.mode,
       source: input.source,
       userMessageId: userMessage.messageId,
@@ -307,7 +328,7 @@ export class RunManager {
       requestId: input.requestId,
       conversationId: input.conversationId,
       userMessageId: userMessage.messageId,
-      modelId: this.model.id,
+      modelId: model.id,
       mode: input.mode,
       source: input.source,
       status: "running",
@@ -321,12 +342,18 @@ export class RunManager {
     const done = new Promise<void>((resolve) => {
       resolveDone = resolve;
     });
+    let resolveTerminalDone!: () => void;
+    const terminalDone = new Promise<void>((resolve) => {
+      resolveTerminalDone = resolve;
+    });
 
     const run: ActiveRun = {
       snapshot,
       requestId: input.requestId,
       controller: new AbortController(),
       done,
+      terminalDone,
+      resolveTerminalDone,
       sequence: 0,
       lastPersistedSequence: 0,
       subscribers: new Set(),
@@ -334,7 +361,8 @@ export class RunManager {
       skipFirstUserMessage: true,
       ...(input.maxTurns !== undefined ? { maxTurns: input.maxTurns } : {}),
       ...(input.deadlineMs !== undefined ? { deadlineMs: input.deadlineMs } : {}),
-      ...(input.maxCost !== undefined ? { maxCost: input.maxCost } : {})
+      ...(input.maxCost !== undefined ? { maxCost: input.maxCost } : {}),
+      ...(config ? { config } : {})
     };
     this.active.set(runId, run);
 
@@ -373,7 +401,10 @@ export class RunManager {
 
     // BUG-002 方案 2：按会话持久化的 workspaceRoot 动态装配上下文（编码工具 + 系统提示词）。
     // 解析失败回退 undefined（execute 内退回构造时的单工作区语义），不阻断本次 run。
-    const workspace = await this.resolveWorkspaceContext(input.conversationId, input.workspaceId);
+    if (config?.workspace && this.workspaceRegistry) {
+      this.workspaceRegistry.bindRun(runId, input.conversationId, config.workspace.workspaceId);
+    }
+    const workspace = config?.workspace ?? await this.resolveWorkspaceContext(input.conversationId, input.workspaceId);
 
     // 兜底捕获 execute 逃逸的异常（通常是落盘/广播二次失败，如磁盘写满）：
     // 必须转成结构化错误并强制内存终态，避免 run 永远 running + unhandled rejection。
@@ -501,7 +532,8 @@ export class RunManager {
    */
   private async compactHistoryForRun(
     conversationId: string,
-    messages: AgentMessage[]
+    messages: AgentMessage[],
+    config?: RunConfigSnapshot
   ): Promise<{
     messages: AgentMessage[];
     compaction: {
@@ -513,15 +545,13 @@ export class RunManager {
     };
   }> {
     // 压缩摘要请求发生在 runId 分配前、不挂 trace（见计划 §8-7 开放项）。
-    const summarizer =
-      this.summarizer ??
-      (this.summarizer = createServeSummarizer({
-        model: this.model,
-        apiKey: this.options.apiKey,
-        ...(this.options.streamFn ? { streamFn: this.options.streamFn } : {})
-      }));
+    const summarizer = this.summarizer ?? createServeSummarizer({
+      model: config?.model ?? this.model,
+      apiKey: config?.apiKey ?? this.options.apiKey,
+      ...(this.options.streamFn ? { streamFn: this.options.streamFn } : {})
+    });
     const result = await compactConversationHistory(messages, {
-      model: this.model,
+      model: config?.model ?? this.model,
       summarizer,
       onWarn: (warning) => process.stderr.write(`[ohna] ${warning}\n`)
     });
@@ -679,9 +709,9 @@ export class RunManager {
     workspace?: ResolvedWorkspaceContext
   ): Promise<void> {
     const context: AgentContext = {
-      systemPrompt: workspace?.systemPrompt ?? this.options.systemPrompt,
+      systemPrompt: workspace?.systemPrompt ?? run.config?.workspace.systemPrompt ?? this.options.systemPrompt,
       messages: history,
-      tools: workspace?.tools ?? this.options.tools
+      tools: workspace?.tools ?? run.config?.workspace.tools ?? this.options.tools
     };
     const runId = run.snapshot.runId;
     const confirmHook = this.confirmGate?.createHook(runId);
@@ -690,6 +720,7 @@ export class RunManager {
       {
         runId,
         conversationId: run.snapshot.conversationId,
+        ...(run.config ? { team: run.config.team } : {}),
         ...(confirmHook ? { beforeToolCall: confirmHook } : {}),
         emit: {
           subagent: (event) => {
@@ -749,8 +780,8 @@ export class RunManager {
       run.deadlineMs !== undefined ? Date.now() + run.deadlineMs : undefined;
     let turns = 0;
     const config: AgentLoopConfig = {
-      model: this.model,
-      apiKey: this.options.apiKey,
+      model: run.config?.model ?? this.model,
+      apiKey: run.config?.apiKey ?? this.options.apiKey,
       convertToLlm: defaultConvertToLlm,
       // 写/执行前挂起等待浏览器确认；只读工具在闸门内部直接放行。
       ...(confirmHook ? { beforeToolCall: confirmHook } : {}),
@@ -996,6 +1027,7 @@ export class RunManager {
       await this.emitFrame(run, "run_status", payload);
       run.snapshot = terminalSnapshot(run.snapshot, status, error);
       run.terminal = true;
+      run.resolveTerminalDone();
       await this.options.runStore.markStatus(run.snapshot.runId, status);
       // run 已结束：清理可能残留的待确认项（deny 释放），避免悬挂与内存泄漏。
       this.confirmGate?.clearRun(run.snapshot.runId);
@@ -1023,6 +1055,7 @@ export class RunManager {
     if (run.terminal) return;
     run.snapshot = terminalSnapshot(run.snapshot, status, error);
     run.terminal = true;
+    run.resolveTerminalDone();
     await this.options.runStore.markStatus(run.snapshot.runId, status);
     this.confirmGate?.clearRun(run.snapshot.runId);
     scheduleReclaim(run, this.active);

@@ -21,6 +21,8 @@ export * from "./validation.js";
  */
 export * from "./runtime.js";
 export { RunManager } from "./run-manager.js";
+export * from "./model/config.js";
+export * from "./scheduler/conversation.js";
 
 /**
  * 工作区授权与归属校验模块：registry（授权表 + 归属反查）、context（上下文缓存）、

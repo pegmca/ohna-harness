@@ -14,6 +14,7 @@ import type { AsyncConfirmGate } from "../confirm-gate.js";
 import type { LocalMessageStore, LocalRunStore, LocalSessionStore } from "../store/index.js";
 import type { WorkspaceRegistry, WorkspaceContextCache, WorkspaceMcpRegistry } from "../workspace/index.js";
 import type { ServeTeamSession } from "./team-session.js";
+import type { RunConfigSnapshot } from "../model/config.js";
 
 /** SSE / 快照错误的最小结构化形状。 */
 export interface RunErrorPayload {
@@ -28,7 +29,12 @@ export interface ActiveRun {
   snapshot: RunSnapshotDtoV2;
   requestId: string;
   controller: AbortController;
+  /** 执行链完成（含 loop 收尾与清理）；用于 cancel / shutdown 等待。 */
   done: Promise<void>;
+  /** 终态达成（completed / failed / interrupted）；用于同会话 FIFO 放行，避免等待后置清理。 */
+  terminalDone: Promise<void>;
+  /** 将 terminalDone 标记为完成；单 run 内只调用一次。 */
+  resolveTerminalDone: () => void;
   sequence: number;
   lastPersistedSequence: number;
   subscribers: Set<(event: RunStreamEventDtoV2) => void>;
@@ -45,6 +51,8 @@ export interface ActiveRun {
   finishPromise?: Promise<void>;
   /** 终态后内存回收定时器（P3-5）；unref，避免阻止进程退出。 */
   reclaimTimer?: NodeJS.Timeout;
+  /** run 创建时解析的配置快照；缺省时回退 RunManager 构造配置。 */
+  config?: RunConfigSnapshot;
 }
 
 /** 创建 run 的输入。 */
@@ -63,6 +71,8 @@ export interface CreateRunInput {
   maxCost?: number;
   /** 工作区归属：跨工作区会话续写时携带，供 Task 6 的工作区授权与上下文解析使用（当前透传、暂不消费）。 */
   workspaceId?: string;
+  /** run 创建时解析的配置快照；runtime 组合根注入后作为本 run 的执行事实源。 */
+  config?: RunConfigSnapshot;
 }
 
 /** createRun 的返回：accepted DTO + 初始快照。 */

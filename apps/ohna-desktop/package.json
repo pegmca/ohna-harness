@@ -10,11 +10,18 @@
     "dev": "electron-vite dev",
     "build": "electron-vite build && vite build --config vite.utility.config.ts && vite build --config vite.test.config.ts",
     "typecheck": "tsc -p tsconfig.json --pretty false",
-    "test": "pnpm build && node --test test/*.test.mjs",
+    "test": "pnpm build && vitest run && node --test test/*.test.mjs",
     "package": "pnpm build && electron-builder",
     "package:dir": "pnpm build && electron-builder --dir"
   },
   "devDependencies": {
+    "@testing-library/jest-dom": "^7.0.0",
+    "@testing-library/react": "^16.3.2",
+    "@types/react": "^19.0.2",
+    "@types/react-dom": "^19.0.2",
+    "@vitejs/plugin-react": "^4.3.4",
+    "jsdom": "^29.1.1",
+    "vitest": "^4.1.10",
     "@types/node": "^22.10.5",
     "electron": "^45.0.0",
     "electron-builder": "^26.18.0",
@@ -27,6 +34,14 @@
     "@aiagent/ai": "workspace:*",
     "@aiagent/coding": "workspace:*",
     "@aiagent/ohna-runtime": "workspace:*",
-    "@aiagent/types": "workspace:*"
+    "@aiagent/types": "workspace:*",
+    "@radix-ui/react-popover": "^1.1.23",
+    "@tailwindcss/vite": "^4.3.1",
+    "lottie-web": "^5.12.2",
+    "lucide-react": "^1.21.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "react-router-dom": "^7.18.1",
+    "tailwindcss": "^4.3.1"
   }
 }

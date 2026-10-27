@@ -35,8 +35,50 @@ export interface FinanceEvalDocumentLike {
   source: string;
   /** 文件名，对应 DataSourceIngestRequestDto.fileName。 */
   fileName: string;
-  /** 文档全文，对应 DataSourceIngestRequestDto.content。 */
-  content: string;
+  /** 文档全文或 PDF 原始字节，对应 DataSourceIngestRequestDto.content。 */
+  content: string | Uint8Array;
+}
+
+/** JSON 数据集中承载二进制文档的稳定信封。 */
+export interface FinanceEvalByteContentEnvelope {
+  /** 声明内容为 base64 编码的二进制。 */
+  contentEncoding: "base64";
+  /** PDF 等二进制文档的 base64 文本。 */
+  contentBase64: string;
+}
+
+/** loader + adapter 共同接受的序列化文档内容。 */
+export type SerializedFinanceEvalContent = string | FinanceEvalByteContentEnvelope;
+
+/**
+ * 将 JSON 数据集里的文本或 base64 字节信封解码为运行时内容。
+ *
+ * @param content 序列化文档内容。
+ * @returns 原文本或 Uint8Array 字节。
+ */
+export function decodeFinanceEvalDocumentContent(
+  content: SerializedFinanceEvalContent
+): string | Uint8Array {
+  if (typeof content === "string") return content;
+
+  return new Uint8Array(Buffer.from(content.contentBase64, "base64"));
+}
+
+/**
+ * 把运行时字节编码为 JSON 数据集可承载的信封。
+ *
+ * @param content 原始文档内容。
+ * @returns 文本或 base64 字节信封。
+ */
+export function serializeFinanceEvalDocumentContent(
+  content: string | Uint8Array
+): SerializedFinanceEvalContent {
+  if (typeof content === "string") return content;
+
+  return {
+    contentEncoding: "base64",
+    contentBase64: Buffer.from(content).toString("base64")
+  };
 }
 
 /**
@@ -71,12 +113,17 @@ export async function createDeterministicFinanceRagRuntime(
   documents: readonly FinanceEvalDocumentLike[],
   options: DataSourceRuntimeOptions = {}
 ): Promise<DataSourceRuntime> {
+  const chunkingOptions = options.chunkingOptions ?? {
+    strategy: "table_aware",
+    maxChars: 1200,
+    overlapChars: 150
+  };
   const runtime = createDataSourceRuntime({
     repository: createInMemoryRagDocumentRepository(),
     vectorStoreFactory: createInMemoryVectorStoreFactory(),
     embeddingClient: createDeterministicMockEmbeddingClient(),
     // 透传可选注入点（前置修正 #5/#1）：切块策略与证据充分性阈值，缺省回落 rag 内置默认。
-    ...(options.chunkingOptions !== undefined ? { chunkingOptions: options.chunkingOptions } : {}),
+    chunkingOptions,
     ...(options.evidenceSufficiencyThreshold !== undefined
       ? { evidenceSufficiencyThreshold: options.evidenceSufficiencyThreshold }
       : {})

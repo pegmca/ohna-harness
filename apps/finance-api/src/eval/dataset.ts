@@ -16,6 +16,11 @@
  */
 
 import { readFileSync } from "node:fs";
+import {
+  decodeFinanceEvalDocumentContent,
+  type FinanceEvalByteContentEnvelope,
+  type SerializedFinanceEvalContent
+} from "./adapter.js";
 
 /**
  * 单篇待 ingest 文档（deterministic 档真实写入 DataSourceRuntime）。
@@ -30,7 +35,7 @@ export interface FinanceEvalDocument {
   /** 文件名（含扩展名），仅用于 lineage 与可调试性。 */
   fileName: string;
   /** 文档全文（Markdown/TXT），会被 runtime 切块、embedding、索引。 */
-  content: string;
+  content: string | Uint8Array;
 }
 
 /**
@@ -127,10 +132,32 @@ function assertCaseShape(case_: unknown, index: number): asserts case_ is Financ
       throw new Error(`case ${c.id} documents 含非对象元素`);
     }
     const d = doc as Record<string, unknown>;
-    if (typeof d.source !== "string" || typeof d.fileName !== "string" || typeof d.content !== "string") {
+    const serializedContent = isSerializedDocument(d) ? d.content : undefined;
+    if (
+      typeof d.source !== "string"
+      || typeof d.fileName !== "string"
+      || serializedContent === undefined
+    ) {
       throw new Error(`case ${c.id} document 缺少 source/fileName/content`);
     }
+    d.content = decodeFinanceEvalDocumentContent(serializedContent);
   }
+}
+
+/**
+ * 校验 JSON 文档内容是文本或 base64 字节信封。
+ *
+ * @param value 未知 document content。
+ * @returns 是否为合法序列化内容。
+ */
+function isSerializedDocument(value: unknown): value is Record<string, unknown> & { content: SerializedFinanceEvalContent } {
+  if (typeof value !== "object" || value === null) return false;
+  const document = value as Record<string, unknown>;
+  const content = document.content;
+  if (typeof content === "string") return true;
+  if (typeof content !== "object" || content === null) return false;
+  const envelope = content as FinanceEvalByteContentEnvelope;
+  return envelope.contentEncoding === "base64" && typeof envelope.contentBase64 === "string";
 }
 
 /**

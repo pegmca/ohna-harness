@@ -280,6 +280,12 @@ ingest lineage 的 `chunkerVersion` 由当前实际生效的 chunking options �
 - 生成器不再出现 `.txt` 中间产物；`rag-golden-v1.json` 的 documents 能承载 `Uint8Array` 并
   被 loader 正确接受。
 
+**当前实现**：生成器写入 `{contentEncoding:"base64", contentBase64}` 文档信封，`.fileName`
+保持 `.pdf`；loader 解码为 `Uint8Array` 后透传真实 `ingestDocument`。`rag-golden-v1.json`
+当前约 73 MB，是内嵌 PDF 字节的显式取舍。17 个来源文档中表格题已产出 `isTableChunk`、
+`isTableSummary` 与 `tableGroupId`（fin-003 为 2301 个表组）；完整 golden deterministic 跑通
+12 条 RAG case，source 级 retrievalHitRate=1、mrr=1、ndcg=0.995。
+
 ---
 
 ## 6. D3 · chunk 级整表召回诊断（D1 的真正验收）

@@ -130,6 +130,28 @@ export function createRagContentChecksum(value: string): string {
 }
 
 /**
+ * 为文本或二进制内容生成稳定 SHA-256 校验和。
+ *
+ * @param content 文本或二进制内容。
+ * @returns SHA-256 hex 字符串。
+ */
+export function createRagDocumentChecksum(content: string | Uint8Array): string {
+  return createHash("sha256").update(content).digest("hex");
+}
+
+/**
+ * 将文本或二进制内容编码为 document_versions.content 可存的文本。
+ *
+ * @param content 原始内容。
+ * @returns 原文本或带 MIME 信封的 base64 文本。
+ */
+export function serializeRagDocumentContent(content: string | Uint8Array): string {
+  if (typeof content === "string") return content;
+
+  return `data:application/octet-stream;base64,${Buffer.from(content).toString("base64")}`;
+}
+
+/**
  * 从 ingest source URI 推导文档来源类型。
  *
  * http(s) 视为远程地址，mock/demo 前缀视为演示文本，其余按本地文件处理；

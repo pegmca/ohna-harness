@@ -20,11 +20,13 @@ import { chunkIngestedDocument } from "./chunking.js";
 import { createHybridRetriever } from "./retrieval.js";
 import {
   createRagContentChecksum,
+  createRagDocumentChecksum,
   createTraceRetrievalEvent,
   isSafeRagSourceUri,
   normalizeRagSourceUri,
   ragChunkRecordToChunk,
   resolveRagSourceType,
+  serializeRagDocumentContent,
   toNewChunkRecord
 } from "./source-uri.js";
 import {
@@ -196,7 +198,7 @@ class DataSourceRuntimeService implements DataSourceRuntime {
     const sourceUri = normalizeRagSourceUri(request.source);
     const fileType = detectDocumentFileType(request.fileName, request.contentType);
     const externalId = createRagContentChecksum(`${sourceUri}|${request.fileName}|${fileType ?? "unknown"}`);
-    const contentChecksum = createRagContentChecksum(request.content);
+    const contentChecksum = createRagDocumentChecksum(request.content);
     const contentType = request.contentType?.trim() || "unknown";
     const now = new Date().toISOString();
     const lineageBase = {
@@ -207,7 +209,7 @@ class DataSourceRuntimeService implements DataSourceRuntime {
       sourceUri,
       contentType,
       contentChecksum,
-      content: request.content,
+      content: serializeRagDocumentContent(request.content),
       parserVersion: RAG_PARSER_VERSION,
       chunkerVersion: resolveChunkerVersion(this.chunkingOptions ?? DEFAULT_CHUNKING_OPTIONS),
       now

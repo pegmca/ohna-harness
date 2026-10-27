@@ -8,7 +8,7 @@
  * 设计要点（与现有权威生成器 test/generate-finance-rag-v1.mjs 对齐、互不覆盖）：
  * - 本脚本是 golden→eval 的**唯一**映射来源；不改动 rag-v1.json 的既有权威生成链路。
  * - 每条非 negative case 按 `evidence[].ticker+report_type+period` 从 manifest 定位真实 PDF，
- *   用 `@aiagent/parsing` 抽全文填入 `documents.content`（deterministic 档真实 ingest 的前提，见 dataset.ts 校验）。
+ *   把原始 PDF 字节以 base64 信封写入 `documents.content`，让评测直接走真实解析链路。
  * - source 标识稳定为 `<ticker>/<report_type>/<period>`，与 expectedSources 对齐；
  *   真实 citation.documentId 是 ingest 时 UUID，故**不设 expectedDocumentIds**（同 rag-v1 口径）。
  * - expectedKeywords：从 gold_answer + 表格/表单文本化抽取，且**实测会出现在解析全文**中，
@@ -25,18 +25,15 @@
  * 可复现：node test/generate-finance-golden-v1.mjs
  */
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
-import { resolve, dirname } from "node:path";
+import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-// 复用评测管线同款解析器。该 workspace 包仅在 packages/rag 下被链接，test/ 下无 pnpm 软链，
-// 故按仓库相对路径直接引用其已构建产物（与 packages/rag 运行时入口一致），避免依赖解析差异。
-import { parsePdfBlocks } from "../packages/parsing/dist/index.js";
 import { readFileSync as readPdfBytes } from "node:fs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(HERE, "..");
 const GOLDEN = resolve(REPO_ROOT, "datasets/finance/rag-golden/golden.jsonl");
-const MANIFEST = "/Users/pegmca/code/origin-data/finance-data/manifest/manifest.jsonl";
-const CORPUS_ROOT = "/Users/pegmca/code/origin-data/finance-data";
+const CORPUS_ROOT = process.env.FINANCE_CORPUS_ROOT ?? "/Users/pegmca/code/origin-data/finance-data";
+const MANIFEST = resolve(CORPUS_ROOT, "manifest/manifest.jsonl");
 const DST = resolve(REPO_ROOT, "datasets/finance/rag-golden-v1.json");
 
 /** 解析 manifest.jsonl → 按 ticker 索引的披露记录数组。 */
@@ -55,22 +52,20 @@ function loadManifest(path) {
 }
 
 /**
- * 解析一份 PDF 为可检索全文（纯文本段落）。
- *
- * 复用评测管线同款 `@aiagent/parsing` 抽取真实 PDF 全文；产物以 `.txt` 文件名交给
- * deterministic 档的 `ingestDocument`（与 rag-v1.json 的 "文本 content + 扩展名决定解析器"
- * 约定一致），评测时会由 TxtParser 重新切块，因此此处只产出干净的纯文本（不做 markdown
- * 表格包裹，避免二次解析时的格式歧义）。
+ * 读取 PDF 原始字节并编码为 JSON 可承载的 base64 信封。
  *
  * @param {string} absPath PDF 绝对路径。
- * @returns {{ content: string, pages: number, textLen: number }}
+ * @returns {{ content: { contentEncoding: "base64", contentBase64: string }, bytes: number }}
  */
-function extractPdfText(absPath) {
+function readPdfEnvelope(absPath) {
   const bytes = new Uint8Array(readPdfBytes(absPath));
-  const blocks = parsePdfBlocks(bytes);
-  // 直接拼接行文本；表格行已是空格分隔的多列，无需额外包裹。
-  const content = blocks.map((b) => b.text).join("\n");
-  return { content, pages: new Set(blocks.map((b) => b.pageNumber ?? 0)).size, textLen: content.length };
+  return {
+    content: {
+      contentEncoding: "base64",
+      contentBase64: Buffer.from(bytes).toString("base64")
+    },
+    bytes: bytes.byteLength
+  };
 }
 
 /**
@@ -186,7 +181,7 @@ function mapCase(golden, manifest) {
     };
   }
 
-  // 去重 source（同一文档只 ingest 一次），按 evidence 解析真实 PDF 全文。
+  // 去重 source（同一文档只 ingest 一次），按 evidence 读取真实 PDF 字节。
   const sources = new Map(); // sourceKey -> {source, fileName, content, meta}
   const sourceKeys = [];
   const recomputeNotes = [];
@@ -202,9 +197,8 @@ function mapCase(golden, manifest) {
     }
     if (r.recomputed) recomputeNotes.push(`${key}: ${r.reason}`);
     const absPath = resolve(CORPUS_ROOT, r.file_path);
-    const { content, pages, textLen } = extractPdfText(absPath);
-    // 文件名用 .txt：content 已是纯文本，与评测器 ingest 的"扩展名决定解析器"约定对齐。
-    sources.set(key, { source: key, fileName: `${key}.txt`, content, pages, textLen });
+    const { content, bytes } = readPdfEnvelope(absPath);
+    sources.set(key, { source: key, fileName: `${key}.pdf`, content, bytes });
   }
 
   const documents = sourceKeys.map((k) => {
@@ -250,7 +244,9 @@ function main() {
   for (const g of goldens) {
     const mapped = mapCase(g, manifest);
     cases.push(mapped);
-    const missing = mapped.documents.filter((d) => d.content === "");
+    const missing = mapped.documents.filter(
+      (d) => typeof d.content === "string" && d.content.length === 0
+    );
     if (missing.length) notes.push(`${g.id}: 缺源文档 ${missing.map((d) => d.source).join(",")}`);
     const kwGap = mapped.mode === "rag" && mapped.expectedKeywords.length === 0 ? ` 关键词为空` : "";
     if (notes.length || kwGap) notes.push(`${g.id}: 映射完成${kwGap} 文档数=${mapped.documents.length}`);
@@ -263,7 +259,7 @@ function main() {
       generator: "test/generate-finance-golden-v1.mjs",
       version: "1.0.0",
       source: "datasets/finance/rag-golden/golden.jsonl",
-      note: "黄金作者集→评测器格式映射；真实 PDF 全文由 @aiagent/parsing 抽取，latest_by 题按当前 manifest 重算报告期。"
+      note: "黄金作者集→评测器格式映射；documents.content 为 PDF 原始字节的 base64 信封，latest_by 题按当前 manifest 重算报告期。"
     },
     seed: 20261027,
     domain: "finance",

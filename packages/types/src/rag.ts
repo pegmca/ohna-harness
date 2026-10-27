@@ -135,7 +135,7 @@ export interface DataSourceIngestRequestDto {
   source: string;
   fileName: string;
   contentType?: string;
-  content: string;
+  content: string | Uint8Array;
 }
 
 /** Composer 文件上传请求；clientAttachmentId 让网络重试保持同一逻辑文档。 */

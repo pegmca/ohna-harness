@@ -13,7 +13,7 @@ import {
   EVENT_CHANNEL,
   PICK_WORKSPACE_CHANNEL,
   REQUEST_CHANNEL,
-  SDK_PROTOCOL_VERSION,
+  PROTOCOL_VERSION,
   validateRequest,
   type OhnaSdk,
   type StartRunInputDto,
@@ -47,7 +47,7 @@ export function createOhnaSdk(invoke: InvokeFn, subscribe?: SubscribeFn): OhnaSd
       throw new Error(validationError.message);
     }
     const response = (await invoke(REQUEST_CHANNEL, {
-      protocolVersion: SDK_PROTOCOL_VERSION,
+      protocolVersion: PROTOCOL_VERSION,
       requestId: crypto.randomUUID(),
       method,
       payload

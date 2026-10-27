@@ -21,9 +21,11 @@ import type {
   WorkspaceDescriptorDto,
 } from "@aiagent/types";
 import type { RuntimeErrorDto } from "@aiagent/types";
+import { PROTOCOL_VERSION } from "@aiagent/types";
 
-/** 跨进程协议版本（与 `@aiagent/types` 的 `PROTOCOL_VERSION` 同步）；preload 只在构造信封时使用。 */
-export const SDK_PROTOCOL_VERSION = 1 as const;
+/** 跨进程协议版本：直接复用 `@aiagent/types` 的单一真相源，避免与 main 各自维护常量而静默失配。 */
+export { PROTOCOL_VERSION };
+
 
 /** 主进程请求分发通道（single dispatcher）。渲染端 SDK 只经此通道发送 `RuntimeRequestEnvelope`。 */
 export const REQUEST_CHANNEL = "ohna:request";

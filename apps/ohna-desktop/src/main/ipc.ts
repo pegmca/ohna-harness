@@ -19,7 +19,6 @@ import {
 import { EVENT_CHANNEL, REQUEST_CHANNEL } from "../preload/contract.js";
 import type { RuntimeHost } from "./runtime-host.js";
 import type { WindowRegistry } from "./windows.js";
-import { createOhnaRuntime, type OhnaRuntime } from "@aiagent/ohna-runtime";
 import { validateEnvelope } from "./envelope.js";
 
 /** 某 webContents 持有的订阅清理函数集合。 */
@@ -175,8 +174,5 @@ export function registerIpc(deps: IpcDeps): () => void {
   };
 }
 
-/** 重新导出 runtime 构造，免去 main/index.ts 单另 import 长路径。 */
-export { createOhnaRuntime };
-export type { OhnaRuntime };
 /** 重新导出信封校验，供纯 Node 单测与 ipc 路由共用同一份 fail-closed 实现。 */
 export { validateEnvelope };

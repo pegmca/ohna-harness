@@ -29,6 +29,7 @@ export function createTableAwareChunks(input: ChunkBlocksInput, options: Chunkin
   let current: TableGroupDraft | undefined;
   let latestHeading: string | undefined;
   let baseCharStart = 0;
+  let pendingRowLabel = "";
 
   const finishGroup = (): void => {
     if (current && current.rows.length > 0) groups.push(current);
@@ -43,7 +44,14 @@ export function createTableAwareChunks(input: ChunkBlocksInput, options: Chunkin
 
     if (block.metadata?.isTableRow === true) {
       current ??= { rows: [], heading: latestHeading };
-      current.rows.push(block);
+      const nextLength = current.rows.reduce((total, row) => total + row.text.length + 1, 0) + block.text.length + 1;
+      if (nextLength > (options.tableMaxChars ?? 30000)) {
+        finishGroup();
+        current = { rows: [], heading: latestHeading };
+      }
+      const row = pendingRowLabel ? { ...block, text: `${pendingRowLabel}${block.text.trim()}` } : block;
+      pendingRowLabel = "";
+      current.rows.push(row);
       if (block.pageNumber !== undefined) {
         current.pageStart ??= block.pageNumber;
         current.pageEnd = block.pageNumber;
@@ -58,6 +66,7 @@ export function createTableAwareChunks(input: ChunkBlocksInput, options: Chunkin
       }
       // 表内换行的业务文本/子字段不是新表；粘回当前表组，避免一行一组的碎片。
       current.rows.push(block);
+      if (isRowLabelFragment(block.text)) pendingRowLabel += block.text.trim();
       continue;
     }
     finishGroup();
@@ -269,4 +278,17 @@ function isSparseDeductionRow(row: IngestedTextBlockDto): boolean {
  */
 function isNumericDataRow(text: string): boolean {
   return splitTableCells(text).slice(1).some((cell) => /^[\s(（+\-]?[\d,.%（）()]+[\s)）]?$/.test(cell.trim()));
+}
+
+/**
+ * 判断非表行是否是行标签的短换行片段，可粘到后续数值行。
+ *
+ * @param text 非表行文本。
+ * @returns 是否为短标签片段。
+ */
+function isRowLabelFragment(text: string): boolean {
+  const normalized = text.replace(/\s+/g, "");
+  if (normalized.length === 0 || normalized.length > 12) return false;
+
+  return !/(?:公司|股份|年度报告|半年度报告|季度报告|第\d+页|\d+\/\d+)/.test(normalized);
 }

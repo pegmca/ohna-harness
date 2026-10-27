@@ -164,6 +164,28 @@ test("wrapped non-table cells stay inside the current table group", () => {
   assert.match(groups[0].text, /生产与销售。[\s\S]*甘肃稀土/);
 });
 
+test("a short wrapped row label before the numeric cells joins that row", () => {
+  const result = chunkDocumentBlocks(
+    {
+      documentId: "doc_label_wrap",
+      source: "mock://label-wrap",
+      blocks: [
+        block(1, "类别  期末余额  期初余额", 1),
+        block(2, "其中：", 1, false),
+        block(3, "按组合", 1, false),
+        block(4, "计提坏", 1, false),
+        block(5, "2,232.54  100.00%  2,307.77", 1)
+      ]
+    },
+    TABLE_OPTIONS
+  );
+
+  assert.equal(result.ok, true);
+  const tableChunk = result.chunks.find((chunk) => chunk.metadata.isTableChunk === true);
+  assert.ok(tableChunk);
+  assert.match(tableChunk.text, /其中：按组合计提坏/);
+});
+
 test("table column count uses a median and ignores sparse deduction rows", () => {
   const result = chunkDocumentBlocks(
     {
@@ -204,6 +226,22 @@ test("an oversized single table row is never split by maxChars", () => {
   assert.ok(tableChunk);
   assert.ok(tableChunk.text.length > 20);
   assert.match(tableChunk.text, /123,456,789/);
+});
+
+test("a misclassified endless table row stream is bounded into multiple table groups", () => {
+  const result = chunkDocumentBlocks(
+    {
+      documentId: "doc_table_boundary",
+      source: "mock://table-boundary",
+      blocks: Array.from({ length: 12 }, (_, index) =>
+        block(index + 1, `行${index + 1}  ${"1234567890  ".repeat(5)}`, 1)
+      )
+    },
+    { ...TABLE_OPTIONS, maxChars: 20, overlapChars: 2, tableMaxChars: 100 }
+  );
+
+  assert.equal(result.ok, true);
+  assert.ok(result.chunks.filter((chunk) => chunk.metadata.isTableChunk === true).length > 1);
 });
 
 test("resolveChunkerVersion derives from the effective strategy", () => {

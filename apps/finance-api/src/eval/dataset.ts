@@ -36,6 +36,10 @@ export interface FinanceEvalDocument {
   fileName: string;
   /** 文档全文（Markdown/TXT），会被 runtime 切块、embedding、索引。 */
   content: string | Uint8Array;
+  /** 图片型来源的页面引用。 */
+  pageImageRef?: string | null;
+  /** 来源类别，默认 text。 */
+  sourceKind?: "text" | "image";
 }
 
 /**
@@ -141,6 +145,8 @@ function assertCaseShape(case_: unknown, index: number): asserts case_ is Financ
       throw new Error(`case ${c.id} document 缺少 source/fileName/content`);
     }
     d.content = decodeFinanceEvalDocumentContent(serializedContent);
+    if (typeof d.pageImageRef !== "string") d.pageImageRef = null;
+    if (d.sourceKind !== "image") d.sourceKind = "text";
   }
 }
 

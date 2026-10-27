@@ -90,6 +90,10 @@ export interface CitationDto {
   quote: string;
   pageNumber?: number;
   confidence: number;
+  /** 视觉证据类型；文本 citation 缺省。 */
+  citationKind?: "image";
+  /** 页面图片定位，形如 `<file_path>#page=N`。 */
+  pageImageRef?: string;
   /** 证据来源：附件 / 内部知识库；缺省表示来源未知（兼容旧数据）。 */
   sourceKind?: CitationSourceKindDto;
 }

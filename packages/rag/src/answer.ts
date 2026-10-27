@@ -14,6 +14,12 @@ import {
  * @returns 标准 citation DTO。
  */
 export function createCitationFromRetrievedChunk(result: RetrievedChunk): Citation {
+  const pageNumber = result.chunk.pageNumber ?? result.chunk.page;
+  const pageImageRef =
+    result.chunk.metadata.sourceLayer === "char_spaced" && pageNumber !== undefined
+      ? `${result.chunk.documentId}#page=${pageNumber}`
+      : undefined;
+
   return {
     chunkId: result.chunk.chunkId,
     documentId: result.chunk.documentId,
@@ -21,8 +27,11 @@ export function createCitationFromRetrievedChunk(result: RetrievedChunk): Citati
     heading: result.chunk.heading,
     chunkIndex: result.chunk.chunkIndex,
     quote: createCitationText(result.chunk),
-    pageNumber: result.chunk.pageNumber ?? result.chunk.page,
+    pageNumber,
     confidence: result.scoreBreakdown.finalScore,
+    ...(pageImageRef !== undefined
+      ? { citationKind: "image" as const, pageImageRef }
+      : {}),
     // 仅在候选带 sourceKind 时才复制，保证旧单源 citation 形状不变（不出现 undefined 键）。
     ...(result.sourceKind !== undefined ? { sourceKind: result.sourceKind } : {})
   };

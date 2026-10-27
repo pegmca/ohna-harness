@@ -203,7 +203,14 @@ function mapCase(golden, manifest) {
 
   const documents = sourceKeys.map((k) => {
     const s = sources.get(k);
-    return { source: s.source, fileName: s.fileName, content: s.content };
+    const imageEvidence = golden.evidence?.find((ev) => ev.source_kind === "image");
+    return {
+      source: s.source,
+      fileName: s.fileName,
+      content: s.content,
+      sourceKind: imageEvidence ? "image" : "text",
+      pageImageRef: imageEvidence?.page_image_ref ?? null
+    };
   });
 
   const expectedKeywords = deriveKeywords(golden, sources);

@@ -59,6 +59,8 @@ export interface ChunkingOptions {
   overlapChars: number;
   /** table_aware 的页眉页脚豁免长度；缺省 80。 */
   tableHeaderFooterMaxChars?: number;
+  /** table_aware 单表最多累计字符数；缺省 30000。 */
+  tableMaxChars?: number;
 }
 
 /**

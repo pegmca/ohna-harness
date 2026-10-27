@@ -363,6 +363,11 @@ ingest lineage 的 `chunkerVersion` 由当前实际生效的 chunking options �
 - ingestion 增加页面渲染 pass，写回 `page_image_ref`。
 - `createCitationFromRetrievedChunk` 增加 image 类型 citation。
 
+**当前实现**：golden 已加入 `fin-014`（中微公司 2025 年报第 25 页，`source_kind:"image"`）；
+`PageImageRepository` 以 `<documentId>#page=N` 保存页面 PNG，`pdftoppm` 只渲染明确点名的页面
+（110 DPI 默认，可覆盖），citation 带 `citationKind:"image"` 与 `pageImageRef`。OCR 与 VLM
+实际读图仍留作后续，当前金丝雀验证“页面 PNG 可落库、可定位、可形成 image citation 元数据”。
+
 ---
 
 ## 8. 与现有评测资产 / 流程的衔接

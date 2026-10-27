@@ -37,6 +37,10 @@ export interface FinanceEvalDocumentLike {
   fileName: string;
   /** 文档全文或 PDF 原始字节，对应 DataSourceIngestRequestDto.content。 */
   content: string | Uint8Array;
+  /** 图片型来源的页面引用；文本来源可为空。 */
+  pageImageRef?: string | null;
+  /** 来源类别，默认 text。 */
+  sourceKind?: "text" | "image";
 }
 
 /** JSON 数据集中承载二进制文档的稳定信封。 */

@@ -90,5 +90,6 @@
 - 校验顺序：先 `node test/validate-finance-golden.mjs` 校验作者集，再生成并跑评测器。
 - 当前 PDF 解析在 worker 行聚合阶段归一 CJK/数字坏层，保留 `U+3000` 与真实列间隔，并用 `sourceLayer:"char_spaced"` 标记坏层页面。
 - 当前 `table_aware` 切块生成共享 `tableGroupId` 的整表与 summary sibling；命中任一同组 chunk 后会在 rerank 前展开整表，整表 answer/citation 保留完整表文本。
+- 图片型来源由 `source_kind:"image"` + `ocr_required:true` + `page_image_ref` 标记；图片资产按 `<documentId>#page=N` 存入文档级 `PageImageRepository`。`fin-014` 是中微公司 2025 年报第 25 页的页面图片金丝雀，OCR 尚未接入。
 - `rag-golden-v1.json` 因内嵌 PDF 原始字节（base64）约 73 MB；这是让确定性评测走真实解析路径的当前取舍。
-- 已知局限（学习期预期）：deterministic 档的 answer 是 mock-embedding + 摘要式 stub，`answerCorrectness` 偏低属正常；真实语义判分需 Step 5 的 live/judge。当前 golden 尚无 `source_kind:"image"` 样本，图片 citation/OCR 通道以 image 金丝雀为前置。
+- 已知局限（学习期预期）：deterministic 档的 answer 是 mock-embedding + 摘要式 stub，`answerCorrectness` 偏低属正常；真实语义判分需 Step 5 的 live/judge。图片视觉通道当前止于页面 PNG 与 image citation 元数据，OCR 仍留作后续。

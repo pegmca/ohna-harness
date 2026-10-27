@@ -44,7 +44,8 @@ export function createTableAwareChunks(input: ChunkBlocksInput, options: Chunkin
 
     if (block.metadata?.isTableRow === true) {
       current ??= { rows: [], heading: latestHeading };
-      const nextLength = current.rows.reduce((total, row) => total + row.text.length + 1, 0) + block.text.length + 1;
+      const beforeRowLength = current.rows.reduce((total, row) => total + row.text.length + 1, 0);
+      const nextLength = beforeRowLength + block.text.length + 1;
       if (nextLength > (options.tableMaxChars ?? 30000)) {
         finishGroup();
         current = { rows: [], heading: latestHeading };
@@ -61,10 +62,20 @@ export function createTableAwareChunks(input: ChunkBlocksInput, options: Chunkin
     }
 
     if (current && block.heading === undefined) {
-      if (isTableContinuationBlock(block, options.tableHeaderFooterMaxChars ?? 80)) {
+      if (current.rows.length === 1 && !hasNumericCell(current.rows[0].text) && !isPotentialTableHeader(current.rows[0].text)) {
+        finishGroup();
+        pendingRowLabel = "";
+        if (text.length > 0) chunks.push(...createFixedChunks(block, input, blockCharStart, options));
         continue;
       }
+      if (isTableContinuationBlock(block, options.tableHeaderFooterMaxChars ?? 80)) continue;
       // 表内换行的业务文本/子字段不是新表；粘回当前表组，避免一行一组的碎片。
+      if (!looksLikeTableContext(current)) {
+        finishGroup();
+        pendingRowLabel = "";
+        chunks.push(...createFixedChunks(block, input, blockCharStart, options));
+        continue;
+      }
       current.rows.push(block);
       if (isRowLabelFragment(block.text)) pendingRowLabel += block.text.trim();
       continue;
@@ -76,6 +87,16 @@ export function createTableAwareChunks(input: ChunkBlocksInput, options: Chunkin
   finishGroup();
 
   for (const [groupIndex, group] of groups.entries()) {
+    if (group.rows.length === 1 && !/(?:^|[\s\u3000])[\d][\d,.]*(?:$|[\s\u3000])/.test(group.rows[0].text)) {
+      const row = group.rows[0];
+      chunks.push(...createFixedChunks(
+        { ...row, metadata: { ...row.metadata, isTableRow: null } },
+        input,
+        0,
+        { ...options, strategy: "heading_aware" }
+      ));
+      continue;
+    }
     chunks.push(...createGroupChunks(group, input, groupIndex));
   }
 
@@ -291,4 +312,37 @@ function isRowLabelFragment(text: string): boolean {
   if (normalized.length === 0 || normalized.length > 12) return false;
 
   return !/(?:公司|股份|年度报告|半年度报告|季度报告|第\d+页|\d+\/\d+)/.test(normalized);
+}
+
+/**
+ * 判断一行是否包含任何数字数据单元格。
+ *
+ * @param text 表行文本。
+ * @returns 含数字单元格时为 true。
+ */
+function hasNumericCell(text: string): boolean {
+  return splitTableCells(text).some((cell) => /\d/.test(cell));
+}
+
+/**
+ * 判断首行是否像表头（两列以上且包含名称类标签），允许后续行补上数值。
+ *
+ * @param text 首行文本。
+ * @returns 是否像表头。
+ */
+function isPotentialTableHeader(text: string): boolean {
+  return splitTableCells(text).length >= 3;
+}
+
+/**
+ * 判断当前聚合组是否呈现真实表格结构，避免一个误判表行吞掉整篇正文。
+ *
+ * @param group 当前表组。
+ * @returns 至少有一条多列表行时为 true。
+ */
+function looksLikeTableContext(group: TableGroupDraft): boolean {
+  return group.rows.some((row) => {
+    const count = Number(row.metadata?.tableColumnCount ?? splitTableCells(row.text).length);
+    return Number.isInteger(count) && count >= 3;
+  });
 }

@@ -244,6 +244,25 @@ test("a misclassified endless table row stream is bounded into multiple table gr
   assert.ok(result.chunks.filter((chunk) => chunk.metadata.isTableChunk === true).length > 1);
 });
 
+test("an isolated misclassified row does not absorb surrounding prose as a table", () => {
+  const result = chunkDocumentBlocks(
+    {
+      documentId: "doc_false_table",
+      source: "mock://false-table",
+      blocks: [
+        block(1, "公司代码  公司简称", 1),
+        block(2, "公司董事会及全体董事保证本报告内容真实、准确、完整。", 1, false),
+        block(3, "公司主营业务保持稳定。", 1, false)
+      ]
+    },
+    TABLE_OPTIONS
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(result.chunks.filter((chunk) => chunk.metadata.isTableChunk === true).length, 0);
+  assert.ok(result.chunks.some((chunk) => chunk.text.includes("公司董事会")));
+});
+
 test("resolveChunkerVersion derives from the effective strategy", () => {
   assert.equal(resolveChunkerVersion(TABLE_OPTIONS), "table_aware-80-10-v1");
   assert.notEqual(

@@ -69,7 +69,6 @@ for (const case_ of dataset.cases.filter((item) => goldens.get(item.id)?.type ==
     tableGroups: groups.size
   });
 }
-
 console.log(`table cases: ${rows.length}`);
 for (const row of rows) {
   console.log(

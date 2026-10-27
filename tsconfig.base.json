@@ -28,11 +28,9 @@
       "@aiagent/ohna-runtime": ["./packages/ohna-runtime/src/index.ts"],
       "@aiagent/report": ["./packages/report/src/index.ts"],
       "@aiagent/security": ["./packages/security/src/index.ts"],
-      "@aiagent/serve": ["./packages/serve/src/index.ts"],
       "@aiagent/identity": ["./packages/identity/src/index.ts"],
       "@aiagent/types": ["./packages/types/src/index.ts"],
       "@aiagent/tools": ["./packages/tools/src/index.ts"],
-      "@aiagent/term": ["./packages/term/src/index.ts"],
       "@aiagent/trace": ["./packages/trace/src/index.ts"],
       "@aiagent/workflow": ["./packages/workflow/src/index.ts"]
     }

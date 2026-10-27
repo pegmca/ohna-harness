@@ -730,7 +730,7 @@ export function Workbench() {
         ok: false,
         runStatus: "failed"
       });
-      setComposerError("请求失败，请确认 ohna 服务已启动（pnpm --filter @aiagent/ohna-cli start）且代理端口一致。");
+      setComposerError("请求失败，请确认桌面 runtime 已就绪且网络代理配置一致，稍后重试。");
     } finally {
       setIsSubmitting(false);
       setActiveRunId(undefined);

@@ -3,7 +3,7 @@
 TypeScript Agent 工程 monorepo：一套可复用的 Agent 内核（`packages/agent`）与两条产品线。
 
 - 产品 A · 金融 SaaS：`apps/finance-api` + `apps/finance-web`（Fastify + PostgreSQL + pgvector + RAG/Report）
-- 产品 B · ohna 编码 Agent：`apps/ohna-cli`（终端 TUI）+ `apps/ohna-web`
+- 产品 B · ohna 编码 Agent：`apps/ohna-desktop`（Electron 桌面端）+ `apps/ohna-eval`（独立评测包）
 
 ## 推荐仓库结构
 
@@ -15,13 +15,13 @@ TypeScript Agent 工程 monorepo：一套可复用的 Agent 内核（`packages/a
 ├── apps/
 │   ├── finance-api/        # 产品 A · 金融 SaaS server
 │   ├── finance-web/        # 产品 A · 金融 SaaS web
-│   ├── ohna-cli/           # 产品 B · ohna 终端 Agent（含 --web 进程内托管）
-│   └── ohna-web/           # 产品 B · 本地 Web UI（Phase 4：文件树 + 待确认卡片 + 本地模式）
+│   ├── ohna-desktop/       # 产品 B · ohna Electron 桌面端（main / preload SDK / utility runtime + React renderer）
+│   └── ohna-eval/          # 产品 B · ohna 评测独立包（coding / team 双域，复用 agent/runtime）
 ├── packages/
 │   ├── ai/
 │   ├── agent/
 │   ├── coding/
-│   ├── serve/              # ohna 服务端装配（JSONL + HTTP/SSE）
+│   ├── ohna-runtime/       # ohna 桌面 runtime 共享内核（JSONL store + RunManager + createOhnaRuntime，无 Fastify/Electron/React）
 │   ├── identity/
 │   ├── database/
 │   ├── channels/
@@ -36,8 +36,8 @@ TypeScript Agent 工程 monorepo：一套可复用的 Agent 内核（`packages/a
 │   ├── memory/
 │   ├── mcp/
 │   ├── security/
-│   ├── term/               # 整屏 TUI 渲染原语（零外部依赖）
-│   └── trace/
+│   ├── trace/
+│   └── (其余共享包)
 ├── datasets/
 ├── package.json
 ├── pnpm-workspace.yaml
@@ -52,10 +52,10 @@ TypeScript Agent 工程 monorepo：一套可复用的 Agent 内核（`packages/a
 
 - `apps/finance-web`：产品 A 的 Vite + React + TypeScript Web 应用入口，负责承载金融研究产品界面，只通过 HTTP API 调用 Agent。
 - `apps/finance-api`：产品 A 的 Fastify HTTP adapter，负责请求校验、异步 Run 生命周期、SSE 事件投影和结构化响应。
-- `apps/ohna-cli`：产品 B 的终端编码 Agent（bin `ohna`），恒为个人编码助手（金融研究能力归属产品 A），工具固定走编码工具集（`packages/coding`，作用域限定在当前工作目录）。M2 已支持会话持久化与 `--resume <id>`、上下文压缩、`--max-turns` / `--deadline-ms` / `--max-cost` 预算治理与 `/cost`；单轮模式同样落盘，可用 `ohna --resume <id>` 接续。M3 支持 slash 命令（`/model /cost /compact /tools /resume`）、写前 unified diff、输出折叠、`--mcp <config.json>` 接入外部 MCP 工具（输出经 `<untrusted_context>` 封装）。v1.4（docs/v1.4/06）改为**单一形态**：`ohna` 启动即同时拉起整屏 TUI 与进程内 Web，二者都是同一条 serve 执行线的订阅者（TUI 与浏览器共享会话、双向实时同步）；`--web` / `--no-web` 参数已删除，端口仍可经 `--web-port` / `--no-open` 配置。
-- `apps/ohna-web`：产品 B 的本地 Web UI（Phase 4）：浏览器里对话、待确认 allow/deny、只读文件树；`pnpm --filter @aiagent/ohna-web build` 后由 `ohna` 单一形态进程内托管，开发模式用 `pnpm --filter @aiagent/ohna-web dev`（代理 `/api` → 127.0.0.1:4173）。
+- `apps/ohna-desktop`：产品 B 的 Electron 桌面端（v2.1），恒为个人编码助手（金融研究能力归属产品 A），工具固定走编码工具集（`packages/coding`，作用域限定在当前工作目录）。main 进程负责单实例锁、原生工作区授权与 IPC 路由；runtime 在 utilityProcess 中经 `packages/ohna-runtime` 的 `createOhnaRuntime` 跑执行；React renderer 经 preload SDK（`window.ohna`）订阅同一 run 事件流，无需 HTTP/SSE。会话持久化与 `--resume <id>`、上下文压缩、`--max-turns` / `--deadline-ms` / `--max-cost` 预算治理与 `/cost`、`--mcp <config.json>` 接入外部 MCP 工具（输出经 `<untrusted_context>` 封装）均由 runtime 与内核承担。
+- `apps/ohna-eval`：产品 B 的评测独立包（v2.0 评测体系 / 桌面迁移 Task 14 从 `ohna-cli` 迁出）：coding 与 team 双域，case / metric / runner 归应用域，`packages/eval-core` 只提供纯函数内核；不依赖桌面窗口或 TUI。
 - `packages/coding`：编码工具集（read / write / edit / bash / grep / find / ls）与路径、命令策略。
-- `packages/serve`：ohna 服务端装配包（`createOhnaServer`）：JSONL stores（sessions / conversations / runs）+ run-v2 HTTP/SSE + 异步确认闸门（`confirm-gate.ts` / `POST /api/runs/:runId/confirmations/:toolCallId`）+ 只读 `GET /api/local/fs`（复用 `@aiagent/coding` 沙箱语义）+ 静态 fallback。`observeOnly` 为可选只读能力（仅外部只读观测实例可能传 `true`，不注册写 run/确认路由并强制 `autoApprove:false`）；CLI 单一形态恒传 `false`，始终经同一 `server.createRun` 驱动执行。
+- `packages/ohna-runtime`：ohna 桌面 runtime 共享内核（v2.1 Task 11 从 `packages/serve` 抽离）：JSONL stores（sessions / conversations / runs）+ RunManager + 组合根 `createOhnaRuntime`，承担单 dataDir 写者锁、run 原子创建、replay+live 订阅、异步确认闸门与成本/compaction 投影；保持「无 Fastify / Electron / React」的纯 Node 依赖边界，桌面 main 与评测复用同一内核。
 - `packages/ai`：统一 LLM 抽象边界，对齐 pi-ai：`Message` 类型族、`AssistantMessageEvent`、provider 适配与 `stream` / `streamSimple`。
 - `packages/agent`：ReAct Agent 循环边界，提供 `agentLoop` / `agentLoopContinue`、`AgentTool` 契约与工具执行；不再有独立的意图路由器或 LLM Client。
 - `packages/identity`：浏览器指纹、稳定 `userId`、session 与 QQ 绑定规则的领域边界。
@@ -65,7 +65,7 @@ TypeScript Agent 工程 monorepo：一套可复用的 Agent 内核（`packages/a
 - `packages/types`：前后端共享类型边界，承载 API contract、DTO、结构化错误和稳定枚举。
 - `packages/parsing`：文档解析边界，负责文件来源、document metadata 和原始文本来源信息。
 - `packages/rag`：RAG 运行时边界，负责 chunking、embedding 抽象、检索、引用和 grounded answer 的稳定类型入口。
-- `packages/eval-core`：**评测薄内核**（docs/v2.0/02）：只放跨产品线不变的纯函数——`gate`（趋势/硬门禁）、`report`（Markdown/JSON 报告渲染）、`judge`、`calibration`、`trajectory`。**零 `@aiagent/*` 运行时依赖**（仅 `import type` 引用 `@aiagent/types`），不装任何产品的 case / metric / runner：金融 RAG 评测在 `apps/finance-api/src/eval/`、ohna 的 agent 与 team 评测在 `apps/ohna-cli/src/eval/`，各自领域自治。
+- `packages/eval-core`：**评测薄内核**（docs/v2.0/02）：只放跨产品线不变的纯函数——`gate`（趋势/硬门禁）、`report`（Markdown/JSON 报告渲染）、`judge`、`calibration`、`trajectory`。**零 `@aiagent/*` 运行时依赖**（仅 `import type` 引用 `@aiagent/types`），不装任何产品的 case / metric / runner：金融 RAG 评测在 `apps/finance-api/src/eval/`、ohna 的 agent 与 team 评测在 `apps/ohna-eval/src/`，各自领域自治。
 - `packages/memory`：长期情节记忆（`EpisodeMemory`）与 `MemoryStore` 适配（进程内 / JSONL / pgvector）。
 - `packages/workflow`：通用顺序 workflow runtime，负责节点 schema 校验、状态流转、max steps、结构化错误和节点事件 sink。
 - `packages/report`：研报领域边界，`generate_report` 工具实现、真实 PDF renderer、Workflow/Artifact repository port 与本地 ArtifactStorage port。
@@ -84,19 +84,14 @@ PostgreSQL 的本地连接、身份、Conversation/Message、Run/RunEvent、migr
 ### ohna L0 快速启动（本地服务）
 
 ```bash
-pnpm --filter @aiagent/ohna-cli build
-ohna <dir> --web-port 4173 --no-open
+pnpm --filter @aiagent/ohna-desktop build
+pnpm --filter @aiagent/ohna-desktop start
 ```
 
-`ohna` 启动即同时拉起整屏 TUI 与进程内 Web（二者都是同一条 serve 执行线的订阅者，双向实时同步），
-并在终端进程内起本地 serve（复用 `packages/serve` 装配）、加载仓库根 `.env`，所以需先配置一个可用
+桌面端在 utilityProcess 中经 `packages/ohna-runtime` 的 `createOhnaRuntime` 跑执行（不再有终端 serve / HTTP/SSE），
+渲染层经 preload SDK（`window.ohna`）订阅同一 run 事件流；首次启动前需先配置一个可用
 provider（`AIAGENT_LLM_API_KEY_*` + `AIAGENT_LLM_MODEL_*`，如 DeepSeek / OpenRouter / Bridge AI）；
-未配置时启动会直接退出并列出所需变量名。服务只绑 `127.0.0.1`，端口占用时自动 +1，
-数据默认落 `~/.ohna/`（`--data-dir` 可改）。`--web` / `--no-web` 参数已删除：默认即带 Web，且不能只启动一项。
-
-```bash
-# 健康检查：返回 { mode: "local", workspaceRoot, model, pid, dataDir }
-curl http://127.0.0.1:4173/api/health
+未配置时 runtime 不可用，UI 显式报错而非静默失败。数据默认落 `~/.ohna/`（桌面设置可改 dataDir）。
 
 # 发一条消息（省略 conversationId 时自动建会话），随后订阅返回的 eventsUrl
 curl -X POST http://127.0.0.1:4173/api/runs \
@@ -536,9 +531,9 @@ pnpm --filter @aiagent/rag test
 pnpm --filter @aiagent/eval-core test
 pnpm --filter @aiagent/workflow test
 pnpm --filter @aiagent/report test
-pnpm --filter @aiagent/serve test
-pnpm --filter @aiagent/ohna-cli test
-pnpm --filter @aiagent/ohna-web test
+pnpm --filter @aiagent/ohna-runtime test
+pnpm --filter @aiagent/ohna-desktop test
+pnpm --filter @aiagent/ohna-eval test
 ```
 
 ## 自动化 Eval 基线
@@ -567,7 +562,7 @@ pnpm eval:finance-api:update-baseline
 
 ## ohna 评测（v2.0：agent + team）
 
-`apps/ohna-cli` 自带两条评测域（case / metric / runner 都归应用域，`packages/eval-core` 只提供纯函数内核）：
+`apps/ohna-eval` 自带两条评测域（case / metric / runner 都归应用域，`packages/eval-core` 只提供纯函数内核）：
 
 ```bash
 # agent 域（既有）：单智能体任务集
@@ -580,14 +575,14 @@ pnpm eval:ohna --dataset team --tier T-L2a         # L2a 真 agentLoop + 桩模�
 pnpm eval:ohna --dataset team --tier T-L2b         # L2b 需真 provider 凭据
 pnpm eval:ohna --dataset team --tier T-L4          # L4 端到端趋势（只观察，永不 block）
 
-# 只有显式命令会更新 baseline（team 域：apps/ohna-cli/eval/team/baseline.json）
+# 只有显式命令会更新 baseline（team 域：apps/ohna-eval/eval/team/baseline.json）
 pnpm eval:ohna --dataset team --tier T-L2a --update-baseline
 ```
 
 - **`--update-baseline` 在「本档不可判定」时会被拒绝**（0 条 case 执行 → exit 2 且不写 baseline），避免产出一份全 `applicable=false` 的空基线、让后续门禁恒绿。
 
 - 数据集：`datasets/ohna/team-v1.json`（tier = `T-L1 | T-L2a | T-L2b | T-L4`）。**趋势门禁永不 block**——L4 只产出观测报告，硬门禁只由 L1/L2a 的确定性指标承担。
-- 报告目录：`apps/ohna-cli/eval/team/`（`report.json` / `report.md` / `baseline.json` / `trend.json` / `trend.md`，已 gitignore）。
+- 报告目录：`apps/ohna-eval/eval/team/`（`report.json` / `report.md` / `baseline.json` / `trend.json` / `trend.md`，已 gitignore）。
 - **凭据缺失时的行为是「显式不可判定」，不是静默通过**：需要 provider 的档位会向 stderr 写 `[team-skip]` 与 `[gate] 无任何 case 执行，本档不可判定`，并按非零状态退出；报告里对应档位标「本档不可判定：0 条 case 执行」。
 - 指标口径与已知限制见 `docs/v2.0/03-team-eval.md`；薄内核分层见 `docs/v2.0/02-eval-system-v2.md`。
 
@@ -595,9 +590,9 @@ pnpm eval:ohna --dataset team --tier T-L2a --update-baseline
 
 `ohna` 的 Trace 抽屉是**同一份 run 事件流**的投影，不另开采集通道：
 
-- 采集层：`packages/agent` 的 `createLlmTraceStreamFn` 每条流式调用产出一条 `LlmCallRecordDto`（必填 `window`，`composition` 在 `onPayload` 现算，`agentId` 在调用入口读取）；serve 负责 `llm_call` / `context_event` 的发射与落盘。
+`- 采集层：`packages/agent` 的 `createLlmTraceStreamFn` 每条流式调用产出一条 `LlmCallRecordDto`（必填 `window`，`composition` 在 `onPayload` 现算，`agentId` 在调用入口读取）；`packages/ohna-runtime` 负责 `llm_call` / `context_event` 的发射与落盘。
 - `context_event` 只有 `kind:"compaction"` 一种，且只在 run 前压缩**真的发生**时发射，位置在 `user_message` 之后、`agent_start` 之前，断线重连可 replay。
-- Web 侧：`features/trace/` 把事件投影成执行地图（`ExecutionRibbon` + 仅 Team run 的 `TraceTeamCards` + 按 turn 分桶的 `TurnGroup`）与三个上下文面板（`ContextComposition` / `ContextTrend` / `ContextEvents`）。列与 ✂ 的定位键是事件 `sequence`（Team run 内 `callIndex` 不唯一）。
+- 桌面侧：`apps/ohna-desktop` 的 `features/trace/` 把事件投影成执行地图（`ExecutionRibbon` + 仅 Team run 的 `TraceTeamCards` + 按 turn 分桶的 `TurnGroup`）与三个上下文面板（`ContextComposition` / `ContextTrend` / `ContextEvents`）。列与 ✂ 的定位键是事件 `sequence`（Team run 内 `callIndex` 不唯一）。
 - 端到端自检（本地桩模型，不需要真实 key）：
 
 ```bash

@@ -2,7 +2,7 @@
 
 ## 1. Goals
 
-This repository hosts two products on one shared kernel: **Immersive** (financial-research SaaS, `apps/finance-api` + `apps/finance-web`) and **ohna** (coding agent, `apps/ohna-cli` + `apps/ohna-web`). The architecture optimizes for explainable runs, replaceable data/model adapters, structured failures, and small task-local context for human and AI contributors.
+This repository hosts two products on one shared kernel: **Immersive** (financial-research SaaS, `apps/finance-api` + `apps/finance-web`) and **ohna** (coding agent, `apps/ohna-desktop` + `apps/ohna-eval`). The architecture optimizes for explainable runs, replaceable data/model adapters, structured failures, and small task-local context for human and AI contributors.
 
 ## 2. System Context
 
@@ -24,20 +24,19 @@ flowchart LR
 The repository has two product lines that share only `packages/` and never import each other's app layer:
 
 - **Product A · 金融 SaaS**: `apps/finance-api` (Fastify production server) + `apps/finance-web` (SaaS web).
-- **Product B · ohna（编码 Agent）**: `apps/ohna-cli` (terminal + `--web` in-process hosting, M3/L3 implemented in Phase 5), `apps/ohna-web` (local web UI, Phase 4 implemented).
+- **Product B · ohna（编码 Agent）**: `apps/ohna-desktop` (Electron desktop: main + preload SDK + utilityProcess runtime + React renderer, v2.1), `apps/ohna-eval` (standalone coding/team eval package, extracted from the former CLI in v2.1 Task 14).
 
 - `apps/finance-web` depends only on browser libraries and `@aiagent/types`.
-- `apps/ohna-web` is the local coding-agent web client (copied from `apps/finance-web`, then stripped of identity gate / SaaS features). It talks to `ohna --web` (the in-process `createOhnaServer`) over the run-v2 HTTP/SSE line protocol, renders the confirmation cards derived from `confirmation_requested` events (pending until a same-`toolCallId` `tool_execution_end`), and shows a lazy-loading read-only file tree that auto-refreshes when write/edit/bash tool executions end. It depends only on browser libraries and `@aiagent/types`.
+- `apps/ohna-desktop` is the ohna Electron desktop client (v2.1). The main process owns the single-instance lock, native workspace authorization, and IPC routing; the runtime runs inside a utilityProcess via `packages/ohna-runtime`'s `createOhnaRuntime` (no HTTP/SSE — the React renderer subscribes to run events through the preload SDK `window.ohna`). It shares the same `agentLoop` kernel with `apps/finance-api` but uses Electron (main + utilityProcess + renderer) as its process model. It selects a real model via `resolveActiveModelFromEnv` (`packages/ai`) and always assembles the `packages/coding` registry (ohna is a personal coding assistant; the financial registry belongs to product A). Session persistence, run-level `transformContext` compaction, and deadline/max-turns/max-cost governance all live in `packages/ohna-runtime` / the kernel, injected through `AgentLoopConfig` hooks without touching the loop kernel.
 - `apps/finance-api` is a transport/composition adapter. It may compose runtime packages but must not implement Agent, RAG, tool, workflow, or report rules.
-- `apps/ohna-cli` is the ohna composition root and local harness. It shares the same `agentLoop` kernel with `apps/finance-api` but uses the terminal as its transport layer (no HTTP/SSE/worker). It selects a real model via `resolveActiveModelFromEnv` (`packages/ai`) and always assembles the `packages/coding` registry (ohna is a personal coding assistant; the financial registry belongs to product A), proving the kernel can run headless. M2 adds session persistence (`~/.ohna/sessions/<id>.jsonl`), run-level `transformContext` compaction, and deadline/max-turns/max-cost governance, all injected through `AgentLoopConfig` hooks without touching the loop kernel. M3/Phase 5 adds the slash command layer (`slash.ts`, injected handlers shared by the local REPL and the web host), a zero-dependency LCS unified diff with write-ahead preview (`diff.ts` + `render.ts`), tool-output folding, `--mcp` external server wiring (`mcp-config.ts`, output encapsulation stays in the mcp adapter's `<untrusted_context>`), and the D8 main path `ohna --web` (`web-entry.ts`): the same process hosts `createOhnaServer`, the terminal and the browser share one conversation over `subscribeConversation`, and `/exit` turns into `shutdown()` + `close()`. This `--web` entry supersedes the former `apps/ohna-api` standalone server entry (retired — see `docs/v1.4/03-web-layout-alignment.md` §0.3).
-- **Eval is domain-autonomous (v2.0):** `apps/finance-api/src/eval/` and `apps/ohna-cli/src/eval/` each own their own dataset schema, executor, metrics, adapter, judge rubrics, and CLI entry. They depend only on `@aiagent/eval-core` (the shared thin kernel) and `@aiagent/types`; metric definitions, datasets, and runnables stay inside the app, never in a shared eval package. The `EvalReportDto` they emit is the single cross-boundary report shape consumed by CI gate (`gateReport`) and (future) Web. The old shared `packages/eval` was deleted in v2.0 (see `docs/v2.0/02-eval-system-v2.md`).
-- `packages/ai` owns the LLM abstraction: `Message` types, `AssistantMessageEvent`, provider adapters, `stream` / `streamSimple`, model metadata resolution (`env-runtime.ts`: context window / max tokens / reasoning / cost via `AIAGENT_LLM_*_<PROFILE>`), usage-cost calculation, and `resolveActiveModelFromEnv` (`model-selection.ts`, shared by ohna-cli and the serve assembly). It has no project dependencies.
+- **Eval is domain-autonomous (v2.0):** `apps/finance-api/src/eval/` and `apps/ohna-eval/src/` each own their own dataset schema, executor, metrics, adapter, judge rubrics, and CLI entry. They depend only on `@aiagent/eval-core` (the shared thin kernel) and `@aiagent/types`; metric definitions, datasets, and runnables stay inside the app, never in a shared eval package. The `EvalReportDto` they emit is the single cross-boundary report shape consumed by CI gate (`gateReport`) and (future) Web. The old shared `packages/eval` was deleted in v2.0 (see `docs/v2.0/02-eval-system-v2.md`).
+- `packages/ai` owns the LLM abstraction: `Message` types, `AssistantMessageEvent`, provider adapters, `stream` / `streamSimple`, model metadata resolution (`env-runtime.ts`: context window / max tokens / reasoning / cost via `AIAGENT_LLM_*_<PROFILE>`), usage-cost calculation, and `resolveActiveModelFromEnv` (`model-selection.ts`, shared by `apps/ohna-desktop` and `apps/finance-api`). It has no project dependencies.
 - `packages/agent` owns the ReAct loop (`agentLoop` / `agentLoopContinue`), `AgentTool` contract, and tool execution; report generation is exposed to the loop as the `generate_report` tool (`packages/report`), not orchestrated by the API layer.
-- `packages/coding` owns coding tools (read/write/edit/bash/grep/find/ls), path/command policy, project-context loading, and `buildCodingSystemPrompt` (coding prompt template + project context, with an injected `onContextError` so packages never write to stderr); it is consumed by `apps/ohna-cli` and `packages/serve`.
+- `packages/coding` owns coding tools (read/write/edit/bash/grep/find/ls), path/command policy, project-context loading, and `buildCodingSystemPrompt` (coding prompt template + project context, with an injected `onContextError` so packages never write to stderr); it is consumed by `apps/ohna-desktop` (via `packages/ohna-runtime`) and `apps/finance-api`.
 - `packages/tools`, `packages/rag`, `packages/workflow`, `packages/report`, and `packages/mcp` own their bounded contexts.
 - `packages/eval-core` is the v2.0 eval **thin kernel**: pure functions + pure mechanism only (`gate` / `report` / `judge` / `calibration` / `trajectory`). It recognizes no app, depends only on `@aiagent/types` via `import type`, and has zero `@aiagent/agent|ai|rag|trace` runtime dependency. The cross-boundary `EvalReportDto` / `BaselineDiff` / `GateResult` live in `@aiagent/types` (not here), so any consumer — including Web — can read the report without pulling in the kernel.
 - `packages/trace` owns the minimal run-event type contract and cross-boundary value redaction; it no longer owns a separate recorder/store. v2.0 起 `RunEventType` 含 `llm_call` 与 `context_event`（后者当前仅 `kind:"compaction"`），payload 经 `import type` 引用 `@aiagent/types` 的 DTO，不引入运行时依赖；**与 `RunEventTypeDto` 必须同步增删**。Trace 的完整数据流（采集 → 身份 → 发射 → 投影）与三条跨层契约见 §4.1.1。
-- `packages/term` owns the ohna CLI's full-screen TUI rendering primitives (zero external dependencies): `RawTerminal` (raw mode / bracketed paste / resize listener / cursor and clear primitives) and `Screen` (throttled + idempotent whole-screen redraw — it clears the screen then writes the current frame, so resize triggers at most one throttled redraw and can never cause a redraw storm), plus the `box` border component, `visibleWidth`, and `truncateToWidth` (visible-column truncation, ANSI-aware / CJK=2). It provides only ANSI primitives; the semantic palette (Amberwood) stays in `apps/ohna-cli/src/ui/theme.ts`, and it must not depend on any app.
+`packages/ohna-runtime` owns the ohna desktop runtime shared kernel (extracted from `packages/serve` in v2.1 Task 11): JSONL stores (sessions / conversations / runs), RunManager, and the composition root `createOhnaRuntime`. It takes the single-dataDir writer lock, creates runs atomically, serves replay+live subscriptions, owns the async confirm gate, and projects cost/compaction. It keeps a pure-Node dependency boundary (no Fastify / Electron / React) so the desktop main process and `apps/ohna-eval` reuse the same kernel.
 - `packages/security` owns prompt-injection assessment and untrusted-context encapsulation; it has no business dependencies and can be used by agent, rag, tools, and report boundaries.
 - `packages/types` owns transport contracts only and has no runtime dependencies.
 - `packages/conversation` owns the mapping between pi `Message` and the linear message store; `packages/database` implements the PostgreSQL adapter without depending on `@aiagent/ai`.
@@ -85,8 +84,8 @@ Trace 的数据流一条线贯穿四层，**每一层只做一件事**，越界�
 |---|---|---|
 | 采集 | `packages/agent` 的 `llm-trace.ts` | `createLlmTraceStreamFn(base, sink, counter, options)` 包裹一次 stream 调用产出一条 `LlmCallRecordDto`；`options.window` **构造期必填**，`options.observer.agentId` 于调用入口读取（错误记录同样可归因）；`composition` 在 `onPayload` 时**现算**（`estimateComposition` 五分类，口径见 docs/v2.0/04 §1.4），未到达 payload 时为 `undefined` |
 | 身份 | `packages/agent` 的 `agent-loop.ts` + `team/pure.ts` | `AgentEvent` 的四类边界事件（`agent_start` / `agent_end` / `turn_start` / `turn_end`）**必带** `agentId`；`AgentLoopConfig.identity` 由 `deriveSubagentIdentity` 派生，缺省兜底为根身份 `SUPERVISOR_AGENT_ID`；`turnIndex` 与 `agentId` 组成 TurnSpan 的键。这是内核相对 v1.x 的**唯一**改动（补身份，不改控制流） |
-| 发射 | `packages/serve` | `llm_call` 由托管 run 自动发射；`context_event`（**单 kind `compaction`**）只在 run 前压缩真的发生（`compacted === true`）时发射，位置在 `user_message` 之后、`agent_start` 之前，可 replay。serve 负责 sequence 分配与落盘，**不感知 payload 形状** |
-| 投影 | `apps/ohna-web` 的 `features/trace/` | `trace-projection`（四类扁平行 + 逐行 `agentId`）→ `trace-spans`（Agent/Turn 跨度森林，**按键归属不按区间切**）与 `trace-context`（上下文点 / 事件，**只读采集值、不重估**）→ `TraceDrawer` 编排 `ExecutionRibbon` + `TraceTeamCards`（仅 Team run）+ `TurnGroup` 与 `ContextComposition` / `ContextTrend` / `ContextEvents` 三面板 |
+| 发射 | `packages/ohna-runtime` | `llm_call` 由托管 run 自动发射；`context_event`（**单 kind `compaction`**）只在 run 前压缩真的发生（`compacted === true`）时发射，位置在 `user_message` 之后、`agent_start` 之前，可 replay。runtime 负责 sequence 分配与落盘，**不感知 payload 形状** |
+| 投影 | `apps/ohna-desktop` 的 `features/trace/` | `trace-projection`（四类扁平行 + 逐行 `agentId`）→ `trace-spans`（Agent/Turn 跨度森林，**按键归属不按区间切**）与 `trace-context`（上下文点 / 事件，**只读采集值、不重估**）→ `TraceDrawer` 编排 `ExecutionRibbon` + `TraceTeamCards`（仅 Team run）+ `TurnGroup` 与 `ContextComposition` / `ContextTrend` / `ContextEvents` 三面板 |
 
 三条**必须遵守**的契约：
 
@@ -94,7 +93,7 @@ Trace 的数据流一条线贯穿四层，**每一层只做一件事**，越界�
    后者在错误路径（同步 throw、流提前结束）下物理上不存在。可空是**对运行时事实的忠实建模**，消费侧
    因此**不需要也不允许**写「缺字段降级分支」——缺 `window` 的记录直接不进上下文视图（docs/v2.0/04 §1.1）。
 2. **Team 归因分两条链、各持一条 callIndex 序列**：子代理侧由 `team/controller.ts` 的 `runMember` 薄转发
-   `observer.agentId = deriveSubagentIdentity(member).agentId`，主线程侧由 serve 的 `run/trace-stream.ts`
+   `observer.agentId = deriveSubagentIdentity(member).agentId`，主线程侧由 `packages/ohna-runtime` 的 trace stream
    转发为 `SUPERVISOR_AGENT_ID`。因此 **`callIndex` 在 Team run 内不唯一**，唯一配对键是事件 `sequence`
    （`ContextPoint.sequence` 随点自带，web 不得另起一遍 `type === "llm_call"` 过滤来配对）。
    **`turnIndex` 同理**：它是 `agentLoop` **每个实例**的回合计数（`agent-loop.ts` 里给首个 `turn_start` 发
@@ -102,10 +101,9 @@ Trace 的数据流一条线贯穿四层，**每一层只做一件事**，越界�
    spawn-agent 可以**同时存在 `turnIndex: 0`**。Turn 跨度的唯一键是 **(agentId, turnIndex) 这一对**
    （web 侧 `trace-spans.ts` 的 `turnKey` 用 `JSON.stringify([agentId, turnIndex])` 编码，避免 agentId 含 `:`
    时分隔符冲突），**不是单独一个 `turnIndex`**；`TurnBucket.key` 与 `data-agent-key` 的归属联调都依赖它。
-3. **Team controller 唯一归 serve**：开关只有一条来源——CLI 的 `--no-team` 经 `hostOhnaWeb` 透传为
-   `createOhnaServer({ team })`，`packages/serve/src/run/team-session.ts` 建唯一实例；CLI 组合根
-   （`runtime/team-wiring.ts`）**不再自建** controller，只保留 `createTeamGateForwarder` 的 fail-closed
-   范例与单测入口。`run/team-runner.ts` 管 run 级 begin/release：`team` 关闭时零开销。
+3. **Team controller 唯一归 ohna-runtime**：开关只有一条来源——桌面 main 经 `createOhnaRuntime({ team })` 装配
+   `packages/ohna-runtime/src/run/team-session.ts` 建唯一实例；`apps/ohna-cli` 的 `--no-team` 已随 CLI 退役，
+   旧 `runtime/team-wiring.ts` 仅留 `createTeamGateForwarder` 的 fail-closed 范例与单测入口（历史参考）。`run/team-runner.ts` 管 run 级 begin/release：`team` 关闭时零开销。
 
 `RunEventType`（`packages/trace`）与 `RunEventTypeDto`（`packages/types`）是两份**独立枚举**，新增 kind
 必须两处同步（docs/v2.0/04 §0 已把它列为已知约束）。
@@ -119,9 +117,9 @@ Trace 的数据流一条线贯穿四层，**每一层只做一件事**，越界�
 退化为 barrel 再导出。外部消费方（`@aiagent/report` 的 `run-report-workflow`、workflow 测试）只依赖公共符号，
 拆分对它们透明（各文件职责即上方列举，无独立 ADR）。
 
-## 4.3 ohna-cli 长任务治理（M2）
+## 4.3 ohna 桌面 runtime 长任务治理（M2）
 
-- **会话持久化**：`apps/ohna-cli/src/session/session-store.ts` 落 `~/.ohna/sessions/<id>.jsonl`，首行 `type:"session"`
+- **会话持久化**：`packages/ohna-runtime/src/store/session-store.ts` 落 `~/.ohna/sessions/<id>.jsonl`，首行 `type:"session"`
   （id/title/timestamps/workspaceRoot/messageCount/usage），后续每行 `type:"message"`；临时文件 + rename 原子写，
   load 跳过损坏行，id 走 `^[A-Za-z0-9_-]+$` 白名单。
 - **两层 compaction**：run 内 `transformContext`（`createCompactionTransform`）压缩 loop 副本以防超窗；
@@ -131,39 +129,36 @@ Trace 的数据流一条线贯穿四层，**每一层只做一件事**，越界�
   `deadlineMs` 字段本身不被内核消费；停止原因由组合根打印并保持结构化输出。
 - 详细取舍与已知限制见 `` 的 Phase 1 小节。
 
-## 4.4 ohna 本地服务装配（L0 / L1）
+## 4.4 ohna 桌面 runtime 装配（v2.1）
 
-- `packages/serve/src/index.ts` 的 `createOhnaServer(options)` 装配 stores、RunManager、routes 与静态 fallback，
-  返回 `{ app, listen, shutdown, close, resolveConfirmation, url }`，另提供进程内句柄
-  `createConversation / listConversations / createRun / subscribeRun / subscribeConversation / cancelRun`
-  （供 `ohna --web` 与测试复用，不改线协议）与 `listenWithRetry`（端口占用 +1，两个入口共用）；
-  不读 `process.argv`、不开浏览器、不注册信号，供 `ohna-cli --web` 复用。
+- `packages/ohna-runtime/src/index.ts` 的 `createOhnaRuntime(options)` 装配 stores、RunManager、确认闸门与团队会话，
+  返回 `{ createConversation, listConversations, createRun, subscribeRun, subscribeConversation, cancelRun, listRunsByConversation, isAutoApprove, listenWithRetry, shutdown }` 的进程内句柄
+  （桌面 main 与评测复用，不暴露 HTTP/SSE）；不读 `process.argv`、不开窗口、不注册信号，由桌面 main 负责进程形态。
   **L3-3（Phase 5）**：`createRun` 在载入历史后执行 run 前会话级 compaction——双基准估算、摘要器
   （复用 `streamSimple`）、摘要持久化为 `messageType:"compaction"` 线性消息、硬收敛与 CLI 共用
   `packages/agent` 的 `enforceContextWindow`；append-only 载入语义（`dropBeforeLastCompaction`）
   实现「摘要替换前缀」。详见 `` §13。
-- 线协议严格实现 run-v2（`@aiagent/types`）：`POST /api/runs` → `AgentRunAcceptedDto`，SSE 每帧
-  `event: run_event` + `id: <sequence>` + `RunStreamEventDtoV2`；`DELETE /api/runs/:id` 取消。
+- 事件流严格实现 run-v2（`@aiagent/types`）：run 事件经 `subscribeRun` / `subscribeConversation` 以 `(event, meta)` 形式推送，
+  `sequence` 单调分配，`lastEventSequence` 只记录已落盘高水位；桌面 renderer 经 preload SDK 订阅同一流。
 - JSONL 三类 store：`sessions/index.jsonl`（追加式元数据）、`conversations/<id>.jsonl`（首行 meta +
   `LinearMessageDto`）、`runs/<runId>.jsonl`（首行 `run_meta` + 关键事件）。`message_update` 不落盘；
   sequence 由 RunManager 对全部帧单调分配，`lastEventSequence` 只记录已落盘高水位。
 - 取消终态（Gate 3）：abort 后丢弃 loop 无 error 的 `agent_end`，改为追加
   `run_status{status:"interrupted"}`，避免客户端把取消显示为 completed。
 - SSE 采用「先订阅缓冲 → replay JSONL → 排序 flush」；允许 sequence 跳号（瞬态事件不落盘），
-  避免重连后等待一个永远不会持久化的序号。
+  避免重连后等待一个永远不会持久化的序号（桌面侧等价于「先订阅缓冲 → replay JSONL → 排序 flush」）。
 - **L1 全工具**：默认 `createCodingToolRegistry(workspaceRoot)`（read/write/edit/bash/grep/find/ls）；
   `options.tools` 可注入只读或自定义工具集，`autoApprove` / `confirmTimeoutMs` 透传确认闸门。
-- **异步确认闸门**：`confirm-gate.ts` 的 `createAsyncConfirmGate` 只拦截 write/edit/bash；先登记 pending
-  再落盘并广播 `confirmation_requested{toolCallId,toolName,args,summary}`，用户经
-  `POST /api/runs/:runId/confirmations/:toolCallId` 允许/拒绝；deny、超时（默认 5 分钟）、run 取消/结束
-  都会释放挂起并回喂 isError。`confirmation_requested` 是持久化事件，刷新后经 SSE replay 恢复卡片。
-- **只读 fs**：`routes/fs.ts` 仅注册 `GET /api/local/fs`（list/read/tree），复用 `@aiagent/coding` 的
-  `assertPathWithinRoot` / `isDeniedPath`；越界或敏感路径 403，不提供任何写端点。
+- **异步确认闸门**：`packages/ohna-runtime/src/confirm-gate.ts` 的 `createAsyncConfirmGate` 只拦截 write/edit/bash；先登记 pending
+  再落盘并广播 `confirmation_requested{toolCallId,toolName,args,summary}`，用户经桌面确认 UI 允许/拒绝；deny、超时（默认 5 分钟）、run 取消/结束
+  都会释放挂起并回喂 isError。`confirmation_requested` 是持久化事件，刷新后经订阅 replay 恢复卡片。
+- **只读 fs**：桌面 renderer 的只读文件树复用 `@aiagent/coding` 的 `assertPathWithinRoot` / `isDeniedPath`（经 IPC 受限接口），
+  越界或敏感路径拒绝，不提供任何写端点。
 - 详细取舍见 ``。
 
 ## 5. Runtime View
 
-`apps/finance-api/src/server.ts` 是服务端（HTTP/SSE）的生产 composition root：所有 PostgreSQL adapter 在此注入，领域 package 不读取 `DATABASE_URL`。`apps/ohna-cli/src/index.ts` 是终端 harness 的组合根（含 `--web` 进程内托管，模型解析、监听端口与信号收尾均由 `packages/serve` 装配）。两者共用同一 `agentLoop` 内核、仅运输层与进程形态不同。PostgreSQL 是 Identity、Conversation/Message、Run/RunEvent、RAG document/chunk/vector、Citation、Workflow 与 Artifact metadata 的唯一事实源；**取消信号也已外置**——`RunExecutionRegistry` 经 Redis pub/sub 跨实例广播即时中断，并以 `run_cancellations` 表持久化标记兜底 queued 竞态，因此"取消请求落在实例 B、run 执行在实例 A"也能真正中断（P0）。内存只保留 live event bus 的本地订阅者、各实例的 `AbortController` 映射与 microtask scheduler，内存 repository 只能由测试显式创建。
+`apps/finance-api/src/server.ts` 是服务端（HTTP/SSE）的生产 composition root：所有 PostgreSQL adapter 在此注入，领域 package 不读取 `DATABASE_URL`。`apps/ohna-desktop` 的 main 进程是桌面组合根（单实例锁、原生工作区授权、IPC 路由与信号收尾），runtime 经 `packages/ohna-runtime` 的 `createOhnaRuntime` 在 utilityProcess 中装配；模型解析由 `packages/ai` 的 `resolveActiveModelFromEnv` 完成。两者共用同一 `agentLoop` 内核、仅运输层与进程形态不同。PostgreSQL 是 Identity、Conversation/Message、Run/RunEvent、RAG document/chunk/vector、Citation、Workflow 与 Artifact metadata 的唯一事实源；**取消信号也已外置**——`RunExecutionRegistry` 经 Redis pub/sub 跨实例广播即时中断，并以 `run_cancellations` 表持久化标记兜底 queued 竞态，因此"取消请求落在实例 B、run 执行在实例 A"也能真正中断（P0）。内存只保留 live event bus 的本地订阅者、各实例的 `AbortController` 映射与 microtask scheduler，内存 repository 只能由测试显式创建。
 
 1. 启动顺序固定为：migration 状态检查（存在 pending migration 直接拒绝启动）→ Fastify ready（陈旧 Run 恢复，把超时未终态的 Run 落库为 `run_interrupted` 失败）→ listen 接流量。readiness 同时验证 provider 配置、PostgreSQL 连通性和 artifact storage 根目录。
 2. Web creates a run through the API.

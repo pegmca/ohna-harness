@@ -27,7 +27,7 @@ export interface ConversationDto {
 }
 
 /**
- * ohna 本地执行会话摘要（`@aiagent/serve` 的 conversations 路由线格式）。
+ * ohna 本地执行会话摘要（桌面 runtime 的 conversations 线格式）。
  *
  * 为什么独立成类型而不是给 `ConversationDto` 加必填字段：该线格式带「产生会话的工作区根目录」，
  * 只有 ohna 本地有「工作区」概念；金融 SaaS（finance-api / finance-web）复用 `ConversationDto`
@@ -35,8 +35,8 @@ export interface ConversationDto {
  */
 export interface WorkspaceConversationDto extends ConversationDto {
   /**
-   * 产生该会话的 serve 实例工作区根目录（绝对路径）。
-   * 必填：多 CLI 实例共享 `~/.ohna` dataDir，web 据此按工作区分组；
+   * 产生该会话的桌面 runtime 工作区根目录（绝对路径）。
+   * 必填：多窗口共享 `~/.ohna` dataDir，桌面端据此按工作区分组；
    * 旧数据中缺失该字段的行在存储层被当作坏行跳过（阻断性升级，无空串兜底）。
    */
   workspaceRoot: string;

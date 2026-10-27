@@ -1,9 +1,8 @@
 /**
  * `@aiagent/ohna-runtime` 公共入口。
  *
- * 本包是 ohna 桌面 runtime 的共享内核包：从 `@aiagent/serve` 抽离的 JSONL 存储端口、
- * RunManager 与组合根 `createOhnaRuntime` 都收敛到此，保持「无 Fastify/Electron/React」
- * 的纯 Node 依赖边界。serve 侧改为 re-export 本包以维持过渡期公共 API 不变。
+ * 本包是 ohna 桌面 runtime 的共享内核包：JSONL 存储端口、RunManager 与组合根
+ * `createOhnaRuntime` 都收敛到此，保持「无 Fastify/Electron/React」的纯 Node 依赖边界。
  */
 export * from "./store/index.js";
 

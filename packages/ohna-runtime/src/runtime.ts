@@ -33,6 +33,9 @@ import {
 import { WorkspaceRegistry, WorkspaceMcpRegistry, WorkspaceContextCache } from "./workspace/index.js";
 import { LocalMessageStore, LocalRunStore, LocalSessionStore } from "./store/index.js";
 import { RunManager } from "./run-manager.js";
+import { createServeTeamSession } from "./run/team-session.js";
+import { resolveCompactionSettings } from "@aiagent/agent";
+import { streamSimple } from "@aiagent/ai";
 
 /** 组合根注入参数。 */
 export interface OhnaRuntimeOptions {
@@ -182,6 +185,22 @@ export async function createOhnaRuntime(options: OhnaRuntimeOptions): Promise<Oh
     workspaceRegistry,
     workspaceContextCache,
     workspaceMcpRegistry,
+    // Team 开关打开时构造会话级 Team 注册表（按 conversationId 持有 controller，成员跨轮保留）；
+    // 同一工具表只有一份 controller、一份 team 成本来源（docs/v2.0/04 §2.2 + spec §7.4）。
+    // window 与 run 前压缩同源（reserveTokens 唯一算法），随每次 llm_call 落盘。
+    ...(team
+      ? {
+          teamSession: createServeTeamSession({
+            model,
+            streamFn: streamFn ?? streamSimple,
+            window: {
+              contextWindow: model.contextWindow,
+              maxTokens: model.maxTokens,
+              reserveTokens: resolveCompactionSettings(model.contextWindow).reserveTokens
+            }
+          })
+        }
+      : {}),
   });
   emitHolder.emit = (runId, payload) =>
     runManager.emitConfirmationRequested(runId, payload);

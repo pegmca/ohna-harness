@@ -129,9 +129,14 @@ export class RunManager {
     });
     // serve 侧 controller 是团队状态的**首选**来源；组合根注入的 getTeamState 保留为
     // fallback（03 已接通的参数链不回退，docs/v2.0/04 §2.2）。
+    // spec §7.4：TeamController 按 conversationId 持有，成本投影必须回到「本 run 所属会话」
+    // 的 controller（按 conversationId 解析），而非全局 last-active。因此 costTracker 注入
+    // 的是「按 conversationId 取读取器」的工厂；组合根注入的 getTeamState 保留为兜底。
     this.costTracker = new RunCostTracker(
       options.model.id,
-      options.getTeamState ?? this.teamBinding.getTeamState()
+      options.getTeamState
+        ? () => options.getTeamState
+        : this.teamBinding.getTeamStateFor
     );
     this.confirmGate = options.confirmGate;
     this.summarizer = options.summarizer;
@@ -337,7 +342,7 @@ export class RunManager {
     // execute 尚未启动（run 前压缩、workspace 解析期间）就调 finishStatus；若把 begin 放在
     // execute 入口，这些 run 会静默缺失 cost_summary，被下游误读为「零成本」。
     // 工具表此时还未知（execute 会按会话 workspace 重新解析），故先在 execute 内补种 byTool。
-    this.costTracker.begin(runId);
+    this.costTracker.begin(runId, input.conversationId);
 
     // 会话级订阅（--web 共享事件流）：新 run 必须先接到其会话的订阅者上，
     // 再广播 user_message（否则订阅者会漏掉 sequence 最早的 user_message 帧）。
@@ -684,6 +689,7 @@ export class RunManager {
     const teamRunner = this.teamBinding.begin(
       {
         runId,
+        conversationId: run.snapshot.conversationId,
         ...(confirmHook ? { beforeToolCall: confirmHook } : {}),
         emit: {
           subagent: (event) => {
@@ -970,7 +976,11 @@ export class RunManager {
       // G-T1：成本汇总先于终态帧发出（客户端以 run_status 判「run 结束」，届时须已持有团队成本段）。
       // 投影 / 发帧失败一律吞掉——成本是观测性数据，绝不能把一次成功的 run 变成 failed。
       try {
-        const costPayload = this.costTracker.project(run.snapshot.runId, status);
+        const costPayload = this.costTracker.project(
+          run.snapshot.runId,
+          status,
+          run.snapshot.conversationId
+        );
         if (costPayload) await this.emitFrame(run, "cost_summary", costPayload);
       } catch (error) {
         // 不改变终态（观测数据不能拖垮执行），但必须留下诊断线索：getTeamState 抛错、

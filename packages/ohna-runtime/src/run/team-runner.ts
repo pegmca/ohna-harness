@@ -61,6 +61,7 @@ export class TeamRunBinding {
    * 为一次 run 建立绑定。
    *
    * @param input.runId 本 run 的标识（会话层 run 注册表的键，并发 run 互不覆盖）。
+   * @param input.conversationId 本 run 所属会话（用于从注册表取该会话的 controller）。
    * @param input.beforeToolCall 本 run 的确认闸门钩子（子代理与主线程共用）。
    * @param input.emit run 事件出口（同步契约）。
    * @param input.tools 本 run 的实际工具表（会话 workspace 解析产物，不含 Team 工具）。
@@ -69,13 +70,16 @@ export class TeamRunBinding {
   begin(
     input: {
       runId: string;
+      conversationId: string;
       beforeToolCall?: NonNullable<AgentLoopConfig["beforeToolCall"]>;
       emit: TeamRunnerEmit;
     },
     tools: readonly AgentTool<any>[]
   ): TeamRunner | undefined {
     if (!this.options.team || !this.options.session) return undefined;
-    const turn = this.options.session.beginTurn(
+    // 按 conversationId 取该会话的 controller，再在其下以 runId 登记独立绑定。转发器
+    // 只在本会话的绑定表内路由，绝不跨 conversation 串流（spec §7.4）。
+    const turn = this.options.session.getOrCreate(input.conversationId).beginRun(
       {
         runId: input.runId,
         ...(input.beforeToolCall ? { beforeToolCall: input.beforeToolCall } : {}),
@@ -102,13 +106,18 @@ export class TeamRunBinding {
   }
 
   /**
-   * 团队状态读取器（`getTeamState` 的第一来源）。
+   * 团队状态读取器（`getTeamState` 的第一来源，按 conversationId 取该会话 controller）。
    *
+   * 返回「按 conversationId 解析 controller 的读取器」而非单一全局读取器：每个会话
+   * 独立持有 controller（成员跨轮保留），成本投影按 run 增量时必须回到**本 run 所属会话**
+   * 的当前成员用量，不能取全局最后一个活跃会话（spec §7.4 禁止 last-active 路由）。
+   *
+   * @param conversationId 会话 id（绑定 controller 实例的闭包键）。
    * @returns 读取器；开关关闭或未注入 session 时 undefined（由组合根注入项兜底）。
    */
-  getTeamState(): (() => TeamState) | undefined {
+  getTeamStateFor(conversationId: string): (() => TeamState) | undefined {
     if (!this.options.team || !this.options.session) return undefined;
-    return () => this.options.session!.getTeamState();
+    return () => this.options.session!.getOrCreate(conversationId).getTeamState();
   }
 }
 

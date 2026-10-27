@@ -206,16 +206,18 @@ export class RunCostTracker {
   /** runId → 在飞期间的聚合器与起算时间（终态发完事件即删除，避免长进程内存泄漏）。 */
   private readonly runs = new Map<
     string,
-    { accumulator: RunCostAccumulator; startedAt: number; teamBaseline?: TeamUsageBaseline }
+    { accumulator: RunCostAccumulator; startedAt: number; conversationId?: string; teamBaseline?: TeamUsageBaseline }
   >();
 
   /**
    * @param modelId cost_summary 的 byModel 键（单模型装配下即本 run 使用的模型 id）。
-   * @param getTeamState 组合根注入的团队状态读取器；未注入时 team 段整体省略。
+   * @param getTeamStateFor 按 conversationId 解析团队状态读取器（spec §7.4：每个会话独立
+   *   持有 controller，成本投影必须回到「本 run 所属会话」的当前成员用量，不取全局 last-active）。
+   *   未注入时 team 段整体省略。
    */
   constructor(
     private readonly modelId: string,
-    private readonly getTeamState: (() => TeamState) | undefined
+    private readonly getTeamStateFor: ((conversationId: string) => (() => TeamState) | undefined) | undefined
   ) {}
 
   /**
@@ -227,14 +229,16 @@ export class RunCostTracker {
    * 「零成本」。工具表此时未知，byTool 桶由 `seedTools` 在 execute 里补齐。
    *
    * @param runId run id。
+   * @param conversationId 本 run 所属会话（team 段投影时按它取 controller，跨会话不串流）。
    */
-  begin(runId: string): void {
+  begin(runId: string, conversationId?: string): void {
     // team 用量基线必须在此刻（任何派发之前）打快照：controller 是会话级实例，
     // 不收基线就只能在收尾时看到「历史 run + 本 run」的累计值（跨 run 重复计费）。
-    const teamBaseline = snapshotTeamBaseline(this.getTeamState);
+    const teamBaseline = snapshotTeamBaseline(this.resolveTeamState(conversationId));
     this.runs.set(runId, {
       accumulator: new RunCostAccumulator(),
       startedAt: Date.now(),
+      ...(conversationId !== undefined ? { conversationId } : {}),
       ...(teamBaseline ? { teamBaseline } : {})
     });
   }
@@ -278,20 +282,34 @@ export class RunCostTracker {
    *
    * @param runId run id。
    * @param status serve 的终态（映射为 trace 的 outcome 枚举）。
+   * @param conversationId 本 run 所属会话（终态时若 begin 未留存则按此取 controller）。
    * @returns 待发送的 payload；本 run 未建立追踪时返回 undefined。
    */
-  project(runId: string, status: RunStatusDtoV2): CostSummaryPayload | undefined {
+  project(runId: string, status: RunStatusDtoV2, conversationId?: string): CostSummaryPayload | undefined {
     const entry = this.runs.get(runId);
     this.runs.delete(runId);
     if (!entry) return undefined;
+    // begin 优先，参数兜底：确保终态投影取到「本 run 所属会话」的 controller（§7.4）。
+    const resolvedConversationId = entry.conversationId ?? conversationId;
     // 终态映射：serve 的 cancelled 与 interrupted 同为「被中断」，对齐 trace 的 outcome 枚举。
     const outcome = status === "failed" ? "failed" : status === "completed" ? "completed" : "interrupted";
     return buildCostSummaryPayload({
       costs: entry.accumulator.project(),
-      team: projectRunTeamSection(this.getTeamState, entry.teamBaseline),
+      team: projectRunTeamSection(this.resolveTeamState(resolvedConversationId), entry.teamBaseline),
       outcome,
       durationMs: Date.now() - entry.startedAt
     });
+  }
+
+  /**
+   * 按 conversationId 解析团队状态读取器；未注入工厂或该会话无 controller 时返回 undefined。
+   *
+   * @param conversationId 会话 id（缺省时直接 undefined，team 段省略）。
+   * @returns 绑定到该会话 controller 的读取器；不可得时 undefined。
+   */
+  private resolveTeamState(conversationId?: string): (() => TeamState) | undefined {
+    if (!this.getTeamStateFor || conversationId === undefined) return undefined;
+    return this.getTeamStateFor(conversationId);
   }
 }
 

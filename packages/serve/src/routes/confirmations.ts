@@ -8,7 +8,6 @@
 import type { ApiResult } from "@aiagent/types";
 import type { FastifyInstance } from "fastify";
 import { createRequestId, failure } from "../errors.js";
-import { isTerminalStatus } from "../run-manager.js";
 import type { RouteDeps } from "./types.js";
 
 /** 从请求体读取对象。 */
@@ -50,14 +49,15 @@ export function registerConfirmationRoutes(app: FastifyInstance, deps: RouteDeps
       }
 
       const { runId, toolCallId } = request.params;
-      const snapshot = await deps.runManager.getSnapshot(runId);
+      const snapshot = await deps.runtime.getRunSnapshot(runId);
       if (!snapshot) {
         return failure(reply, requestId, 404, "not_found", "Run 不存在。");
       }
-      if (isTerminalStatus(snapshot.status)) {
+      if (snapshot.status === "completed" || snapshot.status === "failed" || snapshot.status === "cancelled" || snapshot.status === "interrupted") {
         return failure(reply, requestId, 409, "conflict", "Run 已结束，无法再确认。");
       }
-      if (deps.runManager.isAutoApprove()) {
+      // 自动批准由 serve 选项决定（runtime 不向路由暴露 isAutoApprove，避免双向依赖）。
+      if (deps.isAutoApprove) {
         return failure(
           reply,
           requestId,
@@ -67,7 +67,7 @@ export function registerConfirmationRoutes(app: FastifyInstance, deps: RouteDeps
         );
       }
 
-      const result = deps.runManager.resolveConfirmation(runId, toolCallId, decision);
+      const result = await deps.runtime.resolveConfirmation(runId, toolCallId, decision);
       if (!result.ok) {
         if (result.code === "not_found") {
           return failure(reply, requestId, 404, "not_found", result.message);

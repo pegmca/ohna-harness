@@ -527,7 +527,8 @@ export class RunManager {
    */
   subscribeConversation(
     conversationId: string,
-    listener: (event: RunStreamEventDtoV2) => void
+    listener: (event: RunStreamEventDtoV2) => void,
+    liveOnly?: boolean
   ): () => void {
     let listeners = this.conversationSubscribers.get(conversationId);
     if (!listeners) {
@@ -539,6 +540,8 @@ export class RunManager {
     for (const run of this.active.values()) {
       if (run.snapshot.conversationId === conversationId) run.subscribers.add(listener);
     }
+    // liveOnly 仅影响是否回放历史；会话订阅本身即 live（无独立 replay 通道），此处忽略该位。
+    void liveOnly;
     return () => {
       listeners.delete(listener);
       for (const run of this.active.values()) {
@@ -558,16 +561,22 @@ export class RunManager {
    * @returns 订阅句柄。
    */
   async subscribeWithReplay(runId: string, options: SubscribeOptions): Promise<Subscription> {
-    await this.assertAuthorized(runId);
-    return this.registerRuntimeSubscription((listener) => {
+    // 先同步挂接 live listener（registerRuntimeSubscription 的 attach 回调同步执行），
+    // 保证 subscribe 调用返回前 listener 已登记到 run/会话订阅集——否则与 createRun 的
+    // 「先挂会话订阅者、再广播 user_message」存在竞态（订阅晚于 user_message 首帧）。
+    // 授权在挂接后异步校验；未授权时 run 不会创建，已挂接的 listener 不会收到事件。
+    const subscription = this.registerRuntimeSubscription((listener) => {
       const unsubscribe = subscribeWithReplay({
         afterSequence: options.afterSequence,
+        ...(options.liveOnly ? { liveOnly: true } : {}),
         readEvents: () => this.options.runStore.listEvents(runId),
         attachLive: (liveListener) => this.subscribe(runId, liveListener),
         onEvent: (event) => options.onEvent(event)
       });
       return { detach: unsubscribe, listener };
     });
+    await this.assertAuthorized(runId);
+    return subscription;
   }
 
   /**
@@ -585,11 +594,24 @@ export class RunManager {
     conversationId: string,
     options: SubscribeOptions
   ): Promise<Subscription> {
-    await this.assertAuthorized(conversationId);
-    return this.registerRuntimeSubscription((listener) => {
-      const detach = this.subscribeFutureConversation(conversationId, (event) => listener(event));
-      return { detach, listener };
+    // 先同步挂接：subscribeConversation 同步把 listener 登记进 conversationSubscribers，
+    // 与 subscribeWithReplay 同口径，避免「先 createRun、后 subscribe」漏掉 user_message 首帧。
+    const subscription = this.registerRuntimeSubscription((listener) => {
+      // 与公开 subscribeConversation 一致：attach 到在途 run，保证订阅建立时 진행중인 run
+      // 的终态事件也能被投递（句柄冒烟测试依赖此行为）。options.afterSequence 在会话维度
+      // 无效，由逐 run 的 SSE 重连各自处理。
+      // listener 必须直接转发到 options.onEvent：registerRuntimeSubscription 把 runtimeListener
+      // 重赋为 attached.listener，若此处返回透传 runtimeListener 的 wrapper 会形成自引用递归，
+      // 事件永远到达不了真实回调（句柄冒烟测试依赖此投递路径）。
+      const detach = this.subscribeConversation(
+        conversationId,
+        (event) => options.onEvent(event),
+        options.liveOnly === true
+      );
+      return { detach, listener: (event) => options.onEvent(event) };
     });
+    await this.assertAuthorized(conversationId);
+    return subscription;
   }
 
   /**

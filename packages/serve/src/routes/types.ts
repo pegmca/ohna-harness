@@ -3,8 +3,7 @@
  */
 import type { Model } from "@aiagent/ai";
 import type { ModelCatalogDto } from "@aiagent/types";
-import type { RunManager } from "../run-manager.js";
-import type { LocalMessageStore, LocalRunStore, LocalSessionStore } from "../store/index.js";
+import type { OhnaRuntime } from "@aiagent/ohna-runtime";
 
 /** 所有路由共享的装配上下文。 */
 export interface RouteDeps {
@@ -12,10 +11,8 @@ export interface RouteDeps {
   dataDir: string;
   model: Model<"openai-completions">;
   modelCatalog: ModelCatalogDto;
-  sessionStore: LocalSessionStore;
-  messageStore: LocalMessageStore;
-  runStore: LocalRunStore;
-  runManager: RunManager;
+  /** 全部资源 / run / 确认 / 订阅能力的唯一入口（Task 11 后 serve 不再持有 store）。 */
+  runtime: OhnaRuntime;
   /** 进程 pid，用于 health 诊断。 */
   pid: number;
   /** 关闭中标志：新 run / 写操作返回 503。 */
@@ -26,4 +23,6 @@ export interface RouteDeps {
    * 浏览器不能借观测台发起或取消 run。GET 端点全部保留。
    */
   observeOnly?: boolean;
+  /** 是否为自动批准模式（bypass 权限闸门）；只读观测实例恒为 false。 */
+  isAutoApprove: boolean;
 }

@@ -12,29 +12,30 @@ import type {
 } from "@aiagent/types";
 import type { FastifyInstance } from "fastify";
 import { createRequestId, failure, parseLimit, parseSequenceCursor } from "../errors.js";
-import { deriveTitle, type SessionMeta } from "../store/index.js";
+import type { ConversationSummaryDto } from "@aiagent/types";
 import type { RouteDeps } from "./types.js";
 
 /**
- * 把会话元数据映射为 Web DTO。
+ * 把跨进程会话摘要 DTO 映射为 Web DTO。
  *
- * 导出供 server 句柄的 createConversation / listConversations 复用，
- * 保证进程内入口与 HTTP 路由返回同一 DTO 形状。
+ * 迁移期单工作区：workspaceId 即绝对根，直接作为 `workspaceRoot`；若语义不同则回落
+ * `deps.workspaceRoot`（serve 构造期注册的主工作区）保证字段非空。
  *
- * @param meta 会话元数据。
+ * @param summary 跨进程会话摘要。
+ * @param workspaceRoot 兜底工作区根目录。
  * @returns 会话 DTO。
  */
-export function toConversationDto(meta: SessionMeta): WorkspaceConversationDto {
+export function toConversationDto(summary: ConversationSummaryDto, workspaceRoot: string): WorkspaceConversationDto {
   return {
-    conversationId: meta.id,
-    title: meta.title,
-    status: meta.status,
-    createdAt: meta.createdAt,
-    updatedAt: meta.updatedAt,
-    lastMessageAt: meta.updatedAt,
-    // 工作区根目录已随会话落盘；DTO 必填透出，供 web 侧栏按工作区分组（D1）。
-    workspaceRoot: meta.workspaceRoot,
-    ...(meta.status === "archived" ? { archivedAt: meta.archivedAt ?? meta.updatedAt } : {})
+    conversationId: summary.conversationId,
+    title: summary.title,
+    status: summary.status,
+    createdAt: summary.createdAt,
+    updatedAt: summary.updatedAt,
+    lastMessageAt: summary.lastMessageAt,
+    // 工作区根目录：迁移期 workspaceId 即绝对根；回落主工作区保证非空（D1）。
+    workspaceRoot: summary.workspaceId || workspaceRoot,
+    ...(summary.status === "archived" ? { archivedAt: summary.archivedAt ?? summary.updatedAt } : {})
   };
 }
 
@@ -68,11 +69,13 @@ export function registerConversationRoutes(app: FastifyInstance, deps: RouteDeps
     if (rawTitle !== undefined && typeof rawTitle !== "string") {
       return failure(reply, requestId, 400, "validation_failed", "会话标题格式不正确。");
     }
-    const title = deriveTitle(typeof rawTitle === "string" ? rawTitle : "新会话");
-    const meta = await deps.sessionStore.create({ title, workspaceRoot: deps.workspaceRoot, workspaceId: deps.workspaceRoot });
-    await deps.messageStore.ensureConversation(meta.id, meta.title);
+    // 迁移期单工作区：workspaceId 即绝对根，使 createConversation 通过 fail-closed 授权。
+    const summary = await deps.runtime.createConversation({
+      title: typeof rawTitle === "string" ? rawTitle : undefined,
+      workspaceId: deps.workspaceRoot
+    });
     reply.code(201);
-    return { ok: true, requestId, data: toConversationDto(meta) };
+    return { ok: true, requestId, data: toConversationDto(summary, deps.workspaceRoot) };
   });
 
   /**
@@ -87,9 +90,10 @@ export function registerConversationRoutes(app: FastifyInstance, deps: RouteDeps
     async (request): Promise<ApiResult<CursorPageDto<WorkspaceConversationDto>>> => {
       const requestId = createRequestId();
       const workspaceFilter = request.query.workspaceRoot;
-      const items = (await deps.sessionStore.list())
-        .filter((meta) => workspaceFilter === undefined || meta.workspaceRoot === workspaceFilter)
-        .map(toConversationDto);
+      // 兼容旧 workspaceRoot 查询参数：迁移期它等于 workspaceId（绝对根）。
+      const items = (await deps.runtime.listConversations(
+        workspaceFilter !== undefined ? { workspaceId: workspaceFilter } : undefined
+      )).map((summary) => toConversationDto(summary, deps.workspaceRoot));
       return { ok: true, requestId, data: { items } };
     }
   );
@@ -111,15 +115,14 @@ export function registerConversationRoutes(app: FastifyInstance, deps: RouteDeps
       if ((hasTitle && body.archive !== undefined) || (!hasTitle && !archive)) {
         return failure(reply, requestId, 400, "validation_failed", "仅支持修改 title 或 archive。");
       }
-      const existing = await deps.sessionStore.get(request.params.conversationId);
-      if (!existing) {
+      const updated = await deps.runtime.updateConversation(request.params.conversationId, {
+        ...(hasTitle ? { title: body.title as string } : {}),
+        ...(archive ? { archive: true } : {})
+      });
+      if (!updated) {
         return failure(reply, requestId, 404, "not_found", "会话不存在。");
       }
-      const updated = await deps.sessionStore.update(existing.id, {
-        ...(hasTitle ? { title: body.title as string } : {}),
-        ...(archive ? { status: "archived" as const } : {})
-      });
-      return { ok: true, requestId, data: toConversationDto(updated ?? existing) };
+      return { ok: true, requestId, data: toConversationDto(updated, deps.workspaceRoot) };
     }
   );
 
@@ -135,22 +138,17 @@ export function registerConversationRoutes(app: FastifyInstance, deps: RouteDeps
       if (deps.isShuttingDown()) {
         return failure(reply, requestId, 503, "internal_error", "服务正在关闭，暂时无法生成标题。");
       }
-      const existing = await deps.sessionStore.get(request.params.conversationId);
-      if (!existing) {
-        return failure(reply, requestId, 404, "not_found", "会话不存在。");
-      }
       const body = asRecord(request.body);
       const rawText = body?.text;
       if (typeof rawText !== "string" || rawText.trim() === "") {
         return failure(reply, requestId, 400, "validation_failed", "缺少标题生成的用户消息文本。");
       }
-      const title = await deps.runManager.generateTitle(rawText);
-      if (!title) {
-        // 未生成：返回现有标题（不落盘），前端据此保留截断标题。
-        return { ok: true, requestId, data: toConversationDto(existing) };
+      const updated = await deps.runtime.generateConversationTitle(request.params.conversationId, rawText);
+      if (!updated) {
+        // 未生成或会话不存在：返回 404，前端据此保留截断标题。
+        return failure(reply, requestId, 404, "not_found", "会话不存在或标题生成失败。");
       }
-      const updated = await deps.sessionStore.update(existing.id, { title });
-      return { ok: true, requestId, data: toConversationDto(updated ?? existing) };
+      return { ok: true, requestId, data: toConversationDto(updated, deps.workspaceRoot) };
     }
   );
 
@@ -162,18 +160,17 @@ export function registerConversationRoutes(app: FastifyInstance, deps: RouteDeps
     "/api/conversations/:conversationId/messages",
     async (request, reply): Promise<ApiResult<CursorPageDto<LinearMessageDto>>> => {
       const requestId = createRequestId();
-      const conversation = await deps.sessionStore.get(request.params.conversationId);
-      if (!conversation) {
-        return failure(reply, requestId, 404, "not_found", "会话不存在。");
-      }
       const rawCursor = request.query.cursor;
       if (rawCursor !== undefined && parseSequenceCursor(rawCursor) === undefined) {
         return failure(reply, requestId, 400, "bad_request", "消息分页游标无效。");
       }
-      const page = await deps.messageStore.listPage(conversation.id, {
+      const page = await deps.runtime.listMessages(request.params.conversationId, {
         afterSequence: parseSequenceCursor(rawCursor),
         limit: parseLimit(request.query.limit, 50)
       });
+      if (!page) {
+        return failure(reply, requestId, 404, "not_found", "会话不存在。");
+      }
       return { ok: true, requestId, data: page };
     }
   );

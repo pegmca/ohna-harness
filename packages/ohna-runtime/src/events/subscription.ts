@@ -16,6 +16,11 @@ export interface Subscription {
 /** 订阅选项。 */
 export interface SubscribeOptions {
   afterSequence?: number;
+  /**
+   * 仅订阅实时事件、不回放历史（serve 进程内句柄用于镜像在途 run，与旧 live-only
+   * `runManager.subscribe` 行为一致）。SSE 路由传入 afterSequence 时需要回放，故不置此位。
+   */
+  liveOnly?: boolean;
   onEvent: (event: RunStreamEventDtoV2) => void;
 }
 

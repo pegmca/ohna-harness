@@ -14,6 +14,8 @@ import type { RunStreamEventDtoV2 } from "@aiagent/types";
 /** replay 输入。 */
 export interface ReplayMergeOptions {
   afterSequence?: number;
+  /** 仅实时、不回放历史（serve 进程内句柄镜像在途 run 使用）。 */
+  liveOnly?: boolean;
   readEvents: () => Promise<RunStreamEventDtoV2[]>;
   attachLive: (listener: (event: RunStreamEventDtoV2) => void) => () => void;
   onEvent: (event: RunStreamEventDtoV2) => void;
@@ -85,6 +87,15 @@ export function subscribeWithReplay(options: ReplayMergeOptions): () => void {
   };
 
   detachLive = options.attachLive(onLiveEvent);
+
+  // liveOnly：跳过历史回放，仅挂 live 通道（句柄镜像在途 run，等价于旧 live-only 订阅）。
+  if (options.liveOnly) {
+    replayDone = true;
+    return () => {
+      closed = true;
+      detachLive?.();
+    };
+  }
 
   void options
     .readEvents()

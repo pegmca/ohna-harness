@@ -1,23 +1,21 @@
 /**
  * `@aiagent/serve` 公共入口：ohna 本地服务端装配。
  *
- * 装配只做三件事：
- * 1. 构造 JSONL stores（会话元数据 / 线性消息 / run 事件）；
- * 2. 构造 RunManager（消费 `agentLoop`，实现 run-v2 线协议）；
- * 3. 注册 HTTP/SSE 路由与静态 fallback。
+ * Task 11 后，serve 退化为 `OhnaRuntime` 的纯 HTTP 适配器：不再持有任何 store / RunManager
+ * 实例（单 dataDir 写者约束由 runtime 的 `acquireDataDirLock` 统一保证），所有业务经由
+ * `createOhnaRuntime` 构造的 `runtime` 转发；serve 只负责 HTTP/SSE 路由、静态 fallback 与
+ * 进程内句柄的形状适配。
  *
  * `ohna-cli` 单一形态下经本包驱动执行（TUI / 浏览器双端订阅同一执行线），
  * 仅负责进程内装配；不读取 `process.argv`、不打开浏览器、不注册信号处理。
  */
-import { randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { resolveCompactionSettings, type StreamFn, type TeamState } from "@aiagent/agent";
 import type { Model } from "@aiagent/ai";
-import type { AgentTool } from "@aiagent/tools";
-import { buildCodingSystemPrompt, createCodingToolRegistry } from "@aiagent/coding";
+import type { AgentTool, StreamFn } from "@aiagent/agent";
+import type { ConfirmationDecision, ResolveConfirmationResult } from "./confirm-gate.js";
 import type {
   WorkspaceConversationDto,
   ModelCatalogDto,
@@ -25,20 +23,15 @@ import type {
   RunSnapshotDtoV2,
   RunStreamEventDtoV2
 } from "@aiagent/types";
-import type {
-  CreateRunResult,
-  ResolvedWorkspaceContext
-} from "./run/types.js";
+import type { CreateRunResult } from "./run/types.js";
+import type { OhnaRuntime, OhnaRuntimeOptions } from "@aiagent/ohna-runtime";
 import Fastify, { type FastifyInstance } from "fastify";
-import { createAsyncConfirmGate, type ConfirmationDecision, type ConfirmationRequestedPayload } from "./confirm-gate.js";
 import { registerErrorHandler } from "./errors.js";
-import { RunManager } from "./run-manager.js";
 import { toConversationDto } from "./routes/conversations.js";
 import { registerRoutes } from "./routes/index.js";
 import { createSingleModelCatalog } from "./routes/models.js";
-import { createServeTeamSession } from "./run/team-session.js";
 import { registerStaticFallback } from "./static.js";
-import { LocalMessageStore, LocalRunStore, LocalSessionStore } from "./store/index.js";
+import { createOhnaRuntime } from "@aiagent/ohna-runtime";
 
 /** 端口占用时最多尝试的递增次数（与 04 Phase 2 的 +1 重试一致）。 */
 export const MAX_PORT_ATTEMPTS = 20;
@@ -72,15 +65,8 @@ export interface OhnaServerOptions {
   /** 模型目录；缺省根据 model 生成单模型目录。 */
   modelCatalog?: ModelCatalogDto;
   /**
-   * 团队状态读取器（G-T1 单一路径，docs/v2.0/03-team-eval.md §9.1）：组合根把
-   * `TeamController.getTeamState` 透传进来后，run 收尾会用 `projectTeamCostSummary`
-   * 把结果并入 `cost_summary.payload.team`。缺省不产生 team 段。
-   */
-  getTeamState?: () => TeamState;
-  /**
    * Team 开关（docs/v2.0/04 §2.2）：缺省 false 保持既有单智能体行为。
-   * true 时 serve 侧自建 TeamController，把 TeamCreate / SendMessage 并入 supervisor 工具表，
-   * 子代理与主线程共用同一确认闸门与 traced streamFn，并把四类边界事件写进 run 事件流。
+   * true 时透传 runtime，由 runtime 自建 TeamController（单一 controller / 成本来源）。
    */
   team?: boolean;
 }
@@ -99,7 +85,7 @@ export interface OhnaServer {
     runId: string,
     toolCallId: string,
     decision: ConfirmationDecision
-  ): ReturnType<RunManager["resolveConfirmation"]>;
+  ): Promise<ResolveConfirmationResult>;
   /** 创建会话（进程内入口复用，等价 POST /api/conversations）。 */
   createConversation(title?: string): Promise<WorkspaceConversationDto>;
   /** 列出 active 会话（进程内入口复用，等价 GET /api/conversations）。 */
@@ -169,105 +155,27 @@ export async function createOhnaServer(options: OhnaServerOptions): Promise<Ohna
   const workspaceRoot = path.resolve(options.workspaceRoot);
   const dataDir = path.resolve(options.dataDir ?? path.join(os.homedir(), ".ohna"));
 
-  const sessionStore = new LocalSessionStore(path.join(dataDir, "sessions"));
-  const messageStore = new LocalMessageStore(path.join(dataDir, "conversations"));
-  const runStore = new LocalRunStore(path.join(dataDir, "runs"));
-
-  const systemPrompt =
-    options.systemPrompt ??
-    (await buildCodingSystemPrompt(workspaceRoot, {
-      // 上下文读取失败只影响提示词增强，不阻断本地服务启动。
-      onContextError: () => undefined
-    }));
-
-  // 主工作区工具集：必须复用注入的 tools，否则会丢 MCP 工具并破坏测试注入（tools: []）。
-  const tools = options.tools ?? createCodingToolRegistry(workspaceRoot);
-
-  // BUG-002 方案 2：按会话持久化的 workspaceRoot 动态装配上下文，支持跨工作区会话续写。
-  // 按绝对路径缓存 Promise：并发创建同一工作区的 run 共享同一次装配，避免重复读上下文。
-  const workspaceContextCache = new Map<string, Promise<ResolvedWorkspaceContext>>();
-  // 种子 = 主工作区：复用已注入的 systemPrompt / tools（单工作区语义与 MCP/测试注入零变化）。
-  workspaceContextCache.set(workspaceRoot, Promise.resolve({ workspaceRoot, systemPrompt, tools }));
-
-  /**
-   * 按会话解析工作区上下文：命中缓存直接复用，未命中则按会话根装配编码上下文。
-   *
-   * 边界：跨工作区根只装配 `createCodingToolRegistry(root)` + 编码系统提示词，不携带
-   * 主实例的 MCP 工具；写/执行仍由既有 confirm-gate 确认闸门把关，这是可接受的取舍。
-   *
-   * @param conversationId 会话 id。
-   * @returns 该会话应使用的上下文（含绝对路径 workspaceRoot）。
-   */
-  const resolveWorkspace = async (conversationId: string): Promise<ResolvedWorkspaceContext> => {
-    let root = workspaceRoot;
-    const meta = await sessionStore.get(conversationId);
-    if (meta?.workspaceRoot) root = path.resolve(meta.workspaceRoot);
-
-    const cached = workspaceContextCache.get(root);
-    if (cached) return cached;
-
-    const context = buildCodingSystemPrompt(root, {
-      onContextError: () => undefined
-    }).then((prompt): ResolvedWorkspaceContext => ({
-      workspaceRoot: root,
-      systemPrompt: prompt,
-      tools: createCodingToolRegistry(root)
-    }));
-    workspaceContextCache.set(root, context);
-    return context;
-  };
-
-  // 闸门的 emit 需要 RunManager（分配 sequence 后落盘 + 广播），而 RunManager 又需要闸门。
-  // 用运行期持有者打破构造期循环：emit 只在工具真正请求确认时才被调用。
-  const emitHolder: {
-    emit?: (runId: string, payload: ConfirmationRequestedPayload) => Promise<void>;
-  } = {};
-
-  const confirmGate = createAsyncConfirmGate({
-    // 只读观测模式下强行关闭自动批准：该进程根本不该执行工具（S2）。
-    autoApprove: options.observeOnly ? false : options.autoApprove ?? false,
-    ...(options.confirmTimeoutMs !== undefined ? { timeoutMs: options.confirmTimeoutMs } : {}),
-    emit: async (runId, payload) => {
-      if (!emitHolder.emit) throw new Error("确认事件通道尚未就绪。");
-      await emitHolder.emit(runId, payload);
-    }
-  });
-
-  // v2.0（docs/v2.0/04 §2.2，缺口 B）：Team 开关打开时由 serve 自建 TeamController。
-  // 窗口参数与 run 前压缩共用 `resolveCompactionSettings`（唯一预留口径）：这里只把
-  // contextWindow / maxTokens 交给同一函数现算，不另写预留算法。
-  const teamSession = options.team
-    ? createServeTeamSession({
-        model: options.model,
-        window: {
-          contextWindow: options.model.contextWindow,
-          maxTokens: options.model.maxTokens,
-          reserveTokens: resolveCompactionSettings(options.model.contextWindow).reserveTokens
-        },
-        ...(options.streamFn ? { streamFn: options.streamFn } : {})
-      })
-    : undefined;
-
-  const runManager = new RunManager({
-    workspaceRoot,
+  // Task 11：serve 退化为 runtime 的纯适配器，不再持有 store/RunManager（单 dataDir 写者约束）。
+  // 所有业务经 runtime 转发；autoApprove 在只读观测模式下强制关闭（S2）。
+  const isAutoApprove = options.observeOnly ? false : options.autoApprove ?? false;
+  const runtime = await createOhnaRuntime({
+    dataDir,
     model: options.model,
     apiKey: options.apiKey,
-    systemPrompt,
-    tools,
-    messageStore,
-    runStore,
-    sessionStore,
-    confirmGate,
-    resolveWorkspace,
-    ...(options.streamFn ? { streamFn: options.streamFn } : {}),
-    // G-T1：team 成本投影的组合根通道——注入的 controller.getTeamState 原样下传（保留为 fallback）。
-    ...(options.getTeamState ? { getTeamState: options.getTeamState } : {}),
-    ...(teamSession ? { team: true, teamSession } : {})
+    ...(options.systemPrompt !== undefined ? { systemPrompt: options.systemPrompt } : {}),
+    ...(options.tools !== undefined ? { tools: options.tools } : {}),
+    autoApprove: isAutoApprove,
+    ...(options.team ? { team: true } : {}),
+    ...(options.confirmTimeoutMs !== undefined ? { confirmTimeoutMs: options.confirmTimeoutMs } : {}),
+    ...(options.streamFn !== undefined ? { streamFn: options.streamFn } : {}),
+    ...(options.modelCatalog !== undefined ? { modelCatalog: options.modelCatalog } : {})
   });
-  emitHolder.emit = (runId, payload) =>
-    runManager.emitConfirmationRequested(runId, payload);
+  // 迁移期单工作区：以绝对根作为 workspaceId 注册主工作区，使 createConversation
+  // 传 workspaceId=workspaceRoot 通过 fail-closed 授权（与旧 serve 的 workspaceId 一致）。
+  await runtime.registerWorkspace(workspaceRoot, workspaceRoot);
 
   const modelCatalog = options.modelCatalog ?? createSingleModelCatalog(options.model);
+
   const app = Fastify({ logger: false, bodyLimit: 1_048_576 });
   let closing = false;
 
@@ -277,12 +185,10 @@ export async function createOhnaServer(options: OhnaServerOptions): Promise<Ohna
     dataDir,
     model: options.model,
     modelCatalog,
-    sessionStore,
-    messageStore,
-    runStore,
-    runManager,
+    runtime,
     pid: process.pid,
     isShuttingDown: () => closing,
+    isAutoApprove,
     observeOnly: options.observeOnly === true
   });
   registerStaticFallback(app, {
@@ -306,7 +212,7 @@ export async function createOhnaServer(options: OhnaServerOptions): Promise<Ohna
 
     async shutdown() {
       closing = true;
-      await runManager.shutdown();
+      await runtime.shutdown();
     },
 
     async close() {
@@ -314,60 +220,76 @@ export async function createOhnaServer(options: OhnaServerOptions): Promise<Ohna
     },
 
     resolveConfirmation(runId, toolCallId, decision) {
-      return runManager.resolveConfirmation(runId, toolCallId, decision);
+      return runtime.resolveConfirmation(runId, toolCallId, decision);
     },
 
     async createConversation(title?: string) {
-      const meta = await sessionStore.create({
-        title: title?.trim() ? title : "新会话",
-        workspaceRoot,
+      const summary = await runtime.createConversation({
+        title,
         workspaceId: workspaceRoot
       });
-      await messageStore.ensureConversation(meta.id, meta.title);
-      return toConversationDto(meta);
+      return toConversationDto(summary, workspaceRoot);
     },
 
     async listConversations() {
-      const metas = await sessionStore.list();
-      return metas.map(toConversationDto);
+      const summaries = await runtime.listConversations();
+      return summaries.map((summary) => toConversationDto(summary, workspaceRoot));
     },
 
     async generateConversationTitle(conversationId, text) {
-      const meta = await sessionStore.get(conversationId);
-      if (!meta) return undefined;
-      const title = await runManager.generateTitle(text);
-      if (!title) return undefined;
-      const updated = await sessionStore.update(meta.id, { title });
-      return toConversationDto(updated ?? meta);
+      const summary = await runtime.generateConversationTitle(conversationId, text);
+      return summary ? toConversationDto(summary, workspaceRoot) : undefined;
     },
 
-    createRun(input) {
-      return runManager.createRun({
+    async createRun(input) {
+      // conversationId 缺省时 runtime 内部自动建会话；组装 HTTP 专用受理回执（含 URL）。
+      const result = await runtime.startRun({
         conversationId: input.conversationId,
         message: input.message,
         mode: input.mode ?? "auto",
         source: input.source ?? "composer",
-        requestId: input.requestId ?? randomUUID(),
+        ...(input.requestId !== undefined ? { requestId: input.requestId } : {}),
         ...(input.maxTurns !== undefined ? { maxTurns: input.maxTurns } : {}),
         ...(input.deadlineMs !== undefined ? { deadlineMs: input.deadlineMs } : {}),
-        ...(input.maxCost !== undefined ? { maxCost: input.maxCost } : {})
+        ...(input.maxCost !== undefined ? { maxCost: input.maxCost } : {}),
+        workspaceId: workspaceRoot
       });
+      const accepted: CreateRunResult["accepted"] = {
+        runId: result.accepted.runId,
+        requestId: result.accepted.requestId,
+        conversationId: result.accepted.conversationId,
+        modelId: result.accepted.modelId,
+        status: result.accepted.status,
+        eventsUrl: `/api/runs/${result.accepted.runId}/events`,
+        snapshotUrl: `/api/runs/${result.accepted.runId}`
+      };
+      return { accepted, snapshot: result.snapshot };
     },
 
     subscribeRun(runId, listener) {
-      return runManager.subscribe(runId, listener);
+      // runtime 订阅为 async 返回 Subscription；serve 句柄保持同步返回退订闭包。
+      let unsubscribe = (): void => undefined;
+      // 句柄镜像在途 run 只需实时通道（liveOnly），与旧 live-only 订阅行为一致。
+      void runtime.subscribeRun(runId, { onEvent: listener, liveOnly: true }).then((subscription) => {
+        unsubscribe = () => subscription.unsubscribe();
+      });
+      return () => unsubscribe();
     },
 
     subscribeConversation(conversationId, listener) {
-      return runManager.subscribeConversation(conversationId, listener);
+      let unsubscribe = (): void => undefined;
+      void runtime.subscribeConversation(conversationId, { onEvent: listener, liveOnly: true }).then((subscription) => {
+        unsubscribe = () => subscription.unsubscribe();
+      });
+      return () => unsubscribe();
     },
 
     cancelRun(runId) {
-      return runManager.cancel(runId);
+      return runtime.cancelRun(runId);
     },
 
     isAutoApprove() {
-      return runManager.isAutoApprove();
+      return isAutoApprove;
     },
 
     get observeOnly() {
@@ -375,7 +297,7 @@ export async function createOhnaServer(options: OhnaServerOptions): Promise<Ohna
     },
 
     listRunsByConversation(conversationId) {
-      return runManager.listRunsByConversation(conversationId);
+      return runtime.listRunsByConversation(conversationId);
     },
 
     get port() {

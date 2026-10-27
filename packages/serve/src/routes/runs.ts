@@ -13,7 +13,7 @@ import type {
 } from "@aiagent/types";
 import type { FastifyInstance } from "fastify";
 import { createRequestId, failure } from "../errors.js";
-import { deriveTitle, isValidStoreId } from "../store/index.js";
+import { isValidStoreId } from "../store/index.js";
 import type { RouteDeps } from "./types.js";
 
 /** 从请求体读取对象。 */
@@ -63,31 +63,31 @@ export function registerRunRoutes(app: FastifyInstance, deps: RouteDeps): void {
       }
 
       // 会话不存在则自动建：标题取 message 前 40 字。已存在时保留原标题。
+      // conversationId 缺省时 runtime 内部会按消息自动建会话（fail-closed 授权 workspaceId）。
       const conversationId = requestedConversationId ?? randomUUID();
-      const existing = await deps.sessionStore.get(conversationId);
-      const session =
-        existing ??
-        (await deps.sessionStore.create({
-          id: conversationId,
-          title: deriveTitle(message),
-          workspaceRoot: deps.workspaceRoot,
-          workspaceId: deps.workspaceRoot
-        }));
-      await deps.messageStore.ensureConversation(session.id, session.title);
-
       const mode = body?.mode === "report" ? "report" : "auto";
       const source = body?.source === "report_button" ? "report_button" : "composer";
-
-      const created = await deps.runManager.createRun({
+      const result = await deps.runtime.startRun({
         requestId,
-        conversationId: session.id,
+        conversationId,
         message,
         mode,
-        source
+        source,
+        workspaceId: deps.workspaceRoot
       });
 
+      // 由 RunStartResultDto 拼装 HTTP 专用受理回执（eventsUrl/snapshotUrl 仅 serve 用）。
+      const accepted: AgentRunAcceptedDto = {
+        runId: result.accepted.runId,
+        requestId: result.accepted.requestId,
+        conversationId: result.accepted.conversationId,
+        modelId: result.accepted.modelId,
+        status: result.accepted.status,
+        eventsUrl: `/api/runs/${result.accepted.runId}/events`,
+        snapshotUrl: `/api/runs/${result.accepted.runId}`
+      };
       reply.code(202);
-      return { ok: true, requestId, data: created.accepted };
+      return { ok: true, requestId, data: accepted };
     });
   }
 
@@ -105,7 +105,7 @@ export function registerRunRoutes(app: FastifyInstance, deps: RouteDeps): void {
       if (!isValidStoreId(conversationId)) {
         return failure(reply, requestId, 400, "validation_failed", "conversationId 格式不正确。");
       }
-      const runs = await deps.runManager.listRunsByConversation(conversationId);
+      const runs = await deps.runtime.listRunsByConversation(conversationId);
       return { ok: true, requestId, data: runs };
     }
   );
@@ -115,7 +115,7 @@ export function registerRunRoutes(app: FastifyInstance, deps: RouteDeps): void {
     "/api/runs/:runId",
     async (request, reply): Promise<ApiResult<RunSnapshotDtoV2>> => {
       const requestId = createRequestId();
-      const snapshot = await deps.runManager.getSnapshot(request.params.runId);
+      const snapshot = await deps.runtime.getRunSnapshot(request.params.runId);
       if (!snapshot) {
         return failure(reply, requestId, 404, "not_found", "Run 不存在。");
       }
@@ -133,7 +133,7 @@ export function registerRunRoutes(app: FastifyInstance, deps: RouteDeps): void {
       "/api/runs/:runId",
       async (request, reply): Promise<ApiResult<RunSnapshotDtoV2>> => {
         const requestId = createRequestId();
-        const snapshot = await deps.runManager.cancel(request.params.runId);
+        const snapshot = await deps.runtime.cancelRun(request.params.runId);
         if (!snapshot) {
           return failure(reply, requestId, 404, "not_found", "Run 不存在。");
         }

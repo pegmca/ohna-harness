@@ -23,6 +23,9 @@ import {
   type RuntimeHealthDto,
   type RunMetaDtoV2,
   type WorkspaceDescriptorDto,
+  type ConversationSummaryDto,
+  type CursorPageDto,
+  type LinearMessageDto,
 } from "@aiagent/types";
 import {
   createAsyncConfirmGate,
@@ -41,6 +44,7 @@ import { resolveCompactionSettings } from "@aiagent/agent";
 import { streamSimple } from "@aiagent/ai";
 import type { RunStreamEventDtoV2 } from "@aiagent/types";
 import type { Subscription, SubscribeOptions } from "./events/subscription.js";
+import type { SessionMeta } from "./store/session-store.js";
 
 /** 组合根注入参数。 */
 export interface OhnaRuntimeOptions {
@@ -105,6 +109,16 @@ export interface OhnaRuntime {
     decision: ConfirmationDecision,
     options?: { assertAuthorized?: (id: string) => Promise<void> }
   ): Promise<ResolveConfirmationResult>;
+  /** 新建会话（必填 workspaceId，经 fail-closed 授权校验）。 */
+  createConversation(input: { title?: string; workspaceId: string }): Promise<ConversationSummaryDto>;
+  /** 列出会话（active 优先，可选按 workspaceId 过滤）。 */
+  listConversations(query?: { workspaceId?: string }): Promise<ConversationSummaryDto[]>;
+  /** 修改会话标题或归档；不存在返回 null。 */
+  updateConversation(id: string, input: { title?: string; archive?: boolean }): Promise<ConversationSummaryDto | null>;
+  /** 语义化生成会话标题；失败静默返回 undefined（不抛错）。 */
+  generateConversationTitle(id: string, text: string): Promise<ConversationSummaryDto | undefined>;
+  /** 线性消息游标分页（afterSequence 为已见最大 sequence）；会话不存在返回 null。 */
+  listMessages(id: string, query?: { afterSequence?: number; limit?: number }): Promise<CursorPageDto<LinearMessageDto> | null>;
 }
 
 /**
@@ -316,10 +330,21 @@ export async function createOhnaRuntime(options: OhnaRuntimeOptions): Promise<Oh
       await runManager.shutdown();
     },
     async startRun(input: StartRunInput): Promise<RunStartResultDto> {
-      if (input.workspaceId) {
-        await workspaceRegistry.register(input.workspaceId, workspaceRoot);
-      }
       return scheduler.submit(input, async () => {
+        // 会话不存在时按消息自动建会话（fail-closed 授权 workspaceId）。旧 serve 在
+        // 路由层自建会话，迁移后统一收口到 runtime：conversationId 缺省由 run 携带、
+        // workspaceId 显式传入（serve 传 workspaceRoot）保证授权一致。create 幂等，
+        // 已存在则直接复用，不覆盖原标题。
+        const existing = await sessionStore.get(input.conversationId);
+        if (!existing) {
+          await sessionStore.create({
+            id: input.conversationId,
+            title: input.message.slice(0, 40),
+            workspaceRoot: input.workspaceId ?? workspaceRoot,
+            workspaceId: input.workspaceId ?? workspaceRoot
+          });
+          await messageStore.ensureConversation(input.conversationId, input.message.slice(0, 40));
+        }
         const config = await resolveRunConfig(input.conversationId, input);
         const result = await runManager.createRun({
           requestId: input.requestId ?? randomUUID(),
@@ -355,6 +380,75 @@ export async function createOhnaRuntime(options: OhnaRuntimeOptions): Promise<Oh
     },
     async resolveConfirmation(runId, toolCallId, decision, options) {
       return runManager.resolveConfirmation(runId, toolCallId, decision, options ?? { assertAuthorized });
+    },
+
+    async createConversation(input) {
+      // 必须显式携带已授权 workspaceId：fail-closed，未注册的工作区一律拒绝（由 registerWorkspace 保证）。
+      const meta = await sessionStore.create({
+        title: input.title?.trim() ? input.title : "新会话",
+        workspaceRoot: input.workspaceId,
+        workspaceId: input.workspaceId
+      });
+      await messageStore.ensureConversation(meta.id, meta.title);
+      return toConversationSummary(meta);
+    },
+
+    async listConversations(query) {
+      const metas = await sessionStore.list();
+      const filtered = query?.workspaceId
+        ? metas.filter((meta) => meta.workspaceId === query.workspaceId)
+        : metas;
+      return filtered.map(toConversationSummary);
+    },
+
+    async updateConversation(id, input) {
+      const updated = await sessionStore.update(id, {
+        ...(input.title !== undefined ? { title: input.title } : {}),
+        ...(input.archive ? { status: "archived" } : {})
+      });
+      return updated ? toConversationSummary(updated) : null;
+    },
+
+    async generateConversationTitle(id, text) {
+      const meta = await sessionStore.get(id);
+      if (!meta) return undefined;
+      const title = await runManager.generateTitle(text);
+      if (!title) return undefined;
+      const updated = await sessionStore.update(meta.id, { title });
+      return toConversationSummary(updated ?? meta);
+    },
+
+    async listMessages(id, query) {
+      const conversation = await sessionStore.get(id);
+      if (!conversation) {
+        return null;
+      }
+      return messageStore.listPage(conversation.id, {
+        afterSequence: query?.afterSequence,
+        limit: query?.limit
+      });
     }
+  };
+}
+
+/**
+ * 把内部会话元数据映射为跨进程会话摘要 DTO。
+ *
+ * 字段全量对齐 `ConversationSummaryDto`；`lastMessageAt` 复用 `updatedAt`（本地会话
+ * 列表即为「最后活跃」语义），归档态补 `archivedAt`。
+ *
+ * @param meta 会话元数据。
+ * @returns 会话摘要 DTO。
+ */
+function toConversationSummary(meta: SessionMeta): ConversationSummaryDto {
+  return {
+    conversationId: meta.id,
+    title: meta.title,
+    status: meta.status,
+    createdAt: meta.createdAt,
+    updatedAt: meta.updatedAt,
+    lastMessageAt: meta.updatedAt,
+    ...(meta.status === "archived" ? { archivedAt: meta.archivedAt ?? meta.updatedAt } : {}),
+    workspaceId: meta.workspaceId
   };
 }

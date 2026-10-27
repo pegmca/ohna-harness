@@ -75,6 +75,14 @@ test("buildPdfBlocks keeps normalized rows and records sourceLayer for char-spac
   assert.match(blocks.map((block) => block.text).join("\n"), /213,252\.00 {2}462,419\.73/);
 });
 
+test("full-width-space columns remain separated and count as a two-column table", () => {
+  const line = "董事会秘书　张利荣";
+
+  assert.equal(isTableRow(line), true);
+  assert.equal(countTableColumns(line), 2);
+  assert.equal(buildPdfBlocks([{ text: line, sourceLayer: "native" }])[0]?.text, line);
+});
+
 test("worker normalization merges CJK and broken numeric tokens without collapsing real columns", () => {
   const source = buildStubParserSource([
     { str: "华", x: 10, width: 9 },

@@ -85,7 +85,7 @@ export function buildPdfBlocks(pages: readonly ParsedPdfPage[]): ParsedBlock[] {
     collectParagraphBlocks(
       splitLines(page.text),
       ({ text, lineStart, lineEnd }) => {
-        blocks.push({ text, pageNumber, lineStart, lineEnd, metadata: pageMetadata });
+        blocks.push({ text, pageNumber, lineStart, lineEnd, metadata: { ...pageMetadata } });
       },
       (line, lineNumber, flush) => {
         // 表格行单独成块并打标，避免与相邻正文段落混在同一 block。

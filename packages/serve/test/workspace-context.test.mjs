@@ -99,7 +99,7 @@ test("BUG-002: 跨工作区会话按持久化 workspaceRoot 装配编码上下�
     // 直接经同一 dataDir 的 session store 造一个「持久化 workspaceRoot 指向其它目录」的会话，
     // 模拟用户此前在别的项目目录下建立、后续要续写的跨工作区会话。
     const sessionStore = new LocalSessionStore(path.join(dataDir, "sessions"));
-    const otherMeta = await sessionStore.create({ title: "跨工作区会话", workspaceRoot: otherWorkspace });
+    const otherMeta = await sessionStore.create({ title: "跨工作区会话", workspaceRoot: otherWorkspace, workspaceId: otherWorkspace });
 
     const otherRun = await server.createRun({
       conversationId: otherMeta.id,

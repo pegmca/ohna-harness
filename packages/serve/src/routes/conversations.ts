@@ -69,7 +69,7 @@ export function registerConversationRoutes(app: FastifyInstance, deps: RouteDeps
       return failure(reply, requestId, 400, "validation_failed", "会话标题格式不正确。");
     }
     const title = deriveTitle(typeof rawTitle === "string" ? rawTitle : "新会话");
-    const meta = await deps.sessionStore.create({ title, workspaceRoot: deps.workspaceRoot });
+    const meta = await deps.sessionStore.create({ title, workspaceRoot: deps.workspaceRoot, workspaceId: deps.workspaceRoot });
     await deps.messageStore.ensureConversation(meta.id, meta.title);
     reply.code(201);
     return { ok: true, requestId, data: toConversationDto(meta) };

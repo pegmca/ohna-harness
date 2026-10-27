@@ -21,6 +21,7 @@ import {
   type RunStartResultDto,
   type RuntimeHealthDto,
   type RunMetaDtoV2,
+  type WorkspaceDescriptorDto,
 } from "@aiagent/types";
 import {
   createAsyncConfirmGate,
@@ -29,6 +30,7 @@ import {
   type ConfirmationDecision,
   type ConfirmationRequestedPayload,
 } from "./confirm-gate.js";
+import { WorkspaceRegistry, WorkspaceMcpRegistry, WorkspaceContextCache } from "./workspace/index.js";
 import { LocalMessageStore, LocalRunStore, LocalSessionStore } from "./store/index.js";
 import { RunManager } from "./run-manager.js";
 
@@ -75,6 +77,12 @@ export interface OhnaRuntime {
   getHealth(): Promise<RuntimeHealthDto>;
   getModelCatalog(): Promise<ModelCatalogDto>;
   shutdown(): Promise<void>;
+  /** 注册一个已授权工作区（绝对根目录由 main 经原生对话框选中后传入）。 */
+  registerWorkspace(workspaceId: string, workspaceRoot: string): Promise<WorkspaceDescriptorDto>;
+  /** 列出所有已授权工作区。 */
+  listWorkspaces(): Promise<WorkspaceDescriptorDto[]>;
+  /** 撤销工作区授权（只撤销后续执行授权，不删除历史会话）。 */
+  releaseWorkspace(workspaceId: string): Promise<void>;
   startRun(input: StartRunInput): Promise<RunStartResultDto>;
   getRunSnapshot(runId: string): Promise<RunSnapshotDtoV2 | null>;
   listRunsByConversation(conversationId: string): Promise<RunMetaDtoV2[]>;
@@ -82,8 +90,9 @@ export interface OhnaRuntime {
   resolveConfirmation(
     runId: string,
     toolCallId: string,
-    decision: ConfirmationDecision
-  ): ResolveConfirmationResult;
+    decision: ConfirmationDecision,
+    options?: { assertAuthorized?: (id: string) => Promise<void> }
+  ): Promise<ResolveConfirmationResult>;
 }
 
 /**
@@ -136,6 +145,13 @@ export async function createOhnaRuntime(options: OhnaRuntimeOptions): Promise<Oh
   const runStore = new LocalRunStore(dataDir);
   const sessionStore = new LocalSessionStore(dataDir);
 
+  // 工作区授权三件套：注册表（授权表 + 归属反查）、上下文缓存（按 canonical 根缓存
+  // 系统提示词与工具集）、MCP 容器（按 workspace 隔离的会话生命周期）。三者都只在
+  // runtime 边界内持有，渲染端仅凭 workspaceId 操作资源。
+  const workspaceRegistry = new WorkspaceRegistry({ sessionStore });
+  const workspaceContextCache = new WorkspaceContextCache();
+  const workspaceMcpRegistry = new WorkspaceMcpRegistry();
+
   // 闸门 emit 需要 RunManager（分配 sequence 后落盘 + 广播），而 RunManager 又需要闸门；
   // 用运行期持有者打破构造期循环：emit 只在工具真正请求确认时才被调用。
   const emitHolder: {
@@ -162,10 +178,27 @@ export async function createOhnaRuntime(options: OhnaRuntimeOptions): Promise<Oh
     sessionStore,
     confirmGate,
     ...(streamFn ? { streamFn } : {}),
-    ...(team ? { team: true } : {})
+    ...(team ? { team: true } : {}),
+    workspaceRegistry,
+    workspaceContextCache,
+    workspaceMcpRegistry,
   });
   emitHolder.emit = (runId, payload) =>
     runManager.emitConfirmationRequested(runId, payload);
+
+  // 资源操作反查工作区授权（fail-closed）：未授权 / 已撤销的工作区一律拒绝；
+  // 作为统一入口传给 RunManager 与 runtime 各资源方法复用同一份实现。RunManager 构造前
+  // 必须先声明（其构造入参依赖此闭包）。
+  const assertAuthorized = async (id: string): Promise<void> => {
+    // runId 优先（run 创建时已绑定 workspace），否则按 conversation 反查。
+    try {
+      await workspaceRegistry.resolveRunWorkspace(id);
+      return;
+    } catch {
+      // 非 runId（或 run 尚未绑定）回退到 conversation 维度反查。
+    }
+    await workspaceRegistry.resolveConversationWorkspace(id);
+  };
 
   const catalog = modelCatalog ?? buildSingleModelCatalog(model);
   let closed = false;
@@ -198,8 +231,21 @@ export async function createOhnaRuntime(options: OhnaRuntimeOptions): Promise<Oh
         status: "ok",
         protocolVersion: PROTOCOL_VERSION,
         modelCount: catalog.models.length,
-        workspaceCount: 0
+        workspaceCount: (await workspaceRegistry.list()).length
       };
+    },
+    async registerWorkspace(workspaceId, workspaceRoot) {
+      const descriptor = await workspaceRegistry.register(workspaceId, workspaceRoot);
+      await workspaceContextCache.get(descriptor.displayPath);
+      await workspaceMcpRegistry.get(workspaceId);
+      return descriptor;
+    },
+    async listWorkspaces() {
+      return workspaceRegistry.list();
+    },
+    async releaseWorkspace(workspaceId) {
+      await workspaceMcpRegistry.release(workspaceId);
+      await workspaceRegistry.release(workspaceId);
     },
     async getModelCatalog(): Promise<ModelCatalogDto> {
       return catalog;
@@ -207,9 +253,13 @@ export async function createOhnaRuntime(options: OhnaRuntimeOptions): Promise<Oh
     async shutdown(): Promise<void> {
       if (closed) return;
       closed = true;
+      await workspaceMcpRegistry.closeAll();
       await runManager.shutdown();
     },
     async startRun(input: StartRunInput): Promise<RunStartResultDto> {
+      if (input.workspaceId) {
+        await workspaceRegistry.register(input.workspaceId, workspaceRoot);
+      }
       const result = await runManager.createRun({
         requestId: randomUUID(),
         conversationId: input.conversationId,
@@ -225,16 +275,17 @@ export async function createOhnaRuntime(options: OhnaRuntimeOptions): Promise<Oh
       return toRunStartResult(result);
     },
     getRunSnapshot(runId: string) {
-      return runManager.getSnapshot(runId);
+      return runManager.getSnapshot(runId, { assertAuthorized });
     },
     listRunsByConversation(conversationId: string) {
+      // RunManager.listRunsByConversation 已在内部调用 this.assertAuthorized，无需重复传参。
       return runManager.listRunsByConversation(conversationId);
     },
     cancelRun(runId: string) {
-      return runManager.cancel(runId);
+      return runManager.cancel(runId, { assertAuthorized });
     },
-    resolveConfirmation(runId, toolCallId, decision) {
-      return runManager.resolveConfirmation(runId, toolCallId, decision);
+    async resolveConfirmation(runId, toolCallId, decision, options) {
+      return runManager.resolveConfirmation(runId, toolCallId, decision, options ?? { assertAuthorized });
     }
   };
 }

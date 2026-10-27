@@ -424,6 +424,9 @@ importers:
       '@aiagent/ai':
         specifier: workspace:*
         version: link:../ai
+      '@aiagent/coding':
+        specifier: workspace:*
+        version: link:../coding
       '@aiagent/tools':
         specifier: workspace:*
         version: link:../tools

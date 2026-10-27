@@ -37,6 +37,7 @@ import type {
   ResolveConfirmationResult
 } from "./confirm-gate.js";
 import { RunConfirmations } from "./run/confirmations.js";
+import type { WorkspaceRegistry, WorkspaceContextCache, WorkspaceMcpRegistry } from "./workspace/index.js";
 import {
   compactConversationHistory,
   createServeSummarizer,
@@ -102,6 +103,14 @@ export class RunManager {
   private readonly runWindow: LlmWindowDto;
   /** Team 开关的 run 级装配（关时零开销：begin 直接返回 undefined）。 */
   private readonly teamBinding: TeamRunBinding;
+  /** 工作区授权注册表（spec §6）；缺省 undefined 时资源操作不反查授权（测试 / 无工作区模式）。 */
+  private readonly workspaceRegistry?: WorkspaceRegistry;
+  /** 按 canonical 根缓存的系统提示词与工具集；run 创建时按会话 workspace 解析上下文。 */
+  private readonly workspaceContextCache?: WorkspaceContextCache;
+  /** 按 workspace 隔离的 MCP 会话生命周期容器。 */
+  private readonly workspaceMcpRegistry?: WorkspaceMcpRegistry;
+  /** 资源操作前的归属授权校验（fail-closed）；缺省为空操作。 */
+  private readonly assertAuthorized: (id: string) => Promise<void>;
   /**
    * @param options 模型、工具、store、确认闸门与可选 streamFn（测试注入）。
    */
@@ -132,6 +141,10 @@ export class RunManager {
       (runId) => this.active.get(runId),
       (run, type, payload) => this.emitFrame(run, type, payload)
     );
+    this.workspaceRegistry = options.workspaceRegistry;
+    this.workspaceContextCache = options.workspaceContextCache;
+    this.workspaceMcpRegistry = options.workspaceMcpRegistry;
+    this.assertAuthorized = options.assertAuthorized ?? (async () => undefined);
   }
 
   /**
@@ -155,11 +168,15 @@ export class RunManager {
    * @param decision allow / deny。
    * @returns 结构化结果。
    */
-  resolveConfirmation(
+  async resolveConfirmation(
     runId: string,
     toolCallId: string,
-    decision: ConfirmationDecision
-  ): ResolveConfirmationResult {
+    decision: ConfirmationDecision,
+    options?: { assertAuthorized?: (id: string) => Promise<void> }
+  ): Promise<ResolveConfirmationResult> {
+    // 资源操作前反查工作区授权（fail-closed）；未授权 / 已撤销的工作区一律拒绝。
+    const authorize = options?.assertAuthorized ?? this.assertAuthorized;
+    await authorize(runId);
     return this.confirmations.resolve(runId, toolCallId, decision);
   }
 
@@ -351,7 +368,7 @@ export class RunManager {
 
     // BUG-002 方案 2：按会话持久化的 workspaceRoot 动态装配上下文（编码工具 + 系统提示词）。
     // 解析失败回退 undefined（execute 内退回构造时的单工作区语义），不阻断本次 run。
-    const workspace = await this.resolveWorkspaceContext(input.conversationId);
+    const workspace = await this.resolveWorkspaceContext(input.conversationId, input.workspaceId);
 
     // 兜底捕获 execute 逃逸的异常（通常是落盘/广播二次失败，如磁盘写满）：
     // 必须转成结构化错误并强制内存终态，避免 run 永远 running + unhandled rejection。
@@ -392,6 +409,8 @@ export class RunManager {
    * @returns run 摘要列表（创建时间倒序）；状态优先取内存态活跃 run。
    */
   async listRunsByConversation(conversationId: string): Promise<RunMetaDtoV2[]> {
+    // 资源操作前反查工作区授权（fail-closed）。
+    await this.assertAuthorized(conversationId);
     return await this.options.runStore.listRunsByConversation(
       conversationId,
       (runId) => this.active.get(runId)?.snapshot.status
@@ -404,7 +423,13 @@ export class RunManager {
    * @param runId run id。
    * @returns 快照或 null。
    */
-  async getSnapshot(runId: string): Promise<RunSnapshotDtoV2 | null> {
+  async getSnapshot(
+    runId: string,
+    options?: { assertAuthorized?: (id: string) => Promise<void> }
+  ): Promise<RunSnapshotDtoV2 | null> {
+    // 资源操作前反查工作区授权（fail-closed）。
+    const authorize = options?.assertAuthorized ?? this.assertAuthorized;
+    await authorize(runId);
     const run = this.active.get(runId);
     if (run) return cloneSnapshot(run.snapshot);
     return await this.options.runStore.getRun(runId);
@@ -535,7 +560,13 @@ export class RunManager {
    * @param runId run id。
    * @returns 取消后的快照；run 不存在返回 null。
    */
-  async cancel(runId: string): Promise<RunSnapshotDtoV2 | null> {
+  async cancel(
+    runId: string,
+    options?: { assertAuthorized?: (id: string) => Promise<void> }
+  ): Promise<RunSnapshotDtoV2 | null> {
+    // 资源操作前反查工作区授权（fail-closed）。
+    const authorize = options?.assertAuthorized ?? this.assertAuthorized;
+    await authorize(runId);
     const run = this.active.get(runId);
     if (!run) return await this.options.runStore.getRun(runId);
     if (run.terminal) return cloneSnapshot(run.snapshot);
@@ -580,16 +611,52 @@ export class RunManager {
    * @param conversationId 会话 id。
    * @returns 会话上下文，或 undefined（回退单工作区）。
    */
+  /**
+   * 解析本次 run 的会话级工作区上下文（spec §6.2）。
+   *
+   * 优先按 `workspaceId` 从注册表解析（run 创建入参携带，跨工作区会话续写场景），
+   * 否则按会话持久化的 workspaceId 反查。解析到的归属会在此处把 run 绑定到工作区，
+   * 使后续 getSnapshot / cancel / resolveConfirmation 能凭 runId 反查授权。
+   * 注册表 / 上下文缓存缺位时返回 undefined，回退构造时的单工作区语义，不阻断 run。
+   *
+   * @param conversationId 会话 id。
+   * @param workspaceId 可选的显式工作区 id（run 创建入参携带）。
+   * @returns 会话上下文，或 undefined（回退单工作区）。
+   */
   private async resolveWorkspaceContext(
-    conversationId: string
+    conversationId: string,
+    workspaceId?: string
   ): Promise<ResolvedWorkspaceContext | undefined> {
-    if (!this.options.resolveWorkspace) return undefined;
+    const registry = this.workspaceRegistry;
+    if (!registry) return undefined;
     try {
-      return await this.options.resolveWorkspace(conversationId);
+      // 先按显式 workspaceId 解析，否则按会话反查持久化的 workspaceId。
+      const resolved =
+        (workspaceId ? await registry.resolveAuthorizedWorkspace(workspaceId) : undefined) ??
+        (await registry.resolveConversationWorkspace(conversationId));
+      // run 绑定到工作区：后续资源操作可凭 runId 反查授权。
+      registry.bindRun(this.activeRunIdFor(conversationId), conversationId, resolved.workspaceId);
+      const context = await this.workspaceContextCache?.get(resolved.workspaceRoot);
+      return context
+        ? { workspaceRoot: context.workspaceRoot, systemPrompt: context.systemPrompt, tools: context.tools }
+        : undefined;
     } catch {
       // 解析失败静默回退：跨工作区续写是增强能力，不是 run 的前置条件。
       return undefined;
     }
+  }
+
+  /**
+   * 取当前活跃 run 的 id（按 conversation 反查），用于把 run 绑定到工作区。
+   *
+   * @param conversationId 会话 id。
+   * @returns 活跃 run id；无活跃 run 时返回空串（绑定会被忽略）。
+   */
+  private activeRunIdFor(conversationId: string): string {
+    for (const run of this.active.values()) {
+      if (run.snapshot.conversationId === conversationId) return run.snapshot.runId;
+    }
+    return "";
   }
 
   /**

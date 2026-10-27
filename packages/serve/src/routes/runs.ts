@@ -70,7 +70,8 @@ export function registerRunRoutes(app: FastifyInstance, deps: RouteDeps): void {
         (await deps.sessionStore.create({
           id: conversationId,
           title: deriveTitle(message),
-          workspaceRoot: deps.workspaceRoot
+          workspaceRoot: deps.workspaceRoot,
+          workspaceId: deps.workspaceRoot
         }));
       await deps.messageStore.ensureConversation(session.id, session.title);
 

@@ -19,6 +19,8 @@ export interface SessionMeta {
   createdAt: string;
   updatedAt: string;
   workspaceRoot: string;
+  /** 会话绑定的工作区 ID（spec §6.3：会话以持久化 workspaceId 绑定工作区）。 */
+  workspaceId: string;
   status: LocalSessionStatus;
   /** 归档时间；仅 status=archived 时存在。 */
   archivedAt?: string;
@@ -30,6 +32,8 @@ export interface CreateSessionInput {
   id?: string;
   title?: string;
   workspaceRoot: string;
+  /** 会话绑定的工作区 ID。 */
+  workspaceId: string;
 }
 
 /** update 的输入。 */
@@ -71,6 +75,9 @@ function toSessionLine(value: unknown): SessionLine | null {
   // 阻断性升级：workspaceRoot 必填，缺字段或空串的行视为坏行跳过，不做空串兜底（02 之前的旧会话
   // 数据无此字段，按坏行处理而非默认归组）。
   if (typeof record.workspaceRoot !== "string" || record.workspaceRoot.trim() === "") return null;
+  // 阻断性升级：workspaceId 必填，缺字段或空串的行视为坏行跳过（会话以持久化
+  // workspaceId 绑定工作区，见 spec §6.3；02 之前的旧会话数据无此字段，按坏行处理）。
+  if (typeof record.workspaceId !== "string" || record.workspaceId.trim() === "") return null;
   const status = record.status === "archived" ? "archived" : "active";
   return {
     type: "session",
@@ -79,6 +86,7 @@ function toSessionLine(value: unknown): SessionLine | null {
     createdAt: typeof record.createdAt === "string" ? record.createdAt : nowIso(),
     updatedAt: typeof record.updatedAt === "string" ? record.updatedAt : nowIso(),
     workspaceRoot: record.workspaceRoot,
+    workspaceId: record.workspaceId,
     status,
     ...(status === "archived" && typeof record.archivedAt === "string" ? { archivedAt: record.archivedAt } : {})
   };
@@ -119,6 +127,7 @@ export class LocalSessionStore {
       createdAt: now,
       updatedAt: now,
       workspaceRoot: input.workspaceRoot,
+      workspaceId: input.workspaceId,
       status: "active"
     };
     await this.append(meta);

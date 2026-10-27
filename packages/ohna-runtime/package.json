@@ -18,6 +18,7 @@
   },
   "dependencies": {
     "@aiagent/agent": "workspace:*",
+    "@aiagent/coding": "workspace:*",
     "@aiagent/ai": "workspace:*",
     "@aiagent/tools": "workspace:*",
     "@aiagent/trace": "workspace:*",

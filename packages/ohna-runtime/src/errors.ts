@@ -8,6 +8,32 @@
  */
 import type { RuntimeErrorDto, RuntimeErrorCode } from "@aiagent/types";
 
+/**
+ * 可抛出的协议层归一错误：携带稳定 `code` 与可选 `details`。
+ *
+ * 与裸 `Error` 的区别：本错误被 `toRuntimeError` 视为「已归一」，只回填 requestId
+ * 而不替换 code，因此边界可直接传播 `code` 给调用方（如 `forbidden` /
+ * `workspace_unavailable`）。消息只放可读文案，不携带堆栈。
+ */
+export class RuntimeError extends Error {
+  /** 归一错误码。 */
+  readonly code: RuntimeErrorCode;
+  /** 可选结构化细节。 */
+  readonly details?: Record<string, unknown>;
+
+  /**
+   * @param code 归一错误码。
+   * @param message 可读消息。
+   * @param details 可选结构化细节。
+   */
+  constructor(code: RuntimeErrorCode, message: string, details?: Record<string, unknown>) {
+    super(message);
+    this.name = "RuntimeError";
+    this.code = code;
+    this.details = details;
+  }
+}
+
 /** 协议层归一错误码全集，用于判断未知错误是否需要强制归一到 fallback。 */
 const KNOWN_ERROR_CODES: readonly RuntimeErrorCode[] = [
   "bad_request",

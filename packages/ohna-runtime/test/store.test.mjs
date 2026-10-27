@@ -50,12 +50,12 @@ test("session store: create/list/get/touch/update + 损坏行跳过", async () =
   const dir = await tempDir();
   try {
     const store = new LocalSessionStore(path.join(dir, "sessions"));
-    const created = await store.create({ title: "  Hello   World  ", workspaceRoot: "/tmp/ws" });
+    const created = await store.create({ title: "  Hello   World  ", workspaceRoot: "/tmp/ws", workspaceId: "ws-tmp" });
     assert.equal(created.title, "Hello World");
     assert.equal(created.status, "active");
 
     // 同 id create 幂等：不覆盖已有标题。
-    const again = await store.create({ id: created.id, title: "另一个标题", workspaceRoot: "/tmp/ws" });
+    const again = await store.create({ id: created.id, title: "另一个标题", workspaceRoot: "/tmp/ws", workspaceId: "ws-tmp" });
     assert.equal(again.title, "Hello World");
 
     await store.touch(created.id);
@@ -85,7 +85,7 @@ test("session store: workspaceRoot 必填透出，缺字段/空串的坏行被�
   try {
     const store = new LocalSessionStore(path.join(dir, "sessions"));
     // 正常写入带 workspaceRoot 的会话，store 透出该字段。
-    const created = await store.create({ title: "带工作区的会话", workspaceRoot: "/work/a" });
+    const created = await store.create({ title: "带工作区的会话", workspaceRoot: "/work/a", workspaceId: "ws-a" });
     assert.equal(created.workspaceRoot, "/work/a");
     // 原 serve 测试经 toConversationDto 验证 DTO 透出 workspaceRoot；
     // runtime 包不含路由层 DTO，这里直接断言 store 返回的元数据字段即可覆盖同一意图。

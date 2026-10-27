@@ -12,6 +12,7 @@ import type {
 } from "@aiagent/types";
 import type { AsyncConfirmGate } from "../confirm-gate.js";
 import type { LocalMessageStore, LocalRunStore, LocalSessionStore } from "../store/index.js";
+import type { WorkspaceRegistry, WorkspaceContextCache, WorkspaceMcpRegistry } from "../workspace/index.js";
 import type { ServeTeamSession } from "./team-session.js";
 
 /** SSE / 快照错误的最小结构化形状。 */
@@ -110,6 +111,26 @@ export interface RunManagerOptions {
   resolveWorkspace?: (conversationId: string) => Promise<ResolvedWorkspaceContext>;
   /** 异步确认闸门；缺省时所有工具直接执行（测试 / 只读装配）。 */
   confirmGate?: AsyncConfirmGate;
+  /**
+   * 工作区授权注册表（spec §6）：负责授权表维护与 conversation/run → workspace 归属反查。
+   * 资源操作经 `assertAuthorized` 反查授权，未授权 / 已撤销的工作区一律拒绝（fail-closed）。
+   */
+  workspaceRegistry?: WorkspaceRegistry;
+  /**
+   * 按 canonical 根缓存的系统提示词与工具集；run 创建时按会话 workspace 解析上下文，
+   * 避免每次 run 都重新读项目上下文（AGENTS.md / git 状态）。
+   */
+  workspaceContextCache?: WorkspaceContextCache;
+  /**
+   * 按 workspace 隔离的 MCP 会话生命周期容器；撤销工作区时统一 close。
+   */
+  workspaceMcpRegistry?: WorkspaceMcpRegistry;
+  /**
+   * 资源操作前的归属授权校验（fail-closed）：反查 id 对应的 conversation/run 所属工作区
+   * 是否已授权。未绑定 / 未授权时抛 `forbidden` 或 `workspace_unavailable`。
+   * 缺省（测试 / 无工作区模式）为空操作。
+   */
+  assertAuthorized?: (id: string) => Promise<void>;
   /**
    * run 前会话级压缩的摘要器（L3-3）；缺省由 model + apiKey + streamFn 构造
    * （createServeSummarizer）。测试可注入桩以避免真实摘要调用。

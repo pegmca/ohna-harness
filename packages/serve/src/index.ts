@@ -320,7 +320,8 @@ export async function createOhnaServer(options: OhnaServerOptions): Promise<Ohna
     async createConversation(title?: string) {
       const meta = await sessionStore.create({
         title: title?.trim() ? title : "新会话",
-        workspaceRoot
+        workspaceRoot,
+        workspaceId: workspaceRoot
       });
       await messageStore.ensureConversation(meta.id, meta.title);
       return toConversationDto(meta);

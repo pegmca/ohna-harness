@@ -21,3 +21,10 @@ export * from "./validation.js";
  */
 export * from "./runtime.js";
 export { RunManager } from "./run-manager.js";
+
+/**
+ * 工作区授权与归属校验模块：registry（授权表 + 归属反查）、context（上下文缓存）、
+ * mcp（MCP 会话生命周期容器）。三者只在 runtime 边界内持有，渲染端仅以 `workspaceId`
+ * 操作资源，绝对根目录不离开 runtime。
+ */
+export * from "./workspace/index.js";

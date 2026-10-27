@@ -8,6 +8,12 @@ import type { DocumentParser, ParsedBlock, ParserInput } from "../types.js";
 import { collectParagraphBlocks, splitLines } from "../block-collector.js";
 import { PDF_WORKER_SOURCE } from "../pdf-worker.js";
 
+/** 子进程输出的单页文本及其文本层诊断。 */
+interface ParsedPdfPage {
+  text: string;
+  sourceLayer: "native" | "char_spaced";
+}
+
 /**
  * 解析 PDF 二进制内容为带 pageNumber 与表格标记的 block 草稿。
  *
@@ -40,9 +46,18 @@ export function parsePdfBlocks(content: Uint8Array): ParsedBlock[] {
       maxBuffer: 16 * 1024 * 1024,
       timeout: 30000
     });
-    const parsed = JSON.parse(out.toString("utf-8")) as { pages: string[]; numpages: number };
+    const parsed = JSON.parse(out.toString("utf-8")) as
+      | {
+          pages: Array<ParsedPdfPage | string>;
+          numpages: number;
+        }
+      | string[];
 
-    return buildPdfBlocks(parsed.pages);
+    return buildPdfBlocks(
+      (Array.isArray(parsed) ? parsed : parsed.pages).map((page) =>
+        typeof page === "string" ? { text: page, sourceLayer: "native" } : page
+      )
+    );
   } finally {
     // 无论成功失败都清理临时 PDF，避免磁盘泄漏。
     rmSync(dir, { recursive: true, force: true });
@@ -59,16 +74,18 @@ export function parsePdfBlocks(content: Uint8Array): ParsedBlock[] {
  * @param pages 子进程解析出的逐页纯文本（已按 y 坐标切好行）。
  * @returns 带 pageNumber 与表格标记的解析 block 草稿。
  */
-export function buildPdfBlocks(pages: readonly string[]): ParsedBlock[] {
+export function buildPdfBlocks(pages: readonly ParsedPdfPage[]): ParsedBlock[] {
   const blocks: ParsedBlock[] = [];
 
-  pages.forEach((pageText, pageIndex) => {
+  pages.forEach((page, pageIndex) => {
     const pageNumber = pageIndex + 1;
+    const pageMetadata: Record<string, string | number | boolean | null> =
+      page.sourceLayer === "char_spaced" ? { sourceLayer: page.sourceLayer } : {};
 
     collectParagraphBlocks(
-      splitLines(pageText),
+      splitLines(page.text),
       ({ text, lineStart, lineEnd }) => {
-        blocks.push({ text, pageNumber, lineStart, lineEnd });
+        blocks.push({ text, pageNumber, lineStart, lineEnd, metadata: pageMetadata });
       },
       (line, lineNumber, flush) => {
         // 表格行单独成块并打标，避免与相邻正文段落混在同一 block。
@@ -83,6 +100,7 @@ export function buildPdfBlocks(pages: readonly string[]): ParsedBlock[] {
           lineStart: lineNumber,
           lineEnd: lineNumber,
           metadata: {
+            ...pageMetadata,
             isTableRow: true,
             tableColumnCount: countTableColumns(line)
           }
@@ -96,7 +114,7 @@ export function buildPdfBlocks(pages: readonly string[]): ParsedBlock[] {
 }
 
 /**
- * 识别"表格行"：多列分隔特征——制表符、markdown 竖线，或连续多个空格形成至少两处列间隔。
+ * 识别"表格行"：制表符、markdown 竖线、至少两处 ASCII 列间隔，或一处稳定间隔的两列表。
  *
  * WHY：把表格信息存进 block.metadata（而非丢弃或并入正文），是因为 RAG 检索与
  * citation 需要区分"这是一段叙述"还是"这是一张表格的一行"，从而保留结构化语义线索，
@@ -114,10 +132,18 @@ export function isTableRow(line: string): boolean {
     return true;
   }
 
-  // 连续多个空格且至少出现两处"非空白-空格-非空白"的列间隔，才判定为多列表格。
-  const gaps = line.match(/\S\s{2,}\S/g);
+  const stableGaps = line.split(/[ \t]{2,}|\u3000+/).filter((cell) => cell.trim().length > 0);
 
-  return gaps !== null && gaps.length >= 2;
+  if (stableGaps.length >= 3) {
+    return true;
+  }
+
+  if (stableGaps.length !== 2) {
+    return false;
+  }
+
+  // 两列表要求首列非纯数字，避免把正文里的编号/多个数字误判成表格。
+  return !/^[\d,.%()+\-\s]+$/.test(stableGaps[0].trim());
 }
 
 /**
@@ -140,7 +166,7 @@ export function countTableColumns(line: string): number {
     return line.split("\t").filter((cell) => cell.trim().length > 0).length;
   }
 
-  return line.split(/\s{2,}/).filter((cell) => cell.trim().length > 0).length;
+  return line.split(/[ \t]{2,}|\u3000+/).filter((cell) => cell.trim().length > 0).length;
 }
 
 /** `%PDF-` 的字节序列（0x25 0x50 0x44 0x46 0x2D）。 */

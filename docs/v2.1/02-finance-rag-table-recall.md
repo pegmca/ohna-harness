@@ -154,6 +154,22 @@ PDF ──parsePdfBlocks──▶ blocks(pageNumber / isTableRow / tableColumnCo
   的 gold 首列实体命中率」对比基线判定，不得再用「显著回升」这类无基线口径。目标阈值在拿到基线后
   于 P1 开工前写入本节，作为硬门禁。
 
+**D0 基线与硬门禁**（2026-10-28，改动前 `parsePdfBlocks`）：
+
+| 题目 | blocks | pages | blocks/page | isTableRow | gold 首列实体 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| fin-003 | 263 | 263 | 1.00 | 0 | 8/8 |
+| fin-004 | 221 | 221 | 1.00 | 0 | 2/2 |
+| fin-008 | 4243 | 250 | 16.97 | 2114 | 2/3 |
+| fin-009 | 258 | 258 | 1.00 | 0 | 6/6 |
+| fin-013 | 4747 | 246 | 19.30 | 1768 | 1/1 |
+
+命中口径：gold 首列实体在 CJK 归一后的解析全文里完整出现。P1 的硬门禁是上述五题
+**逐题保留基线命中数**（fin-003 8、fin-004 2、fin-008 2、fin-009 6、fin-013 1），
+且 fin-003/004/009/013 均至少产出一条 `isTableRow` 块；解析单测与
+`test/diagnose-finance-table-parsing.mjs` 均须通过。当前 D0 结果满足该门禁，
+并以 `sourceLayer:"char_spaced"` 标记坏层页面。
+
 ---
 
 ## 4. D1 · table-aware 整表切块（整表 + summary sibling 同批）

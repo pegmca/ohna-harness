@@ -104,4 +104,3 @@ async function projectTraceMetadata(results, runtime) {
     metadata: byId.get(result.chunkId)?.metadata ?? result.metadata
   }));
 }
-

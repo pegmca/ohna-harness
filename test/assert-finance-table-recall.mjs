@@ -76,7 +76,6 @@ for (const row of rows) {
       `group=${row.groupComplete ?? false} expanded=${row.siblingExpanded ?? false} missing=${(row.missingRows ?? []).join("|")}`
   );
 }
-
 if (process.argv[2]) {
   const outputPath = resolve(process.argv[2]);
   writeFileSync(outputPath, JSON.stringify({ generatedAt: new Date().toISOString(), rows }, null, 2), "utf8");

@@ -20,7 +20,7 @@ export function createCitationFromRetrievedChunk(result: RetrievedChunk): Citati
     source: result.chunk.source,
     heading: result.chunk.heading,
     chunkIndex: result.chunk.chunkIndex,
-    quote: createQuote(result.chunk.text),
+    quote: createCitationText(result.chunk),
     pageNumber: result.chunk.pageNumber ?? result.chunk.page,
     confidence: result.scoreBreakdown.finalScore,
     // 仅在候选带 sourceKind 时才复制，保证旧单源 citation 形状不变（不出现 undefined 键）。
@@ -120,7 +120,7 @@ export function synthesizeRagAnswer(
   const evidenceLines = sufficientResults.slice(0, 3).map((result, index) => {
     const heading = result.chunk.heading ? `${result.chunk.heading}：` : "";
 
-    return `[${index + 1}] ${heading}${createAnswerSentence(result.chunk.text, result.scoreBreakdown.matchedTerms)}`;
+    return `[${index + 1}] ${heading}${createAnswerEvidence(result.chunk, result.scoreBreakdown.matchedTerms)}`;
   });
 
   return createRagAnswer({
@@ -206,6 +206,27 @@ function createAnswerSentence(text: string, matchedTerms: readonly string[] = []
   const best = scoredSentences[0]?.sentence ?? normalized;
 
   return best.length > 120 ? `${best.slice(0, 120)}...` : best;
+}
+
+/**
+ * 整表 chunk 直接返回全表；普通 chunk 仍走 120 字句子摘要。
+ *
+ * @param chunk RAG chunk。
+ * @param matchedTerms 查询命中词。
+ * @returns 可直接进入 answer 的证据文本。
+ */
+function createAnswerEvidence(chunk: RagChunk, matchedTerms: readonly string[]): string {
+  return chunk.metadata.isTableChunk === true ? chunk.text : createAnswerSentence(chunk.text, matchedTerms);
+}
+
+/**
+ * 整表 chunk 的 citation 保留全表文本；普通 chunk 维持短引文。
+ *
+ * @param chunk RAG chunk。
+ * @returns citation quote。
+ */
+function createCitationText(chunk: RagChunk): string {
+  return chunk.metadata.isTableChunk === true ? chunk.text : createQuote(chunk.text);
 }
 
 /**

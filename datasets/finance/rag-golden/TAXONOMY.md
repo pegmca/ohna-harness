@@ -62,6 +62,7 @@
 - [ ] `unit_trap` 题 `note` 写明单位，`answer_unit` 准确。
 - [ ] `latest_by` 题带 `snapshot_dependent:true` + `resolution`（按当前 manifest 重算，语料变要重抄）。
 - [ ] `validate` 脚本 0 ERROR（允许 fin-009 式稀疏行 WARN）。
+- [ ] `table` 题在 golden 回归中验证 chunk 级整表召回：summary/whole-table 命中后须通过 `tableGroupId` 覆盖全部 gold 行。
 
 ## 六、与评测管线的关系
 

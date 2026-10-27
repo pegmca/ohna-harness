@@ -51,12 +51,14 @@ export type CitationSourceKind = CitationSourceKindDto;
 
 export type EmbeddingVector = readonly number[];
 
-export type ChunkingStrategy = "fixed_size" | "heading_aware";
+export type ChunkingStrategy = "fixed_size" | "heading_aware" | "table_aware";
 
 export interface ChunkingOptions {
   strategy: ChunkingStrategy;
   maxChars: number;
   overlapChars: number;
+  /** table_aware 的页眉页脚豁免长度；缺省 80。 */
+  tableHeaderFooterMaxChars?: number;
 }
 
 /**
@@ -159,6 +161,8 @@ export interface RetrievalOptions {
   vectorWeight?: number;
   keywordWeight?: number;
   rerank?: boolean;
+  /** 命中整表或 summary 后是否在同一 tableGroupId 内展开 sibling；缺省 true。 */
+  expandTableGroups?: boolean;
 }
 
 export interface RetrievedChunk {
@@ -340,6 +344,8 @@ export interface HybridRetrieverOptions {
    * 缺省 undefined 时退回内存扫描 `chunks`（单测/本地 demo 退化路径）。
    */
   keywordStore?: KeywordCandidateStore;
+  /** 整表/summary 的全部 chunk，用于按 tableGroupId 展开 sibling。 */
+  tableChunks?: readonly EmbeddedChunk[];
 }
 
 export interface RagStructuredError {
@@ -409,6 +415,16 @@ export const RAG_PARSER_VERSION = "parsing-markdown-txt-v1";
 
 /** 切块器版本标识：由默认 chunking options 派生，策略或窗口变化时必须同步更新。 */
 export const RAG_CHUNKER_VERSION = `${DEFAULT_CHUNKING_OPTIONS.strategy}-${DEFAULT_CHUNKING_OPTIONS.maxChars}-${DEFAULT_CHUNKING_OPTIONS.overlapChars}-v1`;
+
+/**
+ * 从实际生效的 chunking options 派生 lineage 版本。
+ *
+ * @param options 当前生效的切块配置。
+ * @returns `strategy-maxChars-overlapChars-v1` 形式版本。
+ */
+export function resolveChunkerVersion(options: ChunkingOptions): string {
+  return `${options.strategy}-${options.maxChars}-${options.overlapChars}-v1`;
+}
 
 export const DEFAULT_MOCK_EMBEDDING_MODEL = "deterministic-mock-embedding-v1";
 export const DEFAULT_MOCK_EMBEDDING_DIMENSIONS = 32;

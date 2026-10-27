@@ -240,6 +240,11 @@ PDF ──parsePdfBlocks──▶ blocks(pageNumber / isTableRow / tableColumnCo
   页眉粘连豁免、稀疏行列数去抖、单行超大表不腰斩、`tableGroupId` 关联、版本派生正确；
   另补检索侧 sibling 展开与 answer 整表交付的定向单测。
 
+**当前实现**：`table_aware` 已聚合连续表行并生成共享 `tableGroupId` 的整表与 summary sibling；
+检索在 rerank 前展开同组整表 chunk（`expandTableGroups` 可关闭）；`tableColumnCount` 取中位数并排除
+`其中/减/加` 稀疏抵减行；表头行计入 `tableRowCount`，但不计入 summary 的首列实体枚举。
+ingest lineage 的 `chunkerVersion` 由当前实际生效的 chunking options 派生。
+
 ---
 
 ## 5. D2 · 评测数据通道保留结构（D1 验收前提）

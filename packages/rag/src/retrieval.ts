@@ -61,6 +61,8 @@ class HybridRetriever implements Retriever {
    * 缺省 undefined 时退回内存扫描 `this.chunks`（单测/本地 demo 退化路径）。
    */
   private readonly keywordStore?: KeywordCandidateStore;
+  /** 整表与 summary sibling 的全量候选，用于按 tableGroupId 展开。 */
+  private readonly tableChunks: readonly EmbeddedChunk[];
 
   /**
    * 创建混合检索器实例。
@@ -72,6 +74,7 @@ class HybridRetriever implements Retriever {
     this.vectorStore = options.vectorStore;
     this.chunks = options.chunks ?? [];
     this.keywordStore = options.keywordStore;
+    this.tableChunks = options.tableChunks ?? [];
     this.reranker = options.reranker ?? createHeuristicReranker();
   }
 
@@ -189,7 +192,10 @@ class HybridRetriever implements Retriever {
       });
     }
 
-    const mergedCandidates = [...candidateMap.values()]
+    const expandedCandidates = normalizedOptions.expandTableGroups
+      ? expandTableGroupCandidates([...candidateMap.values()], this.tableChunks)
+      : [...candidateMap.values()];
+    const mergedCandidates = expandedCandidates
       .sort(compareRetrievedChunks)
       .slice(0, normalizedOptions.candidateLimit)
       .map((result, index) => ({ ...result, rank: index + 1 }));
@@ -318,6 +324,7 @@ interface NormalizedRetrievalOptions {
   vectorWeight: number;
   keywordWeight: number;
   rerank: boolean;
+  expandTableGroups: boolean;
 }
 
 interface KeywordCandidate {
@@ -333,7 +340,7 @@ interface KeywordCandidate {
  */
 function normalizeRetrievalOptions(
   options: RetrievalOptions
-): { ok: true; mode: RetrievalMode; topK: number; candidateLimit: number; filter?: VectorSearchOptions["filter"]; vectorWeight: number; keywordWeight: number; rerank: boolean } | { ok: false; error: RagStructuredError } {
+): { ok: true; mode: RetrievalMode; topK: number; candidateLimit: number; filter?: VectorSearchOptions["filter"]; vectorWeight: number; keywordWeight: number; rerank: boolean; expandTableGroups: boolean } | { ok: false; error: RagStructuredError } {
   if (
     options.filter?.documentIds !== undefined
     && (
@@ -414,8 +421,55 @@ function normalizeRetrievalOptions(
     filter: options.filter,
     vectorWeight,
     keywordWeight,
-    rerank: options.rerank ?? true
+    rerank: options.rerank ?? true,
+    expandTableGroups: options.expandTableGroups ?? true
   };
+}
+
+/**
+ * 把命中的整表或 summary 扩展到同 tableGroupId 的 sibling，并按 chunkId 去重。
+ *
+ * @param candidates 当前召回候选。
+ * @param tableChunks 所有可见整表相关 chunks。
+ * @returns 保留原候选并追加 sibling 的新列表。
+ */
+function expandTableGroupCandidates(
+  candidates: readonly RetrievedChunk[],
+  tableChunks: readonly EmbeddedChunk[]
+): RetrievedChunk[] {
+  const byGroup = new Map<string, EmbeddedChunk[]>();
+  for (const chunk of tableChunks) {
+    const groupId = chunk.metadata.tableGroupId;
+    if (typeof groupId !== "string") continue;
+    const group = byGroup.get(groupId) ?? [];
+    group.push(chunk);
+    byGroup.set(groupId, group);
+  }
+
+  const expanded = new Map<string, RetrievedChunk>(
+    candidates.map((candidate) => [candidate.chunk.chunkId, candidate])
+  );
+
+  for (const candidate of candidates) {
+    const groupId = candidate.chunk.metadata.tableGroupId;
+    if (typeof groupId !== "string") continue;
+    const siblings = byGroup.get(groupId) ?? [];
+    for (const sibling of siblings) {
+      if (expanded.has(sibling.chunkId)) continue;
+      expanded.set(
+        sibling.chunkId,
+        createRetrievedChunkDraft(sibling, {
+          vectorScore: candidate.scoreBreakdown.vectorScore,
+          keywordScore: candidate.scoreBreakdown.keywordScore,
+          queryTerms: candidate.scoreBreakdown.matchedTerms,
+          vectorWeight: candidate.scoreBreakdown.vectorWeight,
+          keywordWeight: candidate.scoreBreakdown.keywordWeight
+        })
+      );
+    }
+  }
+
+  return [...expanded.values()];
 }
 
 /**

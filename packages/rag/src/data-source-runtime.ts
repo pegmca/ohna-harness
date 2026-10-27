@@ -29,8 +29,8 @@ import {
 } from "./source-uri.js";
 import {
   DEFAULT_CHUNKING_OPTIONS,
-  RAG_CHUNKER_VERSION,
   RAG_PARSER_VERSION,
+  resolveChunkerVersion,
   type ChunkingOptions,
   type DataSourceIngestContext,
   type DataSourceListChunksOptions,
@@ -209,7 +209,7 @@ class DataSourceRuntimeService implements DataSourceRuntime {
       contentChecksum,
       content: request.content,
       parserVersion: RAG_PARSER_VERSION,
-      chunkerVersion: RAG_CHUNKER_VERSION,
+      chunkerVersion: resolveChunkerVersion(this.chunkingOptions ?? DEFAULT_CHUNKING_OPTIONS),
       now
     } as const;
 
@@ -471,6 +471,8 @@ class DataSourceRuntimeService implements DataSourceRuntime {
       // 未注入（无 DATABASE_URL / 单测）时退回既有内存语料路径，行为不变。
       const keywordStore = this.keywordStoreFactory?.(ownerUserId);
       if (keywordStore) {
+        const keywordCorpus = await this.loadTableChunksForExpansion(ownerUserId, this.repository);
+        if (!keywordCorpus.ok) return keywordCorpus;
         return {
           ok: true,
           data: createHybridRetriever({
@@ -479,6 +481,7 @@ class DataSourceRuntimeService implements DataSourceRuntime {
             // 关键词候选已外置，内存语料置空（仅向量召回与打分需要，向量召回不消费 chunks）。
             chunks: [],
             keywordStore,
+            tableChunks: keywordCorpus.data,
             reranker: this.reranker
           })
         };
@@ -504,6 +507,9 @@ class DataSourceRuntimeService implements DataSourceRuntime {
           embeddingClient,
           vectorStore: this.vectorStoreFactory(ownerUserId),
           chunks: embeddedChunks,
+          tableChunks: embeddedChunks.filter((chunk) =>
+            chunk.metadata.isTableChunk === true || chunk.metadata.isTableSummary === true
+          ),
           // 生产组合注入真实 Reranker（cross-encoder / LLM-judge）；缺省走内部 HeuristicReranker。
           reranker: this.reranker
         })
@@ -514,5 +520,55 @@ class DataSourceRuntimeService implements DataSourceRuntime {
         error: { code: "retrieval_failed", message: "RAG 持久化候选读取失败，请稍后重试。" }
       };
     }
+  }
+
+  /**
+   * 加载当前 owner 可见的整表相关 chunks，供检索侧 sibling 展开。
+   *
+   * @param ownerUserId 当前调用者。
+   * @param repository 文档 repository。
+   * @returns 整表与 summary chunks。
+   */
+  private async loadTableChunksForExpansion(
+    ownerUserId: string | null,
+    repository: RagDocumentRepository
+  ): Promise<
+    | { ok: true; data: Array<RagChunk & { embedding: readonly number[]; embeddingModel: string }> }
+    | { ok: false; error: RagStructuredError }
+  > {
+    const chunks: RagChunk[] = [];
+    let cursor: string | undefined;
+    do {
+      const page = await repository.listChunks({ ownerUserId, limit: 100, ...(cursor ? { cursor } : {}) });
+      chunks.push(...page.chunks.map(ragChunkRecordToChunk));
+      cursor = page.nextCursor ?? undefined;
+    } while (cursor !== undefined);
+
+    const filtered = chunks.filter(
+      (chunk) => chunk.metadata.isTableChunk === true || chunk.metadata.isTableSummary === true
+    );
+    const embeddingClient = this.embeddingClient;
+    if (!embeddingClient) {
+      return {
+        ok: false,
+        error: {
+          code: "embedding_provider_disabled",
+          message: "Embedding provider 未启用，无法展开整表检索结果。",
+          details: { reason: "embedding_client_not_injected" }
+        }
+      };
+    }
+    if (filtered.length === 0) return { ok: true, data: [] };
+    const embedded = await embeddingClient.embedTexts(filtered.map((chunk) => chunk.text));
+    if (!embedded.ok) return embedded;
+
+    return {
+      ok: true,
+      data: filtered.map((chunk, index) => ({
+        ...chunk,
+        embedding: embedded.embeddings[index].vector,
+        embeddingModel: embedded.model
+      }))
+    };
   }
 }

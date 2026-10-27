@@ -21,6 +21,13 @@
     "smoke:compose": "node test/smoke-compose.mjs",
     "eval:finance-api": "pnpm --filter @aiagent/finance-api eval",
     "eval:finance-api:update-baseline": "pnpm --filter @aiagent/finance-api eval --update-baseline",
+    "eval:finance-golden": "pnpm --filter @aiagent/finance-api eval:golden",
+    "eval:finance-golden:update-baseline": "pnpm --filter @aiagent/finance-api eval:golden:update-baseline",
+    "eval:finance-golden:generate": "node test/generate-finance-golden-v1.mjs",
+    "eval:finance-golden:validate": "node test/validate-finance-golden.mjs",
+    "eval:finance-golden:annotate": "node test/annotate-finance-golden.mjs",
+    "eval:finance-golden:mine": "node test/mine-finance-golden.mjs",
+    "eval:finance-golden:promote": "node test/promote-finance-golden.mjs",
     "eval:ohna:update-baseline": "pnpm --filter @aiagent/ohna-cli eval --update-baseline"
   },
   "devDependencies": {

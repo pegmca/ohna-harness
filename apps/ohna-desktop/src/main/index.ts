@@ -1,133 +1,95 @@
-import { join } from "node:path";
-import { app, BrowserWindow, ipcMain, MessageChannelMain, utilityProcess } from "electron";
-import { verifyPreloadSpike } from "./preload-spike.js";
+/**
+ * 桌面主进程入口（spec §8.1 / §9）：单实例、窗口、原生工作区授权、IPC 路由与 runtime 宿主编排。
+ *
+ * 职责边界（spec §2.1）：主进程只做原生授权与 IPC 路由，不实现 Agent / 会话 / run / 存储；
+ * 真正的执行核在 utilityProcess 的 `OhnaRuntime` 内，经 `RuntimeHost` 通过 MessagePort 通信。
+ * 本文件保持极薄：只装配宿主、窗口与 IPC，不内联业务逻辑。
+ */
+import { app, ipcMain } from "electron";
+import { PICK_WORKSPACE_CHANNEL } from "../preload/contract.js";
+import { RuntimeHost } from "./runtime-host.js";
+import { createUtilityTransport, DEFAULT_WORKER_ENTRY } from "./utility-transport.js";
+import { registerIpc } from "./ipc.js";
+import { WindowRegistry, createSecureWindow, loadSecureWindow } from "./windows.js";
+import { pickWorkspace } from "./workspaces.js";
+import type { WorkspaceDescriptorDto } from "@aiagent/types";
 
-const HTML_ENTRY = join(import.meta.dirname, "../renderer/index.html");
-const WORKER_ENTRY = join(import.meta.dirname, "../utility/worker.js");
-
-let mainWindow: BrowserWindow | undefined;
-let worker: Electron.UtilityProcess | undefined;
+let mainWindow: import("electron").BrowserWindow | undefined;
+let runtimeHost: RuntimeHost | undefined;
+let unregisterIpc: (() => void) | undefined;
 
 /**
- * 启动 utilityProcess 并通过 parentPort 等待握手，再移交独立 MessagePort。
+ * 创建并登记一个安全窗口，登记其 webContents.id 供 IPC sender 校验。
  *
- * @returns utilityProcess 实例与已连接的 MessagePort 客户端。
+ * @param windows 窗口归属登记器。
+ * @returns 已创建的窗口。
  */
-async function startWorker(): Promise<{
-  child: Electron.UtilityProcess;
-  port: Electron.MessagePortMain;
-}> {
-  const child = utilityProcess.fork(WORKER_ENTRY, [], {
-    serviceName: "ohna-desktop-spike-worker"
-  });
-  worker = child;
-
-  const channel = new MessageChannelMain();
-  const ready = new Promise<void>((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      reject(new Error("utilityProcess handshake timed out"));
-    }, 5_000);
-
-    child.once("spawn", () => {
-      child.postMessage({ type: "connect" }, [channel.port1]);
-    });
-    child.once("exit", (code) => {
-      clearTimeout(timeout);
-      reject(new Error(`utilityProcess exited before handshake (code ${code ?? "unknown"})`));
-    });
-    child.once("message", (message) => {
-      const readyMessage = message as { type?: string } | undefined;
-      if (readyMessage?.type !== "ready") {
-        return;
-      }
-      clearTimeout(timeout);
-      resolve();
-    });
-  });
-
-  await ready;
-  console.log("utilityProcess ready");
-  // 先完成控制通道握手，再启动业务端口，确保 renderer IPC 不早于 worker 就绪。
-  channel.port2.start();
-  return { child, port: channel.port2 };
-}
-
-/**
- * 创建仅加载本地 renderer 的安全窗口。
- *
- * @returns 创建完成的窗口。
- */
-function createWindow(): BrowserWindow {
-  const window = new BrowserWindow({
-    width: 720,
-    height: 480,
-    show: false,
-    webPreferences: {
-      preload: join(import.meta.dirname, "../preload/index.cjs"),
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: true
-    }
-  });
-
-  window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
-  window.webContents.on("will-navigate", (event) => event.preventDefault());
+function createMainWindow(windows: WindowRegistry): import("electron").BrowserWindow {
+  const window = createSecureWindow();
   window.once("ready-to-show", () => window.show());
-  void window.loadFile(HTML_ENTRY);
+  void loadSecureWindow(window);
+  windows.register(window.webContents.id);
   window.once("closed", () => {
-    if (mainWindow === window) {
-      mainWindow = undefined;
-    }
+    if (mainWindow === window) mainWindow = undefined;
   });
-
   return window;
 }
 
 /**
- * 启动桌面窗口并登记 worker 探活 IPC。
+ * 通过 host 把已授权工作区登记到 runtime（spec §6.1）。
+ *
+ * @param workspaceId 稳定工作区 ID。
+ * @param workspaceRoot 规范绝对根目录（仅 main / runtime 持有）。
+ * @returns runtime 登记后的描述符。
+ */
+async function registerWorkspaceWithHost(
+  workspaceId: string,
+  workspaceRoot: string
+): Promise<WorkspaceDescriptorDto> {
+  const res = await runtimeHost!.request({
+    requestId: `ws-${workspaceId}`,
+    method: "workspaces.register",
+    payload: { workspaceId, workspaceRoot }
+  });
+  if (!res.ok || !res.data) {
+    throw new Error(res.error?.message ?? "工作区登记失败");
+  }
+  return res.data as WorkspaceDescriptorDto;
+}
+
+/**
+ * 启动桌面：先拉起 runtime 宿主，再创建窗口、登记 IPC、挂工作区选择通道。
  *
  * @returns 应用完成初始化后的 Promise。
  */
 async function bootstrap(): Promise<void> {
   await app.whenReady();
-  const workerProcess = await startWorker();
-  const pending = new Map<number, (value: string) => void>();
-  let nextRequestId = 0;
 
-  workerProcess.port.on("message", (event) => {
-    const response = event.data as { type?: string; id?: number } | undefined;
-    if (response?.type !== "pong") {
-      return;
-    }
-
-    const id = response.id;
-    if (id === undefined) {
-      return;
-    }
-    const resolve = pending.get(id);
-    pending.delete(id);
-    resolve?.("pong");
+  const windows = new WindowRegistry();
+  runtimeHost = new RuntimeHost({
+    createTransport: () => createUtilityTransport(DEFAULT_WORKER_ENTRY)
   });
+  await runtimeHost.start();
 
-  ipcMain.handle("spike:ping", () => {
-    const id = nextRequestId++;
-    return new Promise<string>((resolve) => {
-      pending.set(id, resolve);
-      workerProcess.port.postMessage({ type: "ping", id });
-    });
-  });
+  unregisterIpc = registerIpc({ host: runtimeHost, windows });
 
-  mainWindow = createWindow();
-  mainWindow.webContents.once("did-finish-load", () => {
+  // 原生工作区授权：renderer 经 PICK_WORKSPACE_CHANNEL 请求主进程弹系统对话框并登记。
+  ipcMain.handle(PICK_WORKSPACE_CHANNEL, async () =>
+    pickWorkspace(mainWindow ?? null, (id, root) => registerWorkspaceWithHost(id, root))
+  );
+
+  mainWindow = createMainWindow(windows);
+
+  // 单实例：第二个实例聚焦已有窗口。
+  app.on("second-instance", () => {
     if (mainWindow) {
-      void verifyPreloadSpike(mainWindow);
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.focus();
     }
   });
 
   app.on("activate", () => {
-    if (!mainWindow) {
-      mainWindow = createWindow();
-    }
+    if (!mainWindow) mainWindow = createMainWindow(windows);
   });
 }
 
@@ -138,8 +100,14 @@ app.on("window-all-closed", () => {
 });
 
 app.on("before-quit", () => {
-  worker?.kill();
-  worker = undefined;
+  unregisterIpc?.();
+  void runtimeHost?.stop();
+  runtimeHost = undefined;
 });
 
-void bootstrap();
+// 单实例锁：失败则聚焦已有实例并退出（spec §8.1）。
+if (!app.requestSingleInstanceLock()) {
+  app.quit();
+} else {
+  void bootstrap();
+}

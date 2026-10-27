@@ -211,6 +211,22 @@ importers:
         version: 5.9.3
 
   apps/ohna-desktop:
+    dependencies:
+      '@aiagent/agent':
+        specifier: workspace:*
+        version: link:../../packages/agent
+      '@aiagent/ai':
+        specifier: workspace:*
+        version: link:../../packages/ai
+      '@aiagent/coding':
+        specifier: workspace:*
+        version: link:../../packages/coding
+      '@aiagent/ohna-runtime':
+        specifier: workspace:*
+        version: link:../../packages/ohna-runtime
+      '@aiagent/types':
+        specifier: workspace:*
+        version: link:../../packages/types
     devDependencies:
       '@types/node':
         specifier: ^22.10.5

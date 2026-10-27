@@ -1,66 +1,192 @@
-interface PingMessage {
-  type: "ping";
-  id: number;
-}
+import { homedir } from "node:os";
+import { join } from "node:path";
+import {
+  PROTOCOL_VERSION,
+  type RuntimeEventEnvelope,
+  type RuntimeRequestEnvelope,
+  type RuntimeResponseEnvelope,
+  type RunStreamEventDtoV2,
+} from "@aiagent/types";
+import { createOhnaRuntime, toRuntimeError, type OhnaRuntime } from "@aiagent/ohna-runtime";
+import { resolveActiveModelFromEnv } from "@aiagent/ai";
+import { createCodingToolRegistry } from "@aiagent/coding";
+import {
+  isSubscribeMethod,
+  routeRuntimeRequest,
+  toEventEnvelope,
+  UNSUBSCRIBE_METHOD,
+  type RuntimeRouter,
+  type UnsubscribePayload,
+} from "./routing.js";
 
-interface PongMessage {
-  type: "pong";
-  id: number;
-}
-
+/** 控制消息（parentPort 握手用，不进业务信封）。 */
 interface ReadyMessage {
   type: "ready";
 }
+interface RequestMessage {
+  type: "request";
+  envelope: RuntimeRequestEnvelope;
+}
+
+/** 业务消息（MessagePort 回送用）。 */
+type OutgoingMessage =
+  | { type: "response"; envelope: RuntimeResponseEnvelope }
+  | { type: "event"; envelope: RuntimeEventEnvelope };
 
 /**
- * 返回工具链探活值。
+ * 返回工具链探活值（spike 测试保留）。
  *
  * @returns 固定的 `"pong"`。
  */
-export async function ping(): Promise<"pong"> {
-  return "pong";
-}
-
 /**
- * 在 utilityProcess 中接收主进程移交的 MessagePort。
+ * 在移交的 MessagePort 上处理 runtime 请求：路由到 `OhnaRuntime`，回送响应信封；
+ * 订阅类方法登记 runtime `Subscription.onEvent` 回送 `RuntimeEventEnvelope`；退订释放上游。
  *
- * utilityProcess 以独立 ESM 入口运行；parentPort 只负责握手，后续 runtime
- * 请求走独立 MessagePort，避免控制通道与业务流量耦合。
- *
+ * @param port 主进程移交的业务端口。
+ * @param runtime 已装配的 runtime 实例。
  * @returns 无返回值。
  */
-function listenForConnection(): void {
-  process.parentPort.once("message", (event) => {
-    const [port] = event.ports;
-    if (!port) {
+function servePort(port: Electron.MessagePortMain, runtime: OhnaRuntime): void {
+  const router: RuntimeRouter = {
+    getHealth: () => runtime.getHealth(),
+    getModelCatalog: () => runtime.getModelCatalog(),
+    shutdown: () => runtime.shutdown(),
+    registerWorkspace: (id, root) => runtime.registerWorkspace(id, root),
+    listWorkspaces: () => runtime.listWorkspaces(),
+    releaseWorkspace: (id) => runtime.releaseWorkspace(id),
+    startRun: (input) => runtime.startRun(input as never),
+    getRunSnapshot: (runId) => runtime.getRunSnapshot(runId),
+    listRunsByConversation: (conversationId) => runtime.listRunsByConversation(conversationId),
+    cancelRun: (runId) => runtime.cancelRun(runId),
+    resolveConfirmation: (runId, toolCallId, decision) =>
+      runtime.resolveConfirmation(runId, toolCallId, decision as never),
+    createConversation: (input) => runtime.createConversation(input as never),
+    listConversations: (query) => runtime.listConversations(query as never),
+    updateConversation: (id, input) => runtime.updateConversation(id, input as never),
+    generateConversationTitle: (id, text) => runtime.generateConversationTitle(id, text),
+    listMessages: (id, query) => runtime.listMessages(id, query as never)
+  };
+
+  /** subscriptionId → 上游退订函数。 */
+  const upstream = new Map<string, () => void>();
+
+  port.on("message", async (event) => {
+    const message = event.data as RequestMessage | undefined;
+    if (message?.type !== "request") return;
+    const envelope = message.envelope;
+
+    // 退订：释放上游订阅并回应。
+    if (envelope.method === UNSUBSCRIBE_METHOD) {
+      const payload = envelope.payload as UnsubscribePayload;
+      const unsub = upstream.get(payload.subscriptionId);
+      if (unsub) {
+        unsub();
+        upstream.delete(payload.subscriptionId);
+      }
+      const response: RuntimeResponseEnvelope = {
+        protocolVersion: PROTOCOL_VERSION,
+        requestId: envelope.requestId,
+        ok: true,
+        data: undefined
+      };
+      port.postMessage({ type: "response", envelope: response } satisfies OutgoingMessage);
       return;
     }
 
-    const ready: ReadyMessage = { type: "ready" };
-    process.parentPort.postMessage(ready);
-    listenForPing(port);
-  });
-}
-
-/**
- * 在已移交的 MessagePort 上响应探活请求。
- *
- * @param port 主进程移交的通信端口。
- * @returns 无返回值。
- */
-function listenForPing(port: Electron.MessagePortMain): void {
-  port.on("message", (event) => {
-    const request = event.data as PingMessage | undefined;
-    if (request?.type !== "ping") {
+    // 订阅类：建立 runtime 订阅，onEvent 回送事件信封；subscriptionId 由 runtime 生成。
+    if (isSubscribeMethod(envelope.method)) {
+      try {
+        const subscribeOptions = (envelope.payload as { options?: unknown })?.options ?? {};
+        const targetId = (envelope.payload as { id?: string; runId?: string }).id ??
+          (envelope.payload as { runId?: string }).runId ??
+          "";
+        const subscription =
+          envelope.method === "events.subscribeRun"
+            ? await runtime.subscribeRun(targetId, {
+                ...(subscribeOptions as object),
+                onEvent: (ev: RunStreamEventDtoV2) => emit(targetId, ev)
+              })
+            : await runtime.subscribeConversation(targetId, {
+                ...(subscribeOptions as object),
+                onEvent: (ev: RunStreamEventDtoV2) => emit(targetId, ev)
+              });
+        upstream.set(subscription.subscriptionId, subscription.unsubscribe);
+        const response: RuntimeResponseEnvelope = {
+          protocolVersion: PROTOCOL_VERSION,
+          requestId: envelope.requestId,
+          ok: true,
+          data: { subscriptionId: subscription.subscriptionId }
+        };
+        port.postMessage({ type: "response", envelope: response } satisfies OutgoingMessage);
+      } catch (error) {
+        const response: RuntimeResponseEnvelope = {
+          protocolVersion: PROTOCOL_VERSION,
+          requestId: envelope.requestId,
+          ok: false,
+          error: toRuntimeError(error, envelope.requestId, "internal_error")
+        };
+        port.postMessage({ type: "response", envelope: response } satisfies OutgoingMessage);
+      }
       return;
     }
 
-    const response: PongMessage = { type: "pong", id: request.id };
-    port.postMessage(response);
+    // 普通请求：路由到 runtime 并回送响应。
+    const response = await routeRuntimeRequest(router, envelope);
+    port.postMessage({ type: "response", envelope: response } satisfies OutgoingMessage);
   });
   port.start();
+
+  /** 经业务端口回送一条运行事件。 */
+  function emit(subscriptionId: string, event: RunStreamEventDtoV2): void {
+    const envelope = toEventEnvelope(subscriptionId, event);
+    port.postMessage({ type: "event", envelope } satisfies OutgoingMessage);
+  }
 }
 
-if (process.parentPort) {
-  listenForConnection();
+/**
+ * 在 utilityProcess 中接收主进程移交的 MessagePort 并启动 runtime。
+ *
+ * utilityProcess 以独立 ESM 入口运行；parentPort 只负责握手，后续 runtime 请求走独立
+ * MessagePort，避免控制通道与业务流量耦合。数据目录写入 `~/.ohna`（spec §8.1），
+ * 不在代码里清空既有目录，数据重置由独立控制步骤处理。
+ *
+ * @returns 无返回值。
+ */
+async function listenForConnection(): Promise<void> {
+  const parentPort = process.parentPort;
+  if (!parentPort) return;
+  parentPort.once("message", async (event) => {
+    const port = event.ports?.[0] as Electron.MessagePortMain | undefined;
+    if (!port) return;
+    parentPort.postMessage({ type: "ready" } satisfies ReadyMessage);
+
+    const dataDir = process.env.OHNA_DATA_DIR || join(homedir(), ".ohna");
+    // 模型与凭据复用 CLI 组合根下沉的 `resolveActiveModelFromEnv`（spec §7.1）：遍历各
+    // profile 的 AIAGENT_LLM_*_<PROFILE> 环境变量，缺 key 时返回 null。none 不硬崩溃——
+    // health 报 degraded，由桌面 UI 引导配置凭据（spec §10.2）。
+    const active = resolveActiveModelFromEnv();
+    const model = active?.model;
+    const apiKey = active?.apiKey ?? "";
+    if (!active) {
+      console.warn("[ohna-worker] 未检测到模型 API key，runtime 以 degraded 状态启动。");
+    }
+    // 工具集绑定到当前主工作区根（首版用 dataDir 占位；per-workspace 工具上下文见 Task 6/13）。
+    const tools = createCodingToolRegistry(dataDir);
+    try {
+      const runtime = await createOhnaRuntime({
+        dataDir,
+        model: model as never,
+        apiKey,
+        tools,
+        team: process.env.OHNA_TEAM === "true",
+        autoApprove: process.env.OHNA_AUTO_APPROVE === "true",
+        onLog: (entry) => console.log(`[ohna-runtime:${entry.level}] ${entry.message}`)
+      });
+      servePort(port, runtime);
+    } catch (error) {
+      console.error("[ohna-worker] runtime 启动失败", error);
+    }
+  });
 }
+
+void listenForConnection();

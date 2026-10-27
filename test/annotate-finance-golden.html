@@ -1,0 +1,363 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>财报 RAG 标注 · 单条编辑</title>
+<style>
+  :root { color-scheme: dark; --bg:#18191A; --panel:#202224; --line:#2c2f31; --fg:#e8eaec; --muted:#9aa0a6; --accent:#89D7B7; --warn:#e8c07d; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif; }
+  header { padding:14px 24px; border-bottom:1px solid var(--line); display:flex; align-items:center; gap:14px; flex-wrap:wrap; }
+  h1 { font-size:16px; margin:0; }
+  a { color:var(--accent); text-decoration:none; } a:hover { text-decoration:underline; }
+  main { padding:18px 24px 80px; max-width:1100px; }
+  .panel { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:16px 18px; margin-bottom:16px; }
+  .panel h2 { font-size:14px; margin:0 0 12px; color:var(--accent); }
+  label { display:block; font-size:12px; color:var(--muted); margin:10px 0 4px; }
+  input[type=text], textarea, select { width:100%; background:#161718; color:var(--fg); border:1px solid var(--line); border-radius:6px; padding:8px 10px; font:inherit; }
+  textarea { resize:vertical; min-height:70px; font-family:"SFMono-Regular",Consolas,monospace; font-size:12.5px; }
+  .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:0 14px; }
+  .row { display:flex; gap:8px; align-items:center; margin-bottom:6px; }
+  .row > input { flex:1; }
+  button { background:#2a2d2f; color:var(--fg); border:1px solid var(--line); border-radius:6px; padding:7px 12px; font:inherit; cursor:pointer; }
+  button:hover { border-color:var(--accent); }
+  button.primary { background:var(--accent); color:#18191A; border-color:var(--accent); font-weight:600; }
+  button.ghost { background:transparent; }
+  .wide-table { width:100%; border-collapse:collapse; }
+  .wide-table th, .wide-table td { border:1px solid var(--line); padding:4px; }
+  .wide-table input { border:none; background:transparent; padding:4px 6px; }
+  .wide-table th input.colname { font-weight:600; }
+  .mini { font-size:12px; padding:4px 8px; }
+  .pre { white-space:pre-wrap; background:#161718; border:1px solid var(--line); border-radius:6px; padding:10px; max-height:220px; overflow:auto; font-family:"SFMono-Regular",Consolas,monospace; font-size:12px; color:#cdd2d5; }
+  .pill { display:inline-block; padding:2px 8px; border-radius:999px; font-size:12px; border:1px solid var(--line); }
+  .pill.bad { color:var(--warn); border-color:var(--warn); }
+  .status { position:sticky; bottom:0; left:0; right:0; background:rgba(24,25,26,.94); backdrop-filter:blur(6px); border-top:1px solid var(--line); padding:12px 24px; display:flex; gap:12px; align-items:center; }
+  .toast { position:fixed; top:14px; right:14px; background:var(--accent); color:#18191A; padding:10px 16px; border-radius:8px; font-weight:600; opacity:0; transition:opacity .2s; }
+  .toast.show { opacity:1; }
+  .hint { color:var(--warn); font-size:12px; }
+  .muted { color:var(--muted); }
+</style>
+</head>
+<body>
+<header>
+  <h1 id="title">标注</h1>
+  <span id="health" class="pill"></span>
+  <a id="back" href="/">← 返回列表</a>
+  <a id="pdflink" class="muted" target="_blank" rel="noopener">原文 PDF ↗</a>
+</header>
+<main id="app"><p class="muted">加载中…</p></main>
+<div class="status">
+  <span id="promoteHint" class="muted"></span>
+  <span style="flex:1"></span>
+  <button class="ghost" id="prevBtn">← 上一条</button>
+  <button class="ghost" id="nextBtn">下一条 →</button>
+  <button class="primary" id="saveBtn">保存</button>
+  <button class="primary" id="saveNextBtn">保存并下一条</button>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+const params = new URLSearchParams(location.search);
+const BATCH = params.get("batch");
+const ID = params.get("id");
+
+const TYPE_OPTS = ["numeric_fact","definitional","comparison","multi_doc","table","unit_trap","negative"];
+const DIFF_OPTS = ["easy","medium","hard"];
+const ANS_OPTS = ["number","list","table","form","text"];
+
+let draft = null;
+let batchIds = [];
+
+function el(tag, attrs = {}, children = []) {
+  const n = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k === "class") n.className = v;
+    else if (k === "text") n.textContent = v;
+    else if (k === "html") n.innerHTML = v;
+    else if (k.startsWith("on")) n.addEventListener(k.slice(2), v);
+    else n.setAttribute(k, v);
+  }
+  for (const c of [].concat(children)) if (c) n.appendChild(typeof c === "string" ? document.createTextNode(c) : c);
+  return n;
+}
+
+function field(labelText, inputNode) {
+  return el("div", {}, [el("label", { text: labelText }), inputNode]);
+}
+
+function selectEl(opts, value) {
+  const s = el("select");
+  for (const o of opts) {
+    const opt = el("option", { value: o, text: o });
+    if (o === value) opt.selected = true;
+    s.appendChild(opt);
+  }
+  return s;
+}
+
+function toast(msg) {
+  const t = document.getElementById("toast");
+  t.textContent = msg; t.classList.add("show");
+  setTimeout(() => t.classList.remove("show"), 1600);
+}
+
+/** 表格网格编辑器：gold_answer_table { columns, units?, rows }。 */
+function tableEditor(obj) {
+  const t = obj.gold_answer_table || { columns: [], rows: [] };
+  if (!Array.isArray(t.columns)) t.columns = [];
+  if (!Array.isArray(t.rows)) t.rows = [];
+  if (!t.units) t.units = {};
+  const wrap = el("div");
+  const tbl = el("table", { class: "wide-table" });
+  const headRow = el("tr");
+  function rebuildHead() {
+    headRow.innerHTML = "";
+    t.columns.forEach((c, ci) => {
+      const th = el("th");
+      const name = el("input", { class: "colname", value: c, placeholder: "列名" });
+      name.addEventListener("input", () => { t.columns[ci] = name.value; refreshUnits(); });
+      const unit = el("input", { value: t.units[c] || "", placeholder: "单位(可选)" });
+      unit.addEventListener("input", () => { t.units[name.value] = unit.value; });
+      const del = el("button", { class: "mini", text: "×", onclick: () => {
+        t.columns.splice(ci, 1);
+        t.rows.forEach((r) => r.splice(ci, 1));
+        delete t.units[c];
+        rebuildHead(); rebuildBody();
+      }});
+      th.appendChild(el("div", {}, [name, unit, del]));
+      headRow.appendChild(th);
+    });
+    const addCol = el("th");
+    addCol.appendChild(el("button", { class: "mini", text: "+列", onclick: () => {
+      t.columns.push("列" + (t.columns.length + 1));
+      t.rows.forEach((r) => r.push(""));
+      rebuildHead(); rebuildBody();
+    }}));
+    headRow.appendChild(addCol);
+  }
+  function refreshUnits() { /* no-op: units 已按列名索引，重命名即同步 */ }
+  const body = el("tbody");
+  function rebuildBody() {
+    body.innerHTML = "";
+    t.rows.forEach((r, ri) => {
+      const tr = el("tr");
+      t.columns.forEach((_, ci) => {
+        const td = el("td");
+        const inp = el("input", { value: r[ci] != null ? r[ci] : "" });
+        inp.addEventListener("input", () => { r[ci] = inp.value; });
+        td.appendChild(inp); tr.appendChild(td);
+      });
+      const delTd = el("td");
+      delTd.appendChild(el("button", { class: "mini", text: "×", onclick: () => {
+        t.rows.splice(ri, 1); rebuildBody();
+      }}));
+      tr.appendChild(delTd);
+      body.appendChild(tr);
+    });
+  }
+  rebuildHead();
+  const head = el("thead", {}, [headRow]);
+  tbl.appendChild(head); tbl.appendChild(body);
+  wrap.appendChild(tbl);
+  wrap.appendChild(el("button", { class: "mini", text: "+ 添加行", onclick: () => {
+    t.rows.push(t.columns.map(() => "")); rebuildBody();
+  }}));
+  obj.gold_answer_table = t;
+  return wrap;
+}
+
+/** 键值表单编辑器：gold_answer_form { items:[{key,value}] }。 */
+function formEditor(obj) {
+  const f = obj.gold_answer_form || { items: [] };
+  if (!Array.isArray(f.items)) f.items = [];
+  const wrap = el("div");
+  const list = el("div");
+  function rebuild() {
+    list.innerHTML = "";
+    f.items.forEach((it, i) => {
+      const row = el("div", { class: "row" });
+      const k = el("input", { value: it.key || "", placeholder: "键（如 姓名）" });
+      const v = el("input", { value: it.value || "", placeholder: "值" });
+      k.addEventListener("input", () => { it.key = k.value; });
+      v.addEventListener("input", () => { it.value = v.value; });
+      const del = el("button", { class: "mini", text: "×", onclick: () => { f.items.splice(i, 1); rebuild(); } });
+      row.appendChild(k); row.appendChild(v); row.appendChild(del);
+      list.appendChild(row);
+    });
+  }
+  rebuild();
+  wrap.appendChild(list);
+  wrap.appendChild(el("button", { class: "mini", text: "+ 添加字段", onclick: () => { f.items.push({ key: "", value: "" }); rebuild(); } }));
+  obj.gold_answer_form = f;
+  return wrap;
+}
+
+/** evidence 列表：可编辑 section / page，其余只读展示。 */
+function evidenceEditor(obj) {
+  const wrap = el("div");
+  const ev = Array.isArray(obj.evidence) ? obj.evidence : [];
+  ev.forEach((e, i) => {
+    const panel = el("div", { class: "panel" });
+    panel.appendChild(el("div", { class: "muted", text: `来源 #${i + 1}：${e.ticker || ""} / ${e.report_type || ""} / ${e.period || ""}  (${e.source_kind || "text"})` }));
+    panel.appendChild(field("章节 section（去掉「（候选」「（待补」前缀）",
+      el("input", { value: e.section || "", oninput: (ev2) => { e.section = ev2.target.value; } })));
+    panel.appendChild(field("页码 page",
+      el("input", { type: "text", value: String(e.page ?? 0), oninput: (ev2) => { e.page = Number(ev2.target.value) || 0; } })));
+    panel.appendChild(field("原文 quote（只读参考）", (() => { const ta = el("textarea", { readonly: "readonly" }); ta.value = e.quote || ""; return ta; })()));
+    wrap.appendChild(panel);
+  });
+  if (ev.length === 0) wrap.appendChild(el("p", { class: "muted", text: "（本题无 evidence，可能是 negative 反例）" }));
+  return wrap;
+}
+
+/** distractors 列表：{ticker, report_type, period}。 */
+function distractorEditor(obj) {
+  const wrap = el("div");
+  const ds = Array.isArray(obj.distractors) ? obj.distractors : [];
+  const list = el("div");
+  function rebuild() {
+    list.innerHTML = "";
+    ds.forEach((d, i) => {
+      const row = el("div", { class: "row" });
+      const tk = el("input", { value: d.ticker || "", placeholder: "ticker" });
+      const rt = el("input", { value: d.report_type || "", placeholder: "report_type" });
+      const pe = el("input", { value: d.period || "", placeholder: "period" });
+      tk.oninput = () => d.ticker = tk.value;
+      rt.oninput = () => d.report_type = rt.value;
+      pe.oninput = () => d.period = pe.value;
+      const del = el("button", { class: "mini", text: "×", onclick: () => { ds.splice(i, 1); rebuild(); } });
+      row.appendChild(tk); row.appendChild(rt); row.appendChild(pe); row.appendChild(del);
+      list.appendChild(row);
+    });
+  }
+  rebuild();
+  wrap.appendChild(list);
+  wrap.appendChild(el("button", { class: "mini", text: "+ 添加易混淆文档", onclick: () => { ds.push({ ticker: "", report_type: "", period: "" }); rebuild(); } }));
+  obj.distractors = ds;
+  return wrap;
+}
+
+function render() {
+  const app = document.getElementById("app");
+  app.innerHTML = "";
+  document.getElementById("title").textContent = `${draft.id} · ${BATCH}`;
+  const health = draft._draft?.extraction_health || "-";
+  const hp = document.getElementById("health");
+  hp.textContent = "抽取健康度：" + health;
+  hp.className = "pill" + (health === "bad" ? " bad" : "");
+  const pdf = draft._draft?.file_path;
+  document.getElementById("pdflink").href = pdf ? `/pdf?path=${encodeURIComponent(pdf)}` : "#";
+
+  // —— 基础字段 ——
+  const base = el("div", { class: "panel" });
+  base.appendChild(el("h2", { text: "基础字段" }));
+  const q = el("textarea", { oninput: (e) => draft.query = e.target.value }); q.value = draft.query || "";
+  base.appendChild(field("用户问句 query（自然语言，去掉「（待填」占位）", q));
+  const g = el("textarea", { oninput: (e) => draft.gold_answer = e.target.value }); g.value = draft.gold_answer || "";
+  base.appendChild(field("标准答案 gold_answer（人类可读摘要，合计+拆分）", g));
+  const grid = el("div", { class: "grid2" });
+  grid.appendChild(field("题型 type", selectEl(TYPE_OPTS, draft.type)));
+  grid.appendChild(field("难度 difficulty", selectEl(DIFF_OPTS, draft.difficulty)));
+  grid.appendChild(field("答案形态 answer_type", selectEl(ANS_OPTS, draft.answer_type)));
+  grid.appendChild(field("单位 answer_unit", el("input", { value: draft.answer_unit || "", oninput: (e) => draft.answer_unit = e.target.value })));
+  base.appendChild(grid);
+  base.appendChild(field("坑点说明 note", (() => { const ta = el("textarea", { oninput: (e) => draft.note = e.target.value }); ta.value = draft.note || ""; return ta; })()));
+  app.appendChild(base);
+
+  // —— 抽取锚点原文（只读）——
+  const win = el("div", { class: "panel" });
+  win.appendChild(el("h2", { text: "已抽取锚点原文（只读参考，去对照真值）" }));
+  const pre = el("div", { class: "pre", text: draft._draft?.candidate_window || "（无候选原文）" });
+  win.appendChild(pre);
+  app.appendChild(win);
+
+  // —— 答案结构（表格 / 表单）——
+  if (draft.type === "table") {
+    const p = el("div", { class: "panel" });
+    p.appendChild(el("h2", { text: "标准答案表格 gold_answer_table" }));
+    p.appendChild(tableEditor(draft));
+    app.appendChild(p);
+  } else if (draft.answer_type === "form" || draft.type === "form") {
+    const p = el("div", { class: "panel" });
+    p.appendChild(el("h2", { text: "标准答案表单 gold_answer_form" }));
+    p.appendChild(formEditor(draft));
+    app.appendChild(p);
+  }
+
+  // —— evidence ——
+  const ev = el("div", { class: "panel" });
+  ev.appendChild(el("h2", { text: "真值出处 evidence" }));
+  ev.appendChild(evidenceEditor(draft));
+  app.appendChild(ev);
+
+  // —— distractors ——
+  const ds = el("div", { class: "panel" });
+  ds.appendChild(el("h2", { text: "易混淆文档 distractors" }));
+  ds.appendChild(distractorEditor(draft));
+  app.appendChild(ds);
+
+  // —— 审核 ——
+  const ap = el("div", { class: "panel" });
+  ap.appendChild(el("h2", { text: "定稿审核" }));
+  const cb = el("input", { type: "checkbox" });
+  cb.checked = draft._draft?.approved === true;
+  cb.addEventListener("change", () => { draft._draft = draft._draft || {}; draft._draft.approved = cb.checked; updateHint(); });
+  ap.appendChild(el("label", { style: "display:flex;gap:8px;align-items:center;color:var(--fg)" }, [cb, document.createTextNode("标记已审核（promote 闸门放行，写回 _draft.approved=true）")]));
+  app.appendChild(ap);
+
+  updateHint();
+}
+
+/** 实时提示是否满足 promote 闸门条件。 */
+function updateHint() {
+  const hints = [];
+  if ((draft.query || "").startsWith("（待填")) hints.push("query 仍是占位");
+  if (!draft.gold_answer) hints.push("gold_answer 为空");
+  const ev = Array.isArray(draft.evidence) ? draft.evidence : [];
+  if (!draft.is_negative && ev.length === 0) hints.push("evidence 为空");
+  for (const e of ev) if (e.section && (e.section.includes("（待补") || e.section.includes("（候选"))) hints.push("evidence.section 待补");
+  const approved = draft._draft?.approved === true;
+  const h = document.getElementById("promoteHint");
+  if (approved && hints.length === 0) h.innerHTML = '<span style="color:var(--accent)">✓ 满足 promote 闸门，可定稿</span>';
+  else if (hints.length) h.textContent = "待补：" + hints.join("、");
+  else h.textContent = "未勾选「已审核」，promote 不会入册";
+}
+
+async function save() {
+  const res = await fetch(`/api/draft?batch=${encodeURIComponent(BATCH)}&id=${encodeURIComponent(ID)}`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(draft),
+  });
+  const j = await res.json();
+  if (!res.ok) { toast("保存失败：" + (j.error || res.status)); return false; }
+  toast("已保存 " + ID);
+  return true;
+}
+
+async function goRelative(delta) {
+  if (batchIds.length === 0) return;
+  const idx = batchIds.indexOf(ID);
+  const ni = idx + delta;
+  if (ni < 0 || ni >= batchIds.length) { toast(delta > 0 ? "已是最后一条" : "已是第一条"); return; }
+  await save();
+  const next = batchIds[ni];
+  location.href = `/edit?batch=${encodeURIComponent(BATCH)}&id=${encodeURIComponent(next)}`;
+}
+
+async function main() {
+  const r = await fetch(`/api/draft?batch=${encodeURIComponent(BATCH)}&id=${encodeURIComponent(ID)}`);
+  if (!r.ok) { document.getElementById("app").textContent = "加载失败：" + (await r.text()); return; }
+  draft = await r.json();
+  const rl = await fetch(`/api/drafts?batch=${encodeURIComponent(BATCH)}`);
+  const jl = await rl.json();
+  batchIds = (jl.items || []).map((x) => x.id);
+  render();
+  document.getElementById("saveBtn").onclick = save;
+  document.getElementById("saveNextBtn").onclick = () => goRelative(1);
+  document.getElementById("nextBtn").onclick = () => goRelative(1);
+  document.getElementById("prevBtn").onclick = () => goRelative(-1);
+}
+main();
+</script>
+</body>
+</html>

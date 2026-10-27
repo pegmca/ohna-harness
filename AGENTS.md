@@ -12,6 +12,11 @@ Primary planning documents:
 
 Before implementing a task, read the relevant architecture/design documents and the files in the affected package or app.
 
+## Development Phase Rules
+
+- 当前处于开发阶段，无需考虑老代码或旧接口的兼容性。所有功能和代码均可按当前需求修改、替换或删除，无需保留兼容层、废弃路径或迁移逻辑。
+- 无需编写改动记录、变更日志或历史演进描述；文档只描述当前状态。
+
 ## Repository Structure
 
 两条产品线只共享 `packages/` 核心包，应用层互不依赖：

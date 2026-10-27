@@ -14,6 +14,11 @@
  * 该文件只承载子进程源码字符串；调用与结果映射在 parsers/pdf.ts 中。
  */
 export const PDF_WORKER_SOURCE = [
+  // pdf.js（底层依赖）遇到字体等兼容性问题时向 stdout 打印 Warning，会污染本子进程
+  // 输出的 JSON，导致父进程 JSON.parse 失败。worker 唯一合法输出是末尾的 JSON，
+  // 因此在此静默 warn/log，避免污染（见 parsers/pdf.ts 的 JSON.parse 收敛点）。
+  `console.warn = () => {};`,
+  `console.log = () => {};`,
   `import { readFileSync } from "node:fs";`,
   `const pdfPath = process.env.PARSING_PDF_PATH;`,
   `const pdfParsePath = process.env.PDF_PARSE_PATH;`,

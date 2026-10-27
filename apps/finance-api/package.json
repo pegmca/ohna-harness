@@ -17,7 +17,9 @@
     "test": "pnpm build && node --test test/*.test.mjs",
     "typecheck": "pnpm --filter @aiagent/agent build && pnpm --filter @aiagent/report build && pnpm --filter @aiagent/identity build && pnpm --filter @aiagent/database build && pnpm --filter @aiagent/channels build && pnpm --filter @aiagent/mcp build && tsc -p tsconfig.json --pretty false --noEmit",
     "eval": "node --import tsx src/eval/index.ts",
-    "eval:update-baseline": "node --import tsx src/eval/index.ts --update-baseline"
+    "eval:update-baseline": "node --import tsx src/eval/index.ts --update-baseline",
+    "eval:golden": "node --import tsx src/eval/index.ts --dataset ../../datasets/finance/rag-golden-v1.json",
+    "eval:golden:update-baseline": "node --import tsx src/eval/index.ts --dataset ../../datasets/finance/rag-golden-v1.json --update-baseline"
   },
   "dependencies": {
     "@aiagent/agent": "workspace:*",

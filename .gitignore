@@ -25,14 +25,16 @@ packages/*/src/**/*.d.ts.map
 .workbuddy/
 
 # dsh-repo-dashboard 插件写入的本地 bug 日志（临时产物，不入库）
-tmp/dsh-repo-bug.json
-# 提交说明暂存（沙箱内无法直接 git commit 时的落地位置，非源码）
-tmp/v2.0_commit_message.txt
+tmp/
 
 # finance-api eval 运行产物（由 pnpm eval:finance-api 生成，非源码；baseline 由 --update-baseline 重建）
 apps/finance-api/eval/report.json
 apps/finance-api/eval/report.md
 apps/finance-api/eval/baseline.json
+
+# 金融财报 RAG 黄金评测集 · 半自动抽取草稿（人工待审核工作区，非源码）
+# 作者集 golden.jsonl 本身保留入库；仅忽略 _drafts 工作区。
+datasets/finance/rag-golden/_drafts/
 
 # ohna-cli eval 运行产物（由 pnpm eval:ohna 生成，非源码；baseline 由 --update-baseline 重建）
 apps/ohna-cli/eval/report.json

@@ -1,5 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { ingestDocument, parsePdfBlocks } from "../dist/index.js";
 
 /**
@@ -79,4 +83,51 @@ test("ingestDocument on PDF no longer returns pdf_parser_not_configured", () => 
   assert.ok(blocks.length > 0);
   assert.ok(blocks.every((block) => typeof block.pageNumber === "number"));
   assert.ok(blocks.some((block) => block.metadata && block.metadata.isTableRow === true));
+});
+
+// 回归测试：pdf.js（底层依赖）在遇到字体等兼容性问题时向 stdout 打印 Warning，
+// 会污染子进程输出的 JSON，导致父进程 JSON.parse 失败、真实 PDF 整批解析失败。
+// worker 已在顶部静默 console.warn/log 来隔离该噪声，这里用「会打印 Warning 的 stub
+// pdf-parse」复现该场景，断言 parsePdfBlocks 仍能解析出合法 JSON（而非抛 Unexpected token）。
+test("pdf worker tolerates pdf.js stdout warnings (no JSON pollution)", () => {
+  // 复刻 packages/parsing/src/pdf-worker.ts 的 worker 源码骨架（顶部静默 console.warn/log），
+  // 但用会打印 Warning 的 stub pdf-parse 复现 pdf.js 的噪声行为，断言 stdout 仍可被整体 JSON.parse。
+  const workerSource = [
+    `console.warn = () => {};`,
+    `console.log = () => {};`,
+    `import { readFileSync } from "node:fs";`,
+    `const pdfPath = process.env.PARSING_PDF_PATH;`,
+    `const pdfParsePath = process.env.PDF_PARSE_PATH;`,
+    `const pdfParse = (await import(pdfParsePath)).default;`,
+    `const rawBuf = readFileSync(pdfPath);`,
+    `const pdfBytes = new Uint8Array(rawBuf.buffer, rawBuf.byteOffset, rawBuf.byteLength);`,
+    `const result = await pdfParse(pdfBytes, {});`,
+    `process.stdout.write(JSON.stringify({ pages: [], numpages: result.numpages }));`
+  ].join("\n");
+  const dir = mkdtempSync(join(tmpdir(), "parsing-pdf-warn-"));
+  const pdfPath = join(dir, "input.pdf");
+  writeFileSync(pdfPath, Buffer.from(SAMPLE_PDF));
+
+  // 一个最小 stub：先打印 Warning 到 stdout，再产出合法 JSON（复现 pdf.js 的噪声行为）。
+  const stubParsePath = join(dir, "stub-parse.mjs");
+  writeFileSync(
+    stubParsePath,
+    `export default async (bytes, opts) => {\n  console.warn("Warning: TT: undefined function: 3");\n  return { numpages: 1, text: "hello world" };\n};\n`
+  );
+
+  const out = execFileSync(process.execPath, ["--input-type=module", "-e", workerSource], {
+    env: { ...process.env, PARSING_PDF_PATH: pdfPath, PDF_PARSE_PATH: stubParsePath },
+    maxBuffer: 16 * 1024 * 1024,
+    timeout: 30000
+  });
+
+  // 关键断言：stdout 必须可整体解析为 JSON（Warning 已被 worker 静默，不污染）。
+  let parsed;
+  assert.doesNotThrow(() => {
+    parsed = JSON.parse(out.toString("utf-8"));
+  }, "pdf.js 的 Warning 不应污染 worker 输出的 JSON");
+  assert.equal(parsed.numpages, 1);
+  assert.ok(Array.isArray(parsed.pages));
+
+  rmSync(dir, { recursive: true, force: true });
 });

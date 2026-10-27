@@ -1,0 +1,178 @@
+[
+  {
+    "ticker": "600000.SH",
+    "report_type": "annual",
+    "period": "2025",
+    "type": "unit_trap",
+    "note": "浦发银行 主要会计数据单位为百万元，制造单位陷阱"
+  },
+  {
+    "ticker": "600016.SH",
+    "report_type": "annual",
+    "period": "2025",
+    "type": "unit_trap",
+    "note": "民生银行 主要会计数据单位为百万元"
+  },
+  {
+    "ticker": "600048.SH",
+    "report_type": "annual",
+    "period": "2025",
+    "type": "unit_trap",
+    "note": "保利发展 主要会计数据单位为万元"
+  },
+  {
+    "ticker": "600030.SH",
+    "report_type": "annual",
+    "period": "2025",
+    "type": "form",
+    "note": "中信证券 联系人和联系方式（键值表单）"
+  },
+  {
+    "ticker": "600050.SH",
+    "report_type": "annual",
+    "period": "2025",
+    "type": "form",
+    "note": "中国联通 联系人和联系方式（键值表单）"
+  },
+  {
+    "ticker": "600000.SH",
+    "report_type": "annual",
+    "period": "2025",
+    "type": "form",
+    "note": "浦发银行 联系人和联系方式（键值表单）"
+  },
+  {
+    "ticker": "600016.SH",
+    "report_type": "annual",
+    "period": "2025",
+    "type": "table",
+    "note": "民生银行 主要控股参股公司"
+  },
+  {
+    "ticker": "600048.SH",
+    "report_type": "annual",
+    "period": "2025",
+    "type": "table",
+    "note": "保利发展 主要控股参股公司"
+  },
+  {
+    "ticker": "600030.SH",
+    "report_type": "annual",
+    "period": "2025",
+    "type": "table",
+    "note": "中信证券 主要控股参股公司"
+  },
+  {
+    "ticker": "600196.SH",
+    "report_type": "annual",
+    "period": "2025",
+    "type": "definitional",
+    "note": "复星医药 主营业务"
+  },
+  {
+    "ticker": "600048.SH",
+    "report_type": "annual",
+    "period": "2025",
+    "type": "definitional",
+    "note": "保利发展 主营业务"
+  },
+  {
+    "ticker": "600050.SH",
+    "report_type": "annual",
+    "period": "2025",
+    "type": "definitional",
+    "note": "中国联通 主营业务"
+  },
+  {
+    "ticker": "600048.SH",
+    "report_type": "annual",
+    "period": "2025",
+    "type": "comparison",
+    "note": "保利发展 2025 vs 2024 营业收入对比"
+  },
+  {
+    "ticker": "600050.SH",
+    "report_type": "annual",
+    "period": "2025",
+    "type": "comparison",
+    "note": "中国联通 2025 vs 2024 营业收入对比"
+  },
+  {
+    "ticker": "600196.SH",
+    "report_type": "annual",
+    "period": "2025",
+    "type": "comparison",
+    "note": "复星医药 2025 vs 2024 营业收入对比"
+  },
+  {
+    "ticker": "600030.SH",
+    "report_type": "annual",
+    "period": "2025",
+    "type": "multi_doc",
+    "periods": [
+      "2023",
+      "2024",
+      "2025"
+    ],
+    "note": "中信证券 近两年（语料仅2024/2025年报）营业收入趋势（跨报告期）"
+  },
+  {
+    "ticker": "600048.SH",
+    "report_type": "annual",
+    "period": "2025",
+    "type": "multi_doc",
+    "periods": [
+      "2023",
+      "2024",
+      "2025"
+    ],
+    "note": "保利发展 近两年（语料仅2024/2025年报）营业收入趋势（跨报告期）"
+  },
+  {
+    "ticker": "600050.SH",
+    "report_type": "annual",
+    "period": "2025",
+    "type": "multi_doc",
+    "periods": [
+      "2023",
+      "2024",
+      "2025"
+    ],
+    "note": "中国联通 近两年（语料仅2024/2025年报）营业收入趋势（跨报告期）"
+  },
+  {
+    "ticker": "600030.SH",
+    "report_type": "annual",
+    "period": "2025",
+    "type": "numeric_fact",
+    "note": "中信证券 股东人数（合计+拆分待补）"
+  },
+  {
+    "ticker": "600016.SH",
+    "report_type": "annual",
+    "period": "2025",
+    "type": "numeric_fact",
+    "note": "民生银行 股东人数（合计+拆分待补）"
+  },
+  {
+    "ticker": "300750.SZ",
+    "report_type": "annual",
+    "period": "2025",
+    "type": "negative",
+    "note": "宁德时代（语料无此 ticker）"
+  },
+  {
+    "ticker": "002594.SZ",
+    "report_type": "annual",
+    "period": "2025",
+    "type": "negative",
+    "note": "比亚迪（语料无此 ticker）"
+  },
+  {
+    "ticker": "300059.SZ",
+    "report_type": "annual",
+    "period": "2025",
+    "type": "negative",
+    "note": "东方财富（语料无此 ticker）"
+  }
+]

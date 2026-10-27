@@ -320,6 +320,19 @@ ingest lineage 的 `chunkerVersion` 由当前实际生效的 chunking options �
 `tableRowCoverage` 指标（仅对 `type:"table"` 适用），并只对 table 题设 SLO；不要改动
 现有 source 级门禁的语义。
 
+**当前诊断基线**（2026-10-28，retrieval-only，keyword topK=20）：
+
+| 题目 | tableRowCoverage | 单 chunk 完整 | 组联合完整 | sibling 展开 |
+| --- | ---: | --- | --- | --- |
+| fin-003 | 0.500 | 否 | 否 | 是 |
+| fin-004 | 1.000 | 是 | 是 | 是 |
+| fin-008 | 0.333 | 否 | 否 | 否 |
+| fin-009 | 0.500 | 否 | 否 | 是 |
+| fin-013 | 1.000 | 是 | 是 | 是 |
+
+该诊断仍是手工回归，不进入现有 source 级 CI 门禁。当前缺口集中在「查询没有把目标表组召回到 topK」，
+不是 sibling 展开本身失效；D3 后续调参应优先看表组命中，而不是放宽整表交付口径。
+
 ---
 
 ## 7. D4 · 截图召回（图片型表，收紧后执行）

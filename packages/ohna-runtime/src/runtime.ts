@@ -38,6 +38,8 @@ import { createRunConfigResolver } from "./model/config.js";
 import { createServeTeamSession } from "./run/team-session.js";
 import { resolveCompactionSettings } from "@aiagent/agent";
 import { streamSimple } from "@aiagent/ai";
+import type { RunStreamEventDtoV2 } from "@aiagent/types";
+import type { Subscription, SubscribeOptions } from "./events/subscription.js";
 
 /** 组合根注入参数。 */
 export interface OhnaRuntimeOptions {
@@ -91,6 +93,8 @@ export interface OhnaRuntime {
   /** 撤销工作区授权（只撤销后续执行授权，不删除历史会话）。 */
   releaseWorkspace(workspaceId: string): Promise<void>;
   startRun(input: StartRunInput): Promise<RunStartResultDto>;
+  subscribeRun(runId: string, options: SubscribeOptions): Promise<Subscription>;
+  subscribeConversation(conversationId: string, options: SubscribeOptions): Promise<Subscription>;
   getRunSnapshot(runId: string): Promise<RunSnapshotDtoV2 | null>;
   listRunsByConversation(conversationId: string): Promise<RunMetaDtoV2[]>;
   cancelRun(runId: string): Promise<RunSnapshotDtoV2 | null>;
@@ -251,7 +255,12 @@ export async function createOhnaRuntime(options: OhnaRuntimeOptions): Promise<Oh
    * @param result RunManager 的创建结果。
    * @returns 协议层 run 启动结果（首版订阅与初始事件在 Task 9 接通）。
    */
-  const toRunStartResult = (result: { accepted: { runId: string; requestId: string; conversationId: string; modelId: string; status: RunSnapshotDtoV2["status"] }; snapshot: RunSnapshotDtoV2 }): RunStartResultDto => ({
+  const toRunStartResult = (result: {
+    accepted: { runId: string; requestId: string; conversationId: string; modelId: string; status: RunSnapshotDtoV2["status"] };
+    snapshot: RunSnapshotDtoV2;
+    subscriptionId?: string;
+    initialEvents?: RunStreamEventDtoV2[];
+  }): RunStartResultDto => ({
     accepted: {
       runId: result.accepted.runId,
       requestId: result.accepted.requestId,
@@ -260,10 +269,8 @@ export async function createOhnaRuntime(options: OhnaRuntimeOptions): Promise<Oh
       status: result.accepted.status
     },
     snapshot: result.snapshot,
-    // 首版无实时订阅通道：留空字符串，订阅幂等键在 Task 9 由 runtime 分配。
-    subscriptionId: "",
-    // 首版不回放早期事件：订阅后由 Task 9 的 live 通道补齐。
-    initialEvents: []
+    subscriptionId: result.subscriptionId ?? "",
+    initialEvents: result.initialEvents ?? []
   });
 
   return {
@@ -321,6 +328,12 @@ export async function createOhnaRuntime(options: OhnaRuntimeOptions): Promise<Oh
     },
     getRunSnapshot(runId: string) {
       return runManager.getSnapshot(runId, { assertAuthorized });
+    },
+    subscribeRun(runId: string, options: SubscribeOptions) {
+      return runManager.subscribeWithReplay(runId, options);
+    },
+    subscribeConversation(conversationId: string, options: SubscribeOptions) {
+      return runManager.subscribeConversationWithReplay(conversationId, options);
     },
     listRunsByConversation(conversationId: string) {
       // RunManager.listRunsByConversation 已在内部调用 this.assertAuthorized，无需重复传参。

@@ -53,6 +53,8 @@ export interface ActiveRun {
   reclaimTimer?: NodeJS.Timeout;
   /** run 创建时解析的配置快照；缺省时回退 RunManager 构造配置。 */
   config?: RunConfigSnapshot;
+  /** 原子 startRun 建立的订阅 id；终态后由 detachAtomicSubscription 释放其 listener。 */
+  atomicSubscriptionId?: string;
 }
 
 /** 创建 run 的输入。 */
@@ -79,6 +81,15 @@ export interface CreateRunInput {
 export interface CreateRunResult {
   accepted: AgentRunAcceptedDto;
   snapshot: RunSnapshotDtoV2;
+  /**
+   * startRun 原子创建时建立的订阅 id。
+   *
+   * RunManager 只负责登记 / 查询 / 关闭，不负责 replay 合并，组合根据此 id
+   * 返回真正的 live listener，保证 startRun 与首个订阅没有事件窗口。
+   */
+  subscriptionId?: string;
+  /** startRun 返回前已发射的早期事件（user_message 与可能的 context_event）。 */
+  initialEvents?: RunStreamEventDtoV2[];
 }
 
 /**

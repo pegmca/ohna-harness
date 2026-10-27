@@ -21,6 +21,7 @@ export * from "./validation.js";
  */
 export * from "./runtime.js";
 export { RunManager } from "./run-manager.js";
+export type { Subscription, SubscribeOptions } from "./events/subscription.js";
 export * from "./model/config.js";
 export * from "./scheduler/conversation.js";
 

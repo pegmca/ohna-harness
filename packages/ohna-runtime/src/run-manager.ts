@@ -49,6 +49,8 @@ import { TeamRunBinding, createSupervisorTracedStreamFn, type TeamRunner } from 
 import { createTitleGenerator } from "./run/title.js";
 import { persistRunMessage } from "./run/persist.js";
 import { RunCostTracker } from "./run/cost-summary.js";
+import { createSubscriptionRegistry, type Subscription, type SubscribeOptions } from "./events/subscription.js";
+import { subscribeWithReplay } from "./events/replay.js";
 
 import { isPersistableRunEvent } from "./store/index.js";
 import { cloneSnapshot, delay, toRunErrorPayload } from "./run/helpers.js";
@@ -72,6 +74,7 @@ export type {
 } from "./run/types.js";
 export { isTerminalStatus } from "./run/helpers.js";
 export { linearMessageToAgentMessage } from "./run/message-mapping.js";
+export type { Subscription, SubscribeOptions } from "./events/subscription.js";
 
 /** Run 管理器。 */
 export class RunManager {
@@ -81,6 +84,8 @@ export class RunManager {
   private readonly confirmations: RunConfirmations;
   /** 会话级订阅（--web 终端共享同一会话事件流）：conversationId → listener 集合。 */
   private readonly conversationSubscribers = new Map<string, Set<(event: RunStreamEventDtoV2) => void>>();
+  /** 会话级「只收新 run」订阅：订阅时间点之后创建的 run 才投递（不回放历史）。 */
+  private readonly futureConversationSubscribers = new Map<string, Set<(event: RunStreamEventDtoV2) => void>>();
   /** run 前压缩的摘要器；懒构造，测试可通过 options.summarizer 注入。 */
   private summarizer: RunManagerOptions["summarizer"];
   /** 语义标题生成器；懒构造，测试可通过 options.titleGenerator 注入。 */
@@ -112,6 +117,8 @@ export class RunManager {
   private readonly workspaceMcpRegistry?: WorkspaceMcpRegistry;
   /** 资源操作前的归属授权校验（fail-closed）；缺省为空操作。 */
   private readonly assertAuthorized: (id: string) => Promise<void>;
+  /** runtime 级订阅登记表：原子 startRun 与显式订阅共用。 */
+  private readonly runtimeSubscriptions = createSubscriptionRegistry();
   /**
    * @param options 模型、工具、store、确认闸门与可选 streamFn（测试注入）。
    */
@@ -365,6 +372,18 @@ export class RunManager {
       ...(config ? { config } : {})
     };
     this.active.set(runId, run);
+    // 原子创建：run 处于 active 后先登记缓冲 listener，再发射早期事件。
+    // 若先发 user_message，订阅注册前的时间窗内事件只能靠后续 replay 补齐，
+    // 违反 spec §5.3 的「create + first subscribe 同一操作」约束。
+    const atomicBuffer: RunStreamEventDtoV2[] = [];
+    const atomicSubscription = this.runtimeSubscriptions.register((event) => {
+      atomicBuffer.push(event);
+    });
+    // 记录订阅 id，终态时由 detachAtomicSubscription 释放（见 finishStatus / forceTerminal）。
+    run.atomicSubscriptionId = atomicSubscription.subscriptionId;
+    run.subscribers.add((event) => {
+      this.runtimeSubscriptions.get(atomicSubscription.subscriptionId)?.(event);
+    });
 
     // G-T1：成本聚合状态必须在**任何可能收尾的入口**之前建立。cancel / shutdown 可以在
     // execute 尚未启动（run 前压缩、workspace 解析期间）就调 finishStatus；若把 begin 放在
@@ -377,6 +396,13 @@ export class RunManager {
     const conversationListeners = this.conversationSubscribers.get(input.conversationId);
     if (conversationListeners) {
       for (const listener of conversationListeners) run.subscribers.add(listener);
+    }
+
+    // 会话级「只收新 run」订阅（subscribeConversationWithReplay）：本 run 在订阅之后才创建，
+    // 因此直接接入其事件流（不回放历史，符合 spec §5.4）。
+    const futureListeners = this.futureConversationSubscribers.get(input.conversationId);
+    if (futureListeners) {
+      for (const listener of futureListeners) run.subscribers.add(listener);
     }
 
     // U1：用户消息落盘后、loop 启动前广播为总线一等事件，使 Web 发起的轮次在终端 / 其它
@@ -434,7 +460,9 @@ export class RunManager {
         eventsUrl: `/api/runs/${encodeURIComponent(runId)}/events`,
         snapshotUrl: `/api/runs/${encodeURIComponent(runId)}`
       },
-      snapshot: cloneSnapshot(snapshot)
+      snapshot: cloneSnapshot(snapshot),
+      subscriptionId: atomicSubscription.subscriptionId,
+      initialEvents: atomicBuffer
     };
   }
 
@@ -517,6 +545,135 @@ export class RunManager {
         if (run.snapshot.conversationId === conversationId) run.subscribers.delete(listener);
       }
     };
+  }
+
+  /**
+   * runtime 级 run 订阅：先登记 live listener，再回放已落盘事件并合并。
+   *
+   * 与 `subscribe` 的分工：`subscribe` 只挂活跃 run（Task 11 过渡用）；本方法把
+   * SSE 层的 replay/live 语义移入 runtime，终态后仍可读取历史。
+   *
+   * @param runId run id。
+   * @param options 订阅选项（afterSequence + onEvent）。
+   * @returns 订阅句柄。
+   */
+  async subscribeWithReplay(runId: string, options: SubscribeOptions): Promise<Subscription> {
+    await this.assertAuthorized(runId);
+    return this.registerRuntimeSubscription((listener) => {
+      const unsubscribe = subscribeWithReplay({
+        afterSequence: options.afterSequence,
+        readEvents: () => this.options.runStore.listEvents(runId),
+        attachLive: (liveListener) => this.subscribe(runId, liveListener),
+        onEvent: (event) => options.onEvent(event)
+      });
+      return { detach: unsubscribe, listener };
+    });
+  }
+
+  /**
+   * runtime 级会话订阅：只接收新 run，不隐式回放历史 run。
+   *
+   * 与公开 `subscribeConversation`（会 attach 到在途 run）不同，本方法只监听订阅之后
+   * 新创建的 run——历史 run 的 Trace 来自 run 列表 + 单 run replay，不在此隐式回放；
+   * 既满足 spec §5.4「会话订阅只收新 run」，又不破坏 Task 11 过渡所需的公开方法。
+   *
+   * @param conversationId 会话 id。
+   * @param options 订阅选项（onEvent 接收新 run 事件；afterSequence 在此语义无效）。
+   * @returns 订阅句柄。
+   */
+  async subscribeConversationWithReplay(
+    conversationId: string,
+    options: SubscribeOptions
+  ): Promise<Subscription> {
+    await this.assertAuthorized(conversationId);
+    return this.registerRuntimeSubscription((listener) => {
+      const detach = this.subscribeFutureConversation(conversationId, (event) => listener(event));
+      return { detach, listener };
+    });
+  }
+
+  /**
+   * 会话级「只收新 run」订阅：在建立订阅的时间点之后创建的 run 才会投递事件，
+   * 已存在的在途 run 与历史 run 一律不投递（历史 Trace 由单 run replay 负责）。
+   * 公开 `subscribeConversation` 仍保留 attach 在途 run 的行为给 Task 11 过渡使用。
+   *
+   * @param conversationId 会话 id。
+   * @param listener 事件回调。
+   * @returns 退订函数。
+   */
+  private subscribeFutureConversation(
+    conversationId: string,
+    listener: (event: RunStreamEventDtoV2) => void
+  ): () => void {
+    const listeners = this.futureConversationSubscribers.get(conversationId) ?? new Set();
+    this.futureConversationSubscribers.set(conversationId, listeners);
+    listeners.add(listener);
+    return () => {
+      listeners.delete(listener);
+      if (listeners.size === 0) this.futureConversationSubscribers.delete(conversationId);
+    };
+  }
+
+  /**
+   * 按订阅 id 取得原子 startRun 建立的 live listener。
+   *
+   * @param subscriptionId 订阅 id。
+   * @returns listener；订阅不存在或已退订返回 undefined。
+   */
+  getRuntimeSubscriptionListener(
+    subscriptionId: string
+  ): ((event: RunStreamEventDtoV2) => void) | undefined {
+    return this.runtimeSubscriptions.get(subscriptionId);
+  }
+
+  /**
+   * 关闭全部 runtime 订阅（run 关闭链路使用）。
+   */
+  closeRuntimeSubscriptions(): void {
+    this.runtimeSubscriptions.close();
+  }
+
+  /**
+   * 释放原子 startRun 建立的缓冲订阅。
+   *
+   * createRun 返回的 subscriptionId 仅用于「无事件窗口」地把 initialEvents 交给调用方；
+   * 调用方后续通过 subscribeRun 自行续接实时事件。run 终态后该缓冲订阅已无意义，
+   * 必须释放其 listener，避免 run 离开 active 后仍被持续投递（内存泄漏 + 重复消费）。
+   *
+   * @param runId 已终态的 run id。
+   */
+  private detachAtomicSubscription(runId: string): void {
+    const run = this.active.get(runId);
+    const subscriptionId = run?.atomicSubscriptionId;
+    if (!subscriptionId) return;
+    const listener = this.runtimeSubscriptions.get(subscriptionId);
+    if (listener) {
+      // registry.register 已生成 Subscription.unsubscribe 闭包，这里用其身份直接删除。
+      this.runtimeSubscriptions.remove(subscriptionId);
+    }
+  }
+
+  /**
+   * 登记 runtime 订阅并生成 id。
+   *
+   * @param attach 与 RunManager live 通道的挂接函数。
+   * @returns 订阅句柄。
+   */
+  private registerRuntimeSubscription(
+    attach: (
+      listener: (event: RunStreamEventDtoV2) => void
+    ) => { detach: () => void; listener: (event: RunStreamEventDtoV2) => void }
+  ): Subscription {
+    let runtimeListener: (event: RunStreamEventDtoV2) => void = () => undefined;
+    const subscription = this.runtimeSubscriptions.register((event) => runtimeListener(event));
+    const attached = attach((event) => runtimeListener(event));
+    runtimeListener = attached.listener;
+    const unsubscribe = subscription.unsubscribe.bind(subscription);
+    subscription.unsubscribe = () => {
+      unsubscribe();
+      attached.detach();
+    };
+    return subscription;
   }
 
   /**
@@ -1031,6 +1188,9 @@ export class RunManager {
       await this.options.runStore.markStatus(run.snapshot.runId, status);
       // run 已结束：清理可能残留的待确认项（deny 释放），避免悬挂与内存泄漏。
       this.confirmGate?.clearRun(run.snapshot.runId);
+      // 原子 startRun 的缓冲订阅此时已完成使命：initialEvents 已随 createRun 返回，
+      // 后续事件由调用方自行 subscribeRun 续接，释放其 listener 避免内存泄漏与重复投递。
+      this.detachAtomicSubscription(run.snapshot.runId);
       scheduleReclaim(run, this.active);
     })();
 
@@ -1058,6 +1218,8 @@ export class RunManager {
     run.resolveTerminalDone();
     await this.options.runStore.markStatus(run.snapshot.runId, status);
     this.confirmGate?.clearRun(run.snapshot.runId);
+    // 兜底终态同样释放原子订阅（不依赖磁盘写入成功）。
+    this.detachAtomicSubscription(run.snapshot.runId);
     scheduleReclaim(run, this.active);
   }
 }

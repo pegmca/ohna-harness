@@ -65,23 +65,6 @@ export function decodeFinanceEvalDocumentContent(
 }
 
 /**
- * 把运行时字节编码为 JSON 数据集可承载的信封。
- *
- * @param content 原始文档内容。
- * @returns 文本或 base64 字节信封。
- */
-export function serializeFinanceEvalDocumentContent(
-  content: string | Uint8Array
-): SerializedFinanceEvalContent {
-  if (typeof content === "string") return content;
-
-  return {
-    contentEncoding: "base64",
-    contentBase64: Buffer.from(content).toString("base64")
-  };
-}
-
-/**
  * RAG 证据投影（RagAnswer → 评测关心的子集）。
  *
  * 把 runtime 返回的完整 `RagAnswer` 收束为指标计算所需的字段，隔离「线格式 DTO」

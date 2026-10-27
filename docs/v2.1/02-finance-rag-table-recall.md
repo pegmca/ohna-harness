@@ -251,9 +251,9 @@ ingest lineage 的 `chunkerVersion` 由当前实际生效的 chunking options �
 
 ### 5.1 问题
 
-`test/generate-finance-golden-v1.mjs` 现在先把 PDF 解析成 blocks，随后
-`blocks.map(b => b.text).join("\n")` 压成纯文本，并落成 `.txt` 交给评测。评测端 `.txt` 再走
-`TxtParser`，只会按空行/固定行数切块，**没有 `isTableRow`**。结果是 D1 在评测里不可观测。
+旧数据通道先把 PDF 解析成 blocks，再压成纯文本 `.txt`；评测端 `.txt` 只会按空行/固定行数切块，
+**没有 `isTableRow`**，导致 D1 在评测里不可观测。当前生成器已改为内嵌 PDF 原始字节，直接走真实
+`ingestDocument`。
 
 ### 5.2 改造点
 

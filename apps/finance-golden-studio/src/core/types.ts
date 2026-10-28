@@ -3,7 +3,9 @@ export type GoldenStudioErrorCode =
   | "draft_not_found"
   | "draft_corrupt"
   | "atomic_write_failed"
-  | "backup_failed";
+  | "backup_failed"
+  | "evidence_not_found"
+  | "evidence_parse_failed";
 
 /** Golden 草稿的题型枚举。 */
 export type GoldenDraftType =

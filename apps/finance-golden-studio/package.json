@@ -17,6 +17,7 @@
     "test:types": "tsc --noEmit --strict --module NodeNext --moduleResolution NodeNext --target ES2022 --types node --allowImportingTsExtensions test/contracts.test.ts"
   },
   "dependencies": {
+    "@aiagent/parsing": "workspace:^",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "react-router-dom": "^7.18.1"

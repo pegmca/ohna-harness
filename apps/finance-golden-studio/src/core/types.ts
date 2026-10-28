@@ -74,12 +74,20 @@ export interface GoldenLatestByResolution {
   field: string;
   scope: string;
   expected_report: string;
+  span?: {
+    window: string;
+    rule: string;
+  };
+  coverage_note?: string;
 }
 
 /** 反例题目的语料缺席规则。 */
 export interface GoldenTickerAbsentResolution {
   type: "ticker_absent";
   ticker: string;
+  scope?: string;
+  expected_report?: string;
+  note?: string;
 }
 
 /** 草稿可携带的文档解析规则。 */

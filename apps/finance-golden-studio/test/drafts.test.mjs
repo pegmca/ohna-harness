@@ -7,7 +7,6 @@
 import assert from "node:assert/strict";
 import { after, test } from "node:test";
 import {
-  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -17,8 +16,9 @@ import {
   rmSync,
   writeFileSync
 } from "node:fs";
+import defaultFs from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { backupFile } from "../src/core/backups.ts";
 import { listBatches, listDrafts, readDraft, saveDraft } from "../src/core/drafts.ts";
 import { writeFileAtomic } from "../src/core/fs-atomic.ts";
@@ -190,25 +190,59 @@ test("缺少本地 _draft 状态的 JSON 对象按损坏草稿报告", async () 
   assert.equal(existsSync(filePath), true);
 });
 
-test("原子替换在写入失败时保留原文件并清理临时文件", async (t) => {
-  if (typeof process.getuid === "function" && process.getuid() === 0) {
-    t.skip("root 用户不受目录写权限限制");
-    return;
-  }
+test("运行期形状无效的草稿返回 structured 错误且原文件保持不变", async () => {
+  const config = makeConfig();
+  const filePath = join(config.draftRoot, "batch-shape", "fin-D009.jsonl");
+  const invalid = {
+    ...makeDraft("fin-D009"),
+    query: 42,
+    evidence: "not-an-array",
+    _draft: {}
+  };
+  const original = `${JSON.stringify(invalid)}\n`;
+  mkdirSync(dirname(filePath), { recursive: true });
+  writeFileSync(filePath, original, "utf8");
 
+  await assert.rejects(
+    readDraft(config, "batch-shape", "fin-D009"),
+    (error) => {
+      assert.equal(error.code, "draft_corrupt");
+      assert.match(error.message, /shape|field/i);
+      return true;
+    }
+  );
+  assert.equal(readFileSync(filePath, "utf8"), original);
+  assert.equal(existsSync(filePath), true);
+});
+
+test("原子替换在 rename 失败时保留原文件并清理临时文件", async () => {
   const parent = makeTempDir();
   const target = join(parent, "golden.jsonl");
   const original = '{"id":"fin-001"}\n';
   writeFileSync(target, original, "utf8");
-  chmodSync(parent, 0o500);
+  let temporaryPath;
+  let renamed = false;
+  const fs = createAtomicFs({
+    onOpen(path) {
+      temporaryPath = path;
+    },
+    async rename() {
+      renamed = true;
+      const error = new Error("simulated rename failure");
+      error.code = "EIO";
+      throw error;
+    }
+  });
 
-  try {
-    await assert.rejects(writeFileAtomic(target, '{"id":"fin-002"}\n'), hasCode("atomic_write_failed"));
-    assert.equal(readFileSync(target, "utf8"), original);
-    assert.deepEqual(readdirSync(parent), ["golden.jsonl"]);
-  } finally {
-    chmodSync(parent, 0o700);
-  }
+  await assert.rejects(
+    writeFileAtomic(target, '{"id":"fin-002"}\n', fs),
+    hasCode("atomic_write_failed")
+  );
+  assert.equal(renamed, true);
+  assert.equal(typeof temporaryPath, "string");
+  assert.equal(existsSync(temporaryPath), false);
+  assert.equal(readFileSync(target, "utf8"), original);
+  assert.deepEqual(readdirSync(parent), ["golden.jsonl"]);
 });
 
 test("读取、保存与备份均拒绝逃逸工作区的路径", async () => {
@@ -246,6 +280,174 @@ test("首次备份可在 backupRoot 尚不存在时创建目录", async () => {
   assert.equal(dirname(backupPath), config.backupRoot);
   assert.equal(existsSync(backupPath), true);
 });
+
+test("备份在 rename 失败时清理隐藏临时文件且不留下最终文件", async () => {
+  const config = makeConfig();
+  const original = '{"id":"fin-001"}\n';
+  writeFileSync(config.goldenPath, original, "utf8");
+  let temporaryPath;
+  const fs = createBackupFs({
+    onOpen(path) {
+      temporaryPath = path;
+    },
+    async rename() {
+      const error = new Error("simulated backup rename failure");
+      error.code = "EIO";
+      throw error;
+    }
+  });
+
+  await assert.rejects(
+    backupFile(config, config.goldenPath, "before-promote", fs),
+    hasCode("backup_failed")
+  );
+  assert.equal(typeof temporaryPath, "string");
+  assert.equal(existsSync(temporaryPath), false);
+  assert.deepEqual(readdirSync(config.backupRoot), []);
+});
+
+test("备份通过隐藏临时文件写入后原子 rename 为最终文件", async () => {
+  const config = makeConfig();
+  const original = '{"id":"fin-001"}\n';
+  writeFileSync(config.goldenPath, original, "utf8");
+  const events = [];
+  let temporaryPath;
+  const fs = createBackupFs({
+    onOpen(path) {
+      temporaryPath = path;
+      events.push("open");
+    },
+    async onWrite(path) {
+      assert.equal(path, temporaryPath);
+      events.push("write");
+    },
+    async rename(source, destination) {
+      events.push("rename");
+      assert.equal(source, temporaryPath);
+      assert.equal(readFileSync(source, "utf8"), original);
+      await defaultFs.rename(source, destination);
+    }
+  });
+
+  const backupPath = await backupFile(config, config.goldenPath, "before-promote", fs);
+
+  assert.deepEqual(events, ["open", "write", "rename"]);
+  assert.equal(readFileSync(backupPath, "utf8"), original);
+  assert.deepEqual(readdirSync(config.backupRoot), [basename(backupPath)]);
+});
+
+test("草稿目录创建失败映射为 atomic_write_failed", async () => {
+  const config = makeConfig();
+  rmSync(config.draftRoot, { recursive: true, force: true });
+  writeFileSync(config.draftRoot, "not-a-directory", "utf8");
+
+  await assert.rejects(
+    saveDraft(config, "batch-dir-failure", "fin-D010", {
+      ...makeDraft("fin-D010"),
+      _draft: {}
+    }),
+    hasCode("atomic_write_failed")
+  );
+  assert.equal(readFileSync(config.draftRoot, "utf8"), "not-a-directory");
+});
+
+test("备份目录创建失败映射为 backup_failed", async () => {
+  const config = makeConfig();
+  rmSync(config.backupRoot, { recursive: true, force: true });
+  writeFileSync(config.backupRoot, "not-a-directory", "utf8");
+
+  await assert.rejects(
+    backupFile(config, config.goldenPath, "before-promote"),
+    hasCode("backup_failed")
+  );
+  assert.equal(readFileSync(config.backupRoot, "utf8"), "not-a-directory");
+});
+
+test("备份源读取失败映射为 backup_failed 且不泄漏临时清理异常", async () => {
+  const config = makeConfig();
+  const fs = createBackupFs({
+    async readFile() {
+      const error = new Error("simulated source read failure");
+      error.code = "EACCES";
+      throw error;
+    },
+    async rm() {
+      throw new Error("simulated cleanup failure");
+    }
+  });
+
+  await assert.rejects(
+    backupFile(config, config.goldenPath, "before-promote", fs),
+    (error) => {
+      assert.equal(error.code, "backup_failed");
+      assert.equal(error.cause.code, "EACCES");
+      return true;
+    }
+  );
+  assert.deepEqual(readdirSync(config.backupRoot), []);
+});
+
+/**
+ * 构造只覆盖原子写入所需操作的文件系统测试替身。
+ *
+ * @param overrides 对 open/rename/rm 的可选行为覆盖。
+ * @returns writeFileAtomic 内部依赖形状的完整替身。
+ */
+function createAtomicFs(overrides = {}) {
+  return {
+    async open(path) {
+      overrides.onOpen?.(path);
+      return defaultFs.open(path, "wx", 0o600);
+    },
+    async rename(source, destination) {
+      return defaultFs.rename(source, destination);
+    },
+    async rm(path) {
+      return defaultFs.rm(path);
+    },
+    ...overrides
+  };
+}
+
+/**
+ * 构造只覆盖备份所需操作的文件系统测试替身。
+ *
+ * @param overrides 对 mkdir/open/rename/rm 的可选行为覆盖。
+ * @returns backupFile 内部依赖形状的完整替身。
+ */
+function createBackupFs(overrides = {}) {
+  return {
+    async mkdir(path, options) {
+      return defaultFs.mkdir(path, options);
+    },
+    async open(path, flags, mode) {
+      overrides.onOpen?.(path);
+      const handle = await defaultFs.open(path, flags, mode);
+      return {
+        async writeFile(content) {
+          overrides.onWrite?.(path);
+          return handle.writeFile(content);
+        },
+        async sync() {
+          return handle.sync();
+        },
+        async close() {
+          return handle.close();
+        }
+      };
+    },
+    async readFile(path, options) {
+      return defaultFs.readFile(path, options);
+    },
+    async rename(source, destination) {
+      return defaultFs.rename(source, destination);
+    },
+    async rm(path) {
+      return defaultFs.rm(path);
+    },
+    ...overrides
+  };
+}
 
 /**
  * 创建带完整 WorkspaceConfig 形状的隔离工作区。

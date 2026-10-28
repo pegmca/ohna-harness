@@ -12,7 +12,8 @@ import type { WorkspaceConfig } from "./workspace.js";
 import {
   assertContainedPath,
   validateBatchName,
-  validateDraftId
+  validateDraftId,
+  WorkspaceError
 } from "./workspace.js";
 
 /**
@@ -171,6 +172,10 @@ export async function readDraft(
   if (!isRecord(parsed._draft)) {
     throw corruptDraftError(batch, id, filePath, "Draft must contain _draft state");
   }
+  const shapeError = validateDraftShape(parsed, id);
+  if (shapeError) {
+    throw corruptDraftError(batch, id, filePath, `Invalid draft shape: ${shapeError}`);
+  }
 
   return parsed as unknown as GoldenDraft;
 }
@@ -213,9 +218,19 @@ export async function saveDraft(
       filePath
     }
   };
-  await mkdir(join(config.draftRoot, batch), { recursive: true });
-  assertContainedPath(config.workspaceRoot, filePath);
-  await writeFileAtomic(filePath, `${JSON.stringify(normalized)}\n`);
+  try {
+    await mkdir(join(config.draftRoot, batch), { recursive: true });
+    assertContainedPath(config.workspaceRoot, filePath);
+    await writeFileAtomic(filePath, `${JSON.stringify(normalized)}\n`);
+  } catch (error) {
+    if (error instanceof GoldenStudioError || error instanceof WorkspaceError) throw error;
+    throw new GoldenStudioError(
+      "atomic_write_failed",
+      `Failed to prepare draft directory for ${batch}/${id}.`,
+      { batch, id, filePath },
+      error
+    );
+  }
   return { draft: normalized, filePath };
 }
 
@@ -298,4 +313,53 @@ function isNotFound(error: unknown): boolean {
  */
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * 校验存储、列表与后续编辑直接消费的草稿字段最小运行期形状。
+ *
+ * @param draft 已确认是普通对象的草稿记录。
+ * @param id 文件路径对应的草稿 ID。
+ * @returns 第一个形状问题；合法时返回 undefined。
+ */
+function validateDraftShape(
+  draft: Record<string, unknown>,
+  id: string
+): string | undefined {
+  if (draft.id !== id) return "id must be a string matching the filename";
+  if (typeof draft.query !== "string") return "query must be a string";
+  if (typeof draft.type !== "string") return "type must be a string";
+  if (typeof draft.is_negative !== "boolean") return "is_negative must be a boolean";
+  if (!isRecord(draft._draft)) return "_draft must be an object";
+  if (
+    draft._draft.approved !== undefined &&
+    typeof draft._draft.approved !== "boolean"
+  ) {
+    return "_draft.approved must be a boolean when present";
+  }
+  if (
+    draft._draft.extraction_health !== undefined &&
+    typeof draft._draft.extraction_health !== "string"
+  ) {
+    return "_draft.extraction_health must be a string when present";
+  }
+  return validateArrayFields(draft);
+}
+
+/**
+ * 校验草稿中存储层直接枚举的数组字段。
+ *
+ * @param draft 草稿记录。
+ * @returns 第一个数组形状问题；合法时返回 undefined。
+ */
+function validateArrayFields(draft: Record<string, unknown>): string | undefined {
+  if (!Array.isArray(draft.evidence)) return "evidence must be an array";
+  if (!Array.isArray(draft.distractors)) return "distractors must be an array";
+  if (
+    draft.expected_keywords !== undefined &&
+    !Array.isArray(draft.expected_keywords)
+  ) {
+    return "expected_keywords must be an array when present";
+  }
+  return undefined;
 }

@@ -12,8 +12,9 @@
     "promote": "node --import tsx src/cli/main.ts promote",
     "generate": "node --import tsx src/cli/main.ts generate",
     "annotate": "node --import tsx src/cli/main.ts serve",
-    "typecheck": "tsc -p tsconfig.json --pretty false --noEmit && tsc -p tsconfig.web.json --pretty false --noEmit",
-    "test": "node --import tsx --test test/*.test.mjs"
+    "typecheck": "tsc -p tsconfig.json --pretty false --noEmit && tsc -p tsconfig.web.json --pretty false --noEmit && pnpm test:types",
+    "test": "pnpm test:types && node --import tsx --test test/*.test.mjs",
+    "test:types": "tsc --noEmit --strict --module NodeNext --moduleResolution NodeNext --target ES2022 --types node --allowImportingTsExtensions test/contracts.test.ts"
   },
   "dependencies": {
     "react": "^19.0.0",

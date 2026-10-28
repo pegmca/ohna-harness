@@ -53,6 +53,68 @@ test("validateDraftBatch 枚举并校验草稿后合并报告", async () => {
   );
 });
 
+test("validateDraftBatch 为每个合并问题保留所属草稿 id", async () => {
+  const config = makeWorkflowConfig();
+  writeManifest(config, [
+    {
+      ticker: "600000.SH",
+      report_type: "annual",
+      period: "2025",
+      file_path: "raw/cn/600000.SH/2025.pdf"
+    }
+  ]);
+  writePdf(config, "raw/cn/600000.SH/2025.pdf", "Revenue 100");
+  const firstInvalidDraft = {
+    ...makeGoldenCase({ id: "fin-D001", expected_keywords: [] }),
+    _draft: { approved: false }
+  };
+  const secondInvalidDraft = {
+    ...makeGoldenCase({
+      id: "fin-D002",
+      evidence: [
+        {
+          ...makeGoldenCase().evidence[0],
+          section: "（待补：财务摘要）"
+        }
+      ]
+    }),
+    _draft: { approved: false }
+  };
+  await writeDrafts(config, "attributed", [
+    firstInvalidDraft,
+    secondInvalidDraft
+  ]);
+
+  const { validateDraftBatch } = await import("../src/core/validate-batch.ts");
+  const result = await validateDraftBatch(config, "attributed");
+
+  assert.deepEqual(
+    result.validation.errors.map((issue) => ({
+      id: issue.id,
+      code: issue.code,
+      field: issue.field
+    })),
+    [
+      {
+        id: "fin-D001",
+        code: "expected_keywords_required",
+        field: "expected_keywords"
+      },
+      {
+        id: "fin-D002",
+        code: "section_unresolved",
+        field: "evidence[0].section"
+      }
+    ]
+  );
+  assert.deepEqual(Object.keys(result.validation).sort(), [
+    "errors",
+    "keywordResults",
+    "ok",
+    "warnings"
+  ]);
+});
+
 test("validateDraftBatch 对空批次返回结构化 drafts_not_found", async () => {
   const config = makeWorkflowConfig();
   writeManifest(config, []);

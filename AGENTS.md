@@ -24,7 +24,7 @@ Before implementing a task, read the relevant architecture/design documents and 
 **产品 A · 金融 SaaS（保持不动，独立演进）**
 - `apps/finance-api`: Fastify 生产 server（PostgreSQL + Redis + 多租户 + QQ channel + 金融工具）。
 - `apps/finance-web`: Vite + React + TypeScript 金融 SaaS Web UI。
-- `apps/finance-golden-studio`: 单用户本地 golden 数据制作应用（`@aiagent/finance-golden-studio`），唯一 CLI 为 `golden-studio`，Web 与 CLI 共用 `src/core`。`src/core/workspace.ts` 解析 `workspaceRoot` / `corpusRoot` / `manifestPath` / `draftRoot` / `goldenPath` / `generatedPath` / `backupRoot` 并提供路径守卫；配置只来自 `--workspace` / `--corpus` 或 `GOLDEN_WORKSPACE_ROOT` / `FINANCE_CORPUS_ROOT`，无私有绝对路径兜底。`src/cli/{args,commands,serve,main}.ts` 负责严格参数、命令分派、本地 server 生命周期与信号收尾；`src/server/` 只做 HTTP/SPA 边界；`src/web/` 是 React 标注工作台；作者集 `golden.jsonl` 是唯一事实源，非负例题的 `expected_keywords` 由人工在来源 PDF 中复核，`generate` 原样投射为评测集 `expectedKeywords`。
+- `apps/finance-golden-studio`: 单用户本地 golden 数据制作应用（`@aiagent/finance-golden-studio`），唯一 CLI 为 `golden-studio`，Web 与 CLI 共用 `src/core`。`src/core/workspace.ts` 解析 `workspaceRoot` / `corpusRoot` / `manifestPath` / `draftRoot` / `goldenPath` / `generatedPath` / `backupRoot` 并提供路径守卫；配置只来自 `--workspace` / `--corpus` 或 `GOLDEN_WORKSPACE_ROOT` / `FINANCE_CORPUS_ROOT`，无私有绝对路径兜底。`src/cli/{args,commands,dev,serve,main}.ts` 负责严格参数、一键盘点 dev 进程定义、命令分派、本地 server 生命周期与信号收尾；`src/server/` 只做 HTTP/SPA 边界；`src/web/` 是 React 标注工作台；作者集 `golden.jsonl` 是唯一事实源，非负例题的 `expected_keywords` 由人工在来源 PDF 中复核，`generate` 原样投射为评测集 `expectedKeywords`。
 
 **产品 B · ohna（编码 Agent）**
 - `apps/ohna-cli`: 终端 Agent（`ohna` bin）。M1 编码工具闭环 + M2 长任务治理 + M3 体验对齐 + v1.3 B1-B3 交互/权限/能力扩展已实现。`src/` 按依赖方向分层，入口 `src/index.ts` 保持极薄（仅 parseArgs → runCli）：

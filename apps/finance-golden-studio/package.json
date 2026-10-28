@@ -8,7 +8,7 @@
     "golden-studio": "./bin/golden-studio.mjs"
   },
   "scripts": {
-    "dev": "vite",
+    "dev": "concurrently -k -n api,web -c blue,green \"node --import tsx --watch src/cli/main.ts serve\" \"vite\"",
     "build": "pnpm typecheck && vite build",
     "mine": "pnpm --silent exec node --import tsx src/cli/main.ts mine",
     "validate": "pnpm --silent exec node --import tsx src/cli/main.ts validate",

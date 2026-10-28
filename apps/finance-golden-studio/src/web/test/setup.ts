@@ -20,6 +20,12 @@ Object.defineProperty(globalThis, "localStorage", {
   value: storage
 });
 
+/** jsdom 不实现滚动布局；问题定位点击只验证状态，不验证真实滚动。 */
+Object.defineProperty(Element.prototype, "scrollIntoView", {
+  configurable: true,
+  value: () => undefined
+});
+
 /**
  * 每个测试结束后卸载 React 树，避免路由与列表断言互相污染。
  */

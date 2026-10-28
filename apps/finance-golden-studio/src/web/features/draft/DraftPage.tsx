@@ -50,7 +50,6 @@ export function DraftPage() {
   const [actionError, setActionError] = useState("");
   const [evidenceError, setEvidenceError] = useState("");
   const [evidenceLoading, setEvidenceLoading] = useState(false);
-  const [activeIssueField, setActiveIssueField] = useState<string | undefined>();
   const sources = useMemo(
     () => (draft ? listDraftSources(draft) : []),
     [draft]
@@ -241,7 +240,6 @@ export function DraftPage() {
   };
 
   const selectIssue = (issue: ValidationIssue): void => {
-    setActiveIssueField(issue.field);
     if (!issue.field) return;
     const targetId = issue.field.startsWith("gold_answer_table")
       ? "table-editor-heading"
@@ -394,9 +392,6 @@ export function DraftPage() {
             onIssueSelect={selectIssue}
             report={report}
           />
-          {activeIssueField ? (
-            <p className="muted-text">Issue field: {activeIssueField}</p>
-          ) : null}
         </div>
       </div>
     </section>

@@ -75,55 +75,52 @@ describe("App shell routing", () => {
     expect(client.listDrafts).toHaveBeenCalledWith("batch-long-name", expect.anything());
   });
 
-  test("replaces the draft placeholder with the evidence-aware editor route", async () => {
-    const draft = {
-      id: "fin-D001",
-      query: "What was revenue?",
-      type: "numeric_fact",
-      difficulty: "easy",
-      answer_type: "number",
-      gold_answer: "100",
-      answer_unit: "CNY",
-      evidence: [
-        {
-          ticker: "600000.SH",
-          report_type: "annual",
-          period: "2025",
-          section: "Highlights",
-          page: 1,
-          quote: "Revenue 100",
-          source_kind: "text"
-        }
-      ],
-      requires_multi_doc: false,
-      distractors: [],
-      is_negative: false,
-      note: "",
-      expected_keywords: ["Revenue"],
-      _draft: { file_path: "reports/600000.SH/annual/2025.pdf" }
-    };
+  test("opens the draft editor from a batch draft row", async () => {
+    const draft = makeDraft();
     const client = {
+      listBatches: vi.fn(async () => [makeBatch({ name: "batch-01" })]),
+      listDrafts: vi.fn(async () => [
+        {
+          id: draft.id,
+          query: draft.query,
+          type: draft.type,
+          approved: false,
+          corrupt: false
+        }
+      ]),
       readDraft: vi.fn(async () => draft),
-      readEvidence: vi.fn(async () => ({
-        filePath: "reports/600000.SH/annual/2025.pdf",
-        pages: [1, 2],
-        blocks: [
-          {
-            pageNumber: 1,
-            lineStart: 1,
-            lineEnd: 1,
-            text: "Revenue 100",
-            metadata: {}
-          },
-          {
-            pageNumber: 2,
-            lineStart: 1,
-            lineEnd: 1,
-            text: "Revenue 100",
-            metadata: {}
-          }
-        ]
-      })),
+      readEvidence: vi.fn(async () => evidenceDocument()),
+      evidenceContentUrl: vi.fn(
+        () => "/api/evidence/content?path=reports%2F600000.SH%2Fannual%2F2025.pdf"
+      ),
+      validateDraft: vi.fn(),
+      saveDraft: vi.fn()
+    };
+    render(<App client={client as never} initialEntries={["/batch/batch-01"]} />);
+
+    fireEvent.click(
+      await screen.findByRole("link", { name: "What was revenue?" })
+    );
+
+    expect(
+      await screen.findByRole("heading", { name: "fin-D001" })
+    ).toBeInTheDocument();
+    expect(client.readDraft).toHaveBeenCalledWith(
+      "batch-01",
+      "fin-D001",
+      expect.anything()
+    );
+    expect(
+      await within(screen.getByLabelText("Evidence blocks")).findByText(
+        "Revenue 100"
+      )
+    ).toBeInTheDocument();
+  });
+
+  test("replaces the draft placeholder with the evidence-aware editor route", async () => {
+    const client = {
+      readDraft: vi.fn(async () => makeDraft()),
+      readEvidence: vi.fn(async () => evidenceDocument()),
       evidenceContentUrl: vi.fn(
         () => "http://127.0.0.1:4318/api/evidence/content?path=reports%2F600000.SH%2Fannual%2F2025.pdf"
       ),
@@ -184,6 +181,64 @@ describe("App shell routing", () => {
     expect(screen.queryByText("This workspace is not wired yet.")).not.toBeInTheDocument();
   });
 });
+
+/**
+ * 构造可渲染完整编辑器的草稿。
+ *
+ * @returns 草稿夹具。
+ */
+function makeDraft() {
+  return {
+    id: "fin-D001",
+    query: "What was revenue?",
+    type: "numeric_fact" as const,
+    difficulty: "easy" as const,
+    answer_type: "number" as const,
+    gold_answer: "100",
+    answer_unit: "CNY",
+    evidence: [
+      {
+        ticker: "600000.SH",
+        report_type: "annual" as const,
+        period: "2025",
+        section: "Highlights",
+        page: 1,
+        quote: "Revenue 100",
+        source_kind: "text" as const
+      }
+    ],
+    requires_multi_doc: false,
+    distractors: [],
+    is_negative: false,
+    note: "",
+    expected_keywords: ["Revenue"],
+    _draft: {
+      file_path: "reports/600000.SH/annual/2025.pdf",
+      extraction_health: "ok"
+    }
+  };
+}
+
+/**
+ * 构造编辑器读取的真实证据投影夹具。
+ *
+ * @returns 证据文档。
+ */
+function evidenceDocument() {
+  return {
+    filePath: "reports/600000.SH/annual/2025.pdf",
+    pages: [1],
+    blocks: [
+      {
+        pageNumber: 1,
+        lineStart: 1,
+        lineEnd: 1,
+        text: "Revenue 100",
+        metadata: {}
+      }
+    ]
+  };
+}
 
 beforeAll(() => {
   const values = new Map<string, string>();

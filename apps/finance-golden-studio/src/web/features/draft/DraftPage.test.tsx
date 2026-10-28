@@ -107,6 +107,14 @@ describe("DraftPage", () => {
     expect(
       client.saveDraft.mock.calls.every(([, , draft]) => draft._draft.approved !== true)
     ).toBe(true);
+    fireEvent.click(
+      within(screen.getByRole("list", { name: "errors" })).getByRole(
+        "button",
+        { name: /query must not be empty/ }
+      )
+    );
+    expect(screen.queryByText(/Issue field:/)).not.toBeInTheDocument();
+    expect(screen.getByText("query", { selector: "code" })).toBeInTheDocument();
   });
 
   test("persists the validation snapshot after save and validate", async () => {

@@ -32,7 +32,7 @@ export async function validateDraftBatch(
       { batch }
     );
   }
-  const reports: ValidationReport[] = [];
+  const reports: DraftValidationReport[] = [];
   for (const summary of summaries) {
     if (summary.corrupt) {
       throw new GoldenStudioError(
@@ -42,13 +42,22 @@ export async function validateDraftBatch(
       );
     }
     const draft = await readDraft(config, batch, summary.id);
-    reports.push(await validateDraft(config, draft));
+    reports.push({
+      id: summary.id,
+      report: await validateDraft(config, draft)
+    });
   }
   return {
     batch,
     draftCount: summaries.length,
     validation: mergeReports(reports)
   };
+}
+
+/** 带来源草稿 ID 的单草稿校验结果。 */
+interface DraftValidationReport {
+  id: string;
+  report: ValidationReport;
 }
 
 /**
@@ -73,14 +82,23 @@ export async function validateDraftDraft(
 }
 
 /**
- * 合并多个草稿校验报告。
+ * 合并多个草稿校验报告，并为每条问题标记所属草稿 ID。
  *
- * @param reports 单草稿报告。
+ * 保持 ValidationReport 的扁平形状；CLI、HTTP 与 Web 都从同一
+ * issue.id 读取归因，不引入额外的嵌套报告结构。
+ *
+ * @param reports 带草稿 ID 的单草稿报告。
  * @returns 统一 ValidationReport。
  */
-function mergeReports(reports: readonly ValidationReport[]): ValidationReport {
-  const errors = reports.flatMap((report) => report.errors);
-  const warnings = reports.flatMap((report) => report.warnings);
-  const keywordResults = reports.flatMap((report) => report.keywordResults);
+function mergeReports(
+  reports: readonly DraftValidationReport[]
+): ValidationReport {
+  const errors = reports.flatMap(({ id, report }) =>
+    report.errors.map((candidate) => ({ ...candidate, id }))
+  );
+  const warnings = reports.flatMap(({ id, report }) =>
+    report.warnings.map((candidate) => ({ ...candidate, id }))
+  );
+  const keywordResults = reports.flatMap(({ report }) => report.keywordResults);
   return { ok: errors.length === 0, errors, warnings, keywordResults };
 }

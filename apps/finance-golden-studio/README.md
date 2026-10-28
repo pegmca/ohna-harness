@@ -15,8 +15,11 @@ pnpm install
 pnpm --filter @aiagent/finance-golden-studio dev
 ```
 
-Open `http://127.0.0.1:5173/`. Vite proxies `/api` to the local API at
-`http://127.0.0.1:4318`.
+The command starts both processes. Open the Vite workbench at
+`http://127.0.0.1:5173/`; Vite proxies `/api` to the local API at
+`http://127.0.0.1:4318`. The API process watches TypeScript changes; restart
+the command if you change Vite configuration. Set `GOLDEN_STUDIO_PORT` only
+when running `serve` directly because the dev proxy remains fixed at `4318`.
 
 To run the production workbench, build it once and start the single local
 server:

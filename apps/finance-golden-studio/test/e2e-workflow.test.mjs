@@ -27,6 +27,11 @@ import {
   writeManifest,
   writePdf
 } from "./workflow-fixtures.mjs";
+import {
+  buildDevCommand,
+  devProcesses,
+  devProxyMatchesApi
+} from "../src/cli/dev.ts";
 
 /** 测试包根。 */
 const PACKAGE_ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -132,6 +137,77 @@ test("README 记录一键启动、单一 CLI、环境变量与完整工作流", 
     /mine\s*→\s*annotate\s*→\s*validate\s*→\s*promote\s*→\s*generate\s*→\s*eval/
   );
   assert.match(readme, /expected_keywords/);
+});
+
+test("一键 dev 同时启动本地 API 与 Vite，并以 English 声明页面语言", async () => {
+  const packageJson = JSON.parse(
+    readFileSync(
+      join(REPO_ROOT, "apps", "finance-golden-studio", "package.json"),
+      "utf8"
+    )
+  );
+  const processes = devProcesses();
+  const command = buildDevCommand(processes);
+
+  assert.equal(packageJson.scripts.dev, command);
+  assert.equal(
+    processes.some(
+      ({ args }) =>
+        args.includes("src/cli/main.ts") && args.includes("serve")
+    ),
+    true
+  );
+  assert.equal(
+    processes.some(({ args }) => args.includes("vite")),
+    true
+  );
+  assert.equal(devProxyMatchesApi(), true);
+
+  const indexHtml = readFileSync(
+    join(REPO_ROOT, "apps", "finance-golden-studio", "index.html"),
+    "utf8"
+  );
+  assert.match(indexHtml, /<html lang="en">/);
+});
+
+test("一键 dev 脚本实际启动 API 与 Vite 入口", async () => {
+  const config = makeWorkflowConfig();
+  writeManifest(config, []);
+  const command = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
+  const child = spawn(command, ["dev"], {
+    cwd: PACKAGE_ROOT,
+    env: {
+      ...process.env,
+      GOLDEN_WORKSPACE_ROOT: config.workspaceRoot,
+      FINANCE_CORPUS_ROOT: config.corpusRoot,
+      FORCE_COLOR: "0"
+    }
+  });
+  child.stdout.setEncoding("utf8");
+  child.stderr.setEncoding("utf8");
+  let output = "";
+  child.stdout.on("data", (chunk) => {
+    output += chunk;
+  });
+  child.stderr.on("data", (chunk) => {
+    output += chunk;
+  });
+
+  try {
+    await waitForOutput(
+      () => output,
+      () =>
+        output.includes("[api]") &&
+        output.includes("[web]") &&
+        output.includes("VITE") &&
+        output.includes("Local:")
+    );
+    assert.match(output, /Golden Studio listening at http:\/\/127\.0\.0\.1:4318\//);
+    assert.match(output, /http:\/\/localhost:5173\/|http:\/\/127\.0\.0\.1:5173\//);
+  } finally {
+    child.kill("SIGTERM");
+    await exitChild(child);
+  }
 });
 
 test("当前 14 条作者记录可导入且 13 条正例题都有非空 expected_keywords", () => {
@@ -452,6 +528,45 @@ function capture(command, argv, cwd, timeoutMs = 20_000) {
     child.on("close", (code) => {
       clearTimeout(timer);
       resolvePromise({ code: code ?? 1, stdout, stderr });
+    });
+  });
+}
+
+/**
+ * 等待子进程输出满足条件。
+ *
+ * @param readOutput 当前累计输出读取器。
+ * @param predicate 输出满足条件。
+ * @param timeoutMs 超时毫秒。
+ * @returns 条件成立时完成。
+ */
+async function waitForOutput(readOutput, predicate, timeoutMs = 20_000) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    if (predicate(readOutput())) return;
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 50));
+  }
+  throw new Error(`Dev processes did not start: ${readOutput()}`);
+}
+
+/**
+ * 等待子进程结束，并在超时后强制终止。
+ *
+ * @param child 子进程。
+ * @returns 子进程关闭事件。
+ */
+function exitChild(child) {
+  return new Promise((resolvePromise) => {
+    if (child.exitCode !== null || child.signalCode !== null) {
+      resolvePromise(undefined);
+      return;
+    }
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+    }, 10_000);
+    child.once("close", () => {
+      clearTimeout(timer);
+      resolvePromise(undefined);
     });
   });
 }

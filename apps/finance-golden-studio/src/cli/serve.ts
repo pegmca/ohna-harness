@@ -4,14 +4,13 @@ import type { WorkspaceConfig } from "../core/workspace.js";
 import { resolveWorkspaceConfig } from "../core/workspace.js";
 import { createGoldenStudioServer } from "../server/http.js";
 import type { ServerHandle } from "../server/types.js";
+import { DEV_API_PORT } from "../web/dev-config.js";
 import { CliError } from "./args.js";
 
 /** CLI 应用根目录。 */
 const APP_ROOT = resolve(fileURLToPath(new URL("../..", import.meta.url)));
 /** 默认监听地址。 */
 const DEFAULT_HOST = "127.0.0.1";
-/** 默认 HTTP 端口。 */
-const DEFAULT_PORT = 4318;
 
 /** 可测试的 serve 依赖。 */
 export interface ServeDependencies {
@@ -127,7 +126,7 @@ export function installShutdownSignals(handle: ServeHandle): () => void {
  * @throws {CliError} 端口不是合法整数时抛出。
  */
 function parsePort(value: string | undefined): number {
-  if (value === undefined || value.trim() === "") return DEFAULT_PORT;
+  if (value === undefined || value.trim() === "") return DEV_API_PORT;
   const port = Number(value);
   if (!Number.isInteger(port) || port < 0 || port > 65_535) {
     throw new CliError(

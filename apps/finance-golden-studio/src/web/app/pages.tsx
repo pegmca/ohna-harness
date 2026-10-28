@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
+import { Link, useParams } from "react-router-dom";
 import type { BatchSummary, DraftSummary } from "../shared/api/types.js";
 import { useApiClient } from "./context.js";
 
@@ -44,7 +44,12 @@ export function BatchListPage() {
           <ul className="row-list">
             {batches.map((batch) => (
               <li className="row-item" key={batch.name}>
-                <span className="row-title">{batch.name}</span>
+                <Link
+                  className="row-title table-link"
+                  to={`/batch/${encodeURIComponent(batch.name)}`}
+                >
+                  {batch.name}
+                </Link>
                 <span className="row-meta">{batch.draftCount} drafts</span>
               </li>
             ))}
@@ -90,7 +95,12 @@ export function BatchDraftsPage() {
           <ul className="row-list">
             {drafts.map((draft) => (
               <li className="row-item" key={draft.id}>
-                <span className="row-title">{draft.query || draft.id}</span>
+                <Link
+                  className="row-title table-link"
+                  to={`/draft/${encodeURIComponent(batch)}/${encodeURIComponent(draft.id)}`}
+                >
+                  {draft.query || draft.id}
+                </Link>
                 <span className="row-meta">{draft.id}</span>
               </li>
             ))}

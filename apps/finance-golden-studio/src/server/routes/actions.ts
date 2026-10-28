@@ -1,4 +1,5 @@
 import { generateEvalDataset } from "../../core/generate.js";
+import { mineCandidates } from "../../core/mine.js";
 import { promoteBatch } from "../../core/promote.js";
 import {
   validateDraftBatch,
@@ -10,7 +11,8 @@ import { HttpError } from "../errors.js";
 import {
   readActionBody,
   readBatchSegment,
-  readDraftSegment
+  readDraftSegment,
+  readMineBody
 } from "../paths.js";
 import type { RequestContext, RouteResult } from "../types.js";
 
@@ -34,11 +36,13 @@ export async function handleActions(
     });
   }
   const action = segments[1];
-  const body = readActionBody(await readJsonBody(context.request, context.maxBodyBytes));
   switch (action) {
-    case "validate":
+    case "validate": {
+      const body = readActionBody(await readJsonBody(context.request, context.maxBodyBytes));
       return { kind: "json", status: 200, body: { ok: true, data: await validateAction(context, body) } };
-    case "promote":
+    }
+    case "promote": {
+      const body = readActionBody(await readJsonBody(context.request, context.maxBodyBytes));
       if (!body.batch) {
         throw new HttpError(400, "invalid_request", "batch is required for promote.", {
           field: "batch"
@@ -49,7 +53,9 @@ export async function handleActions(
         status: 200,
         body: { ok: true, data: await promoteBatch(context.config, readBatchSegment(body.batch)) }
       };
+    }
     case "generate": {
+      readActionBody(await readJsonBody(context.request, context.maxBodyBytes));
       const report = await generateEvalDataset(context.config);
       return {
         kind: "json",
@@ -60,6 +66,22 @@ export async function handleActions(
             ...report,
             dataset: { ...report.dataset, cases: report.dataset.cases.length }
           }
+        }
+      };
+    }
+    case "mine": {
+      const body = readMineBody(
+        await readJsonBody(context.request, context.maxBodyBytes)
+      );
+      return {
+        kind: "json",
+        status: 200,
+        body: {
+          ok: true,
+          data: await mineCandidates(context.config, {
+            batch: readBatchSegment(body.batch),
+            candidates: body.candidates
+          })
         }
       };
     }

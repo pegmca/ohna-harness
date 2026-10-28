@@ -1,6 +1,9 @@
 import { Route, Routes } from "react-router-dom";
+import { BatchesPage } from "../features/batches/BatchesPage.js";
 import { DraftPage } from "../features/draft/DraftPage.js";
-import { BatchDraftsPage, BatchListPage } from "./pages.js";
+import { GoldenPage } from "../features/golden/GoldenPage.js";
+import { SettingsPage } from "../features/settings/SettingsPage.js";
+import { BatchDraftsPage } from "./pages.js";
 
 /**
  * Golden Studio 的路由表；草稿详情由证据编辑器承接。
@@ -10,11 +13,11 @@ import { BatchDraftsPage, BatchListPage } from "./pages.js";
 export function GoldenStudioRoutes() {
   return (
     <Routes>
-      <Route element={<BatchListPage />} path="/" />
+      <Route element={<BatchesPage />} path="/" />
       <Route element={<BatchDraftsPage />} path="/batch/:batch" />
       <Route element={<DraftPage />} path="/draft/:batch/:id" />
-      <Route element={<PlaceholderPage label="Golden set" />} path="/golden" />
-      <Route element={<PlaceholderPage label="Settings" />} path="/settings" />
+      <Route element={<GoldenPage />} path="/golden" />
+      <Route element={<SettingsPage />} path="/settings" />
       <Route element={<PlaceholderPage label="Not found" />} path="*" />
     </Routes>
   );

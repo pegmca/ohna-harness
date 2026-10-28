@@ -5,9 +5,13 @@ import type {
   DraftScopedValidationResult,
   DraftSummary,
   GoldenDraft,
+  GoldenStatus,
+  GoldenStudioActionName,
+  GoldenStudioActionResult,
   PdfEvidenceDocument,
   GoldenStudioClientOptions,
-  RequestOptions
+  RequestOptions,
+  WorkspaceSettings
 } from "./types.js";
 
 /** Web 边界的结构化请求错误。 */
@@ -72,6 +76,16 @@ export interface GoldenStudioClient {
     id: string,
     options?: RequestOptions
   ): Promise<DraftScopedValidationResult>;
+  /** 读取作者集与生成评测产物的分离状态。 */
+  readGoldenStatus(options?: RequestOptions): Promise<GoldenStatus>;
+  /** 读取只读工作区与语料配置。 */
+  readWorkspaceSettings(options?: RequestOptions): Promise<WorkspaceSettings>;
+  /** 经显式确认调用 server 动作，返回服务端权威结果。 */
+  runAction(
+    action: GoldenStudioActionName,
+    payload?: Record<string, unknown>,
+    options?: RequestOptions
+  ): Promise<GoldenStudioActionResult>;
 }
 
 /**
@@ -204,6 +218,17 @@ export function createGoldenStudioClient(
           id
         }),
         ...requestOptions
+      }),
+    readGoldenStatus: (options) =>
+      request<GoldenStatus>("api/golden", { method: "GET", ...options }),
+    readWorkspaceSettings: (options) =>
+      request<WorkspaceSettings>("api/settings", { method: "GET", ...options }),
+    runAction: (action, payload = {}, options) =>
+      request<GoldenStudioActionResult>(`api/actions/${action}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ ...payload, confirm: true }),
+        ...options
       })
   };
 }

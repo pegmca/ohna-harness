@@ -19,6 +19,7 @@ import {
   cleanupWorkflowFixtures,
   makeGoldenCase,
   makeWorkflowConfig,
+  writeAnchoredPdf,
   writeGolden,
   writeManifest,
   writePdf
@@ -40,7 +41,7 @@ beforeEach(async () => {
       file_path: pdfPath
     }
   ]);
-  writePdf(config, pdfPath, "Revenue 100");
+  writeAnchoredPdf(config, pdfPath);
   writeGolden(config, [makeGoldenCase()]);
   mkdirSync(join(config.workspaceRoot, "outside"), { recursive: true });
   writeFileSync(join(config.workspaceRoot, "outside", "secret.pdf"), "%PDF-secret");
@@ -389,6 +390,79 @@ test("generate 动作返回结构化报告且不把完整数据集回传", async
   assert.equal(body.data.caseCount, 2);
   assert.equal(body.data.dataset.cases, 2);
   assert.equal(body.data.outputPath, config.generatedPath);
+});
+
+test("golden 与 settings GET 只返回当前工作区的真实状态和只读路径", async () => {
+  const goldenResponse = await request("/api/golden");
+  const settingsResponse = await request("/api/settings");
+  const golden = await goldenResponse.json();
+  const settings = await settingsResponse.json();
+
+  assertApiSuccess(goldenResponse, golden);
+  assert.equal(golden.data.authored.path, config.goldenPath);
+  assert.equal(golden.data.authored.caseCount, 1);
+  assert.equal(golden.data.authored.validation.ok, true);
+  assert.deepEqual(golden.data.generated, {
+    path: config.generatedPath,
+    exists: false
+  });
+
+  assertApiSuccess(settingsResponse, settings);
+  assert.deepEqual(settings.data, {
+    workspaceRoot: config.workspaceRoot,
+    corpusRoot: config.corpusRoot,
+    manifestPath: config.manifestPath,
+    goldenPath: config.goldenPath,
+    generatedPath: config.generatedPath
+  });
+});
+
+test("golden GET 对损坏的生成物明确报错而不伪装为未生成", async () => {
+  mkdirSync(join(config.workspaceRoot, "datasets", "finance"), { recursive: true });
+  writeFileSync(config.generatedPath, '{"cases":', "utf8");
+
+  const response = await request("/api/golden");
+
+  assert.equal(response.status, 409);
+  assertStructuredError(await response.json(), 409, "invalid_request");
+});
+
+test("mine 动作要求候选数组并在确认后写入真实草稿批次", async () => {
+  const missingCandidates = await request("/api/actions/mine", {
+    method: "POST",
+    body: JSON.stringify({ confirm: true, batch: "mined-batch" })
+  });
+  assert.equal(missingCandidates.status, 400);
+  assertStructuredError(
+    await missingCandidates.json(),
+    400,
+    "invalid_request"
+  );
+
+  const response = await request("/api/actions/mine", {
+    method: "POST",
+    body: JSON.stringify({
+      confirm: true,
+      batch: "mined-batch",
+      candidates: [
+        {
+          ticker: "600000.SH",
+          report_type: "annual",
+          period: "2025",
+          type: "numeric_fact"
+        }
+      ]
+    })
+  });
+  const body = await response.json();
+
+  assertApiSuccess(response, body);
+  assert.equal(body.data.batch, "mined-batch");
+  assert.equal(body.data.draftedCount, 1);
+  const batchResponse = await request("/api/batches/mined-batch/drafts");
+  const batch = await batchResponse.json();
+  assertApiSuccess(batchResponse, batch);
+  assert.equal(batch.data[0].id, "fin-D001");
 });
 
 test("证据端点返回解析投影，PDF 流支持完整与 Range 读取", async () => {

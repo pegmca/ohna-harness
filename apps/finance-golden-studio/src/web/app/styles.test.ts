@@ -12,4 +12,10 @@ describe("theme styles", () => {
     expect(systemDarkIndex).toBeGreaterThan(-1);
     expect(systemDarkIndex).toBeGreaterThan(explicitDarkIndex);
   });
+
+  test("maps local font size preferences to CSS variables without viewport scaling", () => {
+    expect(css).toContain(':root[data-font-size="compact"]');
+    expect(css).toContain(':root[data-font-size="large"]');
+    expect(css).not.toMatch(/font-size:\s*[^;]*vw/);
+  });
 });

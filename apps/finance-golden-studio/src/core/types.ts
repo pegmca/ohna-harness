@@ -90,6 +90,48 @@ export interface DraftBatchValidationResult {
   validation: ValidationReport;
 }
 
+/** 作者集只读健康摘要，供 Web 工作台展示而无需暴露内部配置对象。 */
+export interface GoldenAuthoredStatus {
+  path: string;
+  caseCount: number;
+  validation: ValidationReport;
+}
+
+/** 生成评测产物的存在性与摘要；不存在时不携带陈旧统计。 */
+export type GoldenGeneratedStatus =
+  | { path: string; exists: false }
+  | {
+      path: string;
+      exists: true;
+      caseCount: number;
+      datasetVersion: string;
+      modifiedAt: string;
+    };
+
+/** 作者集与生成产物的分离状态。 */
+export interface GoldenStatus {
+  authored: GoldenAuthoredStatus;
+  generated: GoldenGeneratedStatus;
+}
+
+/** 设置页所需的只读工作区配置。 */
+export interface WorkspaceSettings {
+  workspaceRoot: string;
+  corpusRoot: string;
+  manifestPath: string;
+  goldenPath: string;
+  generatedPath: string;
+}
+
+/** 可经本地 server 执行的四个数据工作流。 */
+export type GoldenStudioActionName = "validate" | "promote" | "generate" | "mine";
+
+/** 动作结果只保留 UI 所需的权威摘要，不回传完整 base64 评测集。 */
+export interface GoldenStudioActionResult {
+  action: GoldenStudioActionName;
+  result: Record<string, unknown>;
+}
+
 /** 当前草稿范围的校验结果。 */
 export interface DraftScopedValidationResult {
   batch: string;

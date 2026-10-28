@@ -3,8 +3,12 @@ import type {
   DraftBatchValidationResult,
   DraftScopedValidationResult,
   DraftSummary,
+  GoldenStatus,
   GoldenDraft,
-  PdfEvidenceDocument
+  GoldenStudioActionName,
+  GoldenStudioActionResult,
+  PdfEvidenceDocument,
+  WorkspaceSettings
 } from "../../../core/types.js";
 
 /** 统一错误信封中的错误对象。 */
@@ -40,7 +44,18 @@ export type {
   BatchSummary,
   DraftSummary,
   GoldenDraft,
+  GoldenStatus,
+  GoldenStudioActionName,
+  GoldenStudioActionResult,
+  WorkspaceSettings,
   DraftScopedValidationResult,
   DraftBatchValidationResult,
   PdfEvidenceDocument
 };
+
+/** 动作按钮的确认与调用配置。 */
+export interface GoldenStudioAction {
+  action: GoldenStudioActionName;
+  label: string;
+  payload?: Record<string, unknown>;
+}

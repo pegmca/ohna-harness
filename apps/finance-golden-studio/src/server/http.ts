@@ -6,6 +6,7 @@ import { handleActions } from "./routes/actions.js";
 import { handleBatches } from "./routes/batches.js";
 import { handleDrafts } from "./routes/drafts.js";
 import { handleEvidence } from "./routes/evidence.js";
+import { handleStatus } from "./routes/status.js";
 import type {
   GoldenStudioServerOptions,
   RequestContext,
@@ -97,6 +98,7 @@ async function dispatch(
       (await handleBatches(context, segments)) ??
       (await handleDrafts(context, segments)) ??
       (await handleEvidence(context, segments)) ??
+      (await handleStatus(context, segments)) ??
       (await handleActions(context, segments));
     if (!result) throw unknownRoute(url.pathname);
     writeResponse(response, result);

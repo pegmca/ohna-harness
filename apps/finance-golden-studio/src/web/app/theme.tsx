@@ -57,6 +57,15 @@ export function useTheme(): ThemeContextValue {
 }
 
 /**
+ * 读取可选主题上下文，允许设置组件在独立测试中渲染。
+ *
+ * @returns 主题上下文；未包裹 ThemeProvider 时为 undefined。
+ */
+export function useOptionalTheme(): ThemeContextValue | undefined {
+  return useContext(ThemeContext);
+}
+
+/**
  * 从 localStorage 读取主题偏好。
  *
  * @returns 合法主题偏好；非法或缺省时为 system。

@@ -44,7 +44,7 @@ describe("App shell routing", () => {
 
     const emptyClient = { listBatches: vi.fn(async () => []) };
     const second = render(<App client={emptyClient as never} initialEntries={["/"]} />);
-    expect(await screen.findByText("No batches yet")).toBeInTheDocument();
+    expect(await screen.findByText("No draft batches yet.")).toBeInTheDocument();
     second.unmount();
 
     const errorClient = {
@@ -144,6 +144,42 @@ describe("App shell routing", () => {
       await within(screen.getByLabelText("Evidence blocks")).findByText(
         "Revenue 100"
       )
+    ).toBeInTheDocument();
+    expect(screen.queryByText("This workspace is not wired yet.")).not.toBeInTheDocument();
+  });
+
+  test("routes Golden and Settings to their real workbench pages", async () => {
+    const client = {
+      readGoldenStatus: vi.fn(async () => ({
+        authored: {
+          path: "/workspace/golden.jsonl",
+          caseCount: 2,
+          validation: { ok: true, errors: [], warnings: [], keywordResults: [] }
+        },
+        generated: {
+          path: "/workspace/rag-golden-v1.json",
+          exists: false
+        }
+      })),
+      readWorkspaceSettings: vi.fn(async () => ({
+        workspaceRoot: "/workspace",
+        corpusRoot: "/corpus",
+        manifestPath: "/corpus/manifest/manifest.jsonl",
+        goldenPath: "/workspace/golden.jsonl",
+        generatedPath: "/workspace/rag-golden-v1.json"
+      }))
+    };
+    const golden = render(
+      <App client={client as never} initialEntries={["/golden"]} />
+    );
+    expect(
+      await screen.findByRole("region", { name: "Authored golden" })
+    ).toBeInTheDocument();
+    golden.unmount();
+
+    render(<App client={client as never} initialEntries={["/settings"]} />);
+    expect(
+      await screen.findByRole("heading", { name: "Workspace and corpus" })
     ).toBeInTheDocument();
     expect(screen.queryByText("This workspace is not wired yet.")).not.toBeInTheDocument();
   });

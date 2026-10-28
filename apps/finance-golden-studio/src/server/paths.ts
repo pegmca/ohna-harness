@@ -1,4 +1,5 @@
 import type { GoldenDraft } from "../core/types.js";
+import type { MineCandidate } from "../core/mine-draft.js";
 import {
   validateBatchName,
   validateDraftId
@@ -135,6 +136,36 @@ export function readActionBody(body: Record<string, unknown>): {
     ...(body.scope === undefined ? {} : { scope: body.scope }),
     ...(body.batch === undefined ? {} : { batch: body.batch }),
     ...(body.id === undefined ? {} : { id: body.id })
+  };
+}
+
+/**
+ * 读取 mine 显式确认、批次与候选数组。
+ *
+ * @param body 已解析请求体。
+ * @returns 强类型 mine 输入。
+ * @throws {HttpError} 缺少确认、批次或候选数组时抛出。
+ */
+export function readMineBody(body: Record<string, unknown>): {
+  confirm: true;
+  batch: string;
+  candidates: MineCandidate[];
+} {
+  const action = readActionBody(body);
+  if (!action.batch) {
+    throw new HttpError(400, "invalid_request", "batch is required for mine.", {
+      field: "batch"
+    });
+  }
+  if (!Array.isArray(body.candidates) || !body.candidates.every(isRecord)) {
+    throw new HttpError(400, "invalid_request", "candidates must be an array of objects.", {
+      field: "candidates"
+    });
+  }
+  return {
+    confirm: true,
+    batch: action.batch,
+    candidates: body.candidates as unknown as MineCandidate[]
   };
 }
 

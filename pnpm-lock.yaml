@@ -8,6 +8,9 @@ importers:
 
   .:
     devDependencies:
+      '@aiagent/finance-golden-studio':
+        specifier: workspace:^
+        version: link:apps/finance-golden-studio
       '@eslint/js':
         specifier: ^9.39.5
         version: 9.39.5

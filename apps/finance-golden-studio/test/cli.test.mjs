@@ -428,12 +428,12 @@ test("doctor 将重复 manifest 三元组报告为结构化 corpus 失败", asyn
   );
 });
 
-test("doctor scripts 检查拒绝指向其他应用或入口的脚本", async () => {
+test("doctor scripts 检查拒绝未委托单一 workspace bin 的兼容脚本", async () => {
   const repoRoot = await makeDoctorRepoFixture({
     scripts: {
-      "golden-studio": "node --import tsx other-app/src/cli/main.ts",
       "eval:finance-golden:mine": "pnpm golden-studio mine",
-      "eval:finance-golden:validate": "pnpm golden-studio validate",
+      "eval:finance-golden:validate":
+        "pnpm --filter @aiagent/finance-golden-studio validate",
       "eval:finance-golden:promote": "pnpm golden-studio promote",
       "eval:finance-golden:generate": "pnpm golden-studio generate",
       "eval:finance-golden:annotate": "pnpm golden-studio serve"
@@ -452,7 +452,7 @@ test("doctor scripts 检查拒绝指向其他应用或入口的脚本", async ()
   assert.equal(report.ok, false);
   const scripts = report.checks.find((check) => check.name === "scripts");
   assert.equal(scripts?.ok, false);
-  assert.match(scripts?.message ?? "", /golden-studio|entrypoint/i);
+  assert.match(scripts?.message ?? "", /eval:finance-golden:validate/);
 });
 
 test("doctor scripts 检查接受全部兼容脚本委托单一 Golden Studio 入口", async () => {
@@ -472,16 +472,16 @@ test("doctor scripts 检查接受全部兼容脚本委托单一 Golden Studio �
   assert.equal(scripts?.ok, true, scripts?.message);
 });
 
-test("doctor scripts 检查拒绝通过其他脚本间接运行的入口", async () => {
+test("doctor scripts 检查拒绝根脚本遮蔽 Golden Studio workspace bin", async () => {
   const repoRoot = await makeDoctorRepoFixture({
     scripts: {
       "golden-studio":
         "pnpm --silent exec sh apps/finance-golden-studio/src/cli/main.ts",
-      "eval:finance-golden:mine": "pnpm --silent golden-studio mine",
-      "eval:finance-golden:validate": "pnpm --silent golden-studio validate",
-      "eval:finance-golden:promote": "pnpm --silent golden-studio promote",
-      "eval:finance-golden:generate": "pnpm --silent golden-studio generate",
-      "eval:finance-golden:annotate": "pnpm --silent golden-studio serve"
+      "eval:finance-golden:mine": "pnpm golden-studio mine",
+      "eval:finance-golden:validate": "pnpm golden-studio validate",
+      "eval:finance-golden:promote": "pnpm golden-studio promote",
+      "eval:finance-golden:generate": "pnpm golden-studio generate",
+      "eval:finance-golden:annotate": "pnpm golden-studio serve"
     }
   });
   const { runDoctor } = await import("../src/cli/doctor.ts");
@@ -496,15 +496,14 @@ test("doctor scripts 检查拒绝通过其他脚本间接运行的入口", async
 
   const scripts = report.checks.find((check) => check.name === "scripts");
   assert.equal(scripts?.ok, false);
-  assert.match(scripts?.message ?? "", /must equal.*main\.ts/i);
+  assert.match(scripts?.message ?? "", /must not shadow.*workspace bin/i);
 });
 
-test("pnpm golden-studio doctor --json 只输出一个 JSON 文档", async () => {
+test("文档化 pnpm golden-studio doctor --json 成功时只输出一个 JSON 文档", async () => {
   const fixture = await makeResolvedWorkspace();
   const result = await captureProcess(
     "pnpm",
     [
-      "--silent",
       "golden-studio",
       "doctor",
       "--workspace",
@@ -523,20 +522,62 @@ test("pnpm golden-studio doctor --json 只输出一个 JSON 文档", async () =>
   assert.equal(output.command, "doctor");
 });
 
+test("文档化 pnpm golden-studio doctor --json 失败时仍为非零结构化 JSON", async () => {
+  const fixture = await makeResolvedWorkspace();
+  await writeFile(
+    join(fixture.corpusRoot, "manifest", "manifest.jsonl"),
+    "{not-json}\n",
+    "utf8"
+  );
+  const result = await captureProcess(
+    "pnpm",
+    [
+      "golden-studio",
+      "doctor",
+      "--workspace",
+      fixture.workspaceRoot,
+      "--corpus",
+      fixture.corpusRoot,
+      "--json"
+    ],
+    REPO_ROOT
+  );
+
+  assert.equal(result.code, 1, result.stdout + result.stderr);
+  assert.equal(result.stderr, "");
+  const output = parseJsonOutput(result.stdout);
+  assert.equal(output.ok, false);
+  assert.equal(output.error, "doctor_failed");
+  const corpus = output.result.checks.find((check) => check.name === "corpus");
+  assert.equal(corpus?.errorCode, "manifest_json_invalid");
+});
+
+test("文档化 pnpm golden-studio doctor --json 的 CLI 失败也走 JSON 通道", async () => {
+  const result = await captureProcess(
+    "pnpm",
+    ["golden-studio", "doctor", "--workspace", "--json"],
+    REPO_ROOT
+  );
+
+  assert.equal(result.code, 1, result.stdout + result.stderr);
+  assert.equal(result.stderr, "");
+  const output = parseJsonOutput(result.stdout);
+  assert.equal(output.ok, false);
+  assert.equal(output.error, "missing_option_value");
+  assert.equal("result" in output, false);
+});
+
 test("兼容 scripts 原样递归运行唯一入口以保留参数转发", async () => {
   const scripts = await readPackageJsonScripts(REPO_ROOT);
 
-  assert.equal(
-    scripts["golden-studio"],
-    "pnpm --silent exec node --import tsx apps/finance-golden-studio/src/cli/main.ts"
-  );
+  assert.equal("golden-studio" in scripts, false);
   assert.equal(
     scripts["eval:finance-golden:validate"],
-    "pnpm --silent golden-studio validate"
+    "pnpm golden-studio validate"
   );
   assert.equal(
     scripts["eval:finance-golden:mine"],
-    "pnpm --silent golden-studio mine"
+    "pnpm golden-studio mine"
   );
 });
 
@@ -548,8 +589,8 @@ test("兼容 validate 脚本正确转发 --golden、--workspace 与 --corpus", a
   const result = await captureProcess(
     "pnpm",
     [
-      "--silent",
-      "eval:finance-golden:validate",
+      "golden-studio",
+      "validate",
       "--workspace",
       fixture.workspaceRoot,
       "--corpus",
@@ -586,8 +627,8 @@ test("兼容 mine 脚本正确转发 --candidates、--batch 与 --corpus", async
   const result = await captureProcess(
     "pnpm",
     [
-      "--silent",
-      "eval:finance-golden:mine",
+      "golden-studio",
+      "mine",
       "--workspace",
       fixture.workspaceRoot,
       "--corpus",
@@ -783,13 +824,11 @@ async function makeDoctorRepoFixture(input = {}) {
     "utf8"
   );
   const scripts = input.scripts ?? {
-    "golden-studio":
-      "pnpm --silent exec node --import tsx apps/finance-golden-studio/src/cli/main.ts",
-    "eval:finance-golden:mine": "pnpm --silent golden-studio mine",
-    "eval:finance-golden:validate": "pnpm --silent golden-studio validate",
-    "eval:finance-golden:promote": "pnpm --silent golden-studio promote",
-    "eval:finance-golden:generate": "pnpm --silent golden-studio generate",
-    "eval:finance-golden:annotate": "pnpm --silent golden-studio serve"
+    "eval:finance-golden:mine": "pnpm golden-studio mine",
+    "eval:finance-golden:validate": "pnpm golden-studio validate",
+    "eval:finance-golden:promote": "pnpm golden-studio promote",
+    "eval:finance-golden:generate": "pnpm golden-studio generate",
+    "eval:finance-golden:annotate": "pnpm golden-studio serve"
   };
   await writeFile(
     join(repoRoot, "package.json"),

@@ -10,9 +10,6 @@ import type { CliArguments } from "./args.js";
 const APP_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 /** 仓库根目录。 */
 const REPO_ROOT = resolve(APP_ROOT, "../..");
-/** 唯一 CLI 入口的精确根脚本定义。 */
-const GOLDEN_STUDIO_SCRIPT =
-  "pnpm --silent exec node --import tsx apps/finance-golden-studio/src/cli/main.ts";
 
 /** doctor 检查项名称。 */
 export type DoctorCheckName = "workspace" | "corpus" | "migrations" | "scripts";
@@ -155,6 +152,14 @@ async function checkScripts(repoRoot: string): Promise<DoctorCheck> {
       scripts?: Record<string, unknown>;
     };
     const scripts = packageJson.scripts ?? {};
+    if (Object.hasOwn(scripts, "golden-studio")) {
+      return {
+        name: "scripts",
+        ok: false,
+        message:
+          "Root scripts must not shadow the golden-studio workspace bin."
+      };
+    }
     const missing = scriptRequirements
       .filter(({ name }) => typeof scripts[name] !== "string")
       .map(({ name }) => name);
@@ -163,14 +168,6 @@ async function checkScripts(repoRoot: string): Promise<DoctorCheck> {
         name: "scripts",
         ok: false,
         message: `Missing root scripts: ${missing.join(", ")}.`
-      };
-    }
-    const mainScript = scripts["golden-studio"] as string;
-    if (mainScript !== GOLDEN_STUDIO_SCRIPT) {
-      return {
-        name: "scripts",
-        ok: false,
-        message: `Root golden-studio script must equal: ${GOLDEN_STUDIO_SCRIPT}`
       };
     }
     const mismatched = scriptRequirements
@@ -184,7 +181,7 @@ async function checkScripts(repoRoot: string): Promise<DoctorCheck> {
       ok: mismatched.length === 0,
       message:
         mismatched.length === 0
-          ? "Golden Studio root scripts use the single CLI entry."
+          ? "Golden Studio compatibility scripts use the single CLI entry."
           : `Scripts do not target the single Golden Studio entry: ${mismatched.join(", ")}.`
     };
   } catch (error) {

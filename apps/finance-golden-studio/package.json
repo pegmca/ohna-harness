@@ -5,7 +5,7 @@
   "type": "module",
   "description": "Finance Golden Studio：单用户本地 golden 数据标注工作台",
   "bin": {
-    "golden-studio": "./src/cli/main.ts"
+    "golden-studio": "./bin/golden-studio.mjs"
   },
   "scripts": {
     "dev": "vite",

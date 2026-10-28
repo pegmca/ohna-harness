@@ -13,7 +13,7 @@
     "generate": "node --import tsx src/cli/main.ts generate",
     "annotate": "node --import tsx src/cli/main.ts serve",
     "typecheck": "tsc -p tsconfig.json --pretty false --noEmit && tsc -p tsconfig.web.json --pretty false --noEmit",
-    "test": "node --test test/*.test.mjs"
+    "test": "node --import tsx --test test/*.test.mjs"
   },
   "dependencies": {
     "react": "^19.0.0",

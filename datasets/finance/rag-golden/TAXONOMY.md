@@ -9,9 +9,10 @@
 1. **挑题（mine）**：`node test/mine-finance-golden.mjs <candidates.json>` 读候选清单
    `(ticker, report_type, period, type)`，从 manifest 定位 PDF → 抽全文（CJK 空格归一 + 健康度闸门）
    → 按题型模板抽候选片段（含 `page`/`quote`）→ 落 `_drafts/<batch>/<id>.jsonl`（未定稿草稿）。
-2. **标注（人工）**：打开草稿，补 `gold_answer` / `gold_answer_table` / `gold_answer_form` / `note`，
-   把 `evidence.section` 的「（待补）」换成真实章节名；图片源题补 `source_kind:"image"+ocr_required`。
-3. **校验（validate）**：`pnpm eval:finance-golden:validate` 跑结构 / 引用 / 答案层校验，0 ERROR 才许入册。
+2. **标注（人工）**：打开草稿，补 `gold_answer` / `gold_answer_table` / `gold_answer_form` / `note`
+   与 `expected_keywords`，把 `evidence.section` 的「（待补）」换成真实章节名；图片源题补 `source_kind:"image"+ocr_required`。
+3. **校验（validate）**：`pnpm eval:finance-golden:validate` 统一检查结构、精确 manifest 引用、
+   PDF 可读性、section 完成度、表格 / 表单形状和 `expected_keywords` 源文本可达性；0 ERROR 才许入册。
 4. **入册（promote）**：`node test/promote-finance-golden.mjs <batch>` 把该批草稿并入 `golden.jsonl`
    （自动排重 id、去空行、保持 fin-XXX 递增），再 `generate + eval` 看门禁。
 
@@ -32,6 +33,9 @@
 
 > `form` 与 `table` 在 schema 里是同层（gold_answer_form / gold_answer_table），本报告把它们并为一类
 > 「结构化答案」，模板上按「多行=table、键值=form」区分。生成器两种都接受。
+
+所有非 negative 模板都必须额外手填 `expected_keywords`。关键词应来自题目要求回答案的原文锚点，
+保持人工可复核；不要从 gold prose 自动抽取，且每个关键词都必须在本题 evidence PDF 中命中。
 
 ## 三、难度分级（difficulty）
 
@@ -55,13 +59,16 @@
 
 - [ ] `id` 唯一、`fin-XXX` 连续、无空行。
 - [ ] 非 negative 题 `evidence` 非空且每条命中 manifest（ticker/report_type/period 三元组存在）。
+- [ ] 每条 evidence 三元组在 manifest 中唯一且能读取、解析对应 PDF；不得回退到同公司其他报告期。
 - [ ] `evidence.section` 已填真实章节（无「（待补）」）。
+- [ ] 非 negative 题 `expected_keywords` 至少一个非空值，且全部能在来源 PDF 原文中命中。
+- [ ] negative 题的 ticker 在 manifest 中确实缺席；若已收录，必须改写或删除该反例。
 - [ ] 数字事实题给了「合计 + 拆分」。
 - [ ] `table`/`form` 题有结构化答案；稀疏行已在 `note` 说明。
 - [ ] 跨期/跨文档题 `distractors` 已列易混文档，`note` 写坑点。
 - [ ] `unit_trap` 题 `note` 写明单位，`answer_unit` 准确。
 - [ ] `latest_by` 题带 `snapshot_dependent:true` + `resolution`（按当前 manifest 重算，语料变要重抄）。
-- [ ] `validate` 脚本 0 ERROR（允许 fin-009 式稀疏行 WARN）。
+- [ ] `validate` 0 ERROR（允许 fin-009 式稀疏行 WARN，但须在 `note` 确认省略是有意的）。
 - [ ] `table` 题在 golden 回归中验证 chunk 级整表召回：summary/whole-table 命中后须通过 `tableGroupId` 覆盖全部 gold 行。
 - [ ] 运行 `node test/assert-finance-table-recall.mjs <out.json>`，确认 `tableRowCoverage`、缺行清单与 sibling 展开状态符合当前诊断基线；当前 fin-008 仍缺组合计提坏账行，其余四题应完整覆盖。
 

@@ -156,6 +156,9 @@ export interface GoldenDraft {
   _draft: GoldenDraftState;
 }
 
+/** 写入 `golden.jsonl` 的作者集条目，不包含草稿本地元信息。 */
+export type GoldenCase = Omit<GoldenDraft, "_draft">;
+
 /** 批次列表使用的聚合摘要。 */
 export interface BatchSummary {
   name: string;

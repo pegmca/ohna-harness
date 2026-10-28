@@ -163,7 +163,7 @@ export async function mineCandidates(
 }
 
 /**
- * 从已解析块构建候选草稿，隔离文件 I/O 以便验证锚点与页映射。
+ * 从已解析块构建候选草稿。
  *
  * @param candidate 候选定义。
  * @param record 精确 manifest 记录。

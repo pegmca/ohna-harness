@@ -28,6 +28,7 @@
     "eval:finance-golden:annotate": "pnpm --filter @aiagent/finance-golden-studio annotate",
     "eval:finance-golden:mine": "pnpm --filter @aiagent/finance-golden-studio mine",
     "eval:finance-golden:promote": "pnpm --filter @aiagent/finance-golden-studio promote",
+    "golden-studio": "node --import tsx apps/finance-golden-studio/src/cli/main.ts",
     "eval:ohna:update-baseline": "pnpm --filter @aiagent/ohna-eval eval --update-baseline"
   },
   "devDependencies": {

@@ -23,12 +23,12 @@
     "eval:finance-api:update-baseline": "pnpm --filter @aiagent/finance-api eval --update-baseline",
     "eval:finance-golden": "pnpm --filter @aiagent/finance-api eval:golden",
     "eval:finance-golden:update-baseline": "pnpm --filter @aiagent/finance-api eval:golden:update-baseline",
-    "eval:finance-golden:generate": "pnpm --filter @aiagent/finance-golden-studio generate",
-    "eval:finance-golden:validate": "pnpm --filter @aiagent/finance-golden-studio validate",
-    "eval:finance-golden:annotate": "pnpm --filter @aiagent/finance-golden-studio annotate",
-    "eval:finance-golden:mine": "pnpm --filter @aiagent/finance-golden-studio mine",
-    "eval:finance-golden:promote": "pnpm --filter @aiagent/finance-golden-studio promote",
-    "golden-studio": "node --import tsx apps/finance-golden-studio/src/cli/main.ts",
+    "eval:finance-golden:generate": "pnpm --silent golden-studio generate",
+    "eval:finance-golden:validate": "pnpm --silent golden-studio validate",
+    "eval:finance-golden:annotate": "pnpm --silent golden-studio serve",
+    "eval:finance-golden:mine": "pnpm --silent golden-studio mine",
+    "eval:finance-golden:promote": "pnpm --silent golden-studio promote",
+    "golden-studio": "pnpm --silent exec node --import tsx apps/finance-golden-studio/src/cli/main.ts",
     "eval:ohna:update-baseline": "pnpm --filter @aiagent/ohna-eval eval --update-baseline"
   },
   "devDependencies": {

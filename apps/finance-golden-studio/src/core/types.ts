@@ -2,6 +2,7 @@
 export type GoldenStudioErrorCode =
   | "draft_not_found"
   | "draft_corrupt"
+  | "drafts_not_found"
   | "atomic_write_failed"
   | "backup_failed"
   | "evidence_not_found"

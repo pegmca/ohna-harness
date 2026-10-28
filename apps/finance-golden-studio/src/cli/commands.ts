@@ -1,19 +1,13 @@
 import { readFile } from "node:fs/promises";
-import { join, resolve } from "node:path";
-import { listDrafts } from "../core/drafts.js";
-import { GoldenStudioError } from "../core/errors.js";
+import { resolve } from "node:path";
 import { generateEvalDataset } from "../core/generate.js";
 import type { MineCandidate } from "../core/mine.js";
 import { mineCandidates } from "../core/mine.js";
 import { promoteBatch } from "../core/promote.js";
-import type { ValidationReport } from "../core/schema.js";
-import type { GoldenDraft } from "../core/types.js";
-import { validateDraft, validateGolden } from "../core/validate.js";
+import { validateDraftBatch } from "../core/validate-batch.js";
+import { validateGolden } from "../core/validate.js";
 import type { WorkspaceConfig } from "../core/workspace.js";
-import {
-  resolveWorkspaceConfig,
-  validateBatchName
-} from "../core/workspace.js";
+import { resolveWorkspaceConfig } from "../core/workspace.js";
 import type { CliArguments } from "./args.js";
 import { CliError } from "./args.js";
 import { runDoctor } from "./doctor.js";
@@ -111,60 +105,7 @@ async function validate(parsed: CliArguments): Promise<unknown> {
   if (parsed.golden) {
     return { validation: await validateGolden(config) };
   }
-  return validateBatch(config, parsed.batch as string);
-}
-
-/**
- * 读取批次草稿并逐条调用 validateDraft。
- *
- * @param config 工作区配置。
- * @param batch 批次名。
- * @returns 批次校验信封。
- */
-async function validateBatch(
-  config: WorkspaceConfig,
-  batch: string
-): Promise<unknown> {
-  validateBatchName(batch);
-  const summaries = await listDrafts(config, batch);
-  if (summaries.length === 0) {
-    throw new CliError(
-      "drafts_not_found",
-      `Draft batch not found or empty: ${batch}.`,
-      { batch }
-    );
-  }
-  const reports: ValidationReport[] = [];
-  for (const summary of summaries) {
-    if (summary.corrupt) {
-      throw new GoldenStudioError(
-        "draft_corrupt",
-        `Batch ${batch} contains corrupt draft ${summary.id}.`,
-        { batch, id: summary.id }
-      );
-    }
-    const draft = await readDraftFile(config, batch, summary.id);
-    reports.push(await validateDraft(config, draft));
-  }
-  const validation = mergeReports(reports);
-  return { batch, draftCount: summaries.length, validation };
-}
-
-/**
- * 读取一个已经由 listDrafts 枚举的草稿。
- *
- * @param config 工作区配置。
- * @param batch 批次名。
- * @param id 草稿 ID。
- * @returns 草稿对象。
- */
-async function readDraftFile(
-  config: WorkspaceConfig,
-  batch: string,
-  id: string
-): Promise<GoldenDraft> {
-  const path = join(config.draftRoot, batch, `${id}.jsonl`);
-  return JSON.parse(await readFile(path, "utf8")) as GoldenDraft;
+  return validateDraftBatch(config, parsed.batch as string);
 }
 
 /**
@@ -192,19 +133,6 @@ async function generate(parsed: CliArguments): Promise<unknown> {
       cases: report.dataset.cases.length
     }
   };
-}
-
-/**
- * 合并多个草稿校验报告。
- *
- * @param reports 单草稿报告。
- * @returns 统一 ValidationReport。
- */
-function mergeReports(reports: readonly ValidationReport[]): ValidationReport {
-  const errors = reports.flatMap((report) => report.errors);
-  const warnings = reports.flatMap((report) => report.warnings);
-  const keywordResults = reports.flatMap((report) => report.keywordResults);
-  return { ok: errors.length === 0, errors, warnings, keywordResults };
 }
 
 /**

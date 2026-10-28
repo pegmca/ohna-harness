@@ -16,22 +16,27 @@
     "generate": "pnpm --silent exec node --import tsx src/cli/main.ts generate",
     "annotate": "pnpm --silent exec node --import tsx src/cli/main.ts serve",
     "typecheck": "tsc -p tsconfig.json --pretty false --noEmit && tsc -p tsconfig.web.json --pretty false --noEmit && pnpm test:types",
-    "test": "pnpm test:types && node --import tsx --test test/*.test.mjs",
+    "test": "pnpm test:types && node --import tsx --test test/*.test.mjs && vitest run",
     "test:types": "tsc --noEmit --strict --module NodeNext --moduleResolution NodeNext --target ES2022 --types node --allowImportingTsExtensions test/contracts.test.ts"
   },
   "dependencies": {
     "@aiagent/parsing": "workspace:^",
+    "lucide-react": "^1.21.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "react-router-dom": "^7.18.1"
   },
   "devDependencies": {
+    "@testing-library/jest-dom": "^7.0.0",
+    "@testing-library/react": "^16.3.2",
     "@types/node": "^22.10.5",
     "@types/react": "^19.0.2",
     "@types/react-dom": "^19.0.2",
     "@vitejs/plugin-react": "^4.3.4",
+    "jsdom": "^29.1.1",
     "tsx": "^4.22.4",
     "typescript": "^5.7.2",
-    "vite": "^6.0.7"
+    "vite": "^6.0.7",
+    "vitest": "^4.1.10"
   }
 }

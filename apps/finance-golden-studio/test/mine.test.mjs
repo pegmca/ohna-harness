@@ -6,9 +6,15 @@
  */
 import assert from "node:assert/strict";
 import { after, test } from "node:test";
-import { existsSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  writeFileSync
+} from "node:fs";
 import { join } from "node:path";
 import { listDrafts, readDraft } from "../src/core/drafts.ts";
+import { assessExtractionHealth } from "../src/core/extraction-health.ts";
 import { mineCandidates } from "../src/core/mine.ts";
 import {
   cleanupWorkflowFixtures,
@@ -122,7 +128,7 @@ test("mineCandidates 为语料确实缺席的 negative 候选生成反例骨架"
   assert.equal(report.drafts[0]._draft.extraction_health, "n/a");
 });
 
-test("mineCandidates 同时写成功候选与跳过候选时明确报告部分完成", async () => {
+test("mineCandidates 混合成功与失败候选时零持久化", async () => {
   const config = makeWorkflowConfig();
   const relativePath = "raw/cn/600000.SH/2025.pdf";
   writeManifest(config, [
@@ -150,9 +156,79 @@ test("mineCandidates 同时写成功候选与跳过候选时明确报告部分�
 
   assert.equal(report.ok, false);
   assert.equal(report.complete, false);
-  assert.equal(report.draftedCount, 1);
+  assert.equal(report.draftedCount, 0);
   assert.equal(report.skippedCount, 1);
-  assert.notEqual(await readDraft(config, "batch-partial", "fin-D001"), undefined);
+  assert.deepEqual(report.drafts, []);
+  assert.deepEqual(await listDrafts(config, "batch-partial"), []);
+  assert.equal(existsSync(join(config.draftRoot, "batch-partial")), false);
+});
+
+test("mineCandidates 拒绝覆盖已存在的非空批次", async () => {
+  const config = makeWorkflowConfig();
+  const relativePath = "raw/cn/600000.SH/2025.pdf";
+  writeManifest(config, [
+    manifestRecord("600000.SH", "annual", "2025", relativePath)
+  ]);
+  writeAnchoredPdf(config, relativePath);
+  const batchDir = join(config.draftRoot, "batch-collision");
+  mkdirSync(batchDir, { recursive: true });
+  writeFileSync(join(batchDir, "keep.txt"), "existing\n", "utf8");
+
+  const report = await mineCandidates(config, {
+    batch: "batch-collision",
+    candidates: [
+      {
+        ticker: "600000.SH",
+        report_type: "annual",
+        period: "2025",
+        type: "numeric_fact"
+      }
+    ]
+  });
+
+  assert.equal(report.ok, false);
+  assert.equal(report.draftedCount, 0);
+  assert.equal(report.skipped[0].reason, "batch_exists");
+  assert.equal(readFileSync(join(batchDir, "keep.txt"), "utf8"), "existing\n");
+  assert.equal(existsSync(join(batchDir, "fin-D001.jsonl")), false);
+});
+
+test("assessExtractionHealth 拒绝不足 200 个非空白字符的来源", () => {
+  const health = assessExtractionHealth([
+    {
+      pageNumber: 1,
+      lineStart: 1,
+      lineEnd: 1,
+      text: "短文本",
+      metadata: {}
+    }
+  ]);
+
+  assert.deepEqual(health, {
+    ok: false,
+    reason: "text_too_short",
+    cjkChars: 3,
+    spacedCjkPairs: 0,
+    blocksPerPage: 1
+  });
+});
+
+test("assessExtractionHealth 拒绝低块密度且 CJK 字符间距超过 15% 的来源", () => {
+  const text = "平 安 银 行".repeat(50) + "正常财报数据".repeat(20);
+  const health = assessExtractionHealth([
+    {
+      pageNumber: 1,
+      lineStart: 1,
+      lineEnd: 1,
+      text,
+      metadata: { sourceLayer: "char_spaced" }
+    }
+  ]);
+
+  assert.equal(health.ok, false);
+  assert.equal(health.reason, "cjk_spacing");
+  assert.ok(health.blocksPerPage < 1.5);
+  assert.ok(health.spacedCjkPairs / health.cjkChars > 0.15);
 });
 
 /**

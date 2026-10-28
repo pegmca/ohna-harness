@@ -235,7 +235,7 @@ function resolveEvidence(
         `latest_by scope ticker ${ticker} does not match evidence ticker ${evidence.ticker}.`
       );
     }
-    const latest = latestManifestRecord(recordsByTicker.get(ticker) ?? []);
+    const latest = latestManifestRecord(ticker, recordsByTicker.get(ticker) ?? []);
     if (!latest) {
       throw new Error(`latest_by cannot resolve any manifest record for ${ticker}.`);
     }
@@ -285,15 +285,38 @@ function resolutionScopeTicker(scope: string): string {
  * @returns 最新记录或 undefined。
  */
 function latestManifestRecord(
+  ticker: string,
   records: readonly ManifestRecord[]
 ): ManifestRecord | undefined {
-  let latest: ManifestRecord | undefined;
-  for (const record of records) {
-    const date = record.disclosure_date;
-    if (typeof date !== "string") continue;
-    if (!latest || (latest.disclosure_date ?? "") < date) latest = record;
+  const dated = records.filter(
+    (record): record is ManifestRecord & { disclosure_date: string } =>
+      typeof record.disclosure_date === "string" &&
+      record.disclosure_date.trim().length > 0
+  );
+  if (dated.length === 0) return undefined;
+  const maximumDate = dated.reduce(
+    (maximum, record) =>
+      record.disclosure_date > maximum ? record.disclosure_date : maximum,
+    dated[0].disclosure_date
+  );
+  const newest = dated.filter(
+    (record) => record.disclosure_date === maximumDate
+  );
+  if (newest.length > 1) {
+    throw new GoldenStudioError(
+      "evidence_parse_failed",
+      `latest_by is ambiguous for ${ticker} on ${maximumDate}.`,
+      {
+        reason: "latest_by_ambiguous",
+        ticker,
+        disclosure_date: maximumDate,
+        sources: newest.map((record) =>
+          `${record.ticker}/${record.report_type}/${record.period}`
+        )
+      }
+    );
   }
-  return latest;
+  return newest[0];
 }
 
 /**

@@ -1,15 +1,18 @@
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { parsePdfBlocks } from "@aiagent/parsing";
 import { saveDraft } from "./drafts.js";
 import { GoldenStudioError } from "./errors.js";
+import { assessExtractionHealth } from "./extraction-health.js";
 import type { ManifestRecord } from "./manifest.js";
 import { manifestTripleKey, readManifest } from "./manifest.js";
-import type {
-  GoldenAnswerType,
-  GoldenDraft,
-  GoldenDraftType
-} from "./types.js";
+import {
+  buildMineDraft,
+  buildNegativeDraft,
+  validateMineCandidate
+} from "./mine-draft.js";
+import type { MineCandidate } from "./mine-draft.js";
+import type { GoldenDraft } from "./types.js";
 import type { WorkspaceConfig } from "./workspace.js";
 import {
   assertContainedPath,
@@ -17,14 +20,7 @@ import {
   WorkspaceError
 } from "./workspace.js";
 
-/** 半自动候选输入的一行。 */
-export interface MineCandidate {
-  ticker: string;
-  report_type: string;
-  period: string;
-  type: GoldenDraftType;
-  periods?: string[];
-}
+export type { MineCandidate } from "./mine-draft.js";
 
 /** mine 的批次与候选输入。 */
 export interface MineInput {
@@ -37,9 +33,12 @@ export interface MineSkip {
   candidate: MineCandidate;
   id: string;
   reason:
+    | "batch_exists"
     | "evidence_not_in_manifest"
     | "evidence_not_found"
     | "evidence_parse_failed"
+    | "text_too_short"
+    | "cjk_spacing"
     | "extraction_too_short"
     | "invalid_candidate";
   message: string;
@@ -55,17 +54,6 @@ export interface MineReport {
   drafts: GoldenDraft[];
   skipped: MineSkip[];
 }
-
-/** 题型对应的章节锚点；未登记题型回退到财务指标锚点。 */
-const TYPE_ANCHORS: Record<GoldenDraftType, readonly string[]> = {
-  numeric_fact: ["主要会计数据", "主要会计数据和财务指标", "会计数据"],
-  definitional: ["公司从事的主要业务", "主营业务", "经营范围"],
-  comparison: ["主要会计数据", "主要会计数据和财务指标"],
-  multi_doc: ["主要会计数据", "主要会计数据和财务指标"],
-  table: ["主要控股", "主要参股", "长期应收款", "坏账准备", "应收账款", "前五名"],
-  unit_trap: ["主要会计数据", "主要会计数据和财务指标"],
-  negative: []
-};
 
 /**
  * 从精确定位的 PDF 生成待人工补全的候选草稿。
@@ -98,9 +86,29 @@ export async function mineCandidates(
   const drafts: GoldenDraft[] = [];
   const skipped: MineSkip[] = [];
 
+  const collision = await findBatchCollision(config, input.batch);
+  if (collision) {
+    return {
+      ok: false,
+      complete: false,
+      batch: input.batch,
+      draftedCount: 0,
+      skippedCount: 1,
+      drafts: [],
+      skipped: [
+        {
+          candidate: input.candidates[0] ?? emptyCandidate(),
+          id: "fin-D001",
+          reason: "batch_exists",
+          message: collision
+        }
+      ]
+    };
+  }
+
   for (const [index, candidate] of input.candidates.entries()) {
     const id = `fin-D${String(index + 1).padStart(3, "0")}`;
-    const invalid = validateCandidate(candidate);
+    const invalid = validateMineCandidate(candidate);
     if (invalid) {
       skipped.push({ candidate, id, reason: "invalid_candidate", message: invalid });
       continue;
@@ -116,13 +124,7 @@ export async function mineCandidates(
         });
         continue;
       }
-      const saved = await saveDraft(
-        config,
-        input.batch,
-        id,
-        buildNegativeDraft(candidate, id)
-      );
-      drafts.push(saved.draft);
+      drafts.push(buildNegativeDraft(candidate, id));
       continue;
     }
 
@@ -143,94 +145,38 @@ export async function mineCandidates(
         skipped.push({ candidate, id, ...result });
         continue;
       }
-      const saved = await saveDraft(config, input.batch, id, result);
-      drafts.push(saved.draft);
+      drafts.push(result);
     } catch (error) {
       const mapped = mapEvidenceError(error, candidate, id);
       skipped.push(mapped);
     }
   }
 
-  return {
-    ok: skipped.length === 0,
-    complete: drafts.length > 0 && skipped.length === 0,
-    batch: input.batch,
-    draftedCount: drafts.length,
-    skippedCount: skipped.length,
-    drafts,
-    skipped
-  };
-}
-
-/**
- * 从已解析块构建候选草稿。
- *
- * @param candidate 候选定义。
- * @param record 精确 manifest 记录。
- * @param id 草稿 ID。
- * @param blocks 已解析 PDF 块。
- * @returns 可原子保存的候选草稿。
- * @throws {Error} 抽取文本不足以形成候选时抛出。
- */
-function buildMineDraft(
-  candidate: MineCandidate,
-  record: ManifestRecord,
-  id: string,
-  blocks: ReturnType<typeof parsePdfBlocks>
-): GoldenDraft {
-  const text = blocks.map((block) => block.text).join("\n");
-  if (text.replace(/\s+/gu, "").length < 200) {
-    throw new Error("Candidate PDF has too little extractable text.");
+  if (skipped.length > 0) {
+    return {
+      ok: false,
+      complete: false,
+      batch: input.batch,
+      draftedCount: 0,
+      skippedCount: skipped.length,
+      drafts: [],
+      skipped
+    };
   }
-  const anchor = locateAnchor(blocks, TYPE_ANCHORS[candidate.type]);
-  const extraEvidence = (candidate.periods ?? [])
-    .filter((period) => period !== candidate.period)
-    .map((period) => ({
-      ticker: candidate.ticker,
-      report_type: candidate.report_type as GoldenDraft["evidence"][number]["report_type"],
-      period,
-      section: "（待补：跨报告期）",
-      page: 0,
-      quote: "",
-      source_kind: "text" as const
-    }));
 
+  const savedDrafts: GoldenDraft[] = [];
+  for (const draft of drafts) {
+    const saved = await saveDraft(config, input.batch, draft.id, draft);
+    savedDrafts.push(saved.draft);
+  }
   return {
-    id,
-    query: `（待填：${candidate.ticker} ${candidate.period} ${candidate.type}）`,
-    type: candidate.type,
-    difficulty: "medium",
-    answer_type: defaultAnswerType(candidate.type),
-    gold_answer: "",
-    answer_unit: "（待补）",
-    evidence: [
-      {
-        ticker: candidate.ticker,
-        report_type:
-          candidate.report_type as GoldenDraft["evidence"][number]["report_type"],
-        period: candidate.period,
-        section: anchor ? `（候选：${anchor.anchor}）` : "（待补：章节）",
-        page: anchor?.page ?? 0,
-        quote: anchor?.window ?? "",
-        source_kind: "text"
-      },
-      ...extraEvidence
-    ],
-    expected_keywords: [],
-    requires_multi_doc:
-      candidate.type === "multi_doc" || extraEvidence.length > 0,
-    distractors: [],
-    is_negative: false,
-    note: anchor
-      ? `候选锚点=${anchor.anchor}@p${anchor.page}；人工补真值/拆分`
-      : "未命中锚点，人工定位",
-    _draft: {
-      ticker: candidate.ticker,
-      type: candidate.type,
-      file_path: record.file_path,
-      extraction_health: "ok",
-      candidate_window: anchor?.window ?? ""
-    }
+    ok: true,
+    complete: savedDrafts.length > 0,
+    batch: input.batch,
+    draftedCount: savedDrafts.length,
+    skippedCount: 0,
+    drafts: savedDrafts,
+    skipped
   };
 }
 
@@ -274,117 +220,71 @@ async function buildCandidateDraft(
       error
     );
   }
-  const text = blocks.map((block) => block.text).join("\n");
-  if (text.replace(/\s+/gu, "").length < 200) {
+  const health = assessExtractionHealth(blocks);
+  if (!health.ok) {
+    const reason = health.reason;
     return {
-      reason: "extraction_too_short",
-      message: `Candidate PDF has too little extractable text: ${record.file_path}.`
+      reason,
+      message:
+        reason === "text_too_short"
+          ? `Candidate PDF has too little extractable text: ${record.file_path}.`
+          : `Candidate PDF has character-spaced CJK extraction: ${record.file_path}.`
     };
   }
   return buildMineDraft(candidate, record, id, blocks);
 }
 
 /**
- * 在解析块中查找首个题型锚点，并返回原文窗口与页码。
+ * 检查批次目录是否已存在且非空。
  *
- * @param blocks 已解析 PDF 块。
- * @param anchors 候选章节锚点。
- * @returns 命中锚点及其窗口；无命中时为 undefined。
+ * @param config 当前工作区配置。
+ * @param batch 待创建批次。
+ * @returns 冲突说明；可安全创建时为 undefined。
  */
-function locateAnchor(
-  blocks: ReturnType<typeof parsePdfBlocks>,
-  anchors: readonly string[]
-): { anchor: string; page: number; window: string } | undefined {
-  const normalizedBlocks = blocks.map((block) => ({
-    ...block,
-    normalized: normalizeCjk(block.text)
-  }));
-  const full = normalizedBlocks.map((block) => block.normalized).join("\n");
-  for (const anchor of anchors) {
-    const index = full.indexOf(anchor);
-    if (index === -1) continue;
-    let offset = 0;
-    let page = normalizedBlocks[0]?.pageNumber ?? 0;
-    for (const block of normalizedBlocks) {
-      const next = offset + block.normalized.length + 1;
-      if (index < next) {
-        page = block.pageNumber ?? 0;
-        break;
-      }
-      offset = next;
-    }
-    return {
-      anchor,
-      page,
-      window: full.slice(index, index + 600).replace(/\n/gu, " ")
-    };
+async function findBatchCollision(
+  config: WorkspaceConfig,
+  batch: string
+): Promise<string | undefined> {
+  const batchDir = join(config.draftRoot, batch);
+  assertContainedPath(config.workspaceRoot, batchDir);
+  try {
+    const entries = await readdir(batchDir);
+    return entries.length > 0
+      ? `Draft batch ${batch} already exists and cannot be overwritten.`
+      : undefined;
+  } catch (error) {
+    if (isNotFound(error)) return undefined;
+    throw error;
   }
-  return undefined;
 }
 
 /**
- * 归一 CJK 字符间空格，保留数字和英文原有空格。
+ * 为无候选输入构造占位候选，供批次级冲突诊断使用。
  *
- * @param text PDF 文本。
- * @returns 便于锚点搜索的文本。
+ * @returns 空候选。
  */
-function normalizeCjk(text: string): string {
-  return text.replace(/([\u4e00-\u9fff])\s+([\u4e00-\u9fff])/gu, "$1$2");
-}
-
-/**
- * 为 negative 候选创建显式缺席规则。
- *
- * @param candidate negative 候选。
- * @param id 草稿 ID。
- * @returns 待人工补问句与答案的反例草稿。
- */
-function buildNegativeDraft(candidate: MineCandidate, id: string): GoldenDraft {
+function emptyCandidate(): MineCandidate {
   return {
-    id,
-    query: `（待填：${candidate.ticker} ${candidate.period} 反例）`,
-    type: "negative",
-    difficulty: "easy",
-    answer_type: "text",
-    gold_answer: "（待填：语料中无该 ticker 的财报）",
-    answer_unit: "文本",
-    evidence: [],
-    requires_multi_doc: false,
-    distractors: [],
-    is_negative: true,
-    note: "negative 反例：语料无此 ticker，应拒答/不应编造",
-    resolution: {
-      type: "ticker_absent",
-      scope: `ticker=${candidate.ticker}`,
-      expected_report: "（无）",
-      note: "语料 manifest 中无该 ticker 的任何记录"
-    },
-    _draft: {
-      ticker: candidate.ticker,
-      type: "negative",
-      extraction_health: "n/a"
-    }
+    ticker: "",
+    report_type: "",
+    period: "",
+    type: "numeric_fact"
   };
 }
 
 /**
- * 校验候选必需字段与题型。
+ * 判断文件不存在。
  *
- * @param candidate 待校验候选。
- * @returns 错误说明；合法时为 undefined。
+ * @param error 文件系统异常。
+ * @returns ENOENT 时为 true。
  */
-function validateCandidate(candidate: MineCandidate): string | undefined {
-  if (
-    !candidate.ticker?.trim() ||
-    !candidate.report_type?.trim() ||
-    !candidate.period?.trim()
-  ) {
-    return "Candidate requires ticker, report_type and period.";
-  }
-  if (!Object.hasOwn(TYPE_ANCHORS, candidate.type)) {
-    return `Unsupported candidate type: ${String(candidate.type)}.`;
-  }
-  return undefined;
+function isNotFound(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    error.code === "ENOENT"
+  );
 }
 
 /**
@@ -413,16 +313,4 @@ function mapEvidenceError(
   }
   if (error instanceof WorkspaceError) throw error;
   throw error;
-}
-
-/**
- * 根据题型选择默认答案展示类型。
- *
- * @param type 题型。
- * @returns 初始答案类型。
- */
-function defaultAnswerType(type: GoldenDraftType): GoldenAnswerType {
-  if (type === "table") return "table";
-  if (type === "definitional") return "text";
-  return "number";
 }

@@ -7,7 +7,6 @@
 import assert from "node:assert/strict";
 import { after, test } from "node:test";
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
-import defaultFs from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { listDrafts, saveDraft } from "../src/core/drafts.ts";
 import { promoteBatch } from "../src/core/promote.ts";
@@ -132,7 +131,7 @@ test("promoteBatch 任一审核草稿校验失败时零写入且不创建备份"
   assert.ok(
     report.validation.errors.some(
       (issue) =>
-        issue.id === "fin-D021" &&
+        issue.id === "fin-003" &&
         issue.code === "evidence_not_in_manifest" &&
         issue.field === "evidence[0]"
     ),
@@ -155,26 +154,20 @@ test("promoteBatch 原子写入失败时保留原 golden 与完整备份", async
     }),
     _draft: { approved: true }
   });
-  const originalRename = defaultFs.rename;
-  defaultFs.rename = async (source, destination) => {
-    if (source.includes("_backups")) {
-      return originalRename(source, destination);
+  await assert.rejects(
+    () =>
+      promoteBatch(config, "batch-write-fail", {
+        writeGolden: async () => {
+          const error = new Error("simulated atomic write failure");
+          error.code = "EIO";
+          throw error;
+        }
+      }),
+    (error) => {
+      assert.equal(error.code, "EIO");
+      return true;
     }
-    const error = new Error("simulated rename failure");
-    error.code = "EIO";
-    throw error;
-  };
-  try {
-    await assert.rejects(
-      () => promoteBatch(config, "batch-write-fail"),
-      (error) => {
-        assert.equal(error.code, "atomic_write_failed");
-        return true;
-      }
-    );
-  } finally {
-    defaultFs.rename = originalRename;
-  }
+  );
   assert.equal(readGolden(config), original);
   const backups = readdirSync(config.backupRoot);
   assert.equal(backups.length, 1);
@@ -216,6 +209,65 @@ test("promoteBatch 现存 golden 非法时失败且不创建备份", async () =>
     }
   );
   assert.equal(readFileSync(config.goldenPath, "utf8"), malformed);
+  assert.equal(existsSync(config.backupRoot), false);
+});
+
+test("promoteBatch 校验完整最终作者集，非法既有记录阻止备份与写入", async () => {
+  const config = await makeValidPromotionWorkspace();
+  const invalidExisting = {
+    ...makeGoldenCase({ id: "fin-001", query: "Existing query?" }),
+    query: ""
+  };
+  const original = writeGolden(config, [invalidExisting]);
+  await saveDraft(config, "batch-final-invalid", "fin-D050", {
+    ...makeGoldenCase({
+      id: "fin-D050",
+      query: "Approved query?",
+      expected_keywords: ["Revenue 100"]
+    }),
+    _draft: { approved: true }
+  });
+
+  const report = await promoteBatch(config, "batch-final-invalid");
+
+  assert.equal(report.ok, false);
+  assert.equal(report.promotedCount, 0);
+  assert.ok(
+    report.validation.errors.some(
+      (issue) => issue.id === "fin-001" && issue.field === "query"
+    ),
+    JSON.stringify(report.validation.errors)
+  );
+  assert.equal(readGolden(config), original);
+  assert.equal(existsSync(config.backupRoot), false);
+});
+
+test("promoteBatch 校验完整最终作者集，既有 ID 冲突阻止备份与写入", async () => {
+  const config = await makeValidPromotionWorkspace();
+  const original = writeGolden(config, [
+    makeGoldenCase({ id: "fin-001", query: "First query?" }),
+    makeGoldenCase({ id: "fin-001", query: "Duplicate query?" })
+  ]);
+  await saveDraft(config, "batch-final-duplicate", "fin-D060", {
+    ...makeGoldenCase({
+      id: "fin-D060",
+      query: "Approved query?",
+      expected_keywords: ["Revenue 100"]
+    }),
+    _draft: { approved: true }
+  });
+
+  const report = await promoteBatch(config, "batch-final-duplicate");
+
+  assert.equal(report.ok, false);
+  assert.equal(report.promotedCount, 0);
+  assert.ok(
+    report.validation.errors.some(
+      (issue) => issue.code === "golden_id_duplicate" && issue.id === "fin-001"
+    ),
+    JSON.stringify(report.validation.errors)
+  );
+  assert.equal(readGolden(config), original);
   assert.equal(existsSync(config.backupRoot), false);
 });
 

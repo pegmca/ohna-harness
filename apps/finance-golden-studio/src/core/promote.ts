@@ -1,13 +1,16 @@
 import { existsSync } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { realpath } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { backupFile } from "./backups.js";
 import { listDrafts, readDraft } from "./drafts.js";
 import { GoldenStudioError } from "./errors.js";
 import { writeFileAtomic } from "./fs-atomic.js";
-import type { ValidationIssue, ValidationReport } from "./schema.js";
+import type { ValidationReport } from "./schema.js";
 import { createValidationReport } from "./schema-report.js";
 import type { GoldenCase, GoldenDraft } from "./types.js";
-import { validateDraft } from "./validate.js";
+import { validateGolden } from "./validate.js";
 import type { WorkspaceConfig } from "./workspace.js";
 import {
   assertContainedPath,
@@ -32,6 +35,11 @@ export interface PromoteReport {
   backupPath?: string;
 }
 
+/** promote 的可注入写入边界，默认使用正式原子写入器。 */
+export interface PromoteOptions {
+  writeGolden?: (path: string, content: string) => Promise<void>;
+}
+
 /**
  * 将一个批次中所有审核通过且校验成功的草稿追加进作者集。
  *
@@ -44,7 +52,8 @@ export interface PromoteReport {
  */
 export async function promoteBatch(
   config: WorkspaceConfig,
-  batch: string
+  batch: string,
+  options: PromoteOptions = {}
 ): Promise<PromoteReport> {
   validateBatchName(batch);
   assertContainedPath(config.workspaceRoot, config.goldenPath);
@@ -64,9 +73,20 @@ export async function promoteBatch(
   ).length;
   const existing = await readExistingGolden(config);
   const drafts = await readPromotableDrafts(config, batch, approved);
-  const reports = await validateBatch(config, drafts);
-  const validation = mergeReports(reports);
+  if (drafts.length === 0) {
+    return {
+      ok: true,
+      batch,
+      approvedCount: 0,
+      promotedCount: 0,
+      pendingCount,
+      promoted: [],
+      validation: createValidationReport()
+    };
+  }
 
+  const next = assignGoldenIds(existing, drafts);
+  const validation = await validateFinalAuthoringSet(config, next.records);
   if (!validation.ok) {
     return {
       ok: false,
@@ -78,25 +98,11 @@ export async function promoteBatch(
       validation
     };
   }
-
-  if (drafts.length === 0) {
-    return {
-      ok: true,
-      batch,
-      approvedCount: 0,
-      promotedCount: 0,
-      pendingCount,
-      promoted: [],
-      validation
-    };
-  }
-
-  const next = assignGoldenIds(existing, drafts);
   const backupPath = existsSync(config.goldenPath)
     ? await backupFile(config, config.goldenPath, "before-promote")
     : undefined;
   const content = serializeGolden(next.records);
-  await writeFileAtomic(config.goldenPath, content);
+  await (options.writeGolden ?? writeFileAtomic)(config.goldenPath, content);
 
   return {
     ok: true,
@@ -131,53 +137,33 @@ async function readPromotableDrafts(
 }
 
 /**
- * 校验全部审核草稿并补充批次内重复 ID 诊断。
+ * 校验完整候选作者集（既有记录 + 已分配 ID 的新草稿）。
+ *
+ * 使用临时工作区文件复用 validateGolden，使所有结构、精确引用、关键词、
+ * ID 唯一性和现有 schema 规则在备份与正式写入前一次生效。
  *
  * @param config 当前工作区配置。
- * @param drafts 待发布草稿。
- * @returns 每份草稿的校验报告。
+ * @param records 待成为新 golden.jsonl 的完整记录。
+ * @returns 完整作者集校验报告。
  */
-async function validateBatch(
+async function validateFinalAuthoringSet(
   config: WorkspaceConfig,
-  drafts: readonly GoldenDraft[]
-): Promise<Array<{ id: string; report: ValidationReport }>> {
-  const seen = new Set<string>();
-  const results = [];
-  for (const draft of drafts) {
-    const report = await validateDraft(config, draft);
-    if (seen.has(draft.id)) {
-      report.errors.push({
-        code: "golden_id_duplicate",
-        message: `Draft id ${draft.id} appears more than once in the approved batch.`,
-        id: draft.id,
-        field: "id"
-      });
-      report.ok = false;
-    }
-    seen.add(draft.id);
-    results.push({ id: draft.id, report });
+  records: readonly GoldenCase[]
+): Promise<ValidationReport> {
+  const tempRoot = await mkdtemp(join(tmpdir(), "golden-promote-"));
+  const canonicalRoot = await realpath(tempRoot);
+  const goldenPath = join(canonicalRoot, "golden.jsonl");
+  try {
+    await writeFile(goldenPath, serializeGolden(records), "utf8");
+    return validateGolden({
+      ...config,
+      repoRoot: canonicalRoot,
+      workspaceRoot: canonicalRoot,
+      goldenPath
+    });
+  } finally {
+    await rm(tempRoot, { recursive: true, force: true });
   }
-  return results;
-}
-
-/**
- * 合并批次校验报告并为每条问题补充草稿 ID。
- *
- * @param reports 按草稿归集的校验报告。
- * @returns 统一 ValidationReport。
- */
-function mergeReports(
-  reports: ReadonlyArray<{ id: string; report: ValidationReport }>
-): ValidationReport {
-  const errors: ValidationIssue[] = [];
-  const warnings: ValidationIssue[] = [];
-  const keywordResults = [];
-  for (const { id, report } of reports) {
-    errors.push(...report.errors.map((entry) => ({ ...entry, id: entry.id ?? id })));
-    warnings.push(...report.warnings.map((entry) => ({ ...entry, id: entry.id ?? id })));
-    keywordResults.push(...report.keywordResults);
-  }
-  return createValidationReport({ errors, warnings, keywordResults });
 }
 
 /**

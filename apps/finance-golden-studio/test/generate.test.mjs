@@ -162,6 +162,82 @@ test("generateEvalDataset 将 negative 项映射为 failure 且不伪造来源�
   assert.deepEqual(generated.expectedKeywords, []);
 });
 
+test("generateEvalDataset latest_by 唯一最大披露日时选择该唯一记录", async () => {
+  const config = makeWorkflowConfig();
+  writeManifest(config, [
+    manifestRecord("000963.SZ", "annual", "2024", "raw/a.pdf", "2025-01-01"),
+    manifestRecord("000963.SZ", "interim", "2026H1", "raw/b.pdf", "2026-08-27"),
+    manifestRecord("000963.SZ", "annual", "2025", "raw/c.pdf", "2026-03-01")
+  ]);
+  writePdf(config, "raw/a.pdf", "Revenue 100. HUMAN-KEYWORD. ".repeat(8));
+  writePdf(config, "raw/b.pdf", "Revenue 200. HUMAN-KEYWORD. ".repeat(8));
+  writePdf(config, "raw/c.pdf", "Revenue 300. HUMAN-KEYWORD. ".repeat(8));
+  writeGolden(config, [
+    makeGoldenCase({
+      snapshot_dependent: true,
+      resolution: latestByResolution("000963.SZ", "interim/2026H1"),
+      evidence: [
+        {
+          ticker: "000963.SZ",
+          report_type: "interim",
+          period: "2026H1",
+          section: "Financial highlights",
+          page: 1,
+          quote: "Revenue 200",
+          source_kind: "table"
+        }
+      ],
+      expected_keywords: ["HUMAN-KEYWORD"]
+    })
+  ]);
+
+  const report = await generateEvalDataset(config);
+
+  assert.equal(report.ok, true);
+  assert.deepEqual(report.dataset.cases[0].expectedSources, [
+    "000963.SZ/interim/2026H1"
+  ]);
+});
+
+test("generateEvalDataset latest_by 最大披露日并列时返回结构化歧义错误", async () => {
+  const config = makeWorkflowConfig();
+  writeManifest(config, [
+    manifestRecord("000963.SZ", "annual", "2025", "raw/a.pdf", "2026-08-27"),
+    manifestRecord("000963.SZ", "interim", "2026H1", "raw/b.pdf", "2026-08-27")
+  ]);
+  writePdf(config, "raw/a.pdf", "Revenue 100. HUMAN-KEYWORD. ".repeat(8));
+  writePdf(config, "raw/b.pdf", "Revenue 200. HUMAN-KEYWORD. ".repeat(8));
+  writeGolden(config, [
+    makeGoldenCase({
+      snapshot_dependent: true,
+      resolution: latestByResolution("000963.SZ", "annual/2025"),
+      evidence: [
+        {
+          ticker: "000963.SZ",
+          report_type: "annual",
+          period: "2025",
+          section: "Financial highlights",
+          page: 1,
+          quote: "Revenue 100",
+          source_kind: "table"
+        }
+      ],
+      expected_keywords: ["HUMAN-KEYWORD"]
+    })
+  ]);
+
+  await assert.rejects(
+    () => generateEvalDataset(config),
+    (error) => {
+      assert.equal(error.code, "evidence_parse_failed");
+      assert.equal(error.details.reason, "latest_by_ambiguous");
+      assert.deepEqual(error.details.disclosure_date, "2026-08-27");
+      return true;
+    }
+  );
+  assert.equal(existsSync(config.generatedPath), false);
+});
+
 /**
  * 构造 manifest 记录。
  *
@@ -179,5 +255,21 @@ function manifestRecord(ticker, reportType, period, filePath, disclosureDate) {
     period,
     file_path: filePath,
     disclosure_date: disclosureDate
+  };
+}
+
+/**
+ * 构造显式 latest_by 规则。
+ *
+ * @param {string} ticker 股票代码。
+ * @param {string} expectedReport 期望报告类型/期。
+ * @returns {object} resolution。
+ */
+function latestByResolution(ticker, expectedReport) {
+  return {
+    type: "latest_by",
+    field: "disclosure_date",
+    scope: `ticker=${ticker}`,
+    expected_report: expectedReport
   };
 }

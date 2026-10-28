@@ -6,7 +6,14 @@
  */
 import assert from "node:assert/strict";
 import { after, test } from "node:test";
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync
+} from "node:fs";
 import { dirname, join } from "node:path";
 import { listDrafts, saveDraft } from "../src/core/drafts.ts";
 import { promoteBatch } from "../src/core/promote.ts";
@@ -88,6 +95,212 @@ test("promoteBatch 只发布审核草稿、剔除本地状态、分配连续 ID 
       corrupt: false
     }
   ]);
+});
+
+test("promoteBatch 重试同一批次不追加新 ID，并继续允许后续新草稿发布", async () => {
+  const config = await makeValidPromotionWorkspace();
+  const original = writeGolden(config, [
+    makeGoldenCase({
+      id: "fin-001",
+      query: "Existing query?",
+      expected_keywords: ["Revenue 100"]
+    })
+  ]);
+  const draft = {
+    ...makeGoldenCase({
+      id: "fin-D070",
+      query: "Approved query?",
+      expected_keywords: ["Revenue 100"]
+    }),
+    _draft: { approved: true }
+  };
+  await saveDraft(config, "batch-retry", draft.id, draft);
+
+  const first = await promoteBatch(config, "batch-retry");
+  const firstGolden = readGolden(config);
+  const retry = await promoteBatch(config, "batch-retry");
+
+  assert.equal(first.ok, true);
+  assert.equal(first.promotedCount, 1);
+  assert.equal(retry.ok, true);
+  assert.equal(retry.promotedCount, 0);
+  assert.deepEqual(retry.promoted, [
+    { draftId: "fin-D070", goldenId: "fin-002" }
+  ]);
+  assert.equal(retry.backupPath, undefined);
+  assert.equal(readGolden(config), firstGolden);
+  assert.notEqual(firstGolden, original);
+  assert.deepEqual(
+    readGolden(config)
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line).id),
+    ["fin-001", "fin-002"]
+  );
+
+  await saveDraft(config, "batch-retry", "fin-D071", {
+    ...makeGoldenCase({
+      id: "fin-D071",
+      query: "Second approved query?",
+      expected_keywords: ["Revenue 100"]
+    }),
+    _draft: { approved: true }
+  });
+  const secondDraft = await promoteBatch(config, "batch-retry");
+
+  assert.equal(secondDraft.promotedCount, 1);
+  assert.deepEqual(secondDraft.promoted, [
+    { draftId: "fin-D071", goldenId: "fin-003" }
+  ]);
+  assert.deepEqual(
+    readGolden(config)
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line).id),
+    ["fin-001", "fin-002", "fin-003"]
+  );
+});
+
+test("promoteBatch 对同一草稿 ID 的新内容分配新 ID，而不是误判为幂等重试", async () => {
+  const config = await makeValidPromotionWorkspace();
+  writeGolden(config, [
+    makeGoldenCase({
+      id: "fin-001",
+      query: "Existing query?",
+      expected_keywords: ["Revenue 100"]
+    })
+  ]);
+  const originalDraft = {
+    ...makeGoldenCase({
+      id: "fin-D074",
+      query: "Original approved query?",
+      expected_keywords: ["Revenue 100"]
+    }),
+    _draft: { approved: true }
+  };
+  await saveDraft(config, "batch-content-change", originalDraft.id, originalDraft);
+  const first = await promoteBatch(config, "batch-content-change");
+  assert.equal(first.promotedCount, 1);
+
+  const changedDraft = {
+    ...originalDraft,
+    query: "Changed approved query?"
+  };
+  await saveDraft(
+    config,
+    "batch-content-change",
+    changedDraft.id,
+    changedDraft
+  );
+  const second = await promoteBatch(config, "batch-content-change");
+
+  assert.equal(second.promotedCount, 1);
+  assert.deepEqual(second.promoted, [
+    { draftId: "fin-D074", goldenId: "fin-003" }
+  ]);
+  assert.deepEqual(
+    readGolden(config)
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line).query),
+    [
+      "Existing query?",
+      "Original approved query?",
+      "Changed approved query?"
+    ]
+  );
+});
+
+test("promoteBatch 在 golden 已提交但正式账本缺失时从 pending 收敛", async () => {
+  const config = await makeValidPromotionWorkspace();
+  writeGolden(config, [
+    makeGoldenCase({
+      id: "fin-001",
+      query: "Existing query?",
+      expected_keywords: ["Revenue 100"]
+    })
+  ]);
+  await saveDraft(config, "batch-pending", "fin-D072", {
+    ...makeGoldenCase({
+      id: "fin-D072",
+      query: "Approved query?",
+      expected_keywords: ["Revenue 100"]
+    }),
+    _draft: { approved: true }
+  });
+  const first = await promoteBatch(config, "batch-pending");
+  const ledgerPath = first.publicationLedgerPath;
+  assert.ok(ledgerPath);
+
+  const pendingPath = join(dirname(ledgerPath), "_publications.pending.json");
+  writeFileSync(pendingPath, readFileSync(ledgerPath));
+  rmSync(ledgerPath);
+  const retry = await promoteBatch(config, "batch-pending");
+
+  assert.equal(retry.promotedCount, 0);
+  assert.deepEqual(retry.promoted, [
+    { draftId: "fin-D072", goldenId: "fin-002" }
+  ]);
+  assert.equal(
+    readFileSync(ledgerPath, "utf8").includes('"draftId":"fin-D072"'),
+    true
+  );
+  assert.deepEqual(
+    readGolden(config)
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line).id),
+    ["fin-001", "fin-002"]
+  );
+});
+
+test("promoteBatch pending 记录不会复活 golden 中已不存在的旧发布", async () => {
+  const config = await makeValidPromotionWorkspace();
+  const original = writeGolden(config, [
+    makeGoldenCase({
+      id: "fin-001",
+      query: "Existing query?",
+      expected_keywords: ["Revenue 100"]
+    })
+  ]);
+  await saveDraft(config, "batch-pending-stale", "fin-D073", {
+    ...makeGoldenCase({
+      id: "fin-D073",
+      query: "Approved query?",
+      expected_keywords: ["Revenue 100"]
+    }),
+    _draft: { approved: true }
+  });
+  await assert.rejects(
+    () =>
+      promoteBatch(config, "batch-pending-stale", {
+        writeGolden: async () => {
+          throw new Error("simulated failure before golden commit");
+        }
+      }),
+    /simulated failure/
+  );
+
+  const pendingPath = join(
+    dirname(config.goldenPath),
+    "_publications.pending.json"
+  );
+  assert.equal(existsSync(pendingPath), true);
+  assert.equal(readGolden(config), original);
+
+  const retry = await promoteBatch(config, "batch-pending-stale");
+
+  assert.equal(retry.promotedCount, 1);
+  assert.deepEqual(retry.promoted, [
+    { draftId: "fin-D073", goldenId: "fin-002" }
+  ]);
+  assert.deepEqual(
+    readGolden(config)
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line).id),
+    ["fin-001", "fin-002"]
+  );
 });
 
 test("promoteBatch 任一审核草稿校验失败时零写入且不创建备份", async () => {

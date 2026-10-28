@@ -239,6 +239,75 @@ test("运行期形状无效的草稿返回 structured 错误且原文件保持�
   assert.equal(existsSync(filePath), true);
 });
 
+test("saveDraft 在写入前拒绝缺少作者字段的草稿并保留原文件", async () => {
+  const config = makeConfig();
+  const filePath = join(config.draftRoot, "batch-save-shape", "fin-D011.jsonl");
+  const originalDraft = makeDraft("fin-D011");
+  const original = `${JSON.stringify(originalDraft)}\n`;
+  mkdirSync(dirname(filePath), { recursive: true });
+  writeFileSync(filePath, original, "utf8");
+
+  await assert.rejects(
+    () =>
+      saveDraft(config, "batch-save-shape", "fin-D011", {
+        id: "fin-D011"
+      }),
+    (error) => {
+      assert.equal(error.code, "draft_corrupt");
+      assert.equal(error.details.field, "query");
+      return true;
+    }
+  );
+  assert.equal(readFileSync(filePath, "utf8"), original);
+});
+
+test("saveDraft 拒绝非法 expected_keywords 与 evidence 元素且不写入", async () => {
+  const config = makeConfig();
+  const filePath = join(config.draftRoot, "batch-save-shape", "fin-D012.jsonl");
+  const original = `${JSON.stringify(makeDraft("fin-D012"))}\n`;
+  mkdirSync(dirname(filePath), { recursive: true });
+  writeFileSync(filePath, original, "utf8");
+
+  await assert.rejects(
+    () =>
+      saveDraft(config, "batch-save-shape", "fin-D012", {
+        ...makeDraft("fin-D012"),
+        expected_keywords: [42],
+        _draft: {}
+      }),
+    (error) => {
+      assert.equal(error.code, "draft_corrupt");
+      assert.equal(error.details.field, "expected_keywords[0]");
+      return true;
+    }
+  );
+  assert.equal(readFileSync(filePath, "utf8"), original);
+
+  await assert.rejects(
+    () =>
+      saveDraft(config, "batch-save-shape", "fin-D012", {
+        ...makeDraft("fin-D012"),
+        evidence: [
+          {
+            ticker: "600000.SH",
+            period: "2025",
+            section: "Financial highlights",
+            page: 1,
+            quote: "Revenue 100",
+            source_kind: "table"
+          }
+        ],
+        _draft: {}
+      }),
+    (error) => {
+      assert.equal(error.code, "draft_corrupt");
+      assert.equal(error.details.field, "evidence[0].report_type");
+      return true;
+    }
+  );
+  assert.equal(readFileSync(filePath, "utf8"), original);
+});
+
 test("原子替换在 rename 失败时保留原文件并清理临时文件", async () => {
   const parent = makeTempDir();
   const target = join(parent, "golden.jsonl");

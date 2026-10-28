@@ -1,12 +1,24 @@
 import { existsSync } from "node:fs";
-import { realpath } from "node:fs/promises";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  mkdtemp,
+  readFile,
+  realpath,
+  rm,
+  writeFile
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { backupFile } from "./backups.js";
 import { listDrafts, readDraft } from "./drafts.js";
 import { GoldenStudioError } from "./errors.js";
 import { writeFileAtomic } from "./fs-atomic.js";
+import {
+  commitPublications,
+  planPublications,
+  publicationLedgerPath,
+  recoverPublications,
+  type PublicationStore
+} from "./publications.js";
 import type { ValidationReport } from "./schema.js";
 import { createValidationReport } from "./schema-report.js";
 import type { GoldenCase, GoldenDraft } from "./types.js";
@@ -33,11 +45,13 @@ export interface PromoteReport {
   promoted: PromotedDraft[];
   validation: ValidationReport;
   backupPath?: string;
+  publicationLedgerPath?: string;
 }
 
 /** promote 的可注入写入边界，默认使用正式原子写入器。 */
 export interface PromoteOptions {
   writeGolden?: (path: string, content: string) => Promise<void>;
+  writeLedger?: (path: string, content: string) => Promise<void>;
 }
 
 /**
@@ -85,7 +99,13 @@ export async function promoteBatch(
     };
   }
 
-  const next = assignGoldenIds(existing, drafts);
+  const ledgerPath = publicationLedgerPath(config);
+  const ledger = await recoverPublications(
+    config,
+    existing,
+    publicationStore(options)
+  );
+  const next = planPublications(existing, drafts, batch, ledger);
   const validation = await validateFinalAuthoringSet(config, next.records);
   if (!validation.ok) {
     return {
@@ -98,11 +118,25 @@ export async function promoteBatch(
       validation
     };
   }
+  if (next.promoted.length === 0 && next.reused.length > 0) {
+    return {
+      ok: true,
+      batch,
+      approvedCount: drafts.length,
+      promotedCount: 0,
+      pendingCount,
+      promoted: next.reused,
+      validation,
+      ...(ledgerPath ? { publicationLedgerPath: ledgerPath } : {})
+    };
+  }
   const backupPath = existsSync(config.goldenPath)
     ? await backupFile(config, config.goldenPath, "before-promote")
     : undefined;
-  const content = serializeGolden(next.records);
-  await (options.writeGolden ?? writeFileAtomic)(config.goldenPath, content);
+  await commitPublications(config, next.records, next.ledger, {
+    ...publicationStore(options),
+    ...(options.writeGolden ? { golden: options.writeGolden } : {})
+  });
 
   return {
     ok: true,
@@ -112,7 +146,8 @@ export async function promoteBatch(
     pendingCount,
     promoted: next.promoted,
     validation,
-    ...(backupPath ? { backupPath } : {})
+    ...(backupPath ? { backupPath } : {}),
+    publicationLedgerPath: ledgerPath
   };
 }
 
@@ -207,46 +242,6 @@ async function readExistingGolden(config: WorkspaceConfig): Promise<GoldenCase[]
 }
 
 /**
- * 为审核草稿分配连续 fin-NNN ID 并剔除 `_draft`。
- *
- * @param existing 现存作者集。
- * @param drafts 已通过校验的草稿。
- * @returns 完整作者集与新发布映射。
- */
-function assignGoldenIds(
-  existing: readonly GoldenCase[],
-  drafts: readonly GoldenDraft[]
-): { records: GoldenCase[]; promoted: PromotedDraft[] } {
-  let maximum = maximumGoldenNumber(existing);
-  const records = [...existing];
-  const promoted: PromotedDraft[] = [];
-  for (const draft of drafts) {
-    maximum += 1;
-    const goldenId = `fin-${String(maximum).padStart(3, "0")}`;
-    const { _draft: ignored, ...authoring } = draft;
-    void ignored;
-    records.push({ ...authoring, id: goldenId });
-    promoted.push({ draftId: draft.id, goldenId });
-  }
-  return { records, promoted };
-}
-
-/**
- * 提取现存作者集最大 fin 编号。
- *
- * @param records 现存记录。
- * @returns 最大数字；无匹配记录时为 0。
- */
-function maximumGoldenNumber(records: readonly GoldenCase[]): number {
-  let maximum = 0;
-  for (const record of records) {
-    const match = /^fin-(\d+)$/u.exec(record.id ?? "");
-    if (match) maximum = Math.max(maximum, Number(match[1]));
-  }
-  return maximum;
-}
-
-/**
  * 将作者集写成单行 JSONL。
  *
  * @param records 作者集记录。
@@ -256,6 +251,16 @@ function serializeGolden(records: readonly GoldenCase[]): string {
   return records.length === 0
     ? ""
     : `${records.map((record) => JSON.stringify(record)).join("\n")}\n`;
+}
+
+/**
+ * 将可注入的账本写入器适配为 publication store。
+ *
+ * @param options promote 写入选项。
+ * @returns 账本写入边界。
+ */
+function publicationStore(options: PromoteOptions): PublicationStore {
+  return options.writeLedger ? { write: options.writeLedger } : {};
 }
 
 /**

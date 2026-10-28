@@ -174,7 +174,12 @@ export async function readDraft(
   }
   const shapeError = validateDraftShape(parsed, id);
   if (shapeError) {
-    throw corruptDraftError(batch, id, filePath, `Invalid draft shape: ${shapeError}`);
+    throw corruptDraftError(
+      batch,
+      id,
+      filePath,
+      `Invalid draft shape: ${shapeError.message}`
+    );
   }
 
   return parsed as unknown as GoldenDraft;
@@ -201,12 +206,9 @@ export async function saveDraft(
   draft: GoldenDraft
 ): Promise<SaveDraftResult> {
   const filePath = draftFilePath(config, batch, id);
-  if (draft.id !== id) {
-    throw new GoldenStudioError(
-      "draft_corrupt",
-      `Draft id ${draft.id} does not match requested id ${id}.`,
-      { batch, id, filePath }
-    );
+  const shapeError = validateDraftShape(draft as unknown as Record<string, unknown>, id);
+  if (shapeError) {
+    throw saveDraftShapeError(batch, id, filePath, shapeError);
   }
 
   const normalized: GoldenDraft = {
@@ -291,6 +293,34 @@ function corruptDraftError(
 }
 
 /**
+ * 构造保存边界拒绝草稿形状的结构化错误。
+ *
+ * @param batch 批次名。
+ * @param id 草稿 ID。
+ * @param filePath 目标草稿路径。
+ * @param reason 具体形状问题。
+ * @returns 带 draft_corrupt 错误码与字段详情的异常。
+ */
+function saveDraftShapeError(
+  batch: string,
+  id: string,
+  filePath: string,
+  reason: DraftShapeIssue
+): GoldenStudioError {
+  return new GoldenStudioError(
+    "draft_corrupt",
+    `Invalid draft ${batch}/${id}: ${reason.message}.`,
+    {
+      batch,
+      id,
+      filePath,
+      field: reason.field,
+      reason: reason.message
+    }
+  );
+}
+
+/**
  * 判断文件系统异常是否表示目标缺失。
  *
  * @param error 捕获的异常。
@@ -315,6 +345,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+/** 草稿运行期形状问题及对应字段路径。 */
+interface DraftShapeIssue {
+  field: string;
+  message: string;
+}
+
 /**
  * 校验存储、列表与后续编辑直接消费的草稿字段最小运行期形状。
  *
@@ -325,23 +361,45 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function validateDraftShape(
   draft: Record<string, unknown>,
   id: string
-): string | undefined {
-  if (draft.id !== id) return "id must be a string matching the filename";
-  if (typeof draft.query !== "string") return "query must be a string";
-  if (typeof draft.type !== "string") return "type must be a string";
-  if (typeof draft.is_negative !== "boolean") return "is_negative must be a boolean";
-  if (!isRecord(draft._draft)) return "_draft must be an object";
+): DraftShapeIssue | undefined {
+  if (draft.id !== id) {
+    return {
+      field: "id",
+      message: "id must be a string matching the filename"
+    };
+  }
+  if (typeof draft.query !== "string") {
+    return { field: "query", message: "query must be a string" };
+  }
+  if (typeof draft.type !== "string") {
+    return { field: "type", message: "type must be a string" };
+  }
+  if (typeof draft.is_negative !== "boolean") {
+    return {
+      field: "is_negative",
+      message: "is_negative must be a boolean"
+    };
+  }
+  if (!isRecord(draft._draft)) {
+    return { field: "_draft", message: "_draft must be an object" };
+  }
   if (
     draft._draft.approved !== undefined &&
     typeof draft._draft.approved !== "boolean"
   ) {
-    return "_draft.approved must be a boolean when present";
+    return {
+      field: "_draft.approved",
+      message: "_draft.approved must be a boolean when present"
+    };
   }
   if (
     draft._draft.extraction_health !== undefined &&
     typeof draft._draft.extraction_health !== "string"
   ) {
-    return "_draft.extraction_health must be a string when present";
+    return {
+      field: "_draft.extraction_health",
+      message: "_draft.extraction_health must be a string when present"
+    };
   }
   return validateArrayFields(draft);
 }
@@ -352,14 +410,66 @@ function validateDraftShape(
  * @param draft 草稿记录。
  * @returns 第一个数组形状问题；合法时返回 undefined。
  */
-function validateArrayFields(draft: Record<string, unknown>): string | undefined {
-  if (!Array.isArray(draft.evidence)) return "evidence must be an array";
-  if (!Array.isArray(draft.distractors)) return "distractors must be an array";
+function validateArrayFields(
+  draft: Record<string, unknown>
+): DraftShapeIssue | undefined {
+  if (!Array.isArray(draft.evidence)) {
+    return { field: "evidence", message: "evidence must be an array" };
+  }
+  for (const [index, evidence] of draft.evidence.entries()) {
+    const field = `evidence[${index}]`;
+    if (!isRecord(evidence)) {
+      return { field, message: `${field} must be an object` };
+    }
+    for (const key of ["ticker", "period", "section", "quote"] as const) {
+      if (typeof evidence[key] !== "string") {
+        return { field: `${field}.${key}`, message: `${field}.${key} must be a string` };
+      }
+    }
+    if (typeof evidence.report_type !== "string") {
+      return {
+        field: `${field}.report_type`,
+        message: `${field}.report_type must be a string`
+      };
+    }
+    if (
+      typeof evidence.page !== "number" ||
+      !Number.isFinite(evidence.page) ||
+      evidence.page < 0
+    ) {
+      return {
+        field: `${field}.page`,
+        message: `${field}.page must be a non-negative finite number`
+      };
+    }
+    if (typeof evidence.source_kind !== "string") {
+      return {
+        field: `${field}.source_kind`,
+        message: `${field}.source_kind must be a string`
+      };
+    }
+  }
+  if (!Array.isArray(draft.distractors)) {
+    return { field: "distractors", message: "distractors must be an array" };
+  }
   if (
     draft.expected_keywords !== undefined &&
     !Array.isArray(draft.expected_keywords)
   ) {
-    return "expected_keywords must be an array when present";
+    return {
+      field: "expected_keywords",
+      message: "expected_keywords must be an array when present"
+    };
+  }
+  if (Array.isArray(draft.expected_keywords)) {
+    for (const [index, keyword] of draft.expected_keywords.entries()) {
+      if (typeof keyword !== "string") {
+        return {
+          field: `expected_keywords[${index}]`,
+          message: `expected_keywords[${index}] must be a string`
+        };
+      }
+    }
   }
   return undefined;
 }

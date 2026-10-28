@@ -35,6 +35,8 @@ apps/finance-api/eval/baseline.json
 # 金融财报 RAG 黄金评测集 · 半自动抽取草稿（人工待审核工作区，非源码）
 # 作者集 golden.jsonl 本身保留入库；仅忽略 _drafts 工作区。
 datasets/finance/rag-golden/_drafts/
+datasets/finance/rag-golden/_publications.json
+datasets/finance/rag-golden/_publications.pending.json
 
 # ohna-cli eval 运行产物（由 pnpm eval:ohna 生成，非源码；baseline 由 --update-baseline 重建）
 apps/ohna-cli/eval/report.json

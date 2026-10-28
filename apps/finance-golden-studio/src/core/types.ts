@@ -186,3 +186,24 @@ export interface SaveDraftResult {
   draft: GoldenDraft;
   filePath: string;
 }
+
+/** 本地发布账本中一条已成功落地的草稿到作者集映射。 */
+export interface GoldenPublicationRecord {
+  batch: string;
+  draftId: string;
+  goldenId: string;
+  contentHash: string;
+  publishedAt: string;
+}
+
+/** 工作区内部发布账本；用于 promote 重试去重与追溯。 */
+export interface GoldenPublicationLedger {
+  version: 1;
+  publications: GoldenPublicationRecord[];
+}
+
+/** 已完成 golden 写入、但尚需与发布账本互换的短暂记录。 */
+export interface PendingGoldenPublication {
+  version: 1;
+  publications: GoldenPublicationRecord[];
+}

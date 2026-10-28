@@ -5,10 +5,11 @@
  * 覆盖路径边界、请求体限制、稳定错误信封、草稿往返、范围下载和确认动作。
  */
 import assert from "node:assert/strict";
-import { after, before, test } from "node:test";
+import { after, beforeEach, test } from "node:test";
 import {
   mkdirSync,
   readFileSync,
+  readdirSync,
   rmSync,
   writeFileSync
 } from "node:fs";
@@ -23,12 +24,14 @@ import {
   writePdf
 } from "./workflow-fixtures.mjs";
 
-const config = makeWorkflowConfig();
+let config;
 const pdfPath = "600000.SH/annual/2025.pdf";
 let studioServer;
 let baseUrl;
 
-before(async () => {
+beforeEach(async () => {
+  await cleanup();
+  config = makeWorkflowConfig();
   writeManifest(config, [
     {
       ticker: "600000.SH",
@@ -48,9 +51,7 @@ before(async () => {
 });
 
 after(async () => {
-  await studioServer?.close();
-  cleanupWorkflowFixtures();
-  rmSync(join(config.workspaceRoot, "outside"), { recursive: true, force: true });
+  await cleanup();
 });
 
 test("GET /api/batches 返回经核心聚合的批次摘要", async () => {
@@ -63,8 +64,7 @@ test("GET /api/batches 返回经核心聚合的批次摘要", async () => {
   const response = await request("/api/batches");
   const body = await response.json();
 
-  assert.equal(response.status, 200);
-  assert.equal(body.ok, true);
+  assertApiSuccess(response, body);
   assert.deepEqual(body.data, [
     {
       name: "batch-a",
@@ -89,15 +89,50 @@ test("草稿 PUT/GET 往返保留完整作者内容并刷新服务端本地状�
   );
   const loaded = await loadedResponse.json();
 
-  assert.equal(savedResponse.status, 200);
-  assert.equal(saved.ok, true);
-  assert.equal(loadedResponse.status, 200);
+  assertApiSuccess(savedResponse, saved);
+  assertApiSuccess(loadedResponse, loaded);
   assert.equal(loaded.data.id, "fin-D002");
   assert.equal(loaded.data.query, draft.query);
   assert.equal(loaded.data._draft.batch, "draft-roundtrip");
   assert.equal(Number.isNaN(Date.parse(loaded.data._draft.savedAt)), false);
   assert.equal(loaded.data._draft.filePath.endsWith("fin-D002.jsonl"), true);
   assert.deepEqual(await readDraftFromCore("draft-roundtrip", "fin-D002"), loaded.data);
+});
+
+test("草稿路由匹配 batches/:batch/drafts/:id 五个路径段", async () => {
+  const response = await request("/api/batches/route-shape/drafts/fin-D016");
+
+  assert.equal(response.status, 404);
+  assertStructuredError(await response.json(), 404, "draft_not_found");
+});
+
+test("畸形草稿 PUT 在核心写入前被拒绝且原始字节不变", async () => {
+  const originalDraft = makeDraft("fin-D013");
+  const savedResponse = await request(
+    "/api/batches/draft-overwrite/drafts/fin-D013",
+    {
+      method: "PUT",
+      body: JSON.stringify({ draft: originalDraft })
+    }
+  );
+  const saved = await savedResponse.json();
+  assertApiSuccess(savedResponse, saved);
+  const filePath = join(config.draftRoot, "draft-overwrite", "fin-D013.jsonl");
+  const original = readFileSync(filePath, "utf8");
+
+  const malformed = await request(
+    "/api/batches/draft-overwrite/drafts/fin-D013",
+    {
+      method: "PUT",
+      body: JSON.stringify({ draft: { id: "fin-D013" } })
+    }
+  );
+  const body = await malformed.json();
+
+  assert.equal(malformed.status, 409);
+  assertStructuredError(body, 409, "draft_corrupt");
+  assert.equal(body.error.details.field, "query");
+  assert.equal(readFileSync(filePath, "utf8"), original);
 });
 
 test("批次和草稿路径穿越在任何核心调用前被拒绝", async () => {
@@ -163,6 +198,28 @@ test("动作端点要求显式 confirm:true，拒绝缺失或非布尔确认", a
   );
 });
 
+test("promote 缺少确认时不写入 golden", async () => {
+  const draft = {
+    ...makeDraft("fin-D014"),
+    _draft: { approved: true }
+  };
+  const saved = await request("/api/batches/unconfirmed/drafts/fin-D014", {
+    method: "PUT",
+    body: JSON.stringify({ draft })
+  });
+  assertApiSuccess(saved, await saved.json());
+  const goldenBefore = readFileSync(config.goldenPath, "utf8");
+
+  const response = await request("/api/actions/promote", {
+    method: "POST",
+    body: JSON.stringify({ batch: "unconfirmed" })
+  });
+
+  assert.equal(response.status, 400);
+  assertStructuredError(await response.json(), 400, "confirmation_required");
+  assert.equal(readFileSync(config.goldenPath, "utf8"), goldenBefore);
+});
+
 test("server 拒绝非 loopback 监听地址，避免暴露本地工作区写接口", async () => {
   const exposed = createGoldenStudioServer(config);
   try {
@@ -210,22 +267,22 @@ test("validate 动作委托核心并返回完整校验报告", async () => {
   });
   const body = await response.json();
 
-  assert.equal(response.status, 200);
-  assert.equal(body.ok, true);
+  assertApiSuccess(response, body);
   assert.equal(body.data.batch, "validate-actions");
   assert.equal(body.data.validation.ok, true);
   assert.ok(Array.isArray(body.data.validation.keywordResults));
 });
 
 test("promote 动作经确认后只发布核心判定可发布的草稿", async () => {
-  const draft = {
+  const approvedDraft = {
     ...makeDraft("fin-D004"),
     _draft: { approved: true }
   };
-  await request("/api/batches/promote-actions/drafts/fin-D004", {
+  const saved = await request("/api/batches/promote-actions/drafts/fin-D004", {
     method: "PUT",
-    body: JSON.stringify({ draft })
+    body: JSON.stringify({ draft: approvedDraft })
   });
+  assertApiSuccess(saved, await saved.json());
 
   const response = await request("/api/actions/promote", {
     method: "POST",
@@ -233,22 +290,72 @@ test("promote 动作经确认后只发布核心判定可发布的草稿", async 
   });
   const body = await response.json();
 
-  assert.equal(response.status, 200);
-  assert.equal(body.ok, true);
+  assertApiSuccess(response, body);
   assert.equal(body.data.promotedCount, 1);
   assert.equal(body.data.promoted[0].draftId, "fin-D004");
   assert.equal(readFileSync(config.goldenPath, "utf8").includes('"_draft"'), false);
 });
 
+test("重复 promote 同一请求不追加新 ID 或备份", async () => {
+  const draft = {
+    ...makeDraft("fin-D015"),
+    _draft: { approved: true }
+  };
+  const saved = await request("/api/batches/promote-retry/drafts/fin-D015", {
+    method: "PUT",
+    body: JSON.stringify({ draft })
+  });
+  assertApiSuccess(saved, await saved.json());
+
+  const firstResponse = await request("/api/actions/promote", {
+    method: "POST",
+    body: JSON.stringify({ confirm: true, batch: "promote-retry" })
+  });
+  const first = await firstResponse.json();
+  assertApiSuccess(firstResponse, first);
+  const goldenAfterFirst = readFileSync(config.goldenPath, "utf8");
+  const backupsAfterFirst = readdirSync(config.backupRoot).length;
+
+  const retryResponse = await request("/api/actions/promote", {
+    method: "POST",
+    body: JSON.stringify({ confirm: true, batch: "promote-retry" })
+  });
+  const retry = await retryResponse.json();
+
+  assertApiSuccess(retryResponse, retry);
+  assert.equal(retry.data.promotedCount, 0);
+  assert.deepEqual(retry.data.promoted, [
+    { draftId: "fin-D015", goldenId: first.data.promoted[0].goldenId }
+  ]);
+  assert.equal(readFileSync(config.goldenPath, "utf8"), goldenAfterFirst);
+  assert.equal(readdirSync(config.backupRoot).length, backupsAfterFirst);
+});
+
 test("generate 动作返回结构化报告且不把完整数据集回传", async () => {
+  const generatedDraft = {
+    ...makeDraft("fin-D017"),
+    _draft: { approved: true }
+  };
+  const saved = await request("/api/batches/generate-actions/drafts/fin-D017", {
+    method: "PUT",
+    body: JSON.stringify({ draft: generatedDraft })
+  });
+  assertApiSuccess(saved, await saved.json());
+  const promotedResponse = await request("/api/actions/promote", {
+    method: "POST",
+    body: JSON.stringify({ confirm: true, batch: "generate-actions" })
+  });
+  const promoted = await promotedResponse.json();
+  assertApiSuccess(promotedResponse, promoted);
+  assert.equal(promoted.data.promotedCount, 1);
+
   const response = await request("/api/actions/generate", {
     method: "POST",
     body: JSON.stringify({ confirm: true })
   });
   const body = await response.json();
 
-  assert.equal(response.status, 200);
-  assert.equal(body.ok, true);
+  assertApiSuccess(response, body);
   assert.equal(body.data.caseCount, 2);
   assert.equal(body.data.dataset.cases, 2);
   assert.equal(body.data.outputPath, config.generatedPath);
@@ -261,7 +368,7 @@ test("证据端点返回解析投影，PDF 流支持完整与 Range 读取", asy
   const evidence = await evidenceResponse.json();
   const bytes = readFileSync(join(config.corpusRoot, pdfPath));
 
-  assert.equal(evidenceResponse.status, 200);
+  assertApiSuccess(evidenceResponse, evidence);
   assert.equal(evidence.data.filePath, pdfPath);
   assert.ok(evidence.data.blocks.some((block) => block.text.includes("Revenue 100")));
 
@@ -335,6 +442,7 @@ async function request(path, init = {}) {
   return fetch(`${baseUrl}${path}`, {
     ...init,
     headers: {
+      connection: "close",
       "content-type": "application/json",
       ...(init.headers ?? {})
     }
@@ -354,6 +462,17 @@ function assertStructuredError(body, status, code) {
   assert.equal(body.error.code, code);
   assert.equal(typeof body.error.message, "string");
   assert.equal(typeof body.error.details, "object");
+}
+
+/**
+ * 同时断言 HTTP 成功状态与业务信封成功。
+ *
+ * @param {Response} response 原始响应。
+ * @param {object} body 已解析响应体。
+ */
+function assertApiSuccess(response, body) {
+  assert.equal(response.status, 200);
+  assert.equal(body.ok, true);
 }
 
 /**
@@ -381,4 +500,20 @@ function makeDraft(id) {
     query: `Draft ${id}?`,
     _draft: {}
   };
+}
+
+/**
+ * 关闭当前测试服务并清理其工作区。
+ *
+ * @returns {Promise<void>} 清理完成。
+ */
+async function cleanup() {
+  await studioServer?.close().catch(() => undefined);
+  studioServer = undefined;
+  cleanupWorkflowFixtures();
+  if (config) {
+    rmSync(join(config.workspaceRoot, "outside"), { recursive: true, force: true });
+  }
+  config = undefined;
+  baseUrl = undefined;
 }

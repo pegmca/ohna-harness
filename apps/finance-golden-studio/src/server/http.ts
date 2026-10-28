@@ -129,7 +129,7 @@ function apiSegments(pathname: string): string[] | undefined {
       : pathname;
   const parts = normalized.split("/");
   if (parts[0] !== "" || parts[1] !== "api") return undefined;
-  return parts.slice(2);
+  return parts.slice(2).filter((part) => part.length > 0);
 }
 
 /**

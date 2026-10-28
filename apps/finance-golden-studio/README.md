@@ -75,8 +75,8 @@ pnpm golden-studio serve [--workspace <dir>] [--corpus <dir>] [--json]
 ```
 
 `--json` writes exactly one structured document. Failures use a non-zero exit
-code and stable `error` plus `details`. The former root scripts remain argument
-forwards:
+code and stable `error` plus `details`. Compatibility script names delegate to
+`pnpm golden-studio <subcommand>` and are not pass-through wrappers:
 
 ```bash
 pnpm eval:finance-golden:mine

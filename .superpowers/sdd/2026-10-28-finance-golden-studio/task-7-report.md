@@ -231,7 +231,7 @@ Full package suite:
 
 ```text
 Command: pnpm --filter @aiagent/finance-golden-studio test
-Result: PASS, 146 tests, 0 failures
+Result: PASS, 147 tests, 0 failures
 Note: The existing pdf-parse invalid-PDF stderr diagnostics from intentional
 malformed-PDF tests remain; the process exits 0.
 ```

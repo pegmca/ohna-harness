@@ -53,19 +53,6 @@ export function validateDraftSchema(
   if (Array.isArray(draft.evidence)) validateEvidence(draft.evidence, errors);
   if (Array.isArray(draft.distractors)) validateDistractors(draft.distractors, errors);
   if (draft.type === "table") validateTableAnswer(draft, errors);
-  if (
-    (draft.type === "numeric_fact" || draft.type === "comparison") &&
-    typeof draft.gold_answer === "string" &&
-    draft.gold_answer.trim().length === 0
-  ) {
-    errors.push(
-      issue(
-        "required_string_invalid",
-        `${draft.type} requires a non-empty gold_answer.`,
-        "gold_answer"
-      )
-    );
-  }
   validateTableStructure(draft.gold_answer_table, errors, warnings);
   validateFormStructure(draft.gold_answer_form, errors);
   validateNegative(draft, errors);
@@ -81,7 +68,10 @@ export function validateDraftSchema(
       )
     );
   }
-  return { errors, warnings };
+  return {
+    errors,
+    warnings: options.includeWarnings === false ? [] : warnings
+  };
 }
 
 /**

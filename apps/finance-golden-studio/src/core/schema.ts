@@ -84,6 +84,8 @@ export interface SchemaValidationResult {
 /** 草稿与正式作者集共享结构、但 ID 允许范围不同。 */
 export interface SchemaValidationOptions {
   allowDraftId?: boolean;
+  /** 设为 false 可只返回硬结构错误；validateGolden 用它避免逐行重复表格警告。 */
+  includeWarnings?: boolean;
 }
 
 /** 合法作者集题型。 */

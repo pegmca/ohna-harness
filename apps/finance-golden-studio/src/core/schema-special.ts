@@ -129,6 +129,19 @@ export function validateNegative(
         )
       );
     }
+    const expectedReport =
+      typeof draft.resolution.expected_report === "string"
+        ? draft.resolution.expected_report.trim()
+        : "";
+    if (expectedReport !== "（无）") {
+      errors.push(
+        issue(
+          "negative_scope_invalid",
+          'Scoped ticker_absent resolution requires expected_report="（无）".',
+          "resolution.expected_report"
+        )
+      );
+    }
   }
 }
 

@@ -55,6 +55,24 @@ test("validateDraft 对完整草稿返回可达关键词结果", async () => {
   ]);
 });
 
+test("manifest 同时含精确三元组与重复三元组时仍拒绝歧义", async () => {
+  const { config } = makeWorkspace({
+    manifest: [
+      manifestRecord("000776.SZ", "q1", "2025Q1", DEFAULT_PDF_PATH),
+      manifestRecord("000776.SZ", "q1", "2025Q1", "raw/cn/other.pdf")
+    ]
+  });
+  writePdf(config, DEFAULT_PDF_PATH, DEFAULT_KEYWORD);
+
+  const report = await validateDraft(config, makeDraft());
+
+  assert.equal(report.ok, false);
+  assert.deepEqual(
+    report.errors.map((issue) => issue.code),
+    ["manifest_triple_duplicate"]
+  );
+});
+
 test("非负例题缺少 expected_keywords 时校验失败", async () => {
   const { config } = makeWorkspace();
   writePdf(config, DEFAULT_PDF_PATH, DEFAULT_KEYWORD);
@@ -257,7 +275,7 @@ test("表格列、行和单元格结构非法时返回字段级错误", async ()
   );
 });
 
-test("同一字段的重复 schema 问题只报告一次", async () => {
+test("空 gold_answer 只报告一次字段错误", async () => {
   const { config } = makeWorkspace();
   writePdf(config, DEFAULT_PDF_PATH, DEFAULT_KEYWORD);
 
@@ -463,6 +481,97 @@ test("manifest 命中但 PDF 缺失时返回结构化校验错误而不是抛异
       (issue) =>
         issue.code === "evidence_not_found" && issue.field === "evidence[0]"
     )
+  );
+  assert.deepEqual(report.keywordResults, []);
+});
+
+test("validateGolden 对缺失 PDF 报逐行结构化错误且不伪造不可达关键词", async () => {
+  const { config } = makeWorkspace();
+  const record = { ...withoutDraft(makeDraft()), id: "fin-001" };
+  writeJsonLines(config.goldenPath, [record]);
+
+  const report = await validateGolden(config);
+
+  assert.equal(report.ok, false);
+  assert.ok(
+    report.errors.some(
+      (issue) =>
+        issue.code === "evidence_not_found" &&
+        issue.field === "evidence[0]" &&
+        issue.line === 1 &&
+        issue.id === "fin-001"
+    ),
+    JSON.stringify(report.errors)
+  );
+  assert.deepEqual(report.keywordResults, []);
+});
+
+test("validateGolden 在单行证据结构损坏时不读取来源 PDF", async () => {
+  const { config } = makeWorkspace();
+  const record = {
+    ...withoutDraft(makeDraft()),
+    id: "fin-001",
+    evidence: [{ ticker: "000776.SZ", report_type: "q1" }]
+  };
+  writeJsonLines(config.goldenPath, [record]);
+
+  const report = await validateGolden(config);
+
+  assert.equal(report.ok, false);
+  assert.ok(
+    report.errors.some(
+      (issue) =>
+        issue.code === "required_string_invalid" &&
+        issue.field === "evidence[0].period"
+    ),
+    JSON.stringify(report.errors)
+  );
+  assert.deepEqual(report.keywordResults, []);
+});
+
+test("validateGolden 对非法 keyword 类型不伪造不可达结果", async () => {
+  const { config } = makeWorkspace();
+  writePdf(config, DEFAULT_PDF_PATH, DEFAULT_KEYWORD);
+  writeJsonLines(config.goldenPath, [
+    {
+      ...withoutDraft(makeDraft()),
+      id: "fin-001",
+      expected_keywords: [42]
+    }
+  ]);
+
+  const report = await validateGolden(config);
+
+  assert.ok(
+    report.errors.some(
+      (issue) =>
+        issue.code === "required_string_invalid" &&
+        issue.field === "expected_keywords[0]"
+    ),
+    JSON.stringify(report.errors)
+  );
+  assert.deepEqual(report.keywordResults, []);
+});
+
+test("validateGolden 对无法解析的 PDF 保留 evidence_parse_failed", async () => {
+  const { config } = makeWorkspace();
+  const absolutePath = join(config.corpusRoot, DEFAULT_PDF_PATH);
+  mkdirSync(dirname(absolutePath), { recursive: true });
+  writeFileSync(absolutePath, "%PDF-1.4\nnot a valid pdf", "utf8");
+  writeJsonLines(config.goldenPath, [
+    { ...withoutDraft(makeDraft()), id: "fin-001" }
+  ]);
+
+  const report = await validateGolden(config);
+
+  assert.ok(
+    report.errors.some(
+      (issue) =>
+        issue.code === "evidence_parse_failed" &&
+        issue.field === "evidence[0]" &&
+        issue.line === 1
+    ),
+    JSON.stringify(report.errors)
   );
   assert.deepEqual(report.keywordResults, []);
 });

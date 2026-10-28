@@ -16,7 +16,9 @@ import {
 } from "node:fs";
 import { dirname, join } from "node:path";
 import { listDrafts, saveDraft } from "../src/core/drafts.ts";
+import { recoverPublications } from "../src/core/publications.ts";
 import { promoteBatch } from "../src/core/promote.ts";
+import { writeFileAtomic } from "../src/core/fs-atomic.ts";
 import {
   cleanupWorkflowFixtures,
   makeGoldenCase,
@@ -300,6 +302,189 @@ test("promoteBatch pending 记录不会复活 golden 中已不存在的旧发布
       .split("\n")
       .map((line) => JSON.parse(line).id),
     ["fin-001", "fin-002"]
+  );
+});
+
+test("promoteBatch 在 golden 后账本写入失败时恢复并保留既有发布映射", async () => {
+  const config = await makeValidPromotionWorkspace();
+  writeGolden(config, [
+    makeGoldenCase({
+      id: "fin-001",
+      query: "Existing query?",
+      expected_keywords: ["Revenue 100"]
+    })
+  ]);
+  await saveDraft(config, "batch-old-mapping", "fin-D075", {
+    ...makeGoldenCase({
+      id: "fin-D075",
+      query: "Old approved query?",
+      expected_keywords: ["Revenue 100"]
+    }),
+    _draft: { approved: true }
+  });
+  const first = await promoteBatch(config, "batch-old-mapping");
+  assert.equal(first.promotedCount, 1);
+  const oldMapping = first.promoted[0];
+  const ledgerPath = first.publicationLedgerPath;
+  assert.ok(ledgerPath);
+  const oldLedger = JSON.parse(readFileSync(ledgerPath, "utf8"));
+  oldLedger.publications.unshift({
+    batch: "legacy-batch",
+    draftId: "fin-DLEGACY",
+    goldenId: "fin-000",
+    contentHash: "legacy-content-hash",
+    publishedAt: "2026-01-01T00:00:00.000Z"
+  });
+  await writeFileAtomic(ledgerPath, `${JSON.stringify(oldLedger)}\n`);
+  const goldenBeforeFailingPromotion = readGolden(config);
+
+  await saveDraft(config, "batch-ledger-failure", "fin-D076", {
+    ...makeGoldenCase({
+      id: "fin-D076",
+      query: "New approved query?",
+      expected_keywords: ["Revenue 100"]
+    }),
+    _draft: { approved: true }
+  });
+
+  let ledgerWriteCount = 0;
+  await assert.rejects(
+    () =>
+      promoteBatch(config, "batch-ledger-failure", {
+        writeLedger: async (path, content) => {
+          ledgerWriteCount += 1;
+          if (ledgerWriteCount === 2) {
+            const error = new Error("simulated ledger failure after golden commit");
+            error.code = "EIO";
+            throw error;
+          }
+          writeFileSync(path, content, "utf8");
+        }
+      }),
+    /simulated ledger failure after golden commit/
+  );
+
+  const goldenAfterIntentionalCase = readGolden(config);
+  assert.deepEqual(
+    goldenAfterIntentionalCase
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line).id),
+    ["fin-001", oldMapping.goldenId, "fin-003"]
+  );
+  assert.deepEqual(
+    JSON.parse(readFileSync(ledgerPath, "utf8")).publications.map(
+      ({ batch, draftId, goldenId }) => ({ batch, draftId, goldenId })
+    ),
+    [
+      {
+        batch: "legacy-batch",
+        draftId: "fin-DLEGACY",
+        goldenId: "fin-000"
+      },
+      {
+        batch: "batch-old-mapping",
+        draftId: oldMapping.draftId,
+        goldenId: oldMapping.goldenId
+      }
+    ]
+  );
+  assert.equal(existsSync(join(dirname(ledgerPath), "_publications.pending.json")), true);
+
+  const recoveredBeforeRetry = await recoverPublications(
+    config,
+    goldenAfterIntentionalCase
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line))
+  );
+  assert.deepEqual(
+    recoveredBeforeRetry.publications.map(({ batch, draftId, goldenId }) => ({
+      batch,
+      draftId,
+      goldenId
+    })),
+    [
+      {
+        batch: "legacy-batch",
+        draftId: "fin-DLEGACY",
+        goldenId: "fin-000"
+      },
+      {
+        batch: "batch-old-mapping",
+        draftId: oldMapping.draftId,
+        goldenId: oldMapping.goldenId
+      },
+      {
+        batch: "batch-ledger-failure",
+        draftId: "fin-D076",
+        goldenId: "fin-003"
+      }
+    ]
+  );
+
+  const retry = await promoteBatch(config, "batch-ledger-failure");
+
+  assert.equal(retry.promotedCount, 0);
+  assert.deepEqual(retry.promoted, [
+    { draftId: "fin-D076", goldenId: "fin-003" }
+  ]);
+  assert.equal(readGolden(config), goldenAfterIntentionalCase);
+  const recoveredLedger = JSON.parse(readFileSync(ledgerPath, "utf8"));
+  assert.deepEqual(
+    recoveredLedger.publications.map(({ batch, draftId, goldenId }) => ({
+      batch,
+      draftId,
+      goldenId
+    })),
+    [
+      {
+        batch: "legacy-batch",
+        draftId: "fin-DLEGACY",
+        goldenId: "fin-000"
+      },
+      {
+        batch: "batch-old-mapping",
+        draftId: oldMapping.draftId,
+        goldenId: oldMapping.goldenId
+      },
+      {
+        batch: "batch-ledger-failure",
+        draftId: "fin-D076",
+        goldenId: "fin-003"
+      }
+    ]
+  );
+
+  const unchangedRetry = await promoteBatch(config, "batch-ledger-failure");
+  assert.equal(unchangedRetry.promotedCount, 0);
+  assert.deepEqual(unchangedRetry.promoted, [
+    { draftId: "fin-D076", goldenId: "fin-003" }
+  ]);
+
+  await saveDraft(config, "batch-ledger-failure", "fin-D076", {
+    ...makeGoldenCase({
+      id: "fin-D076",
+      query: "Changed approved query?",
+      expected_keywords: ["Revenue 100"]
+    }),
+    _draft: { approved: true }
+  });
+  const changed = await promoteBatch(config, "batch-ledger-failure");
+  assert.equal(changed.promotedCount, 1);
+  assert.deepEqual(changed.promoted, [
+    { draftId: "fin-D076", goldenId: "fin-004" }
+  ]);
+  assert.deepEqual(
+    readGolden(config)
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line).id),
+    ["fin-001", oldMapping.goldenId, "fin-003", "fin-004"]
+  );
+  assert.equal(
+    readGolden(config).startsWith(goldenBeforeFailingPromotion),
+    true
   );
 });
 

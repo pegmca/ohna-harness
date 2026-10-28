@@ -138,16 +138,19 @@ export async function recoverPublications(
   }
 
   const pending = parseLedger(raw, pendingPath, "Pending publication record");
-  const recovered: GoldenPublicationLedger = {
-    version: 1,
-    publications: pending.publications.filter((publication) =>
+  const existing = await loadPublicationLedger(config);
+  const merged = mergePublicationRecords(
+    existing.publications,
+    pending.publications.filter((publication) =>
       records.some((record) => recordMatchesPublication(record, publication))
     )
+  );
+  const recovered: GoldenPublicationLedger = {
+    version: 1,
+    publications: merged
   };
 
-  if (recovered.publications.length > 0) {
-    await (store.write ?? writeFileAtomic)(ledgerPath, serializeLedger(recovered));
-  }
+  await (store.write ?? writeFileAtomic)(ledgerPath, serializeLedger(recovered));
   await rm(pendingPath, { force: true });
   return recovered;
 }
@@ -256,6 +259,46 @@ function isPublicationRecord(value: unknown): value is GoldenPublicationRecord {
     typeof value.contentHash === "string" &&
     typeof value.publishedAt === "string"
   );
+}
+
+/**
+ * 合并正式账本与 pending 记录，按批次和草稿 ID 以 pending 为准 upsert。
+ *
+ * 先保留现有账本中的全部历史映射，再用 pending 中已确认落地的记录覆盖
+ * 同键条目；这样账本后写失败时不会删除既有发布历史。
+ *
+ * @param existing 正式账本中的既有映射。
+ * @param pending 已与 golden 内容核对的 pending 映射。
+ * @returns 去重后的合并映射，保持既有顺序并追加新记录。
+ */
+function mergePublicationRecords(
+  existing: readonly GoldenPublicationRecord[],
+  pending: readonly GoldenPublicationRecord[]
+): GoldenPublicationRecord[] {
+  const pendingByKey = new Map(
+    pending.map((record) => [publicationKey(record), record])
+  );
+  const merged = existing.map(
+    (record) => pendingByKey.get(publicationKey(record)) ?? record
+  );
+  const existingKeys = new Set(existing.map(publicationKey));
+  for (const record of pending) {
+    const key = publicationKey(record);
+    if (existingKeys.has(key)) continue;
+    merged.push(record);
+    existingKeys.add(key);
+  }
+  return merged;
+}
+
+/**
+ * 生成发布映射的唯一键。
+ *
+ * @param record 发布映射。
+ * @returns 批次与草稿 ID 组成的键。
+ */
+function publicationKey(record: GoldenPublicationRecord): string {
+  return `${record.batch}\u0000${record.draftId}`;
 }
 
 /**

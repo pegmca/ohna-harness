@@ -257,3 +257,72 @@ Cause: index.html references absent Task 8 file src/web/main.tsx
 - No public API or user workflow document needs updating in this Task 7 fix.
   The app README and command migration are explicitly Task 11; the existing
   approved spec already names Task 8 as the Web entrypoint owner.
+
+## Scoped Re-review Fix: Publication Recovery Merge
+
+### Root Cause
+
+`recoverPublications` filtered pending records against committed golden and
+wrote that pending-only set over `_publications.json`. After a failure writing
+the final ledger following a successful golden replacement, the old ledger
+mapping was therefore discarded instead of merged.
+
+### RED Evidence
+
+Added a deterministic fault-injection test that:
+
+- seeds an old batch publication mapping and an additional legacy ledger mapping;
+- writes pending successfully;
+- allows the golden replacement to succeed;
+- forces the final ledger write to fail;
+- invokes recovery and retries the unchanged approved draft;
+- then changes draft content and verifies a new ID.
+
+```text
+Command: pnpm --filter @aiagent/finance-golden-studio exec node --import tsx \
+  --test --test-timeout=30000 test/promote.test.mjs
+Result: FAIL, 11 passed, 1 failed
+Failure: recovered ledger dropped the existing `legacy-batch` mapping
+```
+
+### Fix
+
+- Recovery now loads the existing `_publications.json` and merges verified
+  pending records into it.
+- Records are upserted by `(batch, draftId)`, with pending taking precedence
+  only after its assigned gold ID and content hash are confirmed present in
+  committed golden.
+- Existing mappings absent from pending are preserved.
+- Changed content continues to receive a new golden ID.
+
+### GREEN Evidence
+
+Focused server/core suite:
+
+```text
+Command: pnpm --filter @aiagent/finance-golden-studio exec node --import tsx \
+  --test --test-timeout=30000 \
+  test/promote.test.mjs test/drafts.test.mjs test/server.test.mjs
+Result: PASS, 51 tests, 0 failures
+```
+
+Full package suite:
+
+```text
+Command: pnpm --filter @aiagent/finance-golden-studio test
+Result: PASS, 148 tests, 0 failures
+Note: Existing intentional malformed-PDF pdf-parse stderr diagnostics remain;
+the command exits 0.
+```
+
+Typecheck:
+
+```text
+Command: pnpm --filter @aiagent/finance-golden-studio typecheck
+Result: PASS (Node, Web, and strict test contracts)
+```
+
+### Documentation Impact
+
+- No additional current-state documentation changes are required for this
+  scoped recovery fix; the report records the internal ledger behavior.

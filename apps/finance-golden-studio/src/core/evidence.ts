@@ -3,6 +3,7 @@ import { isAbsolute, relative, resolve } from "node:path";
 import { parsePdfBlocks } from "@aiagent/parsing";
 import type { ParsedBlock } from "@aiagent/parsing";
 import { GoldenStudioError } from "./errors.js";
+import { readManifest } from "./manifest.js";
 import type { WorkspaceConfig } from "./workspace.js";
 import { assertContainedPath } from "./workspace.js";
 
@@ -72,18 +73,10 @@ export async function readPdfEvidence(
   config: WorkspaceConfig,
   relativeFilePath: string
 ): Promise<PdfEvidenceDocument> {
-  if (isAbsolute(relativeFilePath)) {
-    throw new GoldenStudioError(
-      "evidence_not_found",
-      `PDF evidence path must be relative to the corpus root: ${relativeFilePath}.`,
-      { filePath: relativeFilePath }
-    );
-  }
-
-  const absolutePath = resolve(config.corpusRoot, relativeFilePath);
-  assertContainedPath(config.corpusRoot, absolutePath);
-  const normalizedFilePath =
-    relative(config.corpusRoot, absolutePath).replaceAll("\\", "/") || ".";
+  const { absolutePath, normalizedFilePath } = resolveContainedPdfPath(
+    config,
+    relativeFilePath
+  );
 
   let content: Buffer;
   try {
@@ -118,6 +111,65 @@ export async function readPdfEvidence(
       error
     );
   }
+}
+
+/**
+ * 解析 manifest 明确声明的 corpus PDF 绝对路径。
+ *
+ * manifest 记录是 PDF 流的白名单；路径还必须经过 corpus 根包含检查，
+ * 从而同时拒绝未知文件、绝对路径和软链逃逸。解析与字节流共享此策略。
+ *
+ * @param config 当前工作区配置。
+ * @param relativeFilePath 语料根内的 PDF 相对路径。
+ * @returns 规范化路径与绝对路径。
+ * @throws {WorkspaceError} 路径越界时抛出。
+ * @throws {GoldenStudioError} 路径为绝对地址或 manifest 无此 PDF 时抛出。
+ */
+export async function resolvePdfPath(
+  config: WorkspaceConfig,
+  relativeFilePath: string
+): Promise<{ normalizedFilePath: string; absolutePath: string }> {
+  const resolved = resolveContainedPdfPath(config, relativeFilePath);
+  const manifest = await readManifest(config);
+  const allowed = manifest.records.some(
+    (record) => record.file_path.replaceAll("\\", "/") === resolved.normalizedFilePath
+  );
+  if (!allowed) {
+    throw new GoldenStudioError(
+      "evidence_not_found",
+      `PDF evidence is not declared by the corpus manifest: ${resolved.normalizedFilePath}.`,
+      { filePath: resolved.normalizedFilePath }
+    );
+  }
+  return resolved;
+}
+
+/**
+ * 在 corpus 根内解析相对 PDF 路径，不检查 manifest 白名单。
+ *
+ * @param config 当前工作区配置。
+ * @param relativeFilePath 语料根内的 PDF 相对路径。
+ * @returns 规范化路径与绝对路径。
+ * @throws {GoldenStudioError} 路径为绝对地址时抛出。
+ * @throws {WorkspaceError} 路径越界时抛出。
+ */
+function resolveContainedPdfPath(
+  config: WorkspaceConfig,
+  relativeFilePath: string
+): { normalizedFilePath: string; absolutePath: string } {
+  if (isAbsolute(relativeFilePath)) {
+    throw new GoldenStudioError(
+      "evidence_not_found",
+      `PDF evidence path must be relative to the corpus root: ${relativeFilePath}.`,
+      { filePath: relativeFilePath }
+    );
+  }
+
+  const absolutePath = resolve(config.corpusRoot, relativeFilePath);
+  assertContainedPath(config.corpusRoot, absolutePath);
+  const normalizedFilePath =
+    relative(config.corpusRoot, absolutePath).replaceAll("\\", "/") || ".";
+  return { normalizedFilePath, absolutePath };
 }
 
 /**

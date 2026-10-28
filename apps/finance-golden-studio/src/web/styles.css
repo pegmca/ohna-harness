@@ -23,6 +23,20 @@
   --focus-ring: 0 0 0 2px rgba(137, 215, 183, 0.35);
 }
 
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --canvas: #18191a;
+    --surface: #1e2120;
+    --elevated: #232726;
+    --border: rgba(255, 255, 255, 0.12);
+    --border-subtle: rgba(255, 255, 255, 0.08);
+    --text-primary: #ede6da;
+    --text-secondary: #b9bcb7;
+    --primary: #89d7b7;
+    --focus-ring: 0 0 0 2px rgba(137, 215, 183, 0.35);
+  }
+}
+
 * {
   box-sizing: border-box;
 }

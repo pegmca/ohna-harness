@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useMemo } from "react";
+import { createContext, useContext, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 
 /** 主题偏好值。 */
@@ -23,19 +23,18 @@ const THEME_STORAGE_KEY = "golden-studio-theme";
  * @returns 主题上下文提供者。
  */
 export function ThemeProvider({ children }: { children: ReactNode }) {
-  const preference = readStoredPreference();
+  const [preference, setPreferenceState] = useState<ThemePreference>(readStoredPreference);
 
   useEffect(() => {
     const root = document.documentElement;
     root.dataset.theme = preference;
-    if (preference !== "system") return;
-    root.removeAttribute("data-theme");
   }, [preference]);
 
   const value = useMemo<ThemeContextValue>(
     () => ({
       preference,
       setPreference: (next) => {
+        setPreferenceState(next);
         globalThis.localStorage?.setItem(THEME_STORAGE_KEY, next);
       }
     }),

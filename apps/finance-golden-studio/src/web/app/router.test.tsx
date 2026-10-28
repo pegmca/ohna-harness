@@ -1,6 +1,7 @@
-import { render, screen } from "@testing-library/react";
-import { describe, expect, test, vi } from "vitest";
+import { fireEvent, render, screen } from "@testing-library/react";
+import { beforeAll, describe, expect, test, vi } from "vitest";
 import { App } from "./App.tsx";
+import { ThemeProvider, useTheme } from "./theme.tsx";
 import type { BatchSummary } from "../../core/types.ts";
 
 /**
@@ -72,5 +73,64 @@ describe("App shell routing", () => {
     ).toBeInTheDocument();
     expect(await screen.findByText("No drafts yet")).toBeInTheDocument();
     expect(client.listDrafts).toHaveBeenCalledWith("batch-long-name", expect.anything());
+  });
+});
+
+beforeAll(() => {
+  const values = new Map<string, string>();
+  const storage: Storage = {
+    get length() {
+      return values.size;
+    },
+    clear: () => values.clear(),
+    getItem: (key) => values.get(key) ?? null,
+    key: (index) => [...values.keys()][index] ?? null,
+    removeItem: (key) => values.delete(key),
+    setItem: (key, value) => values.set(key, value)
+  };
+  Object.defineProperty(window, "localStorage", { configurable: true, value: storage });
+});
+
+describe("ThemeProvider", () => {
+  test("updates context, applies the selected theme, and persists it", async () => {
+    let preference: string | undefined;
+
+    function ThemeValue() {
+      const { preference: current, setPreference } = useTheme();
+      preference = current;
+      return <button onClick={() => setPreference("dark")}>Set dark</button>;
+    }
+
+    render(
+      <ThemeProvider>
+        <ThemeValue />
+      </ThemeProvider>
+    );
+
+    expect(preference).toBe("system");
+    fireEvent.click(screen.getByRole("button", { name: "Set dark" }));
+
+    expect(preference).toBe("dark");
+    expect(document.documentElement).toHaveAttribute("data-theme", "dark");
+    expect(window.localStorage.getItem("golden-studio-theme")).toBe("dark");
+  });
+
+  test("restores a persisted dark preference on initialization", () => {
+    window.localStorage.setItem("golden-studio-theme", "dark");
+    let preference: string | undefined;
+
+    function ThemeValue() {
+      preference = useTheme().preference;
+      return null;
+    }
+
+    render(
+      <ThemeProvider>
+        <ThemeValue />
+      </ThemeProvider>
+    );
+
+    expect(preference).toBe("dark");
+    expect(document.documentElement).toHaveAttribute("data-theme", "dark");
   });
 });

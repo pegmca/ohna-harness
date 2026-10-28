@@ -2,11 +2,12 @@ import { useEffect, useState } from "react";
 import { FolderCog, Palette, Type } from "lucide-react";
 import { useOptionalApiClient } from "../../app/context.tsx";
 import { useOptionalTheme } from "../../app/theme.tsx";
+import type { FontSizePreference } from "../../app/font-size.ts";
+import { readFontSizePreference } from "../../app/font-size.ts";
 import type { GoldenStudioClient } from "../../shared/api/client.ts";
 import type { WorkspaceSettings } from "../../shared/api/types.ts";
 
-/** 字号偏好。 */
-export type FontSizePreference = "compact" | "comfortable" | "large";
+export type { FontSizePreference } from "../../app/font-size.ts";
 
 /** 设置页加载状态。 */
 type LoadState =
@@ -19,9 +20,6 @@ export interface SettingsPageProps {
   /** 可选注入客户端；缺省读取 App 上下文。 */
   client?: GoldenStudioClient;
 }
-
-/** localStorage 中的字号偏好键。 */
-const FONT_SIZE_KEY = "golden-studio-font-size";
 
 /**
  * 工作区配置与应用外观设置页面。
@@ -143,17 +141,22 @@ function SettingPath({ label, value }: { label: string; value: string }) {
 function AppearanceSection() {
   const theme = useOptionalTheme();
   const preference = theme?.preference ?? "system";
-  const [fontSize, setFontSizeState] = useState<FontSizePreference>(
+  const [localFontSize, setLocalFontSize] = useState<FontSizePreference>(
     readFontSizePreference
   );
+  const fontSize = theme?.fontSize ?? localFontSize;
 
   useEffect(() => {
-    document.documentElement.dataset.fontSize = fontSize;
-  }, [fontSize]);
+    if (theme) return;
+    document.documentElement.dataset.fontSize = localFontSize;
+  }, [localFontSize, theme]);
 
   const setFontSize = (next: FontSizePreference): void => {
-    setFontSizeState(next);
-    globalThis.localStorage?.setItem(FONT_SIZE_KEY, next);
+    if (theme) {
+      theme.setFontSize(next);
+      return;
+    }
+    setLocalFontSize(next);
   };
 
   return (
@@ -207,16 +210,6 @@ function AppearanceSection() {
       </div>
     </section>
   );
-}
-
-/**
- * 从 localStorage 读取合法字号偏好。
- *
- * @returns 字号偏好，缺省为 comfortable。
- */
-function readFontSizePreference(): FontSizePreference {
-  const value = globalThis.localStorage?.getItem(FONT_SIZE_KEY);
-  return value === "compact" || value === "large" ? value : "comfortable";
 }
 
 /**

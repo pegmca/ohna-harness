@@ -1,0 +1,88 @@
+.settings-layout {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: minmax(0, 1.2fr) minmax(280px, 0.8fr);
+}
+
+.settings-heading {
+  border-bottom: 1px solid var(--border-subtle);
+  justify-content: flex-start;
+  margin-bottom: 4px;
+  padding-bottom: 14px;
+}
+
+.settings-heading > svg {
+  color: var(--primary);
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.settings-heading > div {
+  flex: 1;
+}
+
+.settings-heading p {
+  color: var(--text-secondary);
+  font-size: 11px;
+  margin: 3px 0 0;
+}
+
+.settings-list {
+  margin: 0;
+}
+
+.settings-list-row {
+  border-bottom: 1px solid var(--border-subtle);
+  display: grid;
+  gap: 6px;
+  grid-template-columns: minmax(120px, 0.35fr) minmax(0, 1fr);
+  padding: 11px 0;
+}
+
+.settings-list-row dt {
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.settings-list-row dd {
+  margin: 0;
+  min-width: 0;
+}
+
+.settings-list-row code {
+  display: block;
+  font-size: 10px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-bottom: 2px;
+  white-space: nowrap;
+}
+
+.settings-control-row {
+  align-items: center;
+  border-bottom: 1px solid var(--border-subtle);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  justify-content: space-between;
+  padding: 14px 0;
+}
+
+.settings-control-row > div:first-child {
+  align-items: center;
+  display: flex;
+  font-size: 12px;
+  gap: 7px;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}

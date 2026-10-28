@@ -242,4 +242,15 @@ describe("ThemeProvider", () => {
     expect(preference).toBe("dark");
     expect(document.documentElement).toHaveAttribute("data-theme", "dark");
   });
+
+  test("applies a persisted font-size preference on app boot before Settings is visited", async () => {
+    window.localStorage.setItem("golden-studio-font-size", "large");
+    const client = {
+      listBatches: vi.fn(async () => [makeBatch()])
+    };
+    render(<App client={client as never} initialEntries={["/"]} />);
+
+    await screen.findByRole("heading", { name: "Batches" });
+    expect(document.documentElement).toHaveAttribute("data-font-size", "large");
+  });
 });

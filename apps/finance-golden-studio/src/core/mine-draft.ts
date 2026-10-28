@@ -3,17 +3,11 @@ import type { ManifestRecord } from "./manifest.js";
 import type {
   GoldenAnswerType,
   GoldenDraft,
-  GoldenDraftType
+  GoldenDraftType,
+  MineCandidate
 } from "./types.js";
 
-/** 半自动候选输入的一行。 */
-export interface MineCandidate {
-  ticker: string;
-  report_type: string;
-  period: string;
-  type: GoldenDraftType;
-  periods?: string[];
-}
+export type { MineCandidate } from "./types.js";
 
 /** 题型对应的章节锚点。 */
 const TYPE_ANCHORS: Record<GoldenDraftType, readonly string[]> = {

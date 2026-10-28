@@ -9,6 +9,7 @@ import type {
 } from "../../shared/api/types.ts";
 import type { GoldenStudioClient } from "../../shared/api/client.ts";
 import { ActionBar } from "../actions/ActionBar.tsx";
+import { MinePanel } from "./MinePanel.tsx";
 
 /** 批次数据加载状态。 */
 type LoadState =
@@ -70,6 +71,11 @@ export function BatchesPage({ client: injected, onChanged }: BatchesPageProps = 
     onChanged?.();
   };
 
+  const mined = async (): Promise<void> => {
+    refresh();
+    onChanged?.();
+  };
+
   return (
     <section className="workspace workspace-wide">
       <header className="page-header">
@@ -110,6 +116,9 @@ export function BatchesPage({ client: injected, onChanged }: BatchesPageProps = 
             Try again
           </button>
         </div>
+      ) : null}
+      {state.status !== "loading" ? (
+        <MinePanel client={client} onMined={mined} />
       ) : null}
       {state.status === "ready" ? (
         <div className="table-shell">

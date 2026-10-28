@@ -11,6 +11,8 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  statSync,
+  utimesSync,
   writeFileSync
 } from "node:fs";
 import { join } from "node:path";
@@ -248,7 +250,7 @@ test("validate 拒绝相互矛盾的 scope 与 batch 组合", async () => {
   assertStructuredError(await response.json(), 400, "invalid_request");
 });
 
-test("validate 动作委托核心并返回完整校验报告", async () => {
+test("validate 动作返回带 action 与 result 的完整校验报告", async () => {
   const draft = {
     ...makeDraft("fin-D003"),
     _draft: { approved: true, validation: { ok: true } }
@@ -269,9 +271,10 @@ test("validate 动作委托核心并返回完整校验报告", async () => {
   const body = await response.json();
 
   assertApiSuccess(response, body);
-  assert.equal(body.data.batch, "validate-actions");
-  assert.equal(body.data.validation.ok, true);
-  assert.ok(Array.isArray(body.data.validation.keywordResults));
+  assert.equal(body.data.action, "validate");
+  assert.equal(body.data.result.batch, "validate-actions");
+  assert.equal(body.data.result.validation.ok, true);
+  assert.ok(Array.isArray(body.data.result.validation.keywordResults));
 });
 
 test("validate 动作支持当前草稿范围且不返回其他草稿的问题", async () => {
@@ -298,10 +301,11 @@ test("validate 动作支持当前草稿范围且不返回其他草稿的问题",
   const body = await response.json();
 
   assertApiSuccess(response, body);
-  assert.equal(body.data.batch, "scoped-actions");
-  assert.equal(body.data.id, "fin-D017");
-  assert.equal(body.data.validation.ok, true);
-  assert.deepEqual(body.data.validation.errors, []);
+  assert.equal(body.data.action, "validate");
+  assert.equal(body.data.result.batch, "scoped-actions");
+  assert.equal(body.data.result.id, "fin-D017");
+  assert.equal(body.data.result.validation.ok, true);
+  assert.deepEqual(body.data.result.validation.errors, []);
 });
 
 test("promote 动作经确认后只发布核心判定可发布的草稿", async () => {
@@ -322,8 +326,9 @@ test("promote 动作经确认后只发布核心判定可发布的草稿", async 
   const body = await response.json();
 
   assertApiSuccess(response, body);
-  assert.equal(body.data.promotedCount, 1);
-  assert.equal(body.data.promoted[0].draftId, "fin-D004");
+  assert.equal(body.data.action, "promote");
+  assert.equal(body.data.result.promotedCount, 1);
+  assert.equal(body.data.result.promoted[0].draftId, "fin-D004");
   assert.equal(readFileSync(config.goldenPath, "utf8").includes('"_draft"'), false);
 });
 
@@ -354,9 +359,10 @@ test("重复 promote 同一请求不追加新 ID 或备份", async () => {
   const retry = await retryResponse.json();
 
   assertApiSuccess(retryResponse, retry);
-  assert.equal(retry.data.promotedCount, 0);
-  assert.deepEqual(retry.data.promoted, [
-    { draftId: "fin-D015", goldenId: first.data.promoted[0].goldenId }
+  assert.equal(retry.data.action, "promote");
+  assert.equal(retry.data.result.promotedCount, 0);
+  assert.deepEqual(retry.data.result.promoted, [
+    { draftId: "fin-D015", goldenId: first.data.result.promoted[0].goldenId }
   ]);
   assert.equal(readFileSync(config.goldenPath, "utf8"), goldenAfterFirst);
   assert.equal(readdirSync(config.backupRoot).length, backupsAfterFirst);
@@ -378,7 +384,8 @@ test("generate 动作返回结构化报告且不把完整数据集回传", async
   });
   const promoted = await promotedResponse.json();
   assertApiSuccess(promotedResponse, promoted);
-  assert.equal(promoted.data.promotedCount, 1);
+  assert.equal(promoted.data.action, "promote");
+  assert.equal(promoted.data.result.promotedCount, 1);
 
   const response = await request("/api/actions/generate", {
     method: "POST",
@@ -387,9 +394,10 @@ test("generate 动作返回结构化报告且不把完整数据集回传", async
   const body = await response.json();
 
   assertApiSuccess(response, body);
-  assert.equal(body.data.caseCount, 2);
-  assert.equal(body.data.dataset.cases, 2);
-  assert.equal(body.data.outputPath, config.generatedPath);
+  assert.equal(body.data.action, "generate");
+  assert.equal(body.data.result.caseCount, 2);
+  assert.equal(body.data.result.dataset.cases, 2);
+  assert.equal(body.data.result.outputPath, config.generatedPath);
 });
 
 test("golden 与 settings GET 只返回当前工作区的真实状态和只读路径", async () => {
@@ -404,7 +412,8 @@ test("golden 与 settings GET 只返回当前工作区的真实状态和只读�
   assert.equal(golden.data.authored.validation.ok, true);
   assert.deepEqual(golden.data.generated, {
     path: config.generatedPath,
-    exists: false
+    exists: false,
+    freshness: "missing"
   });
 
   assertApiSuccess(settingsResponse, settings);
@@ -425,6 +434,44 @@ test("golden GET 对损坏的生成物明确报错而不伪装为未生成", asy
 
   assert.equal(response.status, 409);
   assertStructuredError(await response.json(), 409, "invalid_request");
+});
+
+test("golden GET 以源文件与生成物的真实修改时间区分 fresh 与 stale", async () => {
+  mkdirSync(join(config.workspaceRoot, "datasets", "finance"), { recursive: true });
+  writeFileSync(
+    config.generatedPath,
+    JSON.stringify({
+      datasetVersion: "finance-rag-golden-v1.0.0",
+      cases: [{ id: "fin-001" }]
+    }),
+    "utf8"
+  );
+  const current = new Date(statSync(config.goldenPath).mtimeMs);
+  utimesSync(config.goldenPath, current, current);
+
+  utimesSync(config.generatedPath, current, current);
+  const equalResponse = await request("/api/golden");
+  const equalBody = await equalResponse.json();
+  assertApiSuccess(equalResponse, equalBody);
+  assert.equal(equalBody.data.generated.freshness, "fresh");
+  assert.equal(
+    Number.isNaN(Date.parse(equalBody.data.generated.sourceModifiedAt)),
+    false
+  );
+
+  const older = new Date(current.getTime() - 60_000);
+  utimesSync(config.generatedPath, older, older);
+  const staleResponse = await request("/api/golden");
+  const staleBody = await staleResponse.json();
+  assertApiSuccess(staleResponse, staleBody);
+  assert.equal(staleBody.data.generated.freshness, "stale");
+
+  const newer = new Date(current.getTime() + 60_000);
+  utimesSync(config.generatedPath, newer, newer);
+  const newerResponse = await request("/api/golden");
+  const newerBody = await newerResponse.json();
+  assertApiSuccess(newerResponse, newerBody);
+  assert.equal(newerBody.data.generated.freshness, "fresh");
 });
 
 test("mine 动作要求候选数组并在确认后写入真实草稿批次", async () => {
@@ -457,8 +504,9 @@ test("mine 动作要求候选数组并在确认后写入真实草稿批次", asy
   const body = await response.json();
 
   assertApiSuccess(response, body);
-  assert.equal(body.data.batch, "mined-batch");
-  assert.equal(body.data.draftedCount, 1);
+  assert.equal(body.data.action, "mine");
+  assert.equal(body.data.result.batch, "mined-batch");
+  assert.equal(body.data.result.draftedCount, 1);
   const batchResponse = await request("/api/batches/mined-batch/drafts");
   const batch = await batchResponse.json();
   assertApiSuccess(batchResponse, batch);

@@ -197,7 +197,7 @@ export function createGoldenStudioClient(
         base
       ).toString(),
     validateBatch: (batch, options) =>
-      request<DraftBatchValidationResult>("api/actions/validate", {
+      request<GoldenStudioActionResult>("api/actions/validate", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
@@ -206,9 +206,9 @@ export function createGoldenStudioClient(
           batch
         }),
         ...options
-      }),
+      }).then((response) => unwrapActionResult<DraftBatchValidationResult>(response, "validate")),
     validateDraft: (batch, id, requestOptions) =>
-      request<DraftScopedValidationResult>("api/actions/validate", {
+      request<GoldenStudioActionResult>("api/actions/validate", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
@@ -218,7 +218,7 @@ export function createGoldenStudioClient(
           id
         }),
         ...requestOptions
-      }),
+      }).then((response) => unwrapActionResult<DraftScopedValidationResult>(response, "validate")),
     readGoldenStatus: (options) =>
       request<GoldenStatus>("api/golden", { method: "GET", ...options }),
     readWorkspaceSettings: (options) =>
@@ -231,6 +231,30 @@ export function createGoldenStudioClient(
         ...options
       })
   };
+}
+
+/**
+ * 将动作信封解包为调用方拥有的结果类型，并拒绝错误 action。
+ *
+ * @template TResult 动作结果类型。
+ * @param response server 返回的动作信封。
+ * @param expected 当前请求预期的动作名。
+ * @returns 已校验动作名的结果。
+ * @throws {ApiError} 信封与请求动作不一致时抛出。
+ */
+function unwrapActionResult<TResult>(
+  response: GoldenStudioActionResult,
+  expected: GoldenStudioActionName
+): TResult {
+  if (response.action !== expected) {
+    throw new ApiError(
+      "unexpected_response",
+      200,
+      `Expected ${expected} action, received ${response.action}.`,
+      { expected, received: response.action }
+    );
+  }
+  return response.result as unknown as TResult;
 }
 
 /**

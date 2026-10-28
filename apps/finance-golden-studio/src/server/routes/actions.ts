@@ -6,6 +6,7 @@ import {
   validateDraftDraft
 } from "../../core/validate-batch.js";
 import { validateGolden } from "../../core/validate.js";
+import type { GoldenStudioActionResult } from "../../core/types.js";
 import { readJsonBody } from "../body.js";
 import { HttpError } from "../errors.js";
 import {
@@ -39,7 +40,7 @@ export async function handleActions(
   switch (action) {
     case "validate": {
       const body = readActionBody(await readJsonBody(context.request, context.maxBodyBytes));
-      return { kind: "json", status: 200, body: { ok: true, data: await validateAction(context, body) } };
+      return actionResponse("validate", await validateAction(context, body));
     }
     case "promote": {
       const body = readActionBody(await readJsonBody(context.request, context.maxBodyBytes));
@@ -48,46 +49,58 @@ export async function handleActions(
           field: "batch"
         });
       }
-      return {
-        kind: "json",
-        status: 200,
-        body: { ok: true, data: await promoteBatch(context.config, readBatchSegment(body.batch)) }
-      };
+      return actionResponse(
+        "promote",
+        await promoteBatch(context.config, readBatchSegment(body.batch))
+      );
     }
     case "generate": {
       readActionBody(await readJsonBody(context.request, context.maxBodyBytes));
       const report = await generateEvalDataset(context.config);
-      return {
-        kind: "json",
-        status: 200,
-        body: {
-          ok: true,
-          data: {
-            ...report,
-            dataset: { ...report.dataset, cases: report.dataset.cases.length }
-          }
-        }
-      };
+      return actionResponse("generate", {
+        ...report,
+        dataset: { ...report.dataset, cases: report.dataset.cases.length }
+      });
     }
     case "mine": {
       const body = readMineBody(
         await readJsonBody(context.request, context.maxBodyBytes)
       );
-      return {
-        kind: "json",
-        status: 200,
-        body: {
-          ok: true,
-          data: await mineCandidates(context.config, {
-            batch: readBatchSegment(body.batch),
-            candidates: body.candidates
-          })
-        }
-      };
+      return actionResponse(
+        "mine",
+        await mineCandidates(context.config, {
+          batch: readBatchSegment(body.batch),
+          candidates: body.candidates
+        })
+      );
     }
     default:
       return undefined;
   }
+}
+
+/**
+ * 把所有动作统一包装为浏览器可消费的契约。
+ *
+ * @param action 动作名。
+ * @param result 服务端权威结果。
+ * @returns 统一成功信封。
+ */
+function actionResponse(
+  action: GoldenStudioActionResult["action"],
+  result: unknown
+): RouteResult {
+  return {
+    kind: "json",
+    status: 200,
+    body: {
+      ok: true,
+      data: {
+        action,
+        result: result as Record<string, unknown>
+      } satisfies GoldenStudioActionResult
+    }
+  };
 }
 
 /**

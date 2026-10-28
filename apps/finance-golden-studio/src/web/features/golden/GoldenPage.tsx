@@ -208,6 +208,15 @@ function AuthoredPanel({ status }: { status: GoldenStatus }) {
  */
 function GeneratedPanel({ status }: { status: GoldenStatus }) {
   const generated = status.generated;
+  const freshness = generated.exists ? generated.freshness : "missing";
+  const freshnessLabel =
+    freshness === "fresh" ? "Fresh" : freshness === "stale" ? "Stale" : "Missing";
+  const freshnessClass =
+    freshness === "fresh"
+      ? "badge-success"
+      : freshness === "stale"
+        ? "badge-warning"
+        : "badge-warning";
   return (
     <section aria-label="Generated eval artifact" className="dataset-panel">
       <div className="dataset-panel-header">
@@ -216,28 +225,35 @@ function GeneratedPanel({ status }: { status: GoldenStatus }) {
           <h2>Generated eval artifact</h2>
         </div>
         <span
-          className={`badge ${generated.exists ? "badge-success" : "badge-warning"}`}
+          className={`badge ${freshnessClass}`}
         >
-          {generated.exists ? "Available" : "Not generated"}
+          {freshnessLabel}
         </span>
       </div>
       <FileClock aria-hidden="true" className="dataset-icon" size={18} />
       <p className="dataset-path">{generated.path}</p>
       {generated.exists ? (
-        <dl className="metric-row">
-          <div>
-            <dt>Cases</dt>
-            <dd>{generated.caseCount} cases</dd>
-          </div>
-          <div>
-            <dt>Dataset version</dt>
-            <dd>{generated.datasetVersion}</dd>
-          </div>
-          <div>
-            <dt>Modified</dt>
-            <dd>{formatTimestamp(generated.modifiedAt)}</dd>
-          </div>
-        </dl>
+        <>
+          {freshness === "stale" ? (
+            <p className="empty-asset">
+              Authored data changed after generation. Regenerate the eval set.
+            </p>
+          ) : null}
+          <dl className="metric-row">
+            <div>
+              <dt>Cases</dt>
+              <dd>{generated.caseCount} cases</dd>
+            </div>
+            <div>
+              <dt>Dataset version</dt>
+              <dd>{generated.datasetVersion}</dd>
+            </div>
+            <div>
+              <dt>Modified</dt>
+              <dd>{formatTimestamp(generated.modifiedAt)}</dd>
+            </div>
+          </dl>
+        </>
       ) : (
         <p className="empty-asset">
           Generate the eval set after authored validation passes.

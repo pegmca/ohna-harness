@@ -1,5 +1,10 @@
 import { createContext, useContext, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
+import {
+  readFontSizePreference,
+  saveFontSizePreference
+} from "./font-size.js";
+import type { FontSizePreference } from "./font-size.js";
 
 /** 主题偏好值。 */
 export type ThemePreference = "system" | "light" | "dark";
@@ -8,6 +13,8 @@ export type ThemePreference = "system" | "light" | "dark";
 interface ThemeContextValue {
   preference: ThemePreference;
   setPreference: (value: ThemePreference) => void;
+  fontSize: FontSizePreference;
+  setFontSize: (value: FontSizePreference) => void;
 }
 
 /** React 主题上下文。 */
@@ -24,11 +31,18 @@ const THEME_STORAGE_KEY = "golden-studio-theme";
  */
 export function ThemeProvider({ children }: { children: ReactNode }) {
   const [preference, setPreferenceState] = useState<ThemePreference>(readStoredPreference);
+  const [fontSize, setFontSizeState] = useState<FontSizePreference>(
+    readFontSizePreference
+  );
 
   useEffect(() => {
     const root = document.documentElement;
     root.dataset.theme = preference;
   }, [preference]);
+
+  useEffect(() => {
+    document.documentElement.dataset.fontSize = fontSize;
+  }, [fontSize]);
 
   const value = useMemo<ThemeContextValue>(
     () => ({
@@ -36,9 +50,14 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
       setPreference: (next) => {
         setPreferenceState(next);
         globalThis.localStorage?.setItem(THEME_STORAGE_KEY, next);
+      },
+      fontSize,
+      setFontSize: (next) => {
+        setFontSizeState(next);
+        saveFontSizePreference(next);
       }
     }),
-    [preference]
+    [fontSize, preference]
   );
 
   return <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>;

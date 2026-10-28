@@ -1,0 +1,114 @@
+.dataset-grid {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-top: 16px;
+}
+
+.dataset-panel,
+.settings-panel {
+  background: var(--surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  min-width: 0;
+  padding: 18px;
+}
+
+.dataset-panel-header,
+.settings-heading {
+  align-items: flex-start;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+}
+
+.dataset-panel h2,
+.settings-heading h2 {
+  font-size: 14px;
+  font-weight: 650;
+  line-height: 1.3;
+  margin: 0;
+}
+
+.dataset-icon {
+  color: var(--primary);
+  margin: 18px 0 7px;
+}
+
+.dataset-path {
+  color: var(--text-secondary);
+  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+  line-height: 1.5;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.metric-row {
+  border-top: 1px solid var(--border-subtle);
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin: 18px 0 0;
+  padding-top: 14px;
+}
+
+.metric-row div {
+  min-width: 0;
+}
+
+.metric-row dt {
+  color: var(--text-secondary);
+  font-size: 10px;
+  margin-bottom: 4px;
+  text-transform: uppercase;
+}
+
+.metric-row dd {
+  font-size: 12px;
+  font-weight: 600;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.issue-summary {
+  border-top: 1px solid var(--border-subtle);
+  margin-top: 16px;
+  padding-top: 12px;
+}
+
+.issue-summary h3 {
+  font-size: 12px;
+  margin: 0 0 8px;
+}
+
+.issue-summary ul {
+  display: grid;
+  gap: 7px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.issue-summary li {
+  background: color-mix(in srgb, var(--danger) 5%, var(--surface));
+  border-left: 2px solid var(--danger);
+  display: grid;
+  font-size: 11px;
+  gap: 2px;
+  padding: 6px 8px;
+}
+
+.issue-summary code {
+  color: var(--danger);
+  font-size: 10px;
+  overflow-wrap: anywhere;
+}
+
+.empty-asset {
+  border-top: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  font-size: 12px;
+  margin: 18px 0 0;
+  padding-top: 14px;
+}

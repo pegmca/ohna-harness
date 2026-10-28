@@ -99,13 +99,15 @@ export interface GoldenAuthoredStatus {
 
 /** 生成评测产物的存在性与摘要；不存在时不携带陈旧统计。 */
 export type GoldenGeneratedStatus =
-  | { path: string; exists: false }
+  | { path: string; exists: false; freshness: "missing" }
   | {
       path: string;
       exists: true;
       caseCount: number;
       datasetVersion: string;
       modifiedAt: string;
+      sourceModifiedAt?: string;
+      freshness: "fresh" | "stale";
     };
 
 /** 作者集与生成产物的分离状态。 */
@@ -126,7 +128,11 @@ export interface WorkspaceSettings {
 /** 可经本地 server 执行的四个数据工作流。 */
 export type GoldenStudioActionName = "validate" | "promote" | "generate" | "mine";
 
-/** 动作结果只保留 UI 所需的权威摘要，不回传完整 base64 评测集。 */
+/**
+ * HTTP 动作成功数据契约：`{ action, result }`。
+ *
+ * result 只保留 UI 所需的权威摘要，不回传完整 base64 评测集。
+ */
 export interface GoldenStudioActionResult {
   action: GoldenStudioActionName;
   result: Record<string, unknown>;
@@ -170,6 +176,15 @@ export type GoldenDraftType =
   | "table"
   | "unit_trap"
   | "negative";
+
+/** 半自动 mine 输入的一条候选定义。 */
+export interface MineCandidate {
+  ticker: string;
+  report_type: string;
+  period: string;
+  type: GoldenDraftType;
+  periods?: string[];
+}
 
 /** Golden 草稿的难度枚举。 */
 export type GoldenDifficulty = "easy" | "medium" | "hard";

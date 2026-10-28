@@ -1,0 +1,137 @@
+.table-scroll {
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  contain: layout paint;
+  max-width: 100%;
+  min-width: 0;
+  overflow: auto;
+  width: 100%;
+}
+
+.answer-table {
+  border-collapse: separate;
+  border-spacing: 0;
+  max-width: none;
+  table-layout: fixed;
+  width: 100%;
+}
+
+.table-canvas {
+  display: block;
+}
+
+.answer-table th,
+.answer-table td {
+  border-bottom: 1px solid var(--border-subtle);
+  border-right: 1px solid var(--border-subtle);
+  max-width: 320px;
+  min-width: 150px;
+  padding: 4px;
+  vertical-align: top;
+}
+
+.answer-table th {
+  background: var(--elevated);
+  font-size: 11px;
+  text-align: left;
+}
+
+.answer-table tr:last-child td,
+.answer-table tr:last-child th {
+  border-bottom: 0;
+}
+
+.answer-table th:last-child,
+.answer-table td:last-child {
+  border-right: 0;
+}
+
+.answer-table .row-index {
+  color: var(--text-secondary);
+  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+  min-width: 32px;
+  text-align: center;
+  white-space: nowrap;
+  width: 32px;
+}
+
+.table-column-head {
+  display: grid;
+  gap: 4px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  min-width: 0;
+}
+
+.table-column-head .table-column-name {
+  font-weight: 650;
+  grid-column: 1;
+}
+
+.table-column-head .table-unit {
+  color: var(--text-secondary);
+  font-size: 10px;
+  grid-column: 1;
+}
+
+.table-column-head .table-action {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+}
+
+.table-input {
+  background: transparent;
+  border: 0;
+  color: var(--text-primary);
+  display: block;
+  font-size: 12px;
+  line-height: 1.5;
+  max-width: 100%;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  padding: 4px;
+  resize: vertical;
+  width: 100%;
+}
+
+.table-cell {
+  min-height: 28px;
+  white-space: pre-wrap;
+}
+
+.table-empty {
+  color: var(--text-secondary);
+  font-size: 12px;
+  min-width: 0 !important;
+  padding: 14px !important;
+}
+
+.row-actions-head,
+.row-actions {
+  min-width: 82px !important;
+  width: 82px;
+}
+
+.section-actions {
+  display: flex;
+  justify-content: flex-start;
+  margin-top: 8px;
+}
+
+.form-group + .form-group {
+  border-top: 1px solid var(--border-subtle);
+  margin-top: 12px;
+  padding-top: 12px;
+}
+
+.form-row {
+  align-items: center;
+  display: grid;
+  gap: 6px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  margin-bottom: 6px;
+}
+
+.form-item-row {
+  grid-template-columns: minmax(0, 0.75fr) minmax(0, 1.25fr) auto;
+}

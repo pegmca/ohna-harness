@@ -143,20 +143,23 @@ describe("createGoldenStudioClient", () => {
 
   test("validateBatch POSTs explicit confirmation and returns the structured report", async () => {
     const result = {
-      batch: "batch-01",
-      draftCount: 1,
-      validation: {
-        ok: false,
-        errors: [{ code: "expected_keywords_required", field: "expected_keywords", message: "Required" }],
-        warnings: [],
-        keywordResults: []
+      action: "validate",
+      result: {
+        batch: "batch-01",
+        draftCount: 1,
+        validation: {
+          ok: false,
+          errors: [{ code: "expected_keywords_required", field: "expected_keywords", message: "Required" }],
+          warnings: [],
+          keywordResults: []
+        }
       }
     };
     const fetch = vi.fn(async () => jsonResponse({ ok: true, data: result }));
     vi.stubGlobal("fetch", fetch);
 
     const client = createGoldenStudioClient("http://127.0.0.1:4318/");
-    assert.deepEqual(await client.validateBatch("batch-01"), result);
+    assert.deepEqual(await client.validateBatch("batch-01"), result.result);
 
     const [url, init] = fetch.mock.calls[0] as unknown as [URL, RequestInit];
     assert.equal(url.toString(), "http://127.0.0.1:4318/api/actions/validate");
@@ -170,24 +173,27 @@ describe("createGoldenStudioClient", () => {
 
   test("validateDraft POSTs the current draft scope and returns a draft-scoped report", async () => {
     const result = {
-      batch: "batch-01",
-      id: "fin-D001",
-      validation: {
-        ok: false,
-        errors: [{
-          code: "expected_keywords_required",
-          field: "expected_keywords",
-          message: "Required"
-        }],
-        warnings: [],
-        keywordResults: []
+      action: "validate",
+      result: {
+        batch: "batch-01",
+        id: "fin-D001",
+        validation: {
+          ok: false,
+          errors: [{
+            code: "expected_keywords_required",
+            field: "expected_keywords",
+            message: "Required"
+          }],
+          warnings: [],
+          keywordResults: []
+        }
       }
     };
     const fetch = vi.fn(async () => jsonResponse({ ok: true, data: result }));
     vi.stubGlobal("fetch", fetch);
 
     const client = createGoldenStudioClient("http://127.0.0.1:4318/");
-    assert.deepEqual(await client.validateDraft("batch-01", "fin-D001"), result);
+    assert.deepEqual(await client.validateDraft("batch-01", "fin-D001"), result.result);
 
     const [url, init] = fetch.mock.calls[0] as unknown as [URL, RequestInit];
     assert.equal(url.toString(), "http://127.0.0.1:4318/api/actions/validate");

@@ -120,3 +120,99 @@ the fixture files were removed afterward.
 No documentation update was required in this task: the behavior is already described
 by the Finance Golden Studio design/plan, and Task 11 owns the app README, migration,
 and final workflow documentation.
+
+## Review Fixes
+
+### Contract
+
+HTTP action success data is now consistently `{ action, result }` under the existing
+`{ ok: true, data }` envelope. `runAction` preserves that shape. `validateBatch` and
+`validateDraft` explicitly unwrap `result` after verifying that `action === "validate"`.
+The live-server client integration invokes promote, mine, and generate and asserts
+authoritative counts of 1 promoted draft, 1 mined draft, 0 skipped candidates, and 1
+generated case.
+
+### Mine UI
+
+The Batches page now loads the CLI-compatible JSON candidate array from a browser file,
+requires a batch name and explicit confirmation, displays real drafted/skipped counts
+and skipped reasons, and refreshes the batch list after success. Candidate objects are
+validated server-side exactly as before; no arbitrary server path input was added.
+
+### Generated Freshness
+
+`src/core/generated-freshness.ts` compares the authored golden and generated artifact
+using nanosecond mtimes when available, with milliseconds as fallback. `/api/golden`
+returns `freshness: "fresh" | "stale" | "missing"`, and the Golden page shows the
+corresponding status and stale regeneration guidance. Tests cover equal, newer, older,
+and missing files.
+
+### Global Font Preference
+
+Font preference moved into the global `ThemeProvider` and shared storage helpers. It is
+applied on App boot before visiting Settings, so a persisted preference survives reload.
+
+### Styles
+
+`src/web/styles.css` is now a one-line entrypoint importing ordered feature chunks:
+`tokens`, `base`, `shell`, `shared`, `actions`, `batches`, `golden`, `settings`,
+`draft-shell`, `draft-editor`, `draft-table`, `draft-validation`, and `responsive`.
+Every feature chunk is under 500 lines, and a structural test guards the import order
+and file inventory.
+
+### Fix Commands And Output
+
+```bash
+pnpm test
+# @aiagent/finance-golden-studio
+# Node: 158 passed, 0 failed
+# Vitest: 10 files, 54 tests passed
+# exit 0
+# Known pdf-parse invalid-fixture stack noise remains expected.
+```
+
+```bash
+pnpm typecheck && pnpm build
+# finance-golden-studio typecheck passed
+# Vite: 1812 modules transformed, build passed
+# exit 0
+```
+
+```bash
+pnpm typecheck
+# repository typecheck: 24 workspace projects passed
+# exit 0
+```
+
+```bash
+pnpm build
+# repository build passed, including finance-golden-studio dist/web
+# exit 0
+```
+
+```bash
+pnpm test
+# repository recursive test run: 5 pre-existing CLI subprocess cases failed
+# because documented `pnpm golden-studio ... --json` emitted empty stdout when
+# nested under `pnpm -r test`; all finance-golden-studio package tests pass directly.
+# exit 1
+```
+
+```bash
+node --import tsx test/verify-finance-golden-studio-visual.mjs
+# 1440x900: font=large, scrollWidth=1440, consoleErrors=[]
+# 1280x800: font=large, scrollWidth=1280, consoleErrors=[]
+# 390x844:  font=large, scrollWidth=390,  consoleErrors=[]
+# Batches, Golden, Settings reload, mine confirmation, and mine result all passed.
+# exit 0
+```
+
+Screenshots and metrics are under `test/output/finance-golden-studio-visual/`.
+The temporary API fixture and Vite dev server were stopped after verification.
+
+### Residual Concern
+
+The only remaining validation failure is the repository-recursive CLI subprocess
+issue above. The same package test command and CLI smoke command pass outside that
+nested `pnpm -r test` context. The deferred focus-trap and truncation minors remain
+deferred.

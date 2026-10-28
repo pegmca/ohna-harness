@@ -29,7 +29,9 @@ function makeClient() {
         exists: true,
         caseCount: 12,
         datasetVersion: "finance-rag-golden-v1.0.0",
-        modifiedAt: "2026-10-28T15:30:00.000Z"
+        modifiedAt: "2026-10-28T15:30:00.000Z",
+        sourceModifiedAt: "2026-10-28T15:00:00.000Z",
+        freshness: "fresh" as const
       }
     })),
     runAction: vi.fn(async () => ({
@@ -59,7 +61,8 @@ describe("GoldenPage", () => {
     const generated = screen.getByRole("region", { name: "Generated eval artifact" });
     expect(within(generated).getByText("12 cases")).toBeInTheDocument();
     expect(within(generated).getByText("finance-rag-golden-v1.0.0")).toBeInTheDocument();
-    expect(within(generated).getByText("Available")).toBeInTheDocument();
+    expect(within(generated).getByText("Fresh")).toBeInTheDocument();
+    expect(within(generated).getByText("Fresh")).toBeInTheDocument();
     expect(within(generated).getByText(/2026/)).toBeInTheDocument();
   });
 
@@ -86,7 +89,8 @@ describe("GoldenPage", () => {
       },
       generated: {
         path: "/workspace/rag-golden-v1.json",
-        exists: false
+        exists: false,
+        freshness: "missing"
       }
     });
     render(<GoldenPage client={client} />);
@@ -94,7 +98,45 @@ describe("GoldenPage", () => {
     const generated = await screen.findByRole("region", {
       name: "Generated eval artifact"
     });
-    expect(within(generated).getByText("Not generated")).toBeInTheDocument();
+    expect(within(generated).getByText("Missing")).toBeInTheDocument();
     expect(within(generated).queryByText(/cases/)).not.toBeInTheDocument();
+  });
+
+  test("shows the actual generated case count from the action result", async () => {
+    const client = makeClient();
+    render(<GoldenPage client={client} />);
+
+    await screen.findByRole("region", { name: "Generated eval artifact" });
+    fireEvent.click(screen.getByRole("button", { name: "Generate eval set" }));
+    fireEvent.click(screen.getByRole("button", { name: "Confirm generation" }));
+
+    expect(await screen.findByText("Generated 14 evaluation cases.")).toBeInTheDocument();
+  });
+
+  test("shows stale generated data when the authored source is newer", async () => {
+    const client = makeClient();
+    vi.mocked(client.readGoldenStatus).mockResolvedValueOnce({
+      authored: {
+        path: "/workspace/golden.jsonl",
+        caseCount: 14,
+        validation: { ok: true, errors: [], warnings: [], keywordResults: [] }
+      },
+      generated: {
+        path: "/workspace/rag-golden-v1.json",
+        exists: true,
+        caseCount: 12,
+        datasetVersion: "finance-rag-golden-v1.0.0",
+        modifiedAt: "2026-10-28T14:30:00.000Z",
+        sourceModifiedAt: "2026-10-28T15:30:00.000Z",
+        freshness: "stale"
+      }
+    });
+    render(<GoldenPage client={client} />);
+
+    const generated = await screen.findByRole("region", {
+      name: "Generated eval artifact"
+    });
+    expect(within(generated).getByText("Stale")).toBeInTheDocument();
+    expect(within(generated).getByText(/regenerate/i)).toBeInTheDocument();
   });
 });

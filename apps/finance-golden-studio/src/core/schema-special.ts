@@ -1,5 +1,6 @@
 import { isRecord, issue } from "./schema.js";
 import type { ValidationIssue } from "./schema.js";
+import { resolveTickerAbsentTarget } from "./ticker-absent.js";
 
 /**
  * 校验表格型答案具备结构化载荷。
@@ -115,7 +116,17 @@ export function validateNegative(
     );
     return;
   }
-  if (draft.resolution.ticker === undefined) {
+  const target = resolveTickerAbsentTarget(draft.resolution);
+  if (target.kind === "conflict") {
+    errors.push(
+      issue(
+        "negative_ticker_conflict",
+        `ticker_absent ticker=${target.directTicker} conflicts with scope ticker=${target.scopedTicker}.`,
+        "resolution"
+      )
+    );
+  }
+  if (target.kind === "scoped") {
     const scope =
       typeof draft.resolution.scope === "string"
         ? draft.resolution.scope.trim()

@@ -12,6 +12,8 @@ import type {
   SchemaValidationResult,
   ValidationIssue
 } from "./schema.js";
+import type { GoldenReportType } from "./types.js";
+import { resolveTickerAbsentTarget } from "./ticker-absent.js";
 import {
   validateNegative,
   validateTableAnswer,
@@ -51,6 +53,7 @@ export function validateDraftSchema(
   validateBooleanAndArrayFields(draft, errors);
   validateResolution(draft.resolution, errors);
   if (Array.isArray(draft.evidence)) validateEvidence(draft.evidence, errors);
+  validateMultiDoc(draft, errors);
   if (Array.isArray(draft.distractors)) validateDistractors(draft.distractors, errors);
   if (draft.type === "table") validateTableAnswer(draft, errors);
   validateTableStructure(draft.gold_answer_table, errors, warnings);
@@ -72,6 +75,74 @@ export function validateDraftSchema(
     errors,
     warnings: options.includeWarnings === false ? [] : warnings
   };
+}
+
+/**
+ * 校验 multi_doc 类型与实际来源基数的一致性。
+ *
+ * distinct 来源按 ticker/report_type/period 三元组判定；重复引用同一 PDF
+ * 不能冒充跨文档。multi_doc 必须显式 requires_multi_doc=true，反向标记也
+ * 必须确有至少两个 distinct 来源。
+ *
+ * @param draft 作者对象。
+ * @param errors 错误收集器。
+ */
+function validateMultiDoc(
+  draft: Record<string, unknown>,
+  errors: ValidationIssue[]
+): void {
+  const sources = uniqueEvidenceTriples(draft.evidence);
+  const sourceCount = sources?.size;
+  if (draft.type === "multi_doc" && draft.requires_multi_doc !== true) {
+    errors.push(
+      issue(
+        "multi_doc_flag_required",
+        "type=multi_doc requires requires_multi_doc=true.",
+        "requires_multi_doc"
+      )
+    );
+  }
+  if (
+    (draft.type === "multi_doc" || draft.requires_multi_doc === true) &&
+    sourceCount !== undefined &&
+    sourceCount < 2
+  ) {
+    errors.push(
+      issue(
+        "multi_doc_sources_required",
+        "multi_doc requires at least two distinct evidence source triples.",
+        "evidence"
+      )
+    );
+  }
+}
+
+/**
+ * 提取有效 evidence 的 distinct 来源三元组。
+ *
+ * @param value evidence 原值。
+ * @returns 三元组集合；输入不是数组时返回 undefined。
+ */
+function uniqueEvidenceTriples(value: unknown): Set<string> | undefined {
+  if (!Array.isArray(value)) return undefined;
+  return new Set(
+    value.flatMap((candidate) => {
+      if (
+        !isRecord(candidate) ||
+        typeof candidate.ticker !== "string" ||
+        candidate.ticker.trim().length === 0 ||
+        typeof candidate.report_type !== "string" ||
+        !GOLDEN_REPORT_TYPE_VALUES.includes(candidate.report_type as GoldenReportType) ||
+        typeof candidate.period !== "string" ||
+        candidate.period.trim().length === 0
+      ) {
+        return [];
+      }
+      return [
+        `${candidate.ticker}\u0000${candidate.report_type}\u0000${candidate.period}`
+      ];
+    })
+  );
 }
 
 /**
@@ -299,9 +370,11 @@ function validateLatestBy(value: Record<string, unknown>, errors: ValidationIssu
  * @param errors 错误收集器。
  */
 function validateTickerAbsent(value: Record<string, unknown>, errors: ValidationIssue[]): void {
-  if (value.ticker !== undefined) {
+  const target = resolveTickerAbsentTarget(value);
+  if (value.ticker !== undefined && typeof value.ticker !== "string") {
     validateRequiredString(value.ticker, "resolution.ticker", errors);
-  } else {
+  }
+  if (target.kind === "scoped") {
     validateRequiredString(value.scope, "resolution.scope", errors);
     validateRequiredString(value.expected_report, "resolution.expected_report", errors);
   }

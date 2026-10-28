@@ -8,6 +8,7 @@ import { manifestTripleKey } from "./manifest.js";
 import { isRecord, issue } from "./schema.js";
 import type { ValidationIssue } from "./schema.js";
 import { validateDraftSchema } from "./schema-fields.js";
+import { resolveTickerAbsentTarget, tickerPresentIssue } from "./ticker-absent.js";
 import type {
   GoldenEvidence,
   GoldenReportType,
@@ -293,32 +294,13 @@ function validateNegativeTicker(
   byTriple: ReadonlyMap<string, ManifestRecord>,
   errors: ValidationIssue[]
 ): void {
-  const ticker =
-    typeof resolution.ticker === "string"
-      ? resolution.ticker
-      : extractScopedTicker(resolution.scope);
-  if (!ticker) return;
+  const target = resolveTickerAbsentTarget(resolution);
+  if (target.kind === "invalid" || target.kind === "conflict") return;
+  const ticker = target.ticker;
   if ([...byTriple.values()].some((record) => record.ticker === ticker)) {
-    errors.push(
-      issue(
-        "negative_ticker_present",
-        `Negative resolution ticker ${ticker} exists in manifest.`,
-        "resolution.scope"
-      )
-    );
+    const found = tickerPresentIssue(target);
+    if (found) errors.push(found);
   }
-}
-
-/**
- * 从 resolution.scope 提取 ticker。
- *
- * @param value scope 值。
- * @returns ticker 或 undefined。
- */
-function extractScopedTicker(value: unknown): string | undefined {
-  return typeof value === "string"
-    ? /^ticker=(\S+)$/u.exec(value.trim())?.[1]
-    : undefined;
 }
 
 /**

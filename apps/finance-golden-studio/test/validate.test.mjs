@@ -27,6 +27,8 @@ const GOLDEN_PATH = fileURLToPath(
 );
 /** 默认来源 PDF 相对路径。 */
 const DEFAULT_PDF_PATH = "raw/cn/000776.SZ/2025Q1.pdf";
+/** 第二个跨报告期来源 PDF 的相对路径。 */
+const SECOND_PDF_PATH = "raw/cn/000776.SZ/2024.pdf";
 /** 默认来源中可由最小 PDF 编码的英文关键词。 */
 const DEFAULT_KEYWORD = "Revenue 184,679";
 
@@ -192,6 +194,72 @@ test("evidence 必须精确命中 manifest 三元组而不回退同 ticker", asy
   assert.deepEqual(report.keywordResults, []);
 });
 
+test("multi_doc 接受两个 distinct 来源且 requires_multi_doc=true", async () => {
+  const { config } = makeWorkspace({
+    manifest: [
+      manifestRecord("000776.SZ", "q1", "2025Q1", DEFAULT_PDF_PATH),
+      manifestRecord("000776.SZ", "annual", "2024", SECOND_PDF_PATH)
+    ]
+  });
+  writePdf(config, DEFAULT_PDF_PATH, DEFAULT_KEYWORD);
+  writePdf(config, SECOND_PDF_PATH, "Revenue 151,234 in 2024");
+
+  const report = await validateDraft(config, makeMultiDocDraft());
+
+  assert.equal(report.ok, true, JSON.stringify(report.errors));
+  assert.deepEqual(report.errors, []);
+});
+
+test("multi_doc 拒绝 false 标记或少于两个 distinct 来源", async () => {
+  const { config } = makeWorkspace({
+    manifest: [
+      manifestRecord("000776.SZ", "q1", "2025Q1", DEFAULT_PDF_PATH),
+      manifestRecord("000776.SZ", "annual", "2024", SECOND_PDF_PATH)
+    ]
+  });
+  writePdf(config, DEFAULT_PDF_PATH, DEFAULT_KEYWORD);
+  writePdf(config, SECOND_PDF_PATH, "Revenue 151,234 in 2024");
+  const valid = makeMultiDocDraft();
+
+  const flagReport = await validateDraft(config, {
+    ...valid,
+    requires_multi_doc: false
+  });
+  const duplicateSourceReport = await validateDraft(config, {
+    ...valid,
+    evidence: [valid.evidence[0], { ...valid.evidence[0] }]
+  });
+  const trueFlagReport = await validateDraft(config, {
+    ...makeDraft(),
+    requires_multi_doc: true
+  });
+
+  assert.ok(
+    flagReport.errors.some(
+      (issue) =>
+        issue.code === "multi_doc_flag_required" &&
+        issue.field === "requires_multi_doc"
+    ),
+    JSON.stringify(flagReport.errors)
+  );
+  assert.ok(
+    duplicateSourceReport.errors.some(
+      (issue) =>
+        issue.code === "multi_doc_sources_required" &&
+        issue.field === "evidence"
+    ),
+    JSON.stringify(duplicateSourceReport.errors)
+  );
+  assert.ok(
+    trueFlagReport.errors.some(
+      (issue) =>
+        issue.code === "multi_doc_sources_required" &&
+        issue.field === "evidence"
+    ),
+    JSON.stringify(trueFlagReport.errors)
+  );
+});
+
 test("关键词不在来源 PDF 文本中时报告 unreachable", async () => {
   const { config } = makeWorkspace();
   writePdf(config, DEFAULT_PDF_PATH, "Annual report without that amount");
@@ -316,6 +384,103 @@ test("合法 negative 不要求 expected_keywords，并要求 scoped ticker 缺�
       (issue) => issue.code === "negative_ticker_present"
     )
   );
+});
+
+test("ticker_absent 的空 ticker 使用 scope 作为实际缺席检查目标", async () => {
+  const { config } = makeWorkspace();
+  const draft = makeNegativeDraft();
+
+  const report = await validateDraft(config, {
+    ...draft,
+    resolution: {
+      ...draft.resolution,
+      ticker: "",
+      scope: "ticker=000776.SZ"
+    }
+  });
+
+  assert.ok(
+    report.errors.some(
+      (issue) =>
+        issue.code === "negative_ticker_present" &&
+        issue.field === "resolution.scope"
+    ),
+    JSON.stringify(report.errors)
+  );
+  assert.equal(
+    report.errors.some(
+      (issue) =>
+        issue.code === "required_string_invalid" &&
+        issue.field === "resolution.ticker"
+    ),
+    false,
+    JSON.stringify(report.errors)
+  );
+});
+
+test("ticker_absent 的非字符串 ticker 不会被静默忽略", async () => {
+  const { config } = makeWorkspace();
+  const draft = makeNegativeDraft();
+
+  const report = await validateDraft(config, {
+    ...draft,
+    resolution: {
+      ...draft.resolution,
+      ticker: 42,
+      scope: undefined
+    }
+  });
+
+  assert.ok(
+    report.errors.some(
+      (issue) =>
+        issue.code === "required_string_invalid" &&
+        issue.field === "resolution.ticker"
+    ),
+    JSON.stringify(report.errors)
+  );
+});
+
+test("ticker_absent 对冲突的 ticker 与 scope 只报确定性冲突", async () => {
+  const { config } = makeWorkspace();
+  const draft = makeNegativeDraft();
+
+  const report = await validateDraft(config, {
+    ...draft,
+    resolution: {
+      ...draft.resolution,
+      ticker: "002340.SZ",
+      scope: "ticker=000776.SZ"
+    }
+  });
+
+  assert.deepEqual(
+    report.errors
+      .filter((issue) => issue.code === "negative_ticker_conflict")
+      .map(({ code, field }) => ({ code, field })),
+    [{ code: "negative_ticker_conflict", field: "resolution" }]
+  );
+  assert.equal(
+    report.errors.some((issue) => issue.code === "negative_ticker_present"),
+    false,
+    JSON.stringify(report.errors)
+  );
+});
+
+test("ticker_absent 的相同 ticker 与 scope 不产生冲突", async () => {
+  const { config } = makeWorkspace();
+  const draft = makeNegativeDraft();
+
+  const report = await validateDraft(config, {
+    ...draft,
+    resolution: {
+      ...draft.resolution,
+      ticker: "002340.SZ",
+      scope: "ticker=002340.SZ"
+    }
+  });
+
+  assert.equal(report.ok, true, JSON.stringify(report.errors));
 });
 
 test("negative 带 evidence、类型不一致或缺少 ticker_absent resolution 时校验失败", async () => {
@@ -708,6 +873,32 @@ function makeNegativeDraft() {
       note: "manifest 中无该公司"
     }
   };
+}
+
+/**
+ * 构造引用两份真实年报风格来源的 multi_doc 草稿。
+ *
+ * @returns {object} multi_doc 草稿。
+ */
+function makeMultiDocDraft() {
+  const draft = makeDraft();
+  draft.id = "fin-D011";
+  draft.query = "广发证券 2025Q1 与 2024 年股东人数如何变化？";
+  draft.type = "multi_doc";
+  draft.difficulty = "hard";
+  draft.gold_answer = "2025Q1 为 184,679 户，2024 年为 151,234 户";
+  draft.requires_multi_doc = true;
+  draft.evidence = [
+    draft.evidence[0],
+    {
+      ...draft.evidence[0],
+      report_type: "annual",
+      period: "2024",
+      section: "股东信息",
+      quote: "Revenue 151,234 in 2024"
+    }
+  ];
+  return draft;
 }
 
 /**

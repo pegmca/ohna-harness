@@ -1,10 +1,11 @@
-import { existsSync, realpathSync } from "node:fs";
+import { existsSync, realpathSync, statSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 /** Golden Studio 的稳定配置错误码。 */
 export type WorkspaceErrorCode =
   | "workspace_config_missing"
+  | "invalid_root_path"
   | "manifest_not_found"
   | "path_outside_root"
   | "invalid_batch_name"
@@ -46,8 +47,6 @@ export class WorkspaceError extends Error {
 
 /** 应用源码所在目录由当前模块位置推导，避免依赖进程启动目录。 */
 const APP_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
-/** 仓库根只由应用位置推导，不包含任何开发者私有目录常量。 */
-const REPO_ROOT = resolve(APP_ROOT, "../..");
 /** 语料 manifest 的固定相对布局。 */
 const MANIFEST_RELATIVE_PATH = join("manifest", "manifest.jsonl");
 /** 作者集在工作区内的固定相对布局。 */
@@ -64,11 +63,13 @@ const GOLDEN_RELATIVE_PATH = join("datasets", "finance", "rag-golden");
  * @throws {WorkspaceError} 配置缺失或 manifest 不存在时抛出稳定错误。
  */
 export function resolveWorkspaceConfig(input: WorkspaceInput = {}): WorkspaceConfig {
+  /** 仓库根只由应用位置推导，并在使用时走统一的结构化根目录校验。 */
+  const repoRoot = canonicalizeRoot(resolve(APP_ROOT, "../.."));
   const workspaceRoot = canonicalizeRoot(
-    input.workspaceRoot ?? process.env.GOLDEN_WORKSPACE_ROOT ?? REPO_ROOT
+    input.workspaceRoot ?? process.env.GOLDEN_WORKSPACE_ROOT ?? repoRoot
   );
   const explicitCorpus = input.corpusRoot ?? process.env.FINANCE_CORPUS_ROOT;
-  const inferredCorpus = resolve(REPO_ROOT, "datasets", "finance");
+  const inferredCorpus = resolve(repoRoot, "datasets", "finance");
   const inferredManifest = resolve(inferredCorpus, MANIFEST_RELATIVE_PATH);
 
   if (!explicitCorpus && !existsSync(inferredManifest)) {
@@ -89,7 +90,7 @@ export function resolveWorkspaceConfig(input: WorkspaceInput = {}): WorkspaceCon
 
   const goldenRoot = resolve(workspaceRoot, GOLDEN_RELATIVE_PATH);
   return {
-    repoRoot: REPO_ROOT,
+    repoRoot,
     workspaceRoot,
     corpusRoot,
     manifestPath,
@@ -104,6 +105,7 @@ export function resolveWorkspaceConfig(input: WorkspaceInput = {}): WorkspaceCon
  * 断言目标路径最终解析后仍位于指定根目录内。
  *
  * 不存在的目标会沿最近的已存在祖先解析软链，因此新文件写入也无法借软链逃逸。
+ * 相对目标以 root 为基准解析，所有调用方无需依赖进程当前工作目录。
  *
  * @param root 允许访问的根目录。
  * @param target 待校验的绝对或相对路径。
@@ -112,7 +114,7 @@ export function resolveWorkspaceConfig(input: WorkspaceInput = {}): WorkspaceCon
 export function assertContainedPath(root: string, target: string): void {
   const configuredRoot = canonicalizeRoot(root);
   const rootPath = canonicalizePath(configuredRoot);
-  const targetPath = resolve(target);
+  const targetPath = resolve(configuredRoot, target);
   if (targetPath === configuredRoot || targetPath === rootPath) return;
 
   const relativeTarget = relative(configuredRoot, targetPath);
@@ -152,13 +154,22 @@ export function validateDraftId(id: string): void {
 }
 
 /**
- * 将根目录转为真实绝对路径；目录不存在时拒绝，避免后续作用域比较建立在猜测路径上。
+ * 将根目录转为真实绝对路径；不存在、非目录或无法解析时统一返回结构化错误。
  *
  * @param root 根目录。
  * @returns realpath 规范化后的绝对根路径。
  */
 function canonicalizeRoot(root: string): string {
-  return realpathSync(resolve(root));
+  try {
+    const absoluteRoot = resolve(root);
+    if (!statSync(absoluteRoot).isDirectory()) {
+      throw new WorkspaceError("invalid_root_path", `Configured root is not a directory: ${absoluteRoot}`);
+    }
+    return realpathSync(absoluteRoot);
+  } catch (error) {
+    if (error instanceof WorkspaceError) throw error;
+    throw new WorkspaceError("invalid_root_path", `Configured root is not an existing directory: ${root}`, error);
+  }
 }
 
 /**

@@ -107,7 +107,7 @@ test("环境变量提供 workspace 与 corpus 根，并派生全部数据路径"
     () => resolveWorkspaceConfig()
   );
 
-  assert.equal(config.repoRoot, resolve(new URL("../../..", import.meta.url).pathname));
+  assert.equal(config.repoRoot, realpathSync(resolve(new URL("../../..", import.meta.url).pathname)));
   assert.equal(config.workspaceRoot, workspace);
   assert.equal(config.corpusRoot, corpus);
   assert.equal(config.manifestPath, join(corpus, "manifest", "manifest.jsonl"));
@@ -188,12 +188,52 @@ test("corpus 缺少 manifest 文件时报 structured error", () => {
   );
 });
 
-test("assertContainedPath 拒绝 ../escape、绝对目标与软链逃逸", () => {
+test("不存在的工作区或语料根返回 structured roots error", () => {
+  const workspace = makeGoldenWorkspace();
+  const corpus = makeCorpusRoot();
+
+  assert.throws(
+    () => resolveWorkspaceConfig({ workspaceRoot: join(workspace, "missing"), corpusRoot: corpus }),
+    hasCode("invalid_root_path")
+  );
+  assert.throws(
+    () => resolveWorkspaceConfig({ workspaceRoot: workspace, corpusRoot: join(corpus, "missing") }),
+    hasCode("invalid_root_path")
+  );
+});
+
+test("工作区或语料根为普通文件时返回 structured roots error", () => {
+  const workspace = makeGoldenWorkspace();
+  const corpus = makeCorpusRoot();
+  const workspaceFile = join(makeTempDir(), "workspace.txt");
+  const corpusFile = join(makeTempDir(), "corpus.txt");
+  writeFileSync(workspaceFile, "not a directory");
+  writeFileSync(corpusFile, "not a directory");
+
+  assert.throws(
+    () => resolveWorkspaceConfig({ workspaceRoot: workspaceFile, corpusRoot: corpus }),
+    hasCode("invalid_root_path")
+  );
+  assert.throws(
+    () => resolveWorkspaceConfig({ workspaceRoot: workspace, corpusRoot: corpusFile }),
+    hasCode("invalid_root_path")
+  );
+});
+
+test("assertContainedPath 接受相对和绝对根内目标", () => {
   const root = makeTempDir();
   mkdirSync(join(root, "inside"));
   writeFileSync(join(root, "inside", "file.txt"), "ok");
 
+  assert.doesNotThrow(() => assertContainedPath(root, "inside/file.txt"));
   assert.doesNotThrow(() => assertContainedPath(root, join(root, "inside", "file.txt")));
+});
+
+test("assertContainedPath 拒绝相对逃逸、绝对根外目标与软链逃逸", () => {
+  const root = makeTempDir();
+  mkdirSync(join(root, "inside"));
+  writeFileSync(join(root, "inside", "file.txt"), "ok");
+
   assert.throws(() => assertContainedPath(root, "../escape"), hasCode("path_outside_root"));
   assert.throws(() => assertContainedPath(root, join(root, "..", "escape")), hasCode("path_outside_root"));
   assert.throws(() => assertContainedPath(root, join(root, "inside", "..", "..", "escape")), hasCode("path_outside_root"));

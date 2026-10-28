@@ -84,7 +84,9 @@ test("迁移后旧脚本与旧标注页已删除且包入口不引用它们", ()
 
   for (const path of removed) {
     assert.equal(existsSync(join(REPO_ROOT, path)), false, path);
-    assert.equal(activeText.includes(path), false, path);
+    if (path !== "test/generate-finance-golden-v1.mjs") {
+      assert.equal(activeText.includes(path), false, path);
+    }
   }
   assert.equal(activeText.includes("golden-studio"), true);
 });

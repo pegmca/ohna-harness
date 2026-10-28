@@ -442,6 +442,12 @@ test("golden GET 以源文件与生成物的真实修改时间区分 fresh 与 s
     config.generatedPath,
     JSON.stringify({
       datasetVersion: "finance-rag-golden-v1.0.0",
+      generatedBy: {
+        generator: "test/generate-finance-golden-v1.mjs",
+        version: "1.0.0",
+        source: "datasets/finance/rag-golden/golden.jsonl",
+        note: "Historical artifact generated before flat archive retirement."
+      },
       cases: [{ id: "fin-001" }]
     }),
     "utf8"
@@ -454,6 +460,11 @@ test("golden GET 以源文件与生成物的真实修改时间区分 fresh 与 s
   const equalBody = await equalResponse.json();
   assertApiSuccess(equalResponse, equalBody);
   assert.equal(equalBody.data.generated.freshness, "fresh");
+  assert.equal(
+    equalBody.data.generated.generator,
+    "test/generate-finance-golden-v1.mjs"
+  );
+  assert.match(equalBody.data.generated.note, /Historical artifact/u);
   assert.equal(
     Number.isNaN(Date.parse(equalBody.data.generated.sourceModifiedAt)),
     false
@@ -472,6 +483,89 @@ test("golden GET 以源文件与生成物的真实修改时间区分 fresh 与 s
   const newerBody = await newerResponse.json();
   assertApiSuccess(newerResponse, newerBody);
   assert.equal(newerBody.data.generated.freshness, "fresh");
+});
+
+test("golden GET 在作者集校验失败时把既有生成物标记为 blocked", async () => {
+  writeGolden(config, [
+    makeGoldenCase({
+      expected_keywords: ["HUMAN-KEYWORD"]
+    })
+  ]);
+  mkdirSync(join(config.workspaceRoot, "datasets", "finance"), {
+    recursive: true
+  });
+  writeFileSync(
+    config.generatedPath,
+    JSON.stringify({
+      datasetVersion: "finance-rag-golden-v1.0.0",
+      cases: [{ id: "fin-001" }]
+    }),
+    "utf8"
+  );
+  const current = new Date();
+  utimesSync(config.goldenPath, current, current);
+  utimesSync(
+    config.generatedPath,
+    new Date(current.getTime() + 60_000),
+    new Date(current.getTime() + 60_000)
+  );
+
+  const response = await request("/api/golden");
+  const body = await response.json();
+
+  assertApiSuccess(response, body);
+  assert.equal(body.data.authored.validation.ok, false);
+  assert.equal(body.data.authored.validation.keywordSummary.unreachable, 1);
+  assert.deepEqual(
+    body.data.authored.validation.keywordResults.map(
+      ({ caseId, caseType, keyword }) => ({ caseId, caseType, keyword })
+    ),
+    [
+      {
+        caseId: "fin-001",
+        caseType: "numeric_fact",
+        keyword: "HUMAN-KEYWORD"
+      }
+    ]
+  );
+  assert.equal(body.data.generated.exists, true);
+  assert.equal(body.data.generated.freshness, "blocked");
+  assert.equal(body.data.generated.caseCount, 1);
+  assert.match(body.data.generated.blockedReason, /authorship/i);
+});
+
+test("golden GET 信任产物 provenance 的 blocked 状态覆盖较新 mtime", async () => {
+  mkdirSync(join(config.workspaceRoot, "datasets", "finance"), {
+    recursive: true
+  });
+  writeFileSync(
+    config.generatedPath,
+    JSON.stringify({
+      datasetVersion: "finance-rag-golden-v1.0.0",
+      generatedBy: {
+        generator: "test/generate-finance-golden-v1.mjs",
+        version: "1.0.0",
+        status: "blocked",
+        note: "Historical artifact awaiting human keyword audit."
+      },
+      cases: [{ id: "fin-001" }]
+    }),
+    "utf8"
+  );
+  const newer = new Date(Date.now() + 60_000);
+  utimesSync(config.generatedPath, newer, newer);
+
+  const response = await request("/api/golden");
+  const body = await response.json();
+
+  assertApiSuccess(response, body);
+  assert.equal(body.data.authored.validation.ok, true);
+  assert.equal(body.data.generated.artifactProvenanceStatus, "blocked");
+  assert.equal(body.data.generated.freshness, "blocked");
+  assert.equal(
+    body.data.generated.blockedReason,
+    "Historical artifact awaiting human keyword audit."
+  );
 });
 
 test("mine 动作要求候选数组并在确认后写入真实草稿批次", async () => {

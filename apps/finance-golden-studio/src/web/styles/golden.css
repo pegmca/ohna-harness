@@ -105,6 +105,52 @@
   overflow-wrap: anywhere;
 }
 
+.keyword-summary {
+  border-top: 1px solid var(--border-subtle);
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-top: 12px;
+  padding-top: 12px;
+}
+
+.keyword-summary div {
+  background: var(--elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  padding: 8px;
+}
+
+.keyword-summary strong {
+  font-size: 15px;
+  font-variant-numeric: tabular-nums;
+}
+
+.issue-summary .keyword-text {
+  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.keyword-evidence {
+  color: var(--text-secondary);
+  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.artifact-provenance {
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.5;
+  margin: 12px 0 0;
+  overflow-wrap: anywhere;
+}
+
 .empty-asset {
   border-top: 1px solid var(--border-subtle);
   color: var(--text-secondary);

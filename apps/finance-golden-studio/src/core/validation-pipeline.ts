@@ -8,8 +8,12 @@ import {
   type ManifestEvidenceResolution,
   type ManifestLatestResolution
 } from "./evidence-resolution.js";
-import type { KeywordReachabilityResult } from "./keywords.js";
+import type {
+  KeywordDiagnostic,
+  KeywordReachabilityResult
+} from "./keywords.js";
 import { validateKeywordReachability } from "./keywords.js";
+import { attributeKeywordResults } from "./keyword-report.js";
 import type { ManifestRecord } from "./manifest.js";
 import { manifestFilePathKey } from "./manifest.js";
 import { isRecord, issue } from "./schema.js";
@@ -37,7 +41,7 @@ export interface ValidationPipelineRecord {
   id?: string;
   errors: ValidationIssue[];
   warnings: ValidationIssue[];
-  keywordResults: KeywordReachabilityResult[];
+  keywordResults: KeywordDiagnostic[];
 }
 
 /** 作者集校验管道结果。 */
@@ -105,7 +109,23 @@ export async function runValidationPipeline(
         errors,
         loaded.failures
       );
-      return { line, ...(id ? { id } : {}), errors, warnings, keywordResults };
+      return {
+        line,
+        ...(id ? { id } : {}),
+        errors,
+        warnings,
+        keywordResults: attributeKeywordResults(
+          record,
+          evidence,
+          (value) => {
+            const resolution = resolveRecordEvidence(record, value, manifestIndex);
+            return resolution.kind === "resolved"
+              ? resolution.record.file_path
+              : undefined;
+          },
+          keywordResults
+        )
+      };
     })
   };
 }

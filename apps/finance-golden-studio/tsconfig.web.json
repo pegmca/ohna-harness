@@ -7,6 +7,7 @@
     "allowImportingTsExtensions": true
   },
   "include": [
+    "src/core/keyword-report.ts",
     "src/core/types.ts",
     "src/web/**/*.ts",
     "src/web/**/*.tsx",

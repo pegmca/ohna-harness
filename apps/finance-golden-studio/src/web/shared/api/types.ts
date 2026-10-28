@@ -8,6 +8,7 @@ import type {
   GoldenStudioActionName,
   GoldenStudioActionResult,
   PdfEvidenceDocument,
+  ValidationReport,
   WorkspaceSettings
 } from "../../../core/types.js";
 
@@ -47,6 +48,7 @@ export type {
   GoldenStatus,
   GoldenStudioActionName,
   GoldenStudioActionResult,
+  ValidationReport,
   WorkspaceSettings,
   DraftScopedValidationResult,
   DraftBatchValidationResult,

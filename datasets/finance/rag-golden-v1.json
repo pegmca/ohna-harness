@@ -5,7 +5,8 @@
     "generator": "test/generate-finance-golden-v1.mjs",
     "version": "1.0.0",
     "source": "datasets/finance/rag-golden/golden.jsonl",
-    "note": "黄金作者集→评测器格式映射；documents.content 为 PDF 原始字节的 base64 信封，latest_by 题按当前 manifest 重算报告期。"
+    "note": "历史产物：由已退役的 test/generate-finance-golden-v1.mjs 生成，尚未按真实 PDF 审计人工 expected_keywords；当前 35 个关键词不可达，是作者侧阻塞，不代表已重新生成。在人工关键词修订并重新生成前，此文件保持 stale/blocked，不可视为当前有效评测基线。",
+    "status": "blocked"
   },
   "seed": 20261027,
   "domain": "finance",

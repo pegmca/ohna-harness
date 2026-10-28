@@ -67,6 +67,8 @@ export interface GeneratedEvalDataset {
 /** generate 工作流结果。 */
 export interface GenerateReport {
   ok: boolean;
+  /** 生成物当前是否可被评测消费，而非仅表示是否存在。 */
+  artifactStatus: "generated" | "blocked";
   caseCount: number;
   ragCount: number;
   failureCount: number;
@@ -92,13 +94,13 @@ export async function generateEvalDataset(
   assertContainedPath(config.workspaceRoot, config.generatedPath);
   const validation = await validateGolden(config);
   if (!validation.ok) {
-    return emptyReport(validation);
+    return blockedReport(validation);
   }
 
   const golden = await readGolden(config);
   const manifest = await readManifest(config);
   if (manifest.errors.length > 0) {
-    return emptyReport({
+    return blockedReport({
       ...validation,
       ok: false,
       errors: [...validation.errors, ...manifest.errors]
@@ -133,6 +135,7 @@ export async function generateEvalDataset(
   const ragCount = cases.filter((candidate) => candidate.mode === "rag").length;
   return {
     ok: true,
+    artifactStatus: "generated",
     caseCount: cases.length,
     ragCount,
     failureCount: cases.length - ragCount,
@@ -485,14 +488,15 @@ async function readGolden(config: WorkspaceConfig): Promise<GoldenCase[]> {
 }
 
 /**
- * 创建失败报告，保持 case 数量为零且不包含 outputPath。
+ * 创建 blocked 报告，不触碰既有生成物。
  *
  * @param validation 校验报告。
  * @returns 失败 GenerateReport。
  */
-function emptyReport(validation: ValidationReport): GenerateReport {
+function blockedReport(validation: ValidationReport): GenerateReport {
   return {
     ok: false,
+    artifactStatus: "blocked",
     caseCount: 0,
     ragCount: 0,
     failureCount: 0,

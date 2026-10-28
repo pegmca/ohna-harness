@@ -6,7 +6,10 @@ import {
   createManifestIndex,
   resolveEvidenceRecord
 } from "./evidence-resolution.js";
-import type { KeywordReachabilityResult } from "./keywords.js";
+import type {
+  KeywordDiagnostic
+} from "./keywords.js";
+import { attributeKeywordResults } from "./keyword-report.js";
 import { manifestFilePathKey, readManifest } from "./manifest.js";
 import type {
   ValidationIssue,
@@ -103,7 +106,7 @@ export async function validateGolden(config: WorkspaceConfig): Promise<Validatio
 
   const errors: ValidationIssue[] = [];
   const warnings: ValidationIssue[] = [];
-  const keywordResults: KeywordReachabilityResult[] = [];
+  const keywordResults: KeywordDiagnostic[] = [];
   const seenIds = new Map<string, number>();
   const index = createManifestIndex(manifest.records);
   const parsedRecords: Array<{
@@ -203,7 +206,12 @@ async function validateRecordWithManifest(
   return createValidationReport({
     errors: [...schema.errors, ...errors],
     warnings: schema.warnings,
-    keywordResults
+    keywordResults: attributeKeywordResults(
+      record,
+      evidence,
+      (value) => resolvedFilePath(value, index),
+      keywordResults
+    )
   });
 }
 

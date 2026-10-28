@@ -77,7 +77,53 @@ export interface KeywordReachabilityResult {
   normalizedKeyword: string;
   reachable: boolean;
   reason?: "empty" | "unreachable";
+  caseId?: string;
+  caseType?: GoldenDraftType;
+  keywordIndex?: number;
+  evidence?: KeywordEvidenceReachability[];
   evidenceIndexes: number[];
+}
+
+/** 可归属到作者 case 的关键词诊断。 */
+export interface KeywordDiagnostic extends KeywordReachabilityResult {
+  caseId: string;
+  caseType: GoldenDraftType;
+  keywordIndex: number;
+  evidence: KeywordEvidenceReachability[];
+}
+
+/** 单个关键词在一条 evidence 文档中的可达性。 */
+export interface KeywordEvidenceReachability {
+  evidenceIndex: number;
+  documentFilePath?: string;
+  reachable: boolean;
+}
+
+/** 单个 case 的关键词计数。 */
+export interface KeywordCaseSummary {
+  caseId: string;
+  caseType?: GoldenDraftType;
+  total: number;
+  reachable: number;
+  unreachable: number;
+}
+
+/** 按题型聚类的关键词计数。 */
+export interface KeywordTypeSummary {
+  caseType: GoldenDraftType;
+  cases: number;
+  total: number;
+  reachable: number;
+  unreachable: number;
+}
+
+/** 全作者集关键词稳定汇总。 */
+export interface KeywordValidationSummary {
+  total: number;
+  reachable: number;
+  unreachable: number;
+  byCase: KeywordCaseSummary[];
+  byType: KeywordTypeSummary[];
 }
 
 /** CLI、HTTP、UI、promote 与 generate 共用的校验结果。 */
@@ -85,7 +131,8 @@ export interface ValidationReport {
   ok: boolean;
   errors: ValidationIssue[];
   warnings: ValidationIssue[];
-  keywordResults: KeywordReachabilityResult[];
+  keywordResults: KeywordDiagnostic[];
+  keywordSummary: KeywordValidationSummary;
 }
 
 /** 单批次校验结果，供 CLI 与本地 server 共享。 */
@@ -112,7 +159,14 @@ export type GoldenGeneratedStatus =
       datasetVersion: string;
       modifiedAt: string;
       sourceModifiedAt?: string;
-      freshness: "fresh" | "stale";
+      generator?: string;
+      generatorVersion?: string;
+      source?: string;
+      note?: string;
+      /** 产物自身声明的历史作者阻塞状态，独立于本次校验结果。 */
+      artifactProvenanceStatus?: "blocked";
+      freshness: "fresh" | "stale" | "blocked";
+      blockedReason?: string;
     };
 
 /** 作者集与生成产物的分离状态。 */
@@ -292,11 +346,8 @@ export interface DraftValidationSnapshot {
   ok: boolean;
   errors: Array<{ code: ValidationIssueCode; message: string; field?: string }>;
   warnings: Array<{ code: ValidationIssueCode; message: string; field?: string }>;
-  keywordResults: Array<{
-    keyword: string;
-    reachable: boolean;
-    evidenceIndexes: number[];
-  }>;
+  keywordResults: KeywordDiagnostic[];
+  keywordSummary?: KeywordValidationSummary;
 }
 
 /**

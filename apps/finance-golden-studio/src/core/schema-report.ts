@@ -1,5 +1,9 @@
-import type { KeywordReachabilityResult } from "./keywords.js";
-import type { ValidationIssue, ValidationReport } from "./schema.js";
+import { createKeywordValidationSummary } from "./keyword-report.js";
+import type {
+  KeywordDiagnostic,
+  ValidationIssue,
+  ValidationReport
+} from "./types.js";
 
 /**
  * 将结构问题、引用问题和关键词问题合并为一个报告。
@@ -10,14 +14,16 @@ import type { ValidationIssue, ValidationReport } from "./schema.js";
 export function createValidationReport(parts: {
   errors?: readonly ValidationIssue[];
   warnings?: readonly ValidationIssue[];
-  keywordResults?: readonly KeywordReachabilityResult[];
+  keywordResults?: readonly KeywordDiagnostic[];
 } = {}): ValidationReport {
   const errors = [...(parts.errors ?? [])];
   const warnings = [...(parts.warnings ?? [])];
+  const keywordResults = [...(parts.keywordResults ?? [])];
   return {
     ok: errors.length === 0,
     errors,
     warnings,
-    keywordResults: [...(parts.keywordResults ?? [])]
+    keywordResults,
+    keywordSummary: createKeywordValidationSummary(keywordResults)
   };
 }

@@ -1,5 +1,5 @@
 /** 生成物相对于作者集的可用状态。 */
-export type GeneratedFreshness = "fresh" | "stale" | "missing";
+export type GeneratedFreshness = "fresh" | "stale" | "blocked" | "missing";
 
 /** 文件时间戳在纳秒精度下的最小比较契约。 */
 export interface FileTimestamp {

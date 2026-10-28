@@ -58,12 +58,24 @@ async function readGoldenStatus(context: RequestContext): Promise<GoldenStatus> 
           ? { sourceModifiedAt: new Date(goldenMetadata.mtimeMs).toISOString() }
           : {}),
         freshness:
-          goldenMetadata
+          generated.value.artifactProvenanceStatus === "blocked" || !validation.ok
+          ? "blocked"
+          : goldenMetadata
             ? (classifyGeneratedFreshness(
                 goldenMetadata,
                 generated.metadata
               ) as "fresh" | "stale")
-            : "fresh"
+            : "fresh",
+        ...(validation.ok && generated.value.artifactProvenanceStatus !== "blocked"
+          ? {}
+          : {
+              blockedReason:
+                generated.value.artifactProvenanceStatus === "blocked"
+                  ? generated.value.note ??
+                    "This historical artifact is marked blocked in its provenance."
+                  : `Authored golden authorship validation must pass before this artifact is usable. ` +
+                    `${validation.keywordSummary.unreachable} unreachable keyword(s) remain.`
+            })
       }
     : generated.value;
   return {
@@ -133,6 +145,7 @@ async function readGeneratedStatus(path: string): Promise<
     const value = JSON.parse(raw) as {
       datasetVersion?: unknown;
       cases?: unknown;
+      generatedBy?: unknown;
     };
     if (
       typeof value.datasetVersion !== "string" ||
@@ -140,6 +153,7 @@ async function readGeneratedStatus(path: string): Promise<
     ) {
       throw new Error("Generated eval artifact does not match its dataset shape.");
     }
+    const generatedBy = asRecord(value.generatedBy);
     return {
       exists: true,
       metadata: {
@@ -152,6 +166,23 @@ async function readGeneratedStatus(path: string): Promise<
         caseCount: value.cases.length,
         datasetVersion: value.datasetVersion,
         modifiedAt,
+        ...(typeof generatedBy?.generator === "string"
+          ? { generator: generatedBy.generator }
+          : {}),
+        ...(typeof generatedBy?.version === "string"
+          ? { generatorVersion: generatedBy.version }
+          : {}),
+        ...(typeof generatedBy?.source === "string"
+          ? { source: generatedBy.source }
+          : {}),
+        ...(typeof generatedBy?.note === "string"
+          ? { note: generatedBy.note }
+          : {}),
+        ...(generatedBy?.status === "blocked"
+          ? {
+              artifactProvenanceStatus: "blocked" as const
+            }
+          : {}),
         freshness: "fresh"
       }
     };
@@ -216,4 +247,16 @@ function isNotFound(error: unknown): boolean {
     "code" in error &&
     error.code === "ENOENT"
   );
+}
+
+/**
+ * 将可选生成器元数据收窄为普通对象。
+ *
+ * @param value 原始 generatedBy。
+ * @returns 普通对象或 undefined。
+ */
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
 }

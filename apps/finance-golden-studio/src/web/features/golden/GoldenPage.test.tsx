@@ -21,7 +21,48 @@ function makeClient() {
             }
           ],
           warnings: [],
-          keywordResults: []
+          keywordResults: [
+            {
+              keyword: "HUMAN-KEYWORD",
+              normalizedKeyword: "human-keyword",
+              reachable: false,
+              reason: "unreachable",
+              evidenceIndexes: [],
+              caseId: "fin-009",
+              caseType: "table",
+              keywordIndex: 0,
+              evidence: [
+                {
+                  evidenceIndex: 0,
+                  documentFilePath: "raw/cn/600150.SH/2025.pdf",
+                  reachable: false
+                }
+              ]
+            }
+          ],
+          keywordSummary: {
+            total: 1,
+            reachable: 0,
+            unreachable: 1,
+            byCase: [
+              {
+                caseId: "fin-009",
+                caseType: "table",
+                total: 1,
+                reachable: 0,
+                unreachable: 1
+              }
+            ],
+            byType: [
+              {
+                caseType: "table",
+                cases: 1,
+                total: 1,
+                reachable: 0,
+                unreachable: 1
+              }
+            ]
+          }
         }
       },
       generated: {
@@ -31,7 +72,9 @@ function makeClient() {
         datasetVersion: "finance-rag-golden-v1.0.0",
         modifiedAt: "2026-10-28T15:30:00.000Z",
         sourceModifiedAt: "2026-10-28T15:00:00.000Z",
-        freshness: "fresh" as const
+        freshness: "blocked" as const,
+        blockedReason:
+          "Authored golden validation must pass before this artifact is usable."
       }
     })),
     runAction: vi.fn(async () => ({
@@ -42,7 +85,7 @@ function makeClient() {
         ragCount: 13,
         failureCount: 1,
         outputPath: "/workspace/rag-golden-v1.json",
-        validation: { ok: true, errors: [], warnings: [], keywordResults: [] }
+        validation: validValidation()
       }
     }))
   } as unknown as GoldenStudioClient;
@@ -57,12 +100,14 @@ describe("GoldenPage", () => {
     expect(within(authored).getByText("14 cases")).toBeInTheDocument();
     expect(within(authored).getByText("Validation failed")).toBeInTheDocument();
     expect(within(authored).getByText("fin-009")).toBeInTheDocument();
+    expect(within(authored).getByText(/1 unreachable keyword/)).toBeInTheDocument();
+    expect(within(authored).getByText(/HUMAN-KEYWORD/)).toBeInTheDocument();
 
     const generated = screen.getByRole("region", { name: "Generated eval artifact" });
     expect(within(generated).getByText("12 cases")).toBeInTheDocument();
     expect(within(generated).getByText("finance-rag-golden-v1.0.0")).toBeInTheDocument();
-    expect(within(generated).getByText("Fresh")).toBeInTheDocument();
-    expect(within(generated).getByText("Fresh")).toBeInTheDocument();
+    expect(within(generated).getByText("Blocked")).toBeInTheDocument();
+    expect(within(generated).getByText(/validation must pass/i)).toBeInTheDocument();
     expect(within(generated).getByText(/2026/)).toBeInTheDocument();
   });
 
@@ -85,7 +130,7 @@ describe("GoldenPage", () => {
       authored: {
         path: "/workspace/golden.jsonl",
         caseCount: 14,
-        validation: { ok: true, errors: [], warnings: [], keywordResults: [] }
+        validation: validValidation()
       },
       generated: {
         path: "/workspace/rag-golden-v1.json",
@@ -119,7 +164,7 @@ describe("GoldenPage", () => {
       authored: {
         path: "/workspace/golden.jsonl",
         caseCount: 14,
-        validation: { ok: true, errors: [], warnings: [], keywordResults: [] }
+        validation: validValidation()
       },
       generated: {
         path: "/workspace/rag-golden-v1.json",
@@ -140,3 +185,20 @@ describe("GoldenPage", () => {
     expect(within(generated).getByText(/regenerate/i)).toBeInTheDocument();
   });
 });
+
+/** 构造无关键词问题的完整校验报告。 */
+function validValidation() {
+  return {
+    ok: true,
+    errors: [],
+    warnings: [],
+    keywordResults: [],
+    keywordSummary: {
+      total: 0,
+      reachable: 0,
+      unreachable: 0,
+      byCase: [],
+      byType: []
+    }
+  };
+}

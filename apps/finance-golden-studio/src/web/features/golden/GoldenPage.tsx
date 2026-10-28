@@ -14,6 +14,7 @@ import type {
   GoldenStudioActionResult
 } from "../../shared/api/types.ts";
 import { ActionBar } from "../actions/ActionBar.tsx";
+import { KeywordDiagnostics } from "./KeywordDiagnostics.tsx";
 
 /** 作者集页面加载状态。 */
 type LoadState =
@@ -181,6 +182,7 @@ function AuthoredPanel({ status }: { status: GoldenStatus }) {
           </dd>
         </div>
       </dl>
+      <KeywordDiagnostics report={authored.validation} />
       {authored.validation.errors.length > 0 ? (
         <div className="issue-summary">
           <h3>Validation issues</h3>
@@ -210,11 +212,17 @@ function GeneratedPanel({ status }: { status: GoldenStatus }) {
   const generated = status.generated;
   const freshness = generated.exists ? generated.freshness : "missing";
   const freshnessLabel =
-    freshness === "fresh" ? "Fresh" : freshness === "stale" ? "Stale" : "Missing";
+    freshness === "fresh"
+      ? "Fresh"
+      : freshness === "stale"
+        ? "Stale"
+        : freshness === "blocked"
+          ? "Blocked"
+          : "Missing";
   const freshnessClass =
     freshness === "fresh"
       ? "badge-success"
-      : freshness === "stale"
+      : freshness === "stale" || freshness === "blocked"
         ? "badge-warning"
         : "badge-warning";
   return (
@@ -234,7 +242,12 @@ function GeneratedPanel({ status }: { status: GoldenStatus }) {
       <p className="dataset-path">{generated.path}</p>
       {generated.exists ? (
         <>
-          {freshness === "stale" ? (
+          {freshness === "blocked" ? (
+            <p className="empty-asset">
+              {generated.blockedReason ??
+                "Authored validation must pass before this artifact is usable."}
+            </p>
+          ) : freshness === "stale" ? (
             <p className="empty-asset">
               Authored data changed after generation. Regenerate the eval set.
             </p>
@@ -253,6 +266,14 @@ function GeneratedPanel({ status }: { status: GoldenStatus }) {
               <dd>{formatTimestamp(generated.modifiedAt)}</dd>
             </div>
           </dl>
+          {generated.note ? (
+            <p className="artifact-provenance">{generated.note}</p>
+          ) : null}
+          {generated.generator ? (
+            <p className="artifact-provenance">
+              Generator: <code>{generated.generator}</code>
+            </p>
+          ) : null}
         </>
       ) : (
         <p className="empty-asset">

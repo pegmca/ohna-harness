@@ -140,6 +140,19 @@ The authoring loop is:
    pnpm golden-studio generate --json
    ```
 
+   Generation is fail-closed. If any authored case has an ERROR, including an
+   unreachable `expected_keywords` entry, the existing
+   `datasets/finance/rag-golden-v1.json` is left byte-for-byte intact and the
+   report returns `artifactStatus: "blocked"`. The Studio Golden page shows both
+   that blocker and the artifact's stored generator provenance.
+
+   To report the current blocked state against the real corpus:
+
+   ```bash
+   FINANCE_CORPUS_ROOT=/path/to/finance-corpus \
+     pnpm golden-studio validate --golden --json
+   ```
+
 6. Run the finance evaluation gate:
 
    ```bash
@@ -147,9 +160,40 @@ The authoring loop is:
    ```
 
 `golden.jsonl` is the only authoring source of truth.
-`datasets/finance/rag-golden-v1.json` is a generated, reviewable artifact whose
-positive cases carry `expectedKeywords` copied from `expected_keywords`; it is
-never hand-edited.
+`datasets/finance/rag-golden-v1.json` is a generated artifact whose positive
+cases normally carry `expectedKeywords` copied from `expected_keywords`; its
+case payload is never hand-edited. The committed artifact is currently a
+**blocked historical artifact** from
+`test/generate-finance-golden-v1.mjs`, not output from a successful current
+regeneration. Real-corpus validation finds 35 unreachable human-authored
+keywords across 12 of 13 non-negative cases. That is an authoring blocker: the
+keywords must be audited against the real PDFs and revised or removed by a
+human. They must not be auto-rewritten, inferred from gold prose, or silently
+normalized into different values.
+
+Current real-corpus failure distribution:
+
+| Case | Type | Unreachable keywords |
+| --- | --- | ---: |
+| `fin-001` | `numeric_fact` | 2 |
+| `fin-002` | `comparison` | 2 |
+| `fin-003` | `table` | 1 |
+| `fin-004` | `table` | 1 |
+| `fin-005` | `numeric_fact` | 1 |
+| `fin-006` | `definitional` | 2 |
+| `fin-007` | `unit_trap` | 3 |
+| `fin-008` | `table` | 4 |
+| `fin-009` | `table` | 11 |
+| `fin-010` | `numeric_fact` | 2 |
+| `fin-011` | `multi_doc` | 3 |
+| `fin-014` | `numeric_fact` | 3 |
+
+Until that audit and a successful `generate` are complete, treat the committed
+artifact as stale/blocked and do not represent it as a current complete golden
+evaluation baseline. The structured `keywordSummary` (total/reachable/
+unreachable plus `byCase` and `byType`) and attributed `keywordResults`
+(`caseId`, `caseType`, `keywordIndex`, original `keyword`, and per-evidence
+`documentFilePath`) are the authoritative blocker report.
 
 The generator embeds the resolved manifest `file_path` as each document's
 `source`, `fileName`, and `expectedSources` entry. `latest_by` defaults to the
@@ -167,4 +211,15 @@ pnpm --filter @aiagent/finance-golden-studio build
 
 The test suite includes a real process-level `serve` check, isolated mine →
 validate → promote → generate workflows, the current 14-case authoring contract,
-and a generation test that uses real PDF bytes.
+and a generation test that uses real PDF bytes. The focused real-corpus check
+is:
+
+```bash
+FINANCE_CORPUS_ROOT=/path/to/finance-corpus \
+  pnpm --filter @aiagent/finance-golden-studio exec \
+  node --import tsx --test test/real-golden-keywords.test.mjs
+```
+
+It reads committed `golden.jsonl` without changing it and prints the structured
+per-keyword failure list. Without `FINANCE_CORPUS_ROOT`, it skips with that
+explicit reason.

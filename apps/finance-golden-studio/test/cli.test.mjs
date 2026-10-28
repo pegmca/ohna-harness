@@ -14,6 +14,7 @@ import {
   rm,
   writeFile
 } from "node:fs/promises";
+import { mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -145,6 +146,119 @@ test("validate --json 对校验 ERROR 返回 validation_failed", async () => {
       (issue) => issue.code === "expected_keywords_required"
     )
   );
+});
+
+test("validate --golden --json 暴露逐关键词归属与稳定汇总，而非泛化失败", async () => {
+  const fixture = await makeResolvedWorkspace({
+    golden: [
+      {
+        ...makeGoldenCase(),
+        id: "fin-001",
+        expected_keywords: ["HUMAN-KEYWORD"]
+      }
+    ],
+    pdfText: "Revenue 100"
+  });
+
+  const result = await captureCli([
+    "validate",
+    "--workspace",
+    fixture.workspaceRoot,
+    "--corpus",
+    fixture.corpusRoot,
+    "--golden",
+    "--json"
+  ]);
+
+  assert.equal(result.code, 1);
+  const output = parseJsonOutput(result.stdout);
+  assert.equal(output.ok, false);
+  assert.equal(output.error, "validation_failed");
+  assert.deepEqual(output.validation.keywordSummary, {
+    total: 1,
+    reachable: 0,
+    unreachable: 1,
+    byCase: [
+      {
+        caseId: "fin-001",
+        caseType: "numeric_fact",
+        total: 1,
+        reachable: 0,
+        unreachable: 1
+      }
+    ],
+    byType: [
+      {
+        caseType: "numeric_fact",
+        cases: 1,
+        total: 1,
+        reachable: 0,
+        unreachable: 1
+      }
+    ]
+  });
+  assert.deepEqual(
+    output.validation.keywordResults.map(
+      ({ caseId, caseType, keywordIndex, keyword, reachable }) => ({
+        caseId,
+        caseType,
+        keywordIndex,
+        keyword,
+        reachable
+      })
+    ),
+    [
+      {
+        caseId: "fin-001",
+        caseType: "numeric_fact",
+        keywordIndex: 0,
+        keyword: "HUMAN-KEYWORD",
+        reachable: false
+      }
+    ]
+  );
+});
+
+test("generate --json 在关键词校验失败时保留既有生成物并报告 blocked", async () => {
+  const fixture = await makeResolvedWorkspace({
+    golden: [
+      {
+        ...makeGoldenCase(),
+        id: "fin-001",
+        expected_keywords: ["HUMAN-KEYWORD"]
+      }
+    ],
+    pdfText: "Revenue 100"
+  });
+  mkdirSync(join(fixture.workspaceRoot, "datasets", "finance"), {
+    recursive: true
+  });
+  const generatedPath = join(
+    fixture.workspaceRoot,
+    "datasets",
+    "finance",
+    "rag-golden-v1.json"
+  );
+  const original = '{"datasetVersion":"old","cases":[]}\n';
+  await writeFile(generatedPath, original, "utf8");
+
+  const result = await captureCli([
+    "generate",
+    "--workspace",
+    fixture.workspaceRoot,
+    "--corpus",
+    fixture.corpusRoot,
+    "--json"
+  ]);
+
+  assert.equal(result.code, 1);
+  const output = parseJsonOutput(result.stdout);
+  assert.equal(output.ok, false);
+  assert.equal(output.error, "generation_failed");
+  assert.equal(output.result.artifactStatus, "blocked");
+  assert.equal(output.result.outputPath, undefined);
+  assert.equal(output.result.validation.keywordSummary.unreachable, 1);
+  assert.equal(await readFile(generatedPath, "utf8"), original);
 });
 
 test("mine 从 --candidates 文件读取候选并使用默认批次", async () => {

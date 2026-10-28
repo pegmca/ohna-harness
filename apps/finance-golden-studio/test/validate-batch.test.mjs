@@ -110,6 +110,7 @@ test("validateDraftBatch 为每个合并问题保留所属草稿 id", async () =
   assert.deepEqual(Object.keys(result.validation).sort(), [
     "errors",
     "keywordResults",
+    "keywordSummary",
     "ok",
     "warnings"
   ]);

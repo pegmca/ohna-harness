@@ -11,8 +11,15 @@
    → 按题型模板抽候选片段（含 `page`/`quote`）→ 落 `_drafts/<batch>/<id>.jsonl`（未定稿草稿）。
 2. **标注（人工）**：运行 `pnpm --filter @aiagent/finance-golden-studio dev` 打开 Web 工作台（或构建后用 `pnpm golden-studio serve`），补 `gold_answer` / `gold_answer_table` / `gold_answer_form` / `note`
    与 `expected_keywords`，把 `evidence.section` 的「（待补）」换成真实章节名；图片源题补 `source_kind:"image"+ocr_required`。
-3. **校验（validate）**：`pnpm eval:finance-golden:validate` 统一检查结构、精确 manifest 引用、
+3. **校验（validate）**：`pnpm golden-studio validate --golden --json` 统一检查结构、精确 manifest 引用、
    PDF 可读性、section 完成度、表格 / 表单形状和 `expected_keywords` 源文本可达性；0 ERROR 才许入册。
+
+   **当前真实语料是已知作者阻塞**：35 个 committed 人工关键词不可达，分布在
+   13 个非 negative case 中的 12 个。逐项失败保留 `caseId` / `caseType` / `keywordIndex` /
+   `documentFilePath`，汇总保留 `keywordSummary.byCase` 与 `byType`。必须由人
+   对照 PDF 审计后修订或删除原词，不能从 gold prose 自动反推、批量改写或约定
+   为已通过；在这些关键词修复前，旧 `rag-golden-v1.json` 保持原样并显示
+   `blocked`，不宣称完成重新生成。
 4. **入册（promote）**：`pnpm golden-studio promote --batch <batch>` 把该批草稿并入 `golden.jsonl`
    （自动排重 id、去空行、保持 fin-XXX 递增），再 `generate + eval` 看门禁。
 
@@ -77,5 +84,10 @@
 ## 六、与评测管线的关系
 
 - 作者集 `golden.jsonl` 是单一事实来源；**不直接写** `rag-golden-v1.json`。
-- 映射：`pnpm golden-studio generate` → `datasets/finance/rag-golden-v1.json`（评测器格式），非负例题的 `expected_keywords` 原样映射为 `expectedKeywords`。
-- 门禁：`pnpm eval:finance-golden`（deterministic 档）；`answerCorrectness` 偏低属 stub 预期，非映射 bug。
+- 映射：`pnpm golden-studio generate` 仅在 `validate --golden` 通过后写入
+  `datasets/finance/rag-golden-v1.json`（评测器格式），非负例题的
+  `expected_keywords` 原样映射为 `expectedKeywords`。当前校验不通过，因此
+  committed 产物是保留的历史文件，不是本次重新生成结果。
+- 门禁：先完成人工关键词 PDF 审计并让 `validate --golden` 0 ERROR；之后才可
+  `generate` 并运行 `pnpm eval:finance-golden`（deterministic 档）。
+  `answerCorrectness` 偏低属 stub 预期，非映射 bug。

@@ -1,4 +1,5 @@
 import type {
+  KeywordDiagnostic,
   KeywordReachabilityResult,
   PdfEvidenceDocument
 } from "./types.js";
@@ -10,7 +11,7 @@ export interface KeywordMatch {
   occurrences: number;
 }
 
-export type { KeywordReachabilityResult };
+export type { KeywordDiagnostic, KeywordReachabilityResult };
 
 /** 一组关键词的源文档可达性结果。 */
 export interface KeywordValidationResult {

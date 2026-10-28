@@ -15,6 +15,14 @@
 7. **来源引用可校验**：`evidence` 的 `ticker / report_type / period` 三元组必须与 `manifest.jsonl` 中至少一条记录精确匹配，不允许回退到同公司其他报告期；evidence 非空且每条来源 PDF 必须可读取、可解析。`file_path` 是 manifest 的唯一文档身份，同一语义三元组可以对应 A/H 等不同变体；此时无选择器的 evidence 必须报结构化歧义，作者需填写 `document_file_path`。
 8. **作者集完整性**：`evidence.section` 不得残留 `（待补：…）` / `（候选：…）` 标记；`golden.jsonl` 每行一个对象、ID 唯一、文件至少一条记录。任何 ERROR 都会阻止 promote / generate。
 
+> **当前状态：作者侧阻塞，未完成重新生成。** 以真实语料运行
+> `validate --golden --json` 时，committed 作者集有 35 个 `expected_keywords`
+> 不可达，分布在 13 个非 negative case 中的 12 个。它们是人工/历史关键词与真实 PDF
+> 原文不一致的作者问题，不是可以从 `gold_answer` 自动修补的数据；必须由人
+> 逐项审计 PDF 后修订或删除关键词。该失败会阻止 `generate` 覆盖
+> `datasets/finance/rag-golden-v1.json`，现有文件是保留的历史产物，应视为
+> `stale/blocked`，不得表述为已完整重新生成。
+
 ## 二、两级评估约定
 
 - **一级·解析准确率**：针对 `ocr_required: true` 的图片源题目，比对解析器 OCR 文本与人工 `quote`，衡量"有没有把图片里的表抽出来"。这是管线的"金丝雀"。
@@ -69,6 +77,10 @@
 - 每个关键词独立扫描本题全部 evidence PDF；至少命中一份即可，报告会保留命中的 evidence 索引。
 - 空数组、空白字符串、非字符串、来源中不可达的关键词均为 ERROR。negative 题不要求该字段；如填写，仍须可解析为字符串数组。
 - `expected_keywords` 直接供 `generate` 使用，生成器不得自行从答案文本推导关键词。
+- 校验报告必须保留每个关键词的原始值，并给出 `caseId`、`caseType`、
+  `keywordIndex`、逐 evidence 的 `documentFilePath`/命中状态；稳定汇总
+  `keywordSummary` 按总数、可达数、不可达数以及 case/type 分组。不能只返回
+  泛化的 `generation_failed`，也不能从 message 文本反推归属。
 
 ### `gold_answer_table` 规则
 
@@ -107,7 +119,9 @@
 ## 七、从作者集到评测器的映射（生成链路）
 
 - 作者集（`golden.jsonl`）是人工标注的单一事实来源；**不要把真值直接写成评测器的 `rag-golden-v1.json`**，统一由生成器映射。
-- 生成器：`pnpm golden-studio generate`，产出 `datasets/finance/rag-golden-v1.json`。
+- 生成器：`pnpm golden-studio generate`，仅在作者集校验 0 ERROR 时产出
+  `datasets/finance/rag-golden-v1.json`。校验失败时既有产物必须保持原字节，
+  CLI/Studio 返回/展示 `blocked` 状态与结构化关键词失败清单。
 - 映射约定（与 `rag-v1.json` 口径对齐）：
   - 每条非 negative case 按 evidence 的 `document_file_path` 或无歧义三元组从 `manifest/manifest.jsonl` 定位真实 PDF，把原始字节以 `{contentEncoding:"base64", contentBase64}` 信封填入 `documents.content`；loader 解码为 `Uint8Array` 后直接进入真实 `ingestDocument`。
   - `source` 与 `fileName` 使用解析出的稳定 `file_path`，`expectedSources` 同步使用该文件身份；同一三元组可区分 A/H 文件。
@@ -115,7 +129,9 @@
   - `latest_by` 时间解析题：生成器按当前 manifest 取同 `ticker/report_type/period` 披露日唯一最晚的一条**重算** `file_path`，避免引到过时/不存在的 PDF；披露日跨变体并列时报结构化歧义，可由 `resolution.variant` 显式消歧。gold_answer 仍是作者集快照值，语料变更须人工重抄（见 `fin-008` 示例）。
   - `negative` 题（语料无此 ticker）映射为 `mode="failure"` + `documents:[]` 占位；deterministic 档当前不执行，留 Step 5。
   - `expected_keywords` 原样映射为评测器的 `expectedKeywords`，不得从 gold prose、表格或表单反推。
-- 校验顺序：先 `pnpm golden-studio validate --golden --json` 校验作者集，再 `pnpm golden-studio generate --json` 生成并跑 `pnpm eval:finance-golden`。
+- 校验顺序：先 `pnpm golden-studio validate --golden --json` 校验作者集，修复
+  全部 ERROR（当前包括上述 35 个真实语料关键词失败）后，才可
+  `pnpm golden-studio generate --json` 并跑 `pnpm eval:finance-golden`。
 - 当前 PDF 解析在 worker 行聚合阶段归一 CJK/数字坏层，保留 `U+3000` 与真实列间隔，并用 `sourceLayer:"char_spaced"` 标记坏层页面。
 - 当前 `table_aware` 切块生成共享 `tableGroupId` 的整表与 summary sibling；命中任一同组 chunk 后会在 rerank 前展开整表，整表 answer/citation 保留完整表文本。
 - 图片型来源由 `source_kind:"image"` + `ocr_required:true` + `page_image_ref` 标记；图片资产按 `<documentId>#page=N` 存入文档级 `PageImageRepository`。`fin-014` 是中微公司 2025 年报第 25 页的页面图片金丝雀，OCR 尚未接入。

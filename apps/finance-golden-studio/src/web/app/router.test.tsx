@@ -151,7 +151,19 @@ describe("App shell routing", () => {
         authored: {
           path: "/workspace/golden.jsonl",
           caseCount: 2,
-          validation: { ok: true, errors: [], warnings: [], keywordResults: [] }
+          validation: {
+            ok: true,
+            errors: [],
+            warnings: [],
+            keywordResults: [],
+            keywordSummary: {
+              total: 0,
+              reachable: 0,
+              unreachable: 0,
+              byCase: [],
+              byType: []
+            }
+          }
         },
         generated: {
           path: "/workspace/rag-golden-v1.json",

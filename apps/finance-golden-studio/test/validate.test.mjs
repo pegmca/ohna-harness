@@ -52,6 +52,16 @@ test("validateDraft 对完整草稿返回可达关键词结果", async () => {
       keyword: DEFAULT_KEYWORD,
       normalizedKeyword: "revenue184,679",
       reachable: true,
+      caseId: "fin-D001",
+      caseType: "numeric_fact",
+      keywordIndex: 0,
+      evidence: [
+        {
+          evidenceIndex: 0,
+          documentFilePath: DEFAULT_PDF_PATH,
+          reachable: true
+        }
+      ],
       evidenceIndexes: [0]
     }
   ]);
@@ -284,9 +294,189 @@ test("关键词不在来源 PDF 文本中时报告 unreachable", async () => {
       normalizedKeyword: "184,679",
       reachable: false,
       reason: "unreachable",
+      caseId: "fin-D001",
+      caseType: "numeric_fact",
+      keywordIndex: 0,
+      evidence: [
+        {
+          evidenceIndex: 0,
+          documentFilePath: DEFAULT_PDF_PATH,
+          reachable: false
+        }
+      ],
       evidenceIndexes: []
     }
   ]);
+});
+
+test("validateGolden 按 case、type 与 evidence 归属关键词并给出稳定汇总", async () => {
+  const record = {
+    ...withoutDraft(makeDraft()),
+    id: "fin-001",
+    expected_keywords: [DEFAULT_KEYWORD, "missing anchor"]
+  };
+  const { config } = makeWorkspace({ golden: [record] });
+  writePdf(
+    config,
+    DEFAULT_PDF_PATH,
+    "Revenue 184,679 exists, but the remaining anchor does not."
+  );
+  const report = await validateGolden(config);
+
+  assert.equal(report.ok, false);
+  assert.deepEqual(report.keywordResults, [
+    {
+      keyword: DEFAULT_KEYWORD,
+      normalizedKeyword: "revenue184,679",
+      reachable: true,
+      caseId: "fin-001",
+      caseType: "numeric_fact",
+      keywordIndex: 0,
+      evidence: [
+        {
+          evidenceIndex: 0,
+          documentFilePath: "raw/cn/000776.SZ/2025Q1.pdf",
+          reachable: true
+        }
+      ],
+      evidenceIndexes: [0]
+    },
+    {
+      keyword: "missing anchor",
+      normalizedKeyword: "missinganchor",
+      reachable: false,
+      reason: "unreachable",
+      caseId: "fin-001",
+      caseType: "numeric_fact",
+      keywordIndex: 1,
+      evidence: [
+        {
+          evidenceIndex: 0,
+          documentFilePath: "raw/cn/000776.SZ/2025Q1.pdf",
+          reachable: false
+        }
+      ],
+      evidenceIndexes: []
+    }
+  ]);
+  assert.deepEqual(report.errors.find((issue) => issue.code === "keyword_unreachable"), {
+    code: "keyword_unreachable",
+    message:
+      "expected_keywords[1] (missing anchor) is not reachable in evidence PDFs.",
+    field: "expected_keywords[1]",
+    line: 1,
+    id: "fin-001"
+  });
+  assert.deepEqual(report.keywordSummary, {
+    total: 2,
+    reachable: 1,
+    unreachable: 1,
+    byCase: [
+      {
+        caseId: "fin-001",
+        caseType: "numeric_fact",
+        total: 2,
+        reachable: 1,
+        unreachable: 1
+      }
+    ],
+    byType: [
+      {
+        caseType: "numeric_fact",
+        cases: 1,
+        total: 2,
+        reachable: 1,
+        unreachable: 1
+      }
+    ]
+  });
+});
+
+test("validateDraftBatch 合并关键词时保留草稿 ID 与题型", async () => {
+  const { config } = makeWorkspace();
+  writePdf(config, DEFAULT_PDF_PATH, DEFAULT_KEYWORD);
+  mkdirSync(join(config.draftRoot, "batch-a"), { recursive: true });
+  writeJsonLines(
+    join(config.draftRoot, "batch-a", "fin-D001.jsonl"),
+    [makeDraft()]
+  );
+  writeJsonLines(
+    join(config.draftRoot, "batch-a", "fin-D002.jsonl"),
+    [
+      {
+        ...makeDraft(),
+        id: "fin-D002",
+        expected_keywords: ["missing anchor"]
+      }
+    ]
+  );
+
+  const { validateDraftBatch } = await import("../src/core/validate-batch.ts");
+  const result = await validateDraftBatch(config, "batch-a");
+  const failed = result.validation.keywordResults.filter((keyword) => !keyword.reachable);
+
+  assert.equal(failed.length, 1);
+  assert.deepEqual(
+    {
+      caseId: failed[0].caseId,
+      caseType: failed[0].caseType,
+      keywordIndex: failed[0].keywordIndex,
+      keyword: failed[0].keyword,
+      evidence: failed[0].evidence
+    },
+    {
+      caseId: "fin-D002",
+      caseType: "numeric_fact",
+      keywordIndex: 0,
+      keyword: "missing anchor",
+      evidence: [
+        {
+          evidenceIndex: 0,
+          documentFilePath: DEFAULT_PDF_PATH,
+          reachable: false
+        }
+      ]
+    }
+  );
+});
+
+test("重复的相同关键词各自保留作者数组索引", async () => {
+  const record = {
+    ...withoutDraft(makeDraft()),
+    id: "fin-001",
+    expected_keywords: [DEFAULT_KEYWORD, "missing anchor", "missing anchor"]
+  };
+  const { config } = makeWorkspace({ golden: [record] });
+  writePdf(config, DEFAULT_PDF_PATH, DEFAULT_KEYWORD);
+
+  const report = await validateGolden(config);
+
+  assert.deepEqual(
+    report.keywordResults.map(
+      ({ keyword, keywordIndex, reachable }) => ({
+        keyword,
+        keywordIndex,
+        reachable
+      })
+    ),
+    [
+      {
+        keyword: DEFAULT_KEYWORD,
+        keywordIndex: 0,
+        reachable: true
+      },
+      {
+        keyword: "missing anchor",
+        keywordIndex: 1,
+        reachable: false
+      },
+      {
+        keyword: "missing anchor",
+        keywordIndex: 2,
+        reachable: false
+      }
+    ]
+  );
 });
 
 test("真实 fin-009 记录仅产生稀疏行 warning", async () => {

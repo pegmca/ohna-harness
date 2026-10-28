@@ -5,6 +5,7 @@ import type {
   DraftScopedValidationResult,
   ValidationReport
 } from "./types.js";
+import { createValidationReport } from "./schema-report.js";
 import { validateDraft } from "./validate.js";
 import type { WorkspaceConfig } from "./workspace.js";
 
@@ -100,5 +101,5 @@ function mergeReports(
     report.warnings.map((candidate) => ({ ...candidate, id }))
   );
   const keywordResults = reports.flatMap(({ report }) => report.keywordResults);
-  return { ok: errors.length === 0, errors, warnings, keywordResults };
+  return createValidationReport({ errors, warnings, keywordResults });
 }

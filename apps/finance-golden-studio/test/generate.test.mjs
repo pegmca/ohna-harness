@@ -6,7 +6,13 @@
  */
 import assert from "node:assert/strict";
 import { after, test } from "node:test";
-import { existsSync, readFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  writeFileSync
+} from "node:fs";
+import { dirname } from "node:path";
 import { generateEvalDataset } from "../src/core/generate.ts";
 import {
   cleanupWorkflowFixtures,
@@ -209,6 +215,37 @@ test("generateEvalDataset 精确来源缺失时失败且不回退到同 ticker �
     JSON.stringify(report.validation.errors)
   );
   assert.equal(existsSync(config.generatedPath), false);
+});
+
+test("generateEvalDataset 校验失败时保留既有生成物字节且标记 blocked", async () => {
+  const config = makeWorkflowConfig();
+  writeManifest(config, [
+    manifestRecord("600000.SH", "annual", "2025", "raw/cn/600000.SH/2025.pdf")
+  ]);
+  writePdf(
+    config,
+    "raw/cn/600000.SH/2025.pdf",
+    "Revenue 100. Only one authored anchor is present. ".repeat(8)
+  );
+  writeGolden(config, [
+    makeGoldenCase({
+      expected_keywords: ["HUMAN-KEYWORD"],
+      id: "fin-001",
+      type: "numeric_fact"
+    })
+  ]);
+  mkdirSync(dirname(config.generatedPath), { recursive: true });
+  const original = '{"datasetVersion":"old","cases":[{"id":"old"}]}\n';
+  writeFileSync(config.generatedPath, original, "utf8");
+
+  const report = await generateEvalDataset(config);
+
+  assert.equal(report.ok, false);
+  assert.equal(report.artifactStatus, "blocked");
+  assert.equal(report.outputPath, undefined);
+  assert.equal(readFileSync(config.generatedPath, "utf8"), original);
+  assert.equal(report.validation.keywordSummary.unreachable, 1);
+  assert.equal(report.validation.keywordResults[0].caseId, "fin-001");
 });
 
 test("generateEvalDataset 将 negative 项映射为 failure 且不伪造来源文档", async () => {

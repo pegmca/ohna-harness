@@ -90,7 +90,8 @@ describe("DraftPage", () => {
         }
       ],
       warnings: [],
-      keywordResults: []
+      keywordResults: [],
+      keywordSummary: emptyKeywordSummary()
     };
     const client = makeClient(invalidReport);
     renderDraftPage(client);
@@ -415,8 +416,52 @@ function validReport(): ValidationReport {
         keyword: "Revenue",
         normalizedKeyword: "revenue",
         reachable: true,
-        evidenceIndexes: [0]
+        evidenceIndexes: [0],
+        caseId: "fin-D001",
+        caseType: "numeric_fact",
+        keywordIndex: 0,
+        evidence: [
+          {
+            evidenceIndex: 0,
+            documentFilePath: "raw/cn/000776.SZ/2025Q1.pdf",
+            reachable: true
+          }
+        ]
       }
-    ]
+    ],
+    keywordSummary: {
+      total: 1,
+      reachable: 1,
+      unreachable: 0,
+      byCase: [
+        {
+          caseId: "fin-D001",
+          caseType: "numeric_fact",
+          total: 1,
+          reachable: 1,
+          unreachable: 0
+        }
+      ],
+      byType: [
+        {
+          caseType: "numeric_fact",
+          cases: 1,
+          total: 1,
+          reachable: 1,
+          unreachable: 0
+        }
+      ]
+    }
+  };
+}
+
+/** 空关键词汇总。 */
+function emptyKeywordSummary() {
+  return {
+    total: 0,
+    reachable: 0,
+    unreachable: 0,
+    byCase: [],
+    byType: []
   };
 }

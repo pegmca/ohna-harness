@@ -9,6 +9,7 @@ import type {
   ValidationReport
 } from "../../../core/types.ts";
 import { useApiClient } from "../../app/context.tsx";
+import { createKeywordValidationSummary } from "../../../core/keyword-report.ts";
 import { ApiError } from "../../shared/api/client.ts";
 import { BasicFields } from "./BasicFields.tsx";
 import { EvidencePane } from "./EvidencePane.tsx";
@@ -419,11 +420,8 @@ function toSnapshot(report: ValidationReport): DraftValidationSnapshot {
     ok: report.ok,
     errors: report.errors,
     warnings: report.warnings,
-    keywordResults: report.keywordResults.map((keyword) => ({
-      keyword: keyword.keyword,
-      reachable: keyword.reachable,
-      evidenceIndexes: keyword.evidenceIndexes
-    }))
+    keywordResults: report.keywordResults,
+    keywordSummary: report.keywordSummary
   };
 }
 
@@ -437,14 +435,19 @@ function fromSnapshot(
   snapshot: DraftValidationSnapshot | undefined
 ): ValidationReport | undefined {
   if (!snapshot) return undefined;
+  const keywordResults = snapshot.keywordResults.map((keyword) => ({
+    ...keyword,
+    normalizedKeyword:
+      keyword.normalizedKeyword ??
+      keyword.keyword.replace(/\s+/gu, "").toLowerCase()
+  }));
   return {
     ok: snapshot.ok,
     errors: snapshot.errors,
     warnings: snapshot.warnings,
-    keywordResults: snapshot.keywordResults.map((keyword) => ({
-      ...keyword,
-      normalizedKeyword: keyword.keyword.replace(/\s+/gu, "").toLowerCase()
-    }))
+    keywordResults,
+    keywordSummary:
+      snapshot.keywordSummary ?? createKeywordValidationSummary(keywordResults)
   };
 }
 

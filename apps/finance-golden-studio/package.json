@@ -1,0 +1,32 @@
+{
+  "name": "@aiagent/finance-golden-studio",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Finance Golden Studio：单用户本地 golden 数据标注工作台",
+  "scripts": {
+    "dev": "vite",
+    "build": "pnpm typecheck && vite build",
+    "mine": "node --import tsx src/cli/main.ts mine",
+    "validate": "node --import tsx src/cli/main.ts validate",
+    "promote": "node --import tsx src/cli/main.ts promote",
+    "generate": "node --import tsx src/cli/main.ts generate",
+    "annotate": "node --import tsx src/cli/main.ts serve",
+    "typecheck": "tsc -p tsconfig.json --pretty false --noEmit && tsc -p tsconfig.web.json --pretty false --noEmit",
+    "test": "node --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "react-router-dom": "^7.18.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "@types/react": "^19.0.2",
+    "@types/react-dom": "^19.0.2",
+    "@vitejs/plugin-react": "^4.3.4",
+    "tsx": "^4.22.4",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.7"
+  }
+}

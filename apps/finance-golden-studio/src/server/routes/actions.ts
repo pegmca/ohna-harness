@@ -1,10 +1,17 @@
 import { generateEvalDataset } from "../../core/generate.js";
 import { promoteBatch } from "../../core/promote.js";
-import { validateDraftBatch } from "../../core/validate-batch.js";
+import {
+  validateDraftBatch,
+  validateDraftDraft
+} from "../../core/validate-batch.js";
 import { validateGolden } from "../../core/validate.js";
 import { readJsonBody } from "../body.js";
 import { HttpError } from "../errors.js";
-import { readActionBody, readBatchSegment } from "../paths.js";
+import {
+  readActionBody,
+  readBatchSegment,
+  readDraftSegment
+} from "../paths.js";
 import type { RequestContext, RouteResult } from "../types.js";
 
 /**
@@ -70,8 +77,19 @@ export async function handleActions(
  */
 async function validateAction(
   context: RequestContext,
-  body: { batch?: string; scope?: "batch" | "golden" }
+  body: {
+    batch?: string;
+    id?: string;
+    scope?: "batch" | "draft" | "golden";
+  }
 ): Promise<unknown> {
+  if (body.scope === "draft") {
+    return validateDraftDraft(
+      context.config,
+      readBatchSegment(body.batch as string),
+      readDraftSegment(body.id as string)
+    );
+  }
   if (body.batch) {
     return validateDraftBatch(context.config, readBatchSegment(body.batch));
   }

@@ -32,7 +32,7 @@ test("validateDraftBatch 枚举并校验草稿后合并报告", async () => {
   ]);
   writePdf(config, "raw/cn/600000.SH/2025.pdf", "Revenue 100");
   const validDraft = {
-    ...makeGoldenCase(),
+    ...makeGoldenCase({ id: "fin-D001" }),
     _draft: { approved: false }
   };
   const invalidDraft = {
@@ -87,6 +87,47 @@ test("validateDraftBatch 对损坏草稿返回结构化 draft_corrupt", async ()
   );
 });
 
+test("validateDraftDraft 只返回当前草稿的问题", async () => {
+  const config = makeWorkflowConfig();
+  writeManifest(config, [
+    {
+      ticker: "600000.SH",
+      report_type: "annual",
+      period: "2025",
+      file_path: "raw/cn/600000.SH/2025.pdf"
+    }
+  ]);
+  writePdf(config, "raw/cn/600000.SH/2025.pdf", "Revenue 100");
+  const validDraft = {
+    ...makeGoldenCase({ id: "fin-D001" }),
+    _draft: { approved: false }
+  };
+  const invalidDraft = {
+    ...makeGoldenCase({ id: "fin-D002", expected_keywords: [] }),
+    _draft: { approved: false }
+  };
+  await writeDrafts(config, "scoped", [validDraft, invalidDraft]);
+  const { validateDraftDraft } = await import("../src/core/validate-batch.ts");
+
+  const validResult = await validateDraftDraft(config, "scoped", "fin-D001");
+  const invalidResult = await validateDraftDraft(config, "scoped", "fin-D002");
+
+  assert.deepEqual(validResult, {
+    batch: "scoped",
+    id: "fin-D001",
+    validation: validResult.validation
+  });
+  assert.equal(validResult.validation.ok, true);
+  assert.deepEqual(validResult.validation.errors, []);
+  assert.equal(invalidResult.validation.ok, false);
+  assert.deepEqual(
+    invalidResult.validation.errors.map((issue) => issue.code),
+    ["expected_keywords_required"]
+  );
+  assert.equal(invalidResult.batch, "scoped");
+  assert.equal(invalidResult.id, "fin-D002");
+});
+
 /**
  * 将草稿写入隔离的批次目录。
  *
@@ -102,7 +143,7 @@ async function writeDrafts(config, batch, drafts) {
     drafts.map((draft) =>
       writeFile(
         join(batchDir, `${draft.id}.jsonl`),
-        `${JSON.stringify(draft)}\n`,
+        JSON.stringify(draft) + "\n",
         "utf8"
       )
     )

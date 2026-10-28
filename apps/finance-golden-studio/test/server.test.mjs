@@ -273,6 +273,36 @@ test("validate 动作委托核心并返回完整校验报告", async () => {
   assert.ok(Array.isArray(body.data.validation.keywordResults));
 });
 
+test("validate 动作支持当前草稿范围且不返回其他草稿的问题", async () => {
+  await request("/api/batches/scoped-actions/drafts/fin-D017", {
+    method: "PUT",
+    body: JSON.stringify({ draft: makeDraft("fin-D017") })
+  });
+  await request("/api/batches/scoped-actions/drafts/fin-D018", {
+    method: "PUT",
+    body: JSON.stringify({
+      draft: { ...makeDraft("fin-D018"), expected_keywords: [] }
+    })
+  });
+
+  const response = await request("/api/actions/validate", {
+    method: "POST",
+    body: JSON.stringify({
+      confirm: true,
+      scope: "draft",
+      batch: "scoped-actions",
+      id: "fin-D017"
+    })
+  });
+  const body = await response.json();
+
+  assertApiSuccess(response, body);
+  assert.equal(body.data.batch, "scoped-actions");
+  assert.equal(body.data.id, "fin-D017");
+  assert.equal(body.data.validation.ok, true);
+  assert.deepEqual(body.data.validation.errors, []);
+});
+
 test("promote 动作经确认后只发布核心判定可发布的草稿", async () => {
   const approvedDraft = {
     ...makeDraft("fin-D004"),

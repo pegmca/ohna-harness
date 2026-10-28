@@ -1,6 +1,7 @@
 import type {
   BatchSummary,
   DraftBatchValidationResult,
+  DraftScopedValidationResult,
   DraftSummary,
   GoldenDraft,
   PdfEvidenceDocument
@@ -29,10 +30,17 @@ export interface RequestOptions {
   signal?: AbortSignal;
 }
 
+/** 客户端构造选项。 */
+export interface GoldenStudioClientOptions {
+  /** 无显式 signal 时的稳定请求超时毫秒数。 */
+  requestTimeoutMs?: number;
+}
+
 export type {
   BatchSummary,
   DraftSummary,
   GoldenDraft,
+  DraftScopedValidationResult,
   DraftBatchValidationResult,
   PdfEvidenceDocument
 };

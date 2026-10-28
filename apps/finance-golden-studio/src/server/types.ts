@@ -20,7 +20,8 @@ export interface RequestContext {
 export interface ActionBody {
   confirm: true;
   batch?: string;
-  scope?: "batch" | "golden";
+  id?: string;
+  scope?: "batch" | "draft" | "golden";
 }
 
 /** 单个路由处理结果；undefined 表示该路由未匹配。 */

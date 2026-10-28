@@ -134,7 +134,7 @@ describe("DraftPage", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: "Approve draft" }));
 
-    await waitFor(() => expect(client.validateBatch).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(client.validateDraft).toHaveBeenCalledTimes(1));
     await waitFor(() =>
       expect(
         client.saveDraft.mock.calls.some(
@@ -144,6 +144,35 @@ describe("DraftPage", () => {
         )
       ).toBe(true)
     );
+  });
+
+  test("does not save or approve a dirty draft", async () => {
+    const client = makeClient();
+    renderDraftPage(client);
+
+    fireEvent.change(await screen.findByLabelText("Query"), {
+      target: { value: "Updated question?" }
+    });
+    const approve = screen.getByRole("button", { name: "Approve draft" });
+
+    expect(approve).toBeDisabled();
+    expect(screen.getByText("Save changes before approving.")).toBeInTheDocument();
+    fireEvent.click(approve);
+    await waitFor(() => expect(client.saveDraft).not.toHaveBeenCalled());
+    expect(client.validateDraft).not.toHaveBeenCalled();
+  });
+
+  test("validates the current draft, not the whole batch", async () => {
+    const client = makeClient();
+    renderDraftPage(client);
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Save and validate" })
+    );
+
+    await screen.findByText("Draft saved and validated.");
+    expect(client.validateDraft).toHaveBeenCalledWith("batch-01", "fin-D001");
+    expect(client.validateBatch).not.toHaveBeenCalled();
   });
 
   test("edits table rows and keeps long cell values available without clipping", async () => {
@@ -210,6 +239,7 @@ describe("DraftPage", () => {
 interface TestClient extends GoldenStudioClient {
   readEvidence: Mock<GoldenStudioClient["readEvidence"]>;
   validateBatch: Mock<GoldenStudioClient["validateBatch"]>;
+  validateDraft: Mock<GoldenStudioClient["validateDraft"]>;
   saveDraft: Mock<GoldenStudioClient["saveDraft"]>;
 }
 
@@ -240,6 +270,11 @@ function makeClient(
     validateBatch: vi.fn(async () => ({
       batch: "batch-01",
       draftCount: 1,
+      validation
+    })),
+    validateDraft: vi.fn(async () => ({
+      batch: "batch-01",
+      id: "fin-D001",
       validation
     }))
   } as unknown as TestClient;

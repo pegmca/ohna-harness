@@ -167,4 +167,73 @@ describe("createGoldenStudioClient", () => {
       batch: "batch-01"
     }));
   });
+
+  test("validateDraft POSTs the current draft scope and returns a draft-scoped report", async () => {
+    const result = {
+      batch: "batch-01",
+      id: "fin-D001",
+      validation: {
+        ok: false,
+        errors: [{
+          code: "expected_keywords_required",
+          field: "expected_keywords",
+          message: "Required"
+        }],
+        warnings: [],
+        keywordResults: []
+      }
+    };
+    const fetch = vi.fn(async () => jsonResponse({ ok: true, data: result }));
+    vi.stubGlobal("fetch", fetch);
+
+    const client = createGoldenStudioClient("http://127.0.0.1:4318/");
+    assert.deepEqual(await client.validateDraft("batch-01", "fin-D001"), result);
+
+    const [url, init] = fetch.mock.calls[0] as unknown as [URL, RequestInit];
+    assert.equal(url.toString(), "http://127.0.0.1:4318/api/actions/validate");
+    assert.equal(init.method, "POST");
+    assert.deepEqual(JSON.parse(String(init.body)), {
+      confirm: true,
+      scope: "draft",
+      batch: "batch-01",
+      id: "fin-D001"
+    });
+  });
+
+  test("requests use an injectable stable timeout signal", async () => {
+    let requestSignal: AbortSignal | null | undefined;
+    vi.stubGlobal("fetch", vi.fn(async (_url: URL | RequestInfo, init?: RequestInit) => {
+      requestSignal = init?.signal;
+      assert.ok(requestSignal instanceof AbortSignal);
+      return new Promise((_resolve, reject) => {
+        requestSignal?.addEventListener("abort", () => reject(new Error("aborted")));
+      });
+    }));
+
+    const client = createGoldenStudioClient("http://127.0.0.1:4318/", {
+      requestTimeoutMs: 10
+    });
+    const error = await client.listBatches().catch((value) => value);
+
+    assert.ok(requestSignal?.aborted);
+    assert.equal((error as { code?: string }).code, "request_timeout");
+  });
+
+  test("hanging requests become structured timeout errors", async () => {
+    vi.stubGlobal("fetch", vi.fn((_url: URL | RequestInfo, init?: RequestInit) => {
+      const signal = init?.signal;
+      assert.ok(signal instanceof AbortSignal);
+      return new Promise((_resolve, reject) => {
+        signal.addEventListener("abort", () => reject(new Error("request aborted")));
+      });
+    }));
+
+    const client = createGoldenStudioClient("/", { requestTimeoutMs: 10 });
+    const error = await client.validateBatch("batch-01").catch((value) => value);
+
+    assert.equal(error.name, "ApiError");
+    assert.equal((error as { code?: string }).code, "request_timeout");
+    assert.equal((error as { status?: number }).status, 0);
+    assert.match(error.message, /timed out/i);
+  });
 });

@@ -74,8 +74,9 @@ export function readDraftBody(body: Record<string, unknown>): GoldenDraft {
  */
 export function readActionBody(body: Record<string, unknown>): {
   confirm: true;
-  scope?: "batch" | "golden";
+  scope?: "batch" | "draft" | "golden";
   batch?: string;
+  id?: string;
 } {
   if (body.confirm !== true) {
     throw new HttpError(
@@ -93,9 +94,10 @@ export function readActionBody(body: Record<string, unknown>): {
   if (
     body.scope !== undefined &&
     body.scope !== "batch" &&
+    body.scope !== "draft" &&
     body.scope !== "golden"
   ) {
-    throw new HttpError(400, "invalid_request", "scope must be batch or golden.", {
+    throw new HttpError(400, "invalid_request", "scope must be batch, draft, or golden.", {
       field: "scope"
     });
   }
@@ -107,10 +109,32 @@ export function readActionBody(body: Record<string, unknown>): {
       { fields: ["scope", "batch"] }
     );
   }
+  if (body.id !== undefined && typeof body.id !== "string") {
+    throw new HttpError(400, "invalid_request", "id must be a string.", {
+      field: "id"
+    });
+  }
+  if (body.scope === "draft" && body.id === undefined) {
+    throw new HttpError(
+      400,
+      "invalid_request",
+      "id is required when scope is draft.",
+      { field: "id" }
+    );
+  }
+  if (body.scope === "draft" && body.batch === undefined) {
+    throw new HttpError(
+      400,
+      "invalid_request",
+      "batch is required when scope is draft.",
+      { field: "batch" }
+    );
+  }
   return {
     confirm: true,
     ...(body.scope === undefined ? {} : { scope: body.scope }),
-    ...(body.batch === undefined ? {} : { batch: body.batch })
+    ...(body.batch === undefined ? {} : { batch: body.batch }),
+    ...(body.id === undefined ? {} : { id: body.id })
   };
 }
 

@@ -2,9 +2,11 @@ import type {
   ApiEnvelope,
   BatchSummary,
   DraftBatchValidationResult,
+  DraftScopedValidationResult,
   DraftSummary,
   GoldenDraft,
   PdfEvidenceDocument,
+  GoldenStudioClientOptions,
   RequestOptions
 } from "./types.js";
 
@@ -64,6 +66,12 @@ export interface GoldenStudioClient {
     batch: string,
     options?: RequestOptions
   ): Promise<DraftBatchValidationResult>;
+  /** 校验当前草稿，并返回无跨草稿归因的权威报告。 */
+  validateDraft(
+    batch: string,
+    id: string,
+    options?: RequestOptions
+  ): Promise<DraftScopedValidationResult>;
 }
 
 /**
@@ -72,10 +80,15 @@ export interface GoldenStudioClient {
  * baseUrl 默认 `/`（同源），也允许指向独立 server 以便本地联调与测试注入。
  *
  * @param baseUrl 客户端请求的基础 URL。
+ * @param options 客户端构造选项。
  * @returns 带统一信封解析与结构化错误的客户端。
  */
-export function createGoldenStudioClient(baseUrl: string = "/"): GoldenStudioClient {
+export function createGoldenStudioClient(
+  baseUrl: string = "/",
+  options: GoldenStudioClientOptions = {}
+): GoldenStudioClient {
   const base = resolveBaseUrl(baseUrl);
+  const requestTimeoutMs = options.requestTimeoutMs ?? 15_000;
 
   /**
    * 发起请求并解包统一信封。
@@ -87,10 +100,19 @@ export function createGoldenStudioClient(baseUrl: string = "/"): GoldenStudioCli
    * @throws {ApiError} 传输失败、响应格式非法或 server 返回错误信封。
    */
   async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+    const signal = init.signal ?? AbortSignal.timeout(requestTimeoutMs);
     let response: Response;
     try {
-      response = await fetch(new URL(path, base), init);
+      response = await fetch(new URL(path, base), { ...init, signal });
     } catch (error) {
+      if (signal.aborted && isTimeoutAbort(signal)) {
+        throw new ApiError(
+          "request_timeout",
+          0,
+          `Request for ${path} timed out after ${requestTimeoutMs}ms.`,
+          { requestTimeoutMs }
+        );
+      }
       const message = error instanceof Error ? error.message : "Network request failed.";
       throw new ApiError("network_error", 0, message, {});
     }
@@ -170,8 +192,31 @@ export function createGoldenStudioClient(baseUrl: string = "/"): GoldenStudioCli
           batch
         }),
         ...options
+      }),
+    validateDraft: (batch, id, requestOptions) =>
+      request<DraftScopedValidationResult>("api/actions/validate", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          confirm: true,
+          scope: "draft",
+          batch,
+          id
+        }),
+        ...requestOptions
       })
   };
+}
+
+/**
+ * 判断取消原因是否为稳定请求超时。
+ *
+ * @param signal 当前请求信号。
+ * @returns TimeoutError 时为 true。
+ */
+function isTimeoutAbort(signal: AbortSignal): boolean {
+  const reason = signal.reason;
+  return reason instanceof Error && reason.name === "TimeoutError";
 }
 
 /**

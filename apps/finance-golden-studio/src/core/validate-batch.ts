@@ -2,12 +2,13 @@ import { listDrafts, readDraft } from "./drafts.js";
 import { GoldenStudioError } from "./errors.js";
 import type {
   DraftBatchValidationResult,
+  DraftScopedValidationResult,
   ValidationReport
 } from "./types.js";
 import { validateDraft } from "./validate.js";
 import type { WorkspaceConfig } from "./workspace.js";
 
-export type { DraftBatchValidationResult };
+export type { DraftBatchValidationResult, DraftScopedValidationResult };
 
 /**
  * 枚举批次草稿、逐条读取校验并合并为批次报告。
@@ -47,6 +48,27 @@ export async function validateDraftBatch(
     batch,
     draftCount: summaries.length,
     validation: mergeReports(reports)
+  };
+}
+
+/**
+ * 校验批次中的当前草稿，为 Web 审批提供无跨草稿归因的权威报告。
+ *
+ * @param config 当前工作区配置。
+ * @param batch 批次名。
+ * @param id 当前草稿 ID。
+ * @returns 仅包含当前草稿问题的校验信封。
+ */
+export async function validateDraftDraft(
+  config: WorkspaceConfig,
+  batch: string,
+  id: string
+): Promise<DraftScopedValidationResult> {
+  const draft = await readDraft(config, batch, id);
+  return {
+    batch,
+    id,
+    validation: await validateDraft(config, draft)
   };
 }
 

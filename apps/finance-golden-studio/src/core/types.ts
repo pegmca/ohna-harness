@@ -90,6 +90,13 @@ export interface DraftBatchValidationResult {
   validation: ValidationReport;
 }
 
+/** 当前草稿范围的校验结果。 */
+export interface DraftScopedValidationResult {
+  batch: string;
+  id: string;
+  validation: ValidationReport;
+}
+
 /** 从解析 block 投影的证据元数据。 */
 export type PdfEvidenceMetadata = Record<
   string,

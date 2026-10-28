@@ -174,7 +174,7 @@ export function DraftPage() {
     setPending("validate");
     setActionError("");
     try {
-      const result = await client.validateBatch(batch);
+      const result = await client.validateDraft(batch, id);
       const nextReport = asReport(result);
       setReport(nextReport);
       setStatusMessage(
@@ -218,6 +218,10 @@ export function DraftPage() {
   };
 
   const approve = async (): Promise<void> => {
+    if (dirty) {
+      setActionError("Save changes before approving.");
+      return;
+    }
     const saved = await persist(draft, "validate");
     if (!saved) return;
     const nextReport = await validate();
@@ -311,6 +315,9 @@ export function DraftPage() {
         <div className="inline-alert" role="alert">
           {actionError}
         </div>
+      ) : null}
+      {dirty && !pending ? (
+        <p className="muted-text">Save changes before approving.</p>
       ) : null}
       {statusMessage ? (
         <p aria-live="polite" className="status-banner">

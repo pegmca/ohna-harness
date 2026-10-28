@@ -81,8 +81,17 @@ export interface GoldenLatestByResolution {
   coverage_note?: string;
 }
 
-/** 反例题目的语料缺席规则。 */
-export interface GoldenTickerAbsentResolution {
+/** 反例题目的语料缺席规则；现存 fin-012 只记录 scope 规则。 */
+export interface GoldenScopedTickerAbsentResolution {
+  type: "ticker_absent";
+  scope: string;
+  expected_report: string;
+  note?: string;
+  ticker?: never;
+}
+
+/** 反例题目的直接 ticker 规则，保留显式 ticker 记录形态。 */
+export interface GoldenDirectTickerAbsentResolution {
   type: "ticker_absent";
   ticker: string;
   scope?: string;
@@ -93,7 +102,8 @@ export interface GoldenTickerAbsentResolution {
 /** 草稿可携带的文档解析规则。 */
 export type GoldenResolution =
   | GoldenLatestByResolution
-  | GoldenTickerAbsentResolution;
+  | GoldenScopedTickerAbsentResolution
+  | GoldenDirectTickerAbsentResolution;
 
 /** 草稿校验结果的轻量快照，由后续校验模块填充。 */
 export interface DraftValidationSnapshot {

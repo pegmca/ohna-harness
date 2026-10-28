@@ -59,6 +59,30 @@ test("保存草稿后可读取，并将批次、保存时间和文件路径写�
   assert.deepEqual(await readDraft(config, "batch-01", "fin-D001"), result.draft);
 });
 
+test("fin-012 的无 ticker_absent resolution 可保存并完整读回", async () => {
+  const config = makeConfig();
+  const resolution = {
+    type: "ticker_absent",
+    scope: "ticker=002340.SZ",
+    expected_report: "（无）",
+    note: "语料 manifest.jsonl 中无 002340.SZ 任何记录，故无源文档可检索"
+  };
+  const draft = {
+    ...makeDraft("fin-012"),
+    type: "negative",
+    answer_type: "text",
+    evidence: [],
+    is_negative: true,
+    resolution,
+    _draft: {}
+  };
+
+  await saveDraft(config, "batch-fin-012", "fin-012", draft);
+  const loaded = await readDraft(config, "batch-fin-012", "fin-012");
+
+  assert.deepEqual(loaded.resolution, resolution);
+});
+
 test("首次保存可在 draftRoot 尚不存在时创建批次目录", async () => {
   const config = makeConfig();
   rmSync(config.draftRoot, { recursive: true, force: true });

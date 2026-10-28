@@ -13,13 +13,12 @@ const latestBy: GoldenResolution = {
   coverage_note: "语料仅有 2024、2025 两份年报，覆盖 2022–2025"
 };
 
-/** 现存 ticker_absent 记录可携带完整边界说明。 */
+/** fin-012 的现存 ticker_absent 记录只带规则说明，不带顶层 ticker。 */
 const tickerAbsent: GoldenResolution = {
   type: "ticker_absent",
-  ticker: "002340.SZ",
   scope: "ticker=002340.SZ",
   expected_report: "（无）",
-  note: "语料 manifest.jsonl 中无 002340.SZ 任何记录"
+  note: "语料 manifest.jsonl 中无 002340.SZ 任何记录，故无源文档可检索"
 };
 
 void [latestBy, tickerAbsent];

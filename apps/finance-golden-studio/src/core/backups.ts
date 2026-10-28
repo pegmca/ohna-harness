@@ -27,7 +27,7 @@ export async function backupFile(
     ? resolve(sourcePath)
     : resolve(config.workspaceRoot, sourcePath);
   assertContainedPath(config.workspaceRoot, source);
-  assertContainedPath(config.backupRoot, config.backupRoot);
+  assertContainedPath(config.workspaceRoot, config.backupRoot);
   await mkdir(config.backupRoot, { recursive: true });
 
   const safeLabel = normalizeLabel(label);
@@ -38,7 +38,7 @@ export async function backupFile(
     config.backupRoot,
     `${stem}.${safeLabel}.${timestamp}.${randomUUID()}${extension}`
   );
-  assertContainedPath(config.backupRoot, destination);
+  assertContainedPath(config.workspaceRoot, destination);
 
   try {
     await copyFile(source, destination, 1);

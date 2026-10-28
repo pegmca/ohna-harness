@@ -62,7 +62,7 @@ export async function listDrafts(
 ): Promise<DraftSummary[]> {
   validateBatchName(batch);
   const batchDir = join(config.draftRoot, batch);
-  assertContainedPath(config.draftRoot, batchDir);
+  assertContainedPath(config.workspaceRoot, batchDir);
   const entries = await readDirectory(batchDir);
   const summaries: DraftSummary[] = [];
 
@@ -168,6 +168,9 @@ export async function readDraft(
       `Draft id must match its filename (received ${String(parsed.id)})`
     );
   }
+  if (!isRecord(parsed._draft)) {
+    throw corruptDraftError(batch, id, filePath, "Draft must contain _draft state");
+  }
 
   return parsed as unknown as GoldenDraft;
 }
@@ -211,7 +214,7 @@ export async function saveDraft(
     }
   };
   await mkdir(join(config.draftRoot, batch), { recursive: true });
-  assertContainedPath(config.draftRoot, filePath);
+  assertContainedPath(config.workspaceRoot, filePath);
   await writeFileAtomic(filePath, `${JSON.stringify(normalized)}\n`);
   return { draft: normalized, filePath };
 }
@@ -228,7 +231,7 @@ function draftFilePath(config: WorkspaceConfig, batch: string, id: string): stri
   validateBatchName(batch);
   validateDraftId(id);
   const filePath = join(config.draftRoot, batch, `${id}.jsonl`);
-  assertContainedPath(config.draftRoot, filePath);
+  assertContainedPath(config.workspaceRoot, filePath);
   return filePath;
 }
 

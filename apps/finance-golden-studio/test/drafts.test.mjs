@@ -59,6 +59,21 @@ test("保存草稿后可读取，并将批次、保存时间和文件路径写�
   assert.deepEqual(await readDraft(config, "batch-01", "fin-D001"), result.draft);
 });
 
+test("首次保存可在 draftRoot 尚不存在时创建批次目录", async () => {
+  const config = makeConfig();
+  rmSync(config.draftRoot, { recursive: true, force: true });
+
+  await saveDraft(config, "first-batch", "fin-D000", {
+    ...makeDraft("fin-D000"),
+    _draft: {}
+  });
+
+  assert.equal(
+    existsSync(join(config.draftRoot, "first-batch", "fin-D000.jsonl")),
+    true
+  );
+});
+
 test("草稿列表返回轻量摘要，批次列表统计草稿、待审核、已审核与损坏数量", async () => {
   const config = makeConfig();
   await saveDraft(config, "batch-02", "fin-D002", {
@@ -163,6 +178,18 @@ test("草稿路径不匹配或缺少单个 JSON 对象时按损坏文件报告",
   assert.equal(existsSync(multiple), true);
 });
 
+test("缺少本地 _draft 状态的 JSON 对象按损坏草稿报告", async () => {
+  const config = makeConfig();
+  const filePath = join(config.draftRoot, "batch-04b", "fin-D008.jsonl");
+  const { _draft: ignored, ...withoutState } = makeDraft("fin-D008");
+  mkdirSync(dirname(filePath), { recursive: true });
+  writeFileSync(filePath, `${JSON.stringify(withoutState)}\n`, "utf8");
+
+  assert.equal(ignored, undefined);
+  await assert.rejects(readDraft(config, "batch-04b", "fin-D008"), hasCode("draft_corrupt"));
+  assert.equal(existsSync(filePath), true);
+});
+
 test("原子替换在写入失败时保留原文件并清理临时文件", async (t) => {
   if (typeof process.getuid === "function" && process.getuid() === 0) {
     t.skip("root 用户不受目录写权限限制");
@@ -208,6 +235,16 @@ test("同一毫秒内相同标签的备份文件名仍唯一且内容完整", as
   assert.equal(dirname(second), config.backupRoot);
   assert.equal(readFileSync(first, "utf8"), '{"id":"fin-001"}\n');
   assert.equal(readFileSync(second, "utf8"), '{"id":"fin-001"}\n');
+});
+
+test("首次备份可在 backupRoot 尚不存在时创建目录", async () => {
+  const config = makeConfig();
+  rmSync(config.backupRoot, { recursive: true, force: true });
+
+  const backupPath = await backupFile(config, config.goldenPath, "first-backup");
+
+  assert.equal(dirname(backupPath), config.backupRoot);
+  assert.equal(existsSync(backupPath), true);
 });
 
 /**

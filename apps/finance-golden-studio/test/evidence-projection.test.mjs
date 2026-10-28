@@ -5,6 +5,7 @@
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { buildPdfBlocks } from "@aiagent/parsing";
 import { projectPdfEvidence } from "../src/core/evidence.ts";
 
 test("projectPdfEvidence 生成有序页码并逐项复制 block 元数据", () => {
@@ -47,4 +48,21 @@ test("projectPdfEvidence 生成有序页码并逐项复制 block 元数据", () 
   });
   assert.notEqual(projectPdfEvidence("report.pdf", blocks).blocks[0], blocks[0]);
   assert.notEqual(projectPdfEvidence("report.pdf", blocks).blocks[0].metadata, blocks[0].metadata);
+});
+
+test("projectPdfEvidence 保留真实解析 block 的 char-spaced sourceLayer", () => {
+  const parsedBlocks = buildPdfBlocks([
+    {
+      text: "华 美 公 司　子 公 司\n213,252.00  462,419.73",
+      sourceLayer: "char_spaced"
+    }
+  ]);
+
+  const evidence = projectPdfEvidence("char-spaced.pdf", parsedBlocks);
+  const tableBlock = evidence.blocks.find((block) => block.metadata.isTableRow === true);
+
+  assert.ok(tableBlock, "应投影解析器生成的字符间距表格行");
+  assert.equal(tableBlock.metadata.sourceLayer, "char_spaced");
+  assert.equal(tableBlock.metadata.tableColumnCount, 2);
+  assert.ok(evidence.blocks.every((block) => block.metadata.sourceLayer === "char_spaced"));
 });

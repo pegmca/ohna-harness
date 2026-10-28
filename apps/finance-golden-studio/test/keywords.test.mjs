@@ -100,15 +100,32 @@ test("validateKeywordReachability 对每个关键词扫描全部证据并保留�
 
   assert.deepEqual(result, {
     ok: false,
+    reason: "unreachable",
     keywordResults: [
-      { keyword: "华美公司", reachable: true, evidenceIndexes: [0, 1] },
-      { keyword: "462,419.73", reachable: true, evidenceIndexes: [0] },
-      { keyword: "不存在关键词", reachable: false, evidenceIndexes: [] }
+      {
+        keyword: "华美公司",
+        normalizedKeyword: "华美公司",
+        reachable: true,
+        evidenceIndexes: [0, 1]
+      },
+      {
+        keyword: "462,419.73",
+        normalizedKeyword: "462,419.73",
+        reachable: true,
+        evidenceIndexes: [0]
+      },
+      {
+        keyword: "不存在关键词",
+        normalizedKeyword: "不存在关键词",
+        reachable: false,
+        reason: "unreachable",
+        evidenceIndexes: []
+      }
     ]
   });
 });
 
-test("validateKeywordReachability 在无关键词或全部可达时返回 ok", () => {
+test("validateKeywordReachability 区分未提供关键词、空关键词与不可达关键词", () => {
   const evidence = [
     {
       filePath: "601006.SH/annual/2025.pdf",
@@ -126,13 +143,52 @@ test("validateKeywordReachability 在无关键词或全部可达时返回 ok", (
   ];
 
   assert.deepEqual(validateKeywordReachability(evidence, []), {
-    ok: true,
+    ok: false,
+    reason: "missing",
     keywordResults: []
+  });
+  assert.deepEqual(validateKeywordReachability(evidence, ["", "董事会秘书张利荣"]), {
+    ok: false,
+    reason: "empty",
+    keywordResults: [
+      {
+        keyword: "",
+        normalizedKeyword: "",
+        reachable: false,
+        reason: "empty",
+        evidenceIndexes: []
+      },
+      {
+        keyword: "董事会秘书张利荣",
+        normalizedKeyword: "董事会秘书张利荣",
+        reachable: true,
+        evidenceIndexes: [0]
+      }
+    ]
   });
   assert.deepEqual(validateKeywordReachability(evidence, ["董事会秘书张利荣"]), {
     ok: true,
+    reason: "reachable",
     keywordResults: [
-      { keyword: "董事会秘书张利荣", reachable: true, evidenceIndexes: [0] }
+      {
+        keyword: "董事会秘书张利荣",
+        normalizedKeyword: "董事会秘书张利荣",
+        reachable: true,
+        evidenceIndexes: [0]
+      }
+    ]
+  });
+  assert.deepEqual(validateKeywordReachability(evidence, ["不存在关键词"]), {
+    ok: false,
+    reason: "unreachable",
+    keywordResults: [
+      {
+        keyword: "不存在关键词",
+        normalizedKeyword: "不存在关键词",
+        reachable: false,
+        reason: "unreachable",
+        evidenceIndexes: []
+      }
     ]
   });
 });
@@ -159,6 +215,7 @@ test("validateKeywordReachability 不把换行差异之外的内容归一掉", (
     [
       {
         keyword: "营业收入27,655,202,065.43",
+        normalizedKeyword: "营业收入27,655,202,065.43",
         reachable: true,
         evidenceIndexes: [0]
       }

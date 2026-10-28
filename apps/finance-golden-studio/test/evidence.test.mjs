@@ -139,7 +139,7 @@ test("readPdfEvidence 投影真实 PDF 的页码、行号、文本与完整元�
   );
 });
 
-test("readPdfEvidence 保留表格行、列数与 sourceLayer 元数据", async () => {
+test("readPdfEvidence 保留真实 PDF 的表格行与列数元数据", async () => {
   const roots = makeWorkspace();
   const filePath = "600111.SH/annual/2025.pdf";
   mkdirSync(join(roots.corpusRoot, "600111.SH", "annual"), { recursive: true });

@@ -10,13 +10,16 @@ export interface KeywordMatch {
 /** 单个关键词是否可达及命中的证据文档索引。 */
 export interface KeywordReachabilityResult {
   keyword: string;
+  normalizedKeyword: string;
   reachable: boolean;
+  reason?: "empty" | "unreachable";
   evidenceIndexes: number[];
 }
 
 /** 一组关键词的源文档可达性结果。 */
 export interface KeywordValidationResult {
   ok: boolean;
+  reason: "reachable" | "missing" | "empty" | "unreachable";
   keywordResults: KeywordReachabilityResult[];
 }
 
@@ -77,7 +80,26 @@ export function validateKeywordReachability(
   evidence: readonly PdfEvidenceDocument[],
   keywords: readonly string[]
 ): KeywordValidationResult {
+  if (keywords.length === 0) {
+    return {
+      ok: false,
+      reason: "missing",
+      keywordResults: []
+    };
+  }
+
   const keywordResults = keywords.map((keyword) => {
+    const match = findKeywordMatches("", [keyword])[0];
+    if (!match) {
+      return {
+        keyword,
+        normalizedKeyword: "",
+        reachable: false,
+        reason: "empty" as const,
+        evidenceIndexes: []
+      };
+    }
+
     const evidenceIndexes = evidence.flatMap((document, index) => {
       const parsedText = document.blocks.map((block) => block.text).join("\n");
       return findKeywordMatches(parsedText, [keyword])[0]?.occurrences
@@ -87,13 +109,22 @@ export function validateKeywordReachability(
 
     return {
       keyword,
+      normalizedKeyword: match.normalizedKeyword,
       reachable: evidenceIndexes.length > 0,
+      ...(evidenceIndexes.length === 0 ? { reason: "unreachable" as const } : {}),
       evidenceIndexes
     };
   });
 
+  const reason = keywordResults.some((result) => result.reason === "empty")
+    ? "empty"
+    : keywordResults.every((result) => result.reachable)
+      ? "reachable"
+      : "unreachable";
+
   return {
-    ok: keywordResults.every((result) => result.reachable),
+    ok: reason === "reachable",
+    reason,
     keywordResults
   };
 }

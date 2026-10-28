@@ -10,6 +10,8 @@ export interface ManifestRecord {
   report_type: string;
   period: string;
   file_path: string;
+  /** latest_by 时间路由所需的披露日期；缺失时不得猜测最新文件。 */
+  disclosure_date?: string;
 }
 
 /** manifest 读取结果；损坏行保留为诊断而不是静默跳过。 */
@@ -143,7 +145,11 @@ function parseManifestRecord(value: unknown): ManifestRecord | undefined {
     ticker: value.ticker,
     report_type: value.report_type,
     period: value.period,
-    file_path: value.file_path
+    file_path: value.file_path,
+    ...(typeof value.disclosure_date === "string" &&
+    value.disclosure_date.trim().length > 0
+      ? { disclosure_date: value.disclosure_date }
+      : {})
   };
 }
 

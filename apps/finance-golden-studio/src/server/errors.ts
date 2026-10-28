@@ -28,9 +28,10 @@ export class HttpError extends Error {
     status: number,
     code: HttpErrorCode,
     message: string,
-    details: Record<string, unknown> = {}
+    details: Record<string, unknown> = {},
+    cause?: unknown
   ) {
-    super(message);
+    super(message, { cause });
     this.name = "HttpError";
     this.status = status;
     this.code = code;

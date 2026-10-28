@@ -346,24 +346,26 @@ pnpm eval:finance-api --update-baseline      # 只写 <app>/eval/baseline.json
 - **产出**：`apps/finance-api/src/eval/{dataset,run,metrics,adapter,judge-rubrics,index}.ts`；`datasets/finance/rag-v1.json`（迁原 `datasets/eval-financial-v1.json`）。
 - **接口**：`run.ts` 导出 `runFinanceEval(dataset, {tier, judge?, baseline?}): Promise<EvalReportDto>`；`metrics.ts` 导出 `scoreCaseWithEvidence`（金融指标）；`index.ts` 调 `eval-core.evaluateGate` 判 exit code。
 - **数据集生成器唯一性（provenance 约束，跨工作项对齐）**：`datasets/finance/rag-v1.json` 的**唯一权威生成器是 `test/generate-finance-rag-v1.mjs`**（幂等、字节级可复现，输出自描述 `generatedBy` 字段）。该生成器**不写 `expectedDocumentIds`**（仅 source 级命中），且 `minCitations=2`。**禁止**改用已被取代的旧迁移脚本（`test/migrate-finance-eval-dataset.mjs`，v2.0 落地时已删除；本文档若再引用该名字均指这一历史脚本）重跑——它会按 source 列表回填 `expectedDocumentIds`，而真实 `citation.documentId` 是 ingest 生成的 UUID，会让 `metrics.ts` 的 documentId 优先匹配分支恒为 0，导致 `retrievalHitRate`/`mrr`/`ndcg` 跌至 ~0、破坏 CI 门禁。若需调整数据集，一律改 `generate-finance-rag-v1.mjs` 后重跑。
-- **黄金评测集 → 评测器映射（学习期自建真值链路）**：人工标注的投研知识库真值放在 `datasets/finance/rag-golden/golden.jsonl`（作者集，约定见同目录 `SCHEMA.md`），由**独立**生成器 `test/generate-finance-golden-v1.mjs` 映射为评测器格式 `datasets/finance/rag-golden-v1.json`。它与 `rag-v1.json` 的权威生成器**互不覆盖**：前者把真实 PDF 原始字节以 base64 信封填入 `documents.content`，loader 解码后直接走真实 `ingestDocument`（deterministic 档真实 ingest 的前提），source 标识稳定为 `<ticker>/<report_type>/<period>`，同样**不设 `expectedDocumentIds`**、`minCitations=2`；`latest_by` 时间解析题按当前 manifest 重算最新报告期，避免引到过时或不存在的 PDF。运行：
+- **黄金评测集 → 评测器映射（学习期自建真值链路）**：人工标注的投研知识库真值放在 `datasets/finance/rag-golden/golden.jsonl`（作者集，约定见同目录 `SCHEMA.md`），由 `apps/finance-golden-studio` 的 `golden-studio generate` 映射为评测器格式 `datasets/finance/rag-golden-v1.json`。它与 `rag-v1.json` 的权威生成器**互不覆盖**：前者把真实 PDF 原始字节以 base64 信封填入 `documents.content`，loader 解码后直接走真实 `ingestDocument`（deterministic 档真实 ingest 的前提），source 标识稳定为 `<ticker>/<report_type>/<period>`，同样**不设 `expectedDocumentIds`**、`minCitations=2`；`latest_by` 时间解析题按当前 manifest 重算最新报告期，避免引到过时或不存在的 PDF。运行：
   ```bash
   pnpm eval:finance-golden:validate                          # 校验作者集 golden.jsonl（结构/引用/答案）
   pnpm eval:finance-golden:generate                          # 由 golden.jsonl 生成 rag-golden-v1.json
   pnpm eval:finance-golden:update-baseline                   # 建基线（等价底层 --update-baseline）
   pnpm eval:finance-golden                                  # 判门禁（等价底层确定性档）
   ```
-  根脚本最终都落到 `apps/finance-api` 的 `eval:golden*` 子脚本；底层等价命令为
-  `node test/generate-finance-golden-v1.mjs` 与
+  前三个根脚本直接委托 `apps/finance-golden-studio` 的单一 `golden-studio` bin；评测门禁继续落到 `apps/finance-api` 的 `eval:golden*` 子脚本。底层等价命令为
+  `pnpm golden-studio generate` 与
   `pnpm --filter @aiagent/finance-api eval --dataset ../../datasets/finance/rag-golden-v1.json [--update-baseline]`。
   注意：deterministic 档的 `answer` 是 mock-embedding + 摘要式 stub 合成（无 LLM），真实 PDF 经 OCR 后数字常带空格（如 `184, 679`），故 `answerCorrectness` 偏低属预期；该指标的真实语义需等 Step 5 的 live/judge 链路。`negative` 反例题（语料无此 ticker）映射为 `mode="failure"` 占位，deterministic 档当前不执行，留 Step 5。
 
-  **作者集扩量与半自动抽取（学习期 30–50 条基准）**：人工从 1000 份 PDF 挑题最烦的是「找 PDF + 抄数字」。复用工具链见同目录 `datasets/finance/rag-golden/TAXONOMY.md`（题型模板库 + 挑题→标注→校验清单），并配套两个脚本：
+  **作者集扩量与半自动抽取（学习期 30–50 条基准）**：人工从 1000 份 PDF 挑题最烦的是「找 PDF + 抄数字」。复用工具链见同目录 `datasets/finance/rag-golden/TAXONOMY.md`（题型模板库 + 挑题→标注→校验清单）与 `apps/finance-golden-studio/README.md`：
   ```bash
-  node test/mine-finance-golden.mjs <candidates.json> [<batch>]   # 半自动：按 (ticker,report_type,period,type) 抽候选片段落 _drafts/<batch>/
-  node test/promote-finance-golden.mjs <batch>                    # 人工审核(_draft.approved=true)后并入 golden.jsonl（重排 fin-XXX、去空行）
+  pnpm golden-studio mine --candidates <candidates.json> --batch <batch> # 抽候选片段落 _drafts/<batch>/
+  pnpm --filter @aiagent/finance-golden-studio dev                      # Web 补答案并手填 expected_keywords
+  pnpm golden-studio validate --batch <batch> --json                    # 0 ERROR 才可发布
+  pnpm golden-studio promote --batch <batch>                            # 人工审核(_draft.approved=true)后并入 golden.jsonl
   ```
-  关键约束（已在 miner 内实现）：抽取健康度闸门会自动拦截「字符间空格缺陷」PDF（如 `000001.SZ` 年报每块一页、CJK 带间距，锚点搜索与子串匹配全废），这类文件**不要手工挑入册**；`_drafts/` 是人工待审核工作区，已加 `.gitignore`，作者集 `golden.jsonl` 本身保留入库。
+  关键约束：每道非负例题必须手填至少一个来源可达的 `expected_keywords`，`generate` 不得自行从答案反推；抽取健康度闸门会拦截「字符间空格缺陷」PDF（如 `000001.SZ` 年报每块一页、CJK 带间距，锚点搜索与子串匹配全废），这类文件**不要手工挑入册**；`_drafts/` 是人工待审核工作区，已加 `.gitignore`，作者集 `golden.jsonl` 本身保留入库。
 - **前置**：先完成 §3.3 的六个前置修正（`RagAnswerDto.status` + 阈值暴露、`EvalCaseDto` 迁出 types、删 `expectedChunkIds`、`goldEvidence`、`ChunkingOptions` 贯穿、`RagAnswer`/`RagAnswerDto` 拆解决策、`EvalMetricDto → EvalReportDto` 映射）。
 - **命令**：根 `package.json` 增 `"eval:finance-api": "pnpm --filter finance-api eval"`。
 - **验收**：`--tier deterministic` 跑通并**新建 baseline**（RAG 线当前无 baseline，验收是「首次产出 `EvalReportDto` 并建基线」，不是「保持一致」）；`eval-core` 只被 `finance-api/eval` 依赖。

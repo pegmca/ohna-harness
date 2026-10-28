@@ -98,15 +98,15 @@
 - `fin-003` 北方稀土主要控股参股公司（`table`，`gold_answer_table`）
 - `fin-004` 大秦铁路联系人和联系方式（`table`，`gold_answer_table`）
 
-- 作者集扩量与半自动抽取工具链见同目录 `TAXONOMY.md`（题型模板库 + 挑题→标注→校验清单）、`test/mine-finance-golden.mjs`（候选抽取）、`test/promote-finance-golden.mjs`（草稿定稿入册）。
-- 人工补真值最便捷的方式是 Web 标注器：`node test/annotate-finance-golden.mjs`（默认端口 5174），浏览器打开 `http://localhost:5174/` 即可逐条填表单（query / gold_answer / gold_answer_table 表格网格 / gold_answer_form 键值表单 / evidence.section / distractors / 勾选「已审核」），并内嵌原文 PDF 预览链接；保存后写回 `_drafts/<batch>/<id>.jsonl`，`promote` 闸门只读 `_draft.approved=true` 的草稿。对应 pnpm 脚本：`eval:finance-golden:annotate`。
+- 作者集扩量与半自动抽取工具链见同目录 `TAXONOMY.md`（题型模板库 + 挑题→标注→校验清单）与 `apps/finance-golden-studio/README.md`。候选抽取、草稿标注、校验、定稿、生成和评测统一经 `pnpm golden-studio <subcommand>`。
+- 人工补真值的入口是 Finance Golden Studio Web 工作台：先运行 `pnpm --filter @aiagent/finance-golden-studio dev` 并打开 `http://127.0.0.1:5173/`，或构建后运行 `pnpm golden-studio serve`（默认 `http://127.0.0.1:4318/`）。工作台支持 query、`gold_answer`、表格/表单、`evidence.section`、distractors、来源 PDF 与 `expected_keywords`；保存写回 `_drafts/<batch>/<id>.jsonl`，`promote` 只发布 `_draft.approved=true` 且校验通过的草稿。
 
 种子数据见同目录 `golden.jsonl`。
 
 ## 七、从作者集到评测器的映射（生成链路）
 
 - 作者集（`golden.jsonl`）是人工标注的单一事实来源；**不要把真值直接写成评测器的 `rag-golden-v1.json`**，统一由生成器映射。
-- 生成器：`test/generate-finance-golden-v1.mjs`（`node test/generate-finance-golden-v1.mjs`），产出 `datasets/finance/rag-golden-v1.json`。
+- 生成器：`pnpm golden-studio generate`，产出 `datasets/finance/rag-golden-v1.json`。
 - 映射约定（与 `rag-v1.json` 口径对齐）：
   - 每条非 negative case 按 `evidence[].ticker+report_type+period` 从 `manifest/manifest.jsonl` 定位真实 PDF，把原始字节以 `{contentEncoding:"base64", contentBase64}` 信封填入 `documents.content`；loader 解码为 `Uint8Array` 后直接进入真实 `ingestDocument`。
   - `source` 标识稳定为 `<ticker>/<report_type>/<period>`，`.fileName` 保持 `.pdf`。
@@ -114,7 +114,7 @@
   - `latest_by` 时间解析题：生成器按当前 manifest 取同 ticker 披露日最晚的一条**重算**报告期与 `file_path`，避免引到过时/不存在的 PDF；gold_answer 仍是作者集快照值，语料变更须人工重抄（见 `fin-008` 示例）。
   - `negative` 题（语料无此 ticker）映射为 `mode="failure"` + `documents:[]` 占位；deterministic 档当前不执行，留 Step 5。
   - `expected_keywords` 原样映射为评测器的 `expectedKeywords`，不得从 gold prose、表格或表单反推。
-- 校验顺序：先 `node test/validate-finance-golden.mjs` 校验作者集，再生成并跑评测器。
+- 校验顺序：先 `pnpm golden-studio validate --golden --json` 校验作者集，再 `pnpm golden-studio generate --json` 生成并跑 `pnpm eval:finance-golden`。
 - 当前 PDF 解析在 worker 行聚合阶段归一 CJK/数字坏层，保留 `U+3000` 与真实列间隔，并用 `sourceLayer:"char_spaced"` 标记坏层页面。
 - 当前 `table_aware` 切块生成共享 `tableGroupId` 的整表与 summary sibling；命中任一同组 chunk 后会在 rerank 前展开整表，整表 answer/citation 保留完整表文本。
 - 图片型来源由 `source_kind:"image"` + `ocr_required:true` + `page_image_ref` 标记；图片资产按 `<documentId>#page=N` 存入文档级 `PageImageRepository`。`fin-014` 是中微公司 2025 年报第 25 页的页面图片金丝雀，OCR 尚未接入。

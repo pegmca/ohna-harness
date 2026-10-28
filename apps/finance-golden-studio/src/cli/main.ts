@@ -51,6 +51,10 @@ if (invokedDirectly) {
   runCli(process.argv.slice(2))
     .then((code) => {
       process.exitCode = code;
+      if (code !== 0) {
+        // 失败是终态；主动退出，让测试/Agent 调用不会被残留句柄挂住。
+        process.exit(code);
+      }
     })
     .catch((error: unknown) => {
       process.stderr.write(

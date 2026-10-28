@@ -203,6 +203,7 @@ function failureCode(command: CliCommand): string {
   if (command === "promote") return "promotion_failed";
   if (command === "generate") return "generation_failed";
   if (command === "doctor") return "doctor_failed";
+  if (command === "serve") return "serve_startup_failed";
   return "command_failed";
 }
 
@@ -249,6 +250,9 @@ function summary(command: CliCommand, result: unknown): string {
   }
   if (command === "generate") {
     return `generated ${Number(result.caseCount ?? 0)} evaluation case(s).`;
+  }
+  if (command === "serve" && typeof result.url === "string") {
+    return `Golden Studio listening at ${result.url}`;
   }
   return `ok ${command}`;
 }

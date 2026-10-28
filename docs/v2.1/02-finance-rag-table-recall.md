@@ -27,8 +27,8 @@
 - 切块器：`packages/rag/src/chunking.ts` 的 `chunkDocumentBlocks`，`heading_aware` 策略
   （`DEFAULT_CHUNKING_OPTIONS`：`maxChars:1200 / overlap:150`，见 `packages/rag/src/types.ts:401`）
   **逐 block 调用 `createFixedSizeChunks`**。
-- 评测集：作者集 `golden.jsonl` + 草稿 `datasets/finance/rag-golden/_drafts/batch-01/`，Web 标注器
-  `test/annotate-finance-golden.mjs` 已支持 `gold_answer_table` 网格 / `gold_answer_form` 键值表单 / `page_image_ref`。
+- 评测集：作者集 `golden.jsonl` + 草稿 `datasets/finance/rag-golden/_drafts/batch-01/`，Finance Golden Studio Web 工作台
+  已支持 `gold_answer_table` 网格 / `gold_answer_form` 键值表单 / `page_image_ref`；启动与工作流见 `apps/finance-golden-studio/README.md`。
 - Schema：`datasets/finance/rag-golden/SCHEMA.md` 已预留 `source_kind:"image"` + `ocr_required` + `page_image_ref`。
 
 ### 1.2 根因：不止「表被切碎」，还有「解析层坏层」和「数据通道丢结构」
@@ -142,7 +142,7 @@ PDF ──parsePdfBlocks──▶ blocks(pageNumber / isTableRow / tableColumnCo
    里保留 `sourceLayer: "char_spaced"` 等诊断标记。`sourceLayer` 同时作为 D4 渲染 pass 的输入，
    避免另立一套「图片页判定」。
 
-这一步会把 `test/mine-finance-golden.mjs` 里已有的 `normalizeCjk` 收敛到 parsing 包内，
+这一步会把 Finance Golden Studio miner 已有的 `normalizeCjk` 收敛到 parsing 包内，
 避免「候选抽取器归一、正式评测生成器不归一」的分叉。
 
 ### 3.2 验收
@@ -261,7 +261,7 @@ ingest lineage 的 `chunkerVersion` 由当前实际生效的 chunking options �
 通道。** 原方案里的「解析 blocks 直通切块评测-only 路径」会再造一条和生产 ingest 不同的代码路径，
 违反 v2.0「评测必须触达真实系统、禁止 fixture 自证」的原则。
 
-- `test/generate-finance-golden-v1.mjs`：不再 `parsePdfBlocks` 后 `blocks.map(...).join("\n")` 压成
+- `apps/finance-golden-studio/src/core/generate.ts`（经 `pnpm golden-studio generate` 调用）：不再 `parsePdfBlocks` 后 `blocks.map(...).join("\n")` 压成
   `.txt`，改为把 PDF 原始字节写入 `documents`（`fileName` 保持 `.pdf`，`content` 为
   `Uint8Array`）。golden 生成器不再做二次解析，也不再产出会丢失元数据的中间文本。
 - `apps/finance-api/src/eval/adapter.ts`：把 `FinanceEvalDocumentLike.content` 从 `string` 放宽为
@@ -424,6 +424,6 @@ ingest lineage 的 `chunkerVersion` 由当前实际生效的 chunking options �
 - `TAXONOMY.md`：校验清单加「整表题须验证 chunk 级整表召回」。
 - `packages/rag/src/types.ts` 注释（策略枚举、`resolveChunkerVersion` 版本语义、sibling 展开开关）。
 - `apps/finance-api/src/eval/adapter.ts` 注释（`content` 放宽为 `string | Uint8Array`）。
-- `test/generate-finance-golden-v1.mjs` 头部注释：说明不再压平 `.txt`、直接透传 PDF bytes。
+- `apps/finance-golden-studio/src/core/generate.ts` 注释：说明不再压平 `.txt`、直接透传 PDF bytes。
 
 暂不动代码（本任务仅出方案）；P1 起按 §3 顺序改动。

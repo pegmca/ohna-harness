@@ -5,6 +5,8 @@ import type { WorkspaceConfig } from "../core/workspace.js";
 export interface GoldenStudioServerOptions {
   /** JSON 请求体的最大字节数，默认 1 MiB。 */
   maxBodyBytes?: number;
+  /** 可选的 Vite 构建产物目录；提供时同源托管 SPA。 */
+  staticDir?: string;
 }
 
 /** 路由层共享的请求上下文。 */

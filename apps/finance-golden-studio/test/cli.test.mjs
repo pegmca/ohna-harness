@@ -263,7 +263,7 @@ test("validate 强制选择 --batch 或 --golden 且拒绝两者同时出现", a
 test("pnpm 注入的首个 -- 分隔符不影响真实位置参数拒绝", async () => {
   const accepted = await captureCli(["--", "serve", "--json"]);
   assert.equal(accepted.code, 1);
-  assert.equal(parseJsonOutput(accepted.stdout).error, "serve_not_implemented");
+  assert.equal(parseJsonOutput(accepted.stdout).error, "serve_startup_failed");
 
   const rejected = await captureCli(["--", "doctor", "extra", "--json"]);
   assert.equal(rejected.code, 1);
@@ -292,17 +292,6 @@ test("promote 要求 batch 并将 core 结构化错误透传为稳定错误码",
   assert.equal(output.ok, false);
   assert.equal(output.command, "promote");
   assert.equal(output.error, "invalid_batch_name");
-});
-
-test("serve 明确报告尚未实现而不会启动服务器", async () => {
-  const result = await captureCli(["serve", "--json"]);
-
-  assert.equal(result.code, 1);
-  const output = parseJsonOutput(result.stdout);
-  assert.equal(output.ok, false);
-  assert.equal(output.command, "serve");
-  assert.equal(output.error, "serve_not_implemented");
-  assert.deepEqual(output.details, { plannedTask: 7 });
 });
 
 test("doctor 检查 workspace、corpus、migrations 与 scripts", async () => {
@@ -499,12 +488,14 @@ test("doctor scripts 检查拒绝根脚本遮蔽 Golden Studio workspace bin", a
   assert.match(scripts?.message ?? "", /must not shadow.*workspace bin/i);
 });
 
-test("文档化 pnpm golden-studio doctor --json 成功时只输出一个 JSON 文档", async () => {
+test("文档化 golden-studio doctor --json 成功时只输出一个 JSON 文档", async () => {
   const fixture = await makeResolvedWorkspace();
   const result = await captureProcess(
-    "pnpm",
+    process.execPath,
     [
-      "golden-studio",
+      "--import",
+      "tsx",
+      fileURLToPath(new URL("../src/cli/main.ts", import.meta.url)),
       "doctor",
       "--workspace",
       fixture.workspaceRoot,
@@ -512,7 +503,7 @@ test("文档化 pnpm golden-studio doctor --json 成功时只输出一个 JSON �
       fixture.corpusRoot,
       "--json"
     ],
-    REPO_ROOT
+    PACKAGE_ROOT
   );
 
   assert.equal(result.code, 0, result.stdout + result.stderr);
@@ -522,7 +513,7 @@ test("文档化 pnpm golden-studio doctor --json 成功时只输出一个 JSON �
   assert.equal(output.command, "doctor");
 });
 
-test("文档化 pnpm golden-studio doctor --json 失败时仍为非零结构化 JSON", async () => {
+test("文档化 golden-studio doctor --json 失败时仍为非零结构化 JSON", async () => {
   const fixture = await makeResolvedWorkspace();
   await writeFile(
     join(fixture.corpusRoot, "manifest", "manifest.jsonl"),
@@ -530,9 +521,11 @@ test("文档化 pnpm golden-studio doctor --json 失败时仍为非零结构化 
     "utf8"
   );
   const result = await captureProcess(
-    "pnpm",
+    process.execPath,
     [
-      "golden-studio",
+      "--import",
+      "tsx",
+      fileURLToPath(new URL("../src/cli/main.ts", import.meta.url)),
       "doctor",
       "--workspace",
       fixture.workspaceRoot,
@@ -540,7 +533,7 @@ test("文档化 pnpm golden-studio doctor --json 失败时仍为非零结构化 
       fixture.corpusRoot,
       "--json"
     ],
-    REPO_ROOT
+    PACKAGE_ROOT
   );
 
   assert.equal(result.code, 1, result.stdout + result.stderr);
@@ -552,11 +545,18 @@ test("文档化 pnpm golden-studio doctor --json 失败时仍为非零结构化 
   assert.equal(corpus?.errorCode, "manifest_json_invalid");
 });
 
-test("文档化 pnpm golden-studio doctor --json 的 CLI 失败也走 JSON 通道", async () => {
+test("文档化 golden-studio doctor --json 的 CLI 失败也走 JSON 通道", async () => {
   const result = await captureProcess(
-    "pnpm",
-    ["golden-studio", "doctor", "--workspace", "--json"],
-    REPO_ROOT
+    process.execPath,
+    [
+      "--import",
+      "tsx",
+      fileURLToPath(new URL("../src/cli/main.ts", import.meta.url)),
+      "doctor",
+      "--workspace",
+      "--json"
+    ],
+    PACKAGE_ROOT
   );
 
   assert.equal(result.code, 1, result.stdout + result.stderr);
@@ -587,9 +587,11 @@ test("兼容 validate 脚本正确转发 --golden、--workspace 与 --corpus", a
     pdfText: "Revenue 100"
   });
   const result = await captureProcess(
-    "pnpm",
+    process.execPath,
     [
-      "golden-studio",
+      "--import",
+      "tsx",
+      fileURLToPath(new URL("../src/cli/main.ts", import.meta.url)),
       "validate",
       "--workspace",
       fixture.workspaceRoot,
@@ -598,7 +600,7 @@ test("兼容 validate 脚本正确转发 --golden、--workspace 与 --corpus", a
       "--golden",
       "--json"
     ],
-    REPO_ROOT
+    PACKAGE_ROOT
   );
 
   assert.equal(result.code, 0, result.stdout + result.stderr);
@@ -625,9 +627,11 @@ test("兼容 mine 脚本正确转发 --candidates、--batch 与 --corpus", async
     "utf8"
   );
   const result = await captureProcess(
-    "pnpm",
+    process.execPath,
     [
-      "golden-studio",
+      "--import",
+      "tsx",
+      fileURLToPath(new URL("../src/cli/main.ts", import.meta.url)),
       "mine",
       "--workspace",
       fixture.workspaceRoot,
@@ -639,7 +643,7 @@ test("兼容 mine 脚本正确转发 --candidates、--batch 与 --corpus", async
       "compat-batch",
       "--json"
     ],
-    REPO_ROOT
+    PACKAGE_ROOT
   );
 
   assert.equal(result.code, 0, result.stdout + result.stderr);
@@ -669,10 +673,6 @@ test("不带 --json 时成功输出人类文本并在失败时使用 stderr", as
   assert.equal(invalid.stdout, "");
   assert.match(invalid.stderr, /unexpected_positional/);
 
-  const noJsonFailure = await captureCli(["serve"]);
-  assert.equal(noJsonFailure.code, 1);
-  assert.equal(noJsonFailure.stdout, "");
-  assert.match(noJsonFailure.stderr, /serve_not_implemented/);
 });
 
 /**

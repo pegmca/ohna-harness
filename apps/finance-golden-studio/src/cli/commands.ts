@@ -11,6 +11,7 @@ import { resolveWorkspaceConfig } from "../core/workspace.js";
 import type { CliArguments } from "./args.js";
 import { CliError } from "./args.js";
 import { runDoctor } from "./doctor.js";
+import { installShutdownSignals, startGoldenStudioServer } from "./serve.js";
 
 /**
  * 分派一个已解析命令。
@@ -21,11 +22,7 @@ import { runDoctor } from "./doctor.js";
 export async function runCommand(parsed: CliArguments): Promise<unknown> {
   switch (parsed.command) {
     case "serve":
-      throw new CliError(
-        "serve_not_implemented",
-        "The local Golden Studio server is not available yet.",
-        { plannedTask: 7 }
-      );
+      return serve(parsed);
     case "doctor":
       return runDoctor(parsed);
     case "mine":
@@ -37,6 +34,23 @@ export async function runCommand(parsed: CliArguments): Promise<unknown> {
     case "generate":
       return generate(parsed);
   }
+}
+
+/**
+ * 启动本地 Web 与 HTTP API，并安装进程信号收尾。
+ *
+ * @param parsed CLI 参数。
+ * @returns 实际监听地址。
+ * @throws {CliError} 工作区或监听启动失败时抛出。
+ */
+async function serve(parsed: CliArguments): Promise<unknown> {
+  const handle = await startGoldenStudioServer({
+    ...(parsed.workspace || parsed.corpus
+      ? { workspaceRoot: parsed.workspace, corpusRoot: parsed.corpus }
+      : {})
+  });
+  installShutdownSignals(handle);
+  return { url: handle.url };
 }
 
 /**

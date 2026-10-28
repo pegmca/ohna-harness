@@ -7,6 +7,7 @@ import { handleBatches } from "./routes/batches.js";
 import { handleDrafts } from "./routes/drafts.js";
 import { handleEvidence } from "./routes/evidence.js";
 import { handleStatus } from "./routes/status.js";
+import { readStaticAsset, writeStaticAsset } from "./static.js";
 import type {
   GoldenStudioServerOptions,
   RequestContext,
@@ -32,8 +33,9 @@ export function createGoldenStudioServer(
   options: GoldenStudioServerOptions = {}
 ): ServerHandle {
   const maxBodyBytes = options.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES;
+  const staticDir = options.staticDir;
   const server = createServer((request, response) => {
-    void dispatch(config, request, response, maxBodyBytes);
+    void dispatch(config, request, response, maxBodyBytes, staticDir);
   });
 
   return {
@@ -82,17 +84,33 @@ export function createGoldenStudioServer(
  * @param request 原始请求。
  * @param response 原始响应。
  * @param maxBodyBytes 请求体上限。
+ * @param staticDir 可选的 Web 构建产物目录。
  */
 async function dispatch(
   config: WorkspaceConfig,
   request: IncomingMessage,
   response: ServerResponse,
-  maxBodyBytes: number
+  maxBodyBytes: number,
+  staticDir: string | undefined
 ): Promise<void> {
   try {
     const url = new URL(request.url ?? "/", "http://127.0.0.1");
     const segments = apiSegments(url.pathname);
-    if (!segments) throw unknownRoute(url.pathname);
+    if (!segments) {
+      if (!staticDir || (request.method !== "GET" && request.method !== "HEAD")) {
+        throw unknownRoute(url.pathname);
+      }
+      const asset = await readStaticAsset(staticDir, url.pathname);
+      if (request.method === "HEAD") {
+        response.statusCode = 200;
+        response.setHeader("content-type", asset.contentType);
+        response.setHeader("cache-control", "no-cache");
+        response.end();
+        return;
+      }
+      writeStaticAsset(response, asset);
+      return;
+    }
     const context: RequestContext = { config, request, response, url, maxBodyBytes };
     const result =
       (await handleBatches(context, segments)) ??

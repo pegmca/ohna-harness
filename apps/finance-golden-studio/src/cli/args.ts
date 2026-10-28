@@ -28,7 +28,7 @@ const COMMAND_OPTIONS: Record<CliCommand, ReadonlySet<string>> = {
   validate: new Set(["--json", "--workspace", "--corpus", "--batch", "--golden"]),
   promote: new Set(["--json", "--workspace", "--corpus", "--batch"]),
   generate: new Set(["--json", "--workspace", "--corpus"]),
-  serve: new Set(["--json"]),
+  serve: new Set(["--json", "--workspace", "--corpus"]),
   doctor: new Set(["--json", "--workspace", "--corpus"])
 };
 

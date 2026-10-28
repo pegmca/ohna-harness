@@ -1,19 +1,19 @@
 # 金融财报 RAG 黄金评测集 · 题型库与标注清单（挑题 → 标注 → 校验）
 
-本文件是「扩作者集到 30–50 条」的**可复用操作手册**。配合 `test/mine-finance-golden.mjs`
-（半自动候选抽取）与 `test/promote-finance-golden.mjs`（草稿定稿入册）使用，目标：
+本文件是「扩作者集到 30–50 条」的**可复用操作手册**。配合 `apps/finance-golden-studio`
+的 `golden-studio` 单一 CLI（半自动候选抽取、标注、校验与定稿入册）使用，目标：
 把人工挑题最烦的两步——找 PDF、从 PDF 抄数字——自动化掉，人只做「确认 / 改数 / 补拆分」。
 
 ## 一、整体流程（四步闭环）
 
-1. **挑题（mine）**：`node test/mine-finance-golden.mjs <candidates.json>` 读候选清单
+1. **挑题（mine）**：`pnpm golden-studio mine --candidates <candidates.json> --batch <batch>` 读候选清单
    `(ticker, report_type, period, type)`，从 manifest 定位 PDF → 抽全文（CJK 空格归一 + 健康度闸门）
    → 按题型模板抽候选片段（含 `page`/`quote`）→ 落 `_drafts/<batch>/<id>.jsonl`（未定稿草稿）。
-2. **标注（人工）**：打开草稿，补 `gold_answer` / `gold_answer_table` / `gold_answer_form` / `note`
+2. **标注（人工）**：运行 `pnpm --filter @aiagent/finance-golden-studio dev` 打开 Web 工作台（或构建后用 `pnpm golden-studio serve`），补 `gold_answer` / `gold_answer_table` / `gold_answer_form` / `note`
    与 `expected_keywords`，把 `evidence.section` 的「（待补）」换成真实章节名；图片源题补 `source_kind:"image"+ocr_required`。
 3. **校验（validate）**：`pnpm eval:finance-golden:validate` 统一检查结构、精确 manifest 引用、
    PDF 可读性、section 完成度、表格 / 表单形状和 `expected_keywords` 源文本可达性；0 ERROR 才许入册。
-4. **入册（promote）**：`node test/promote-finance-golden.mjs <batch>` 把该批草稿并入 `golden.jsonl`
+4. **入册（promote）**：`pnpm golden-studio promote --batch <batch>` 把该批草稿并入 `golden.jsonl`
    （自动排重 id、去空行、保持 fin-XXX 递增），再 `generate + eval` 看门禁。
 
 ## 二、题型模板库（7 类，各给锚点 + 必填字段）
@@ -75,5 +75,5 @@
 ## 六、与评测管线的关系
 
 - 作者集 `golden.jsonl` 是单一事实来源；**不直接写** `rag-golden-v1.json`。
-- 映射：`test/generate-finance-golden-v1.mjs` → `rag-golden-v1.json`（评测器格式）。
+- 映射：`pnpm golden-studio generate` → `datasets/finance/rag-golden-v1.json`（评测器格式），非负例题的 `expected_keywords` 原样映射为 `expectedKeywords`。
 - 门禁：`pnpm eval:finance-golden`（deterministic 档）；`answerCorrectness` 偏低属 stub 预期，非映射 bug。

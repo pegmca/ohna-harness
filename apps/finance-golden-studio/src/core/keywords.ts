@@ -1,4 +1,7 @@
-import type { PdfEvidenceDocument } from "./evidence.js";
+import type {
+  KeywordReachabilityResult,
+  PdfEvidenceDocument
+} from "./types.js";
 
 /** 单个作者关键词在扫描文本中的命中摘要。 */
 export interface KeywordMatch {
@@ -7,14 +10,7 @@ export interface KeywordMatch {
   occurrences: number;
 }
 
-/** 单个关键词是否可达及命中的证据文档索引。 */
-export interface KeywordReachabilityResult {
-  keyword: string;
-  normalizedKeyword: string;
-  reachable: boolean;
-  reason?: "empty" | "unreachable";
-  evidenceIndexes: number[];
-}
+export type { KeywordReachabilityResult };
 
 /** 一组关键词的源文档可达性结果。 */
 export interface KeywordValidationResult {

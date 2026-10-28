@@ -116,4 +116,55 @@ describe("createGoldenStudioClient", () => {
       "application/json"
     );
   });
+
+  test("readEvidence requests the corpus-relative path and returns blocks", async () => {
+    const evidence = {
+      filePath: "reports/600000.SH/annual/2025.pdf",
+      pages: [2],
+      blocks: []
+    };
+    const fetch = vi.fn(async () => jsonResponse({ ok: true, data: evidence }));
+    vi.stubGlobal("fetch", fetch);
+
+    const client = createGoldenStudioClient("http://127.0.0.1:4318/");
+    const result = await client.readEvidence(evidence.filePath);
+
+    assert.deepEqual(result, evidence);
+    const [url] = fetch.mock.calls[0] as unknown as [URL, RequestInit];
+    assert.equal(
+      url.toString(),
+      "http://127.0.0.1:4318/api/evidence?path=reports%2F600000.SH%2Fannual%2F2025.pdf"
+    );
+    assert.equal(
+      client.evidenceContentUrl(evidence.filePath),
+      "http://127.0.0.1:4318/api/evidence/content?path=reports%2F600000.SH%2Fannual%2F2025.pdf"
+    );
+  });
+
+  test("validateBatch POSTs explicit confirmation and returns the structured report", async () => {
+    const result = {
+      batch: "batch-01",
+      draftCount: 1,
+      validation: {
+        ok: false,
+        errors: [{ code: "expected_keywords_required", field: "expected_keywords", message: "Required" }],
+        warnings: [],
+        keywordResults: []
+      }
+    };
+    const fetch = vi.fn(async () => jsonResponse({ ok: true, data: result }));
+    vi.stubGlobal("fetch", fetch);
+
+    const client = createGoldenStudioClient("http://127.0.0.1:4318/");
+    assert.deepEqual(await client.validateBatch("batch-01"), result);
+
+    const [url, init] = fetch.mock.calls[0] as unknown as [URL, RequestInit];
+    assert.equal(url.toString(), "http://127.0.0.1:4318/api/actions/validate");
+    assert.equal(init.method, "POST");
+    assert.equal(init.body, JSON.stringify({
+      confirm: true,
+      scope: "batch",
+      batch: "batch-01"
+    }));
+  });
 });

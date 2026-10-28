@@ -1,15 +1,13 @@
 import { listDrafts, readDraft } from "./drafts.js";
 import { GoldenStudioError } from "./errors.js";
-import type { ValidationReport } from "./schema.js";
+import type {
+  DraftBatchValidationResult,
+  ValidationReport
+} from "./types.js";
 import { validateDraft } from "./validate.js";
 import type { WorkspaceConfig } from "./workspace.js";
 
-/** 单批次校验结果，供 CLI 与本地 server 共享。 */
-export interface DraftBatchValidationResult {
-  batch: string;
-  draftCount: number;
-  validation: ValidationReport;
-}
+export type { DraftBatchValidationResult };
 
 /**
  * 枚举批次草稿、逐条读取校验并合并为批次报告。

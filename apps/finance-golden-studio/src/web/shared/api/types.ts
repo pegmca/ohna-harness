@@ -1,4 +1,10 @@
-import type { BatchSummary, DraftSummary, GoldenDraft } from "../../../core/types.js";
+import type {
+  BatchSummary,
+  DraftBatchValidationResult,
+  DraftSummary,
+  GoldenDraft,
+  PdfEvidenceDocument
+} from "../../../core/types.js";
 
 /** 统一错误信封中的错误对象。 */
 export interface ApiErrorShape {
@@ -26,5 +32,7 @@ export interface RequestOptions {
 export type {
   BatchSummary,
   DraftSummary,
-  GoldenDraft
+  GoldenDraft,
+  DraftBatchValidationResult,
+  PdfEvidenceDocument
 };

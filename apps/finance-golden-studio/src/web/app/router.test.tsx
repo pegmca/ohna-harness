@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { beforeAll, describe, expect, test, vi } from "vitest";
 import { App } from "./App.tsx";
 import { ThemeProvider, useTheme } from "./theme.tsx";
@@ -73,6 +73,79 @@ describe("App shell routing", () => {
     ).toBeInTheDocument();
     expect(await screen.findByText("No drafts yet")).toBeInTheDocument();
     expect(client.listDrafts).toHaveBeenCalledWith("batch-long-name", expect.anything());
+  });
+
+  test("replaces the draft placeholder with the evidence-aware editor route", async () => {
+    const draft = {
+      id: "fin-D001",
+      query: "What was revenue?",
+      type: "numeric_fact",
+      difficulty: "easy",
+      answer_type: "number",
+      gold_answer: "100",
+      answer_unit: "CNY",
+      evidence: [
+        {
+          ticker: "600000.SH",
+          report_type: "annual",
+          period: "2025",
+          section: "Highlights",
+          page: 1,
+          quote: "Revenue 100",
+          source_kind: "text"
+        }
+      ],
+      requires_multi_doc: false,
+      distractors: [],
+      is_negative: false,
+      note: "",
+      expected_keywords: ["Revenue"],
+      _draft: { file_path: "reports/600000.SH/annual/2025.pdf" }
+    };
+    const client = {
+      readDraft: vi.fn(async () => draft),
+      readEvidence: vi.fn(async () => ({
+        filePath: "reports/600000.SH/annual/2025.pdf",
+        pages: [1, 2],
+        blocks: [
+          {
+            pageNumber: 1,
+            lineStart: 1,
+            lineEnd: 1,
+            text: "Revenue 100",
+            metadata: {}
+          },
+          {
+            pageNumber: 2,
+            lineStart: 1,
+            lineEnd: 1,
+            text: "Revenue 100",
+            metadata: {}
+          }
+        ]
+      })),
+      evidenceContentUrl: vi.fn(
+        () => "http://127.0.0.1:4318/api/evidence/content?path=reports%2F600000.SH%2Fannual%2F2025.pdf"
+      ),
+      validateBatch: vi.fn(),
+      saveDraft: vi.fn()
+    };
+    render(
+      <App
+        client={client as never}
+        initialEntries={["/draft/batch-01/fin-D001"]}
+      />
+    );
+
+    expect(
+      await screen.findByRole("heading", { name: "fin-D001" })
+    ).toBeInTheDocument();
+    expect(
+      await within(screen.getByLabelText("Evidence blocks")).findByText(
+        "Revenue 100"
+      )
+    ).toBeInTheDocument();
+    expect(screen.queryByText("This workspace is not wired yet.")).not.toBeInTheDocument();
   });
 });
 

@@ -4,27 +4,16 @@ import { parsePdfBlocks } from "@aiagent/parsing";
 import type { ParsedBlock } from "@aiagent/parsing";
 import { GoldenStudioError } from "./errors.js";
 import { readManifest } from "./manifest.js";
+import type {
+  PdfEvidenceBlock,
+  PdfEvidenceDocument,
+  PdfEvidenceMetadata
+} from "./types.js";
 import type { WorkspaceConfig } from "./workspace.js";
 import { assertContainedPath } from "./workspace.js";
 
 /** 从解析包 block 契约推导的证据元数据，避免两边字段漂移。 */
-export type PdfEvidenceMetadata = NonNullable<ParsedBlock["metadata"]>;
-
-/** 可交给 Web 与 CLI 共用的 PDF 证据块。 */
-export interface PdfEvidenceBlock {
-  pageNumber: number;
-  lineStart: number;
-  lineEnd: number;
-  text: string;
-  metadata: PdfEvidenceMetadata;
-}
-
-/** 一份来源 PDF 的页面列表与按原文顺序排列的证据块。 */
-export interface PdfEvidenceDocument {
-  filePath: string;
-  pages: number[];
-  blocks: PdfEvidenceBlock[];
-}
+export type { PdfEvidenceBlock, PdfEvidenceDocument, PdfEvidenceMetadata };
 
 /**
  * 把解析器 block 投影为证据块，并汇总得到有序页码。

@@ -8,6 +8,110 @@ export type GoldenStudioErrorCode =
   | "evidence_not_found"
   | "evidence_parse_failed";
 
+/** Golden 校验问题的稳定代码。 */
+export type ValidationIssueCode =
+  | GoldenStudioErrorCode
+  | "workspace_config_missing"
+  | "invalid_root_path"
+  | "manifest_not_found"
+  | "path_outside_root"
+  | "invalid_batch_name"
+  | "invalid_draft_id"
+  | "golden_file_not_found"
+  | "golden_json_invalid"
+  | "golden_line_not_object"
+  | "golden_line_count_invalid"
+  | "golden_id_duplicate"
+  | "manifest_json_invalid"
+  | "manifest_record_invalid"
+  | "manifest_triple_duplicate"
+  | "expected_keywords_required"
+  | "expected_keyword_empty"
+  | "keyword_unreachable"
+  | "section_unresolved"
+  | "evidence_required"
+  | "evidence_not_in_manifest"
+  | "negative_evidence_present"
+  | "negative_resolution_required"
+  | "negative_ticker_present"
+  | "negative_ticker_conflict"
+  | "negative_scope_invalid"
+  | "negative_type_required"
+  | "multi_doc_flag_required"
+  | "multi_doc_sources_required"
+  | "table_columns_required"
+  | "table_rows_required"
+  | "table_row_not_array"
+  | "table_sparse_row"
+  | "table_cell_not_string"
+  | "form_items_required"
+  | "form_item_invalid"
+  | "required_string_invalid"
+  | "array_required"
+  | "boolean_required"
+  | "enum_invalid"
+  | "id_invalid"
+  | "evidence_invalid"
+  | "distractor_invalid"
+  | "answer_structure_required"
+  | "resolution_required"
+  | "resolution_invalid";
+
+/** 单条校验问题；field 指向作者可定位的 JSON 路径。 */
+export interface ValidationIssue {
+  code: ValidationIssueCode;
+  message: string;
+  field?: string;
+  line?: number;
+  id?: string;
+}
+
+/** 单个关键词在扫描文本中的可达性摘要。 */
+export interface KeywordReachabilityResult {
+  keyword: string;
+  normalizedKeyword: string;
+  reachable: boolean;
+  reason?: "empty" | "unreachable";
+  evidenceIndexes: number[];
+}
+
+/** CLI、HTTP、UI、promote 与 generate 共用的校验结果。 */
+export interface ValidationReport {
+  ok: boolean;
+  errors: ValidationIssue[];
+  warnings: ValidationIssue[];
+  keywordResults: KeywordReachabilityResult[];
+}
+
+/** 单批次校验结果，供 CLI 与本地 server 共享。 */
+export interface DraftBatchValidationResult {
+  batch: string;
+  draftCount: number;
+  validation: ValidationReport;
+}
+
+/** 从解析 block 投影的证据元数据。 */
+export type PdfEvidenceMetadata = Record<
+  string,
+  string | number | boolean | null
+>;
+
+/** 可交给 Web 与 CLI 共用的 PDF 证据块。 */
+export interface PdfEvidenceBlock {
+  pageNumber: number;
+  lineStart: number;
+  lineEnd: number;
+  text: string;
+  metadata: PdfEvidenceMetadata;
+}
+
+/** 一份来源 PDF 的页面列表与按原文顺序排列的证据块。 */
+export interface PdfEvidenceDocument {
+  filePath: string;
+  pages: number[];
+  blocks: PdfEvidenceBlock[];
+}
+
 /** Golden 草稿的题型枚举。 */
 export type GoldenDraftType =
   | "numeric_fact"
@@ -111,8 +215,8 @@ export type GoldenResolution =
 /** 草稿校验结果的轻量快照，由后续校验模块填充。 */
 export interface DraftValidationSnapshot {
   ok: boolean;
-  errors: Array<{ code: string; message: string; field?: string }>;
-  warnings: Array<{ code: string; message: string; field?: string }>;
+  errors: Array<{ code: ValidationIssueCode; message: string; field?: string }>;
+  warnings: Array<{ code: ValidationIssueCode; message: string; field?: string }>;
   keywordResults: Array<{
     keyword: string;
     reachable: boolean;

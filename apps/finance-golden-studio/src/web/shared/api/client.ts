@@ -1,8 +1,10 @@
 import type {
   ApiEnvelope,
   BatchSummary,
+  DraftBatchValidationResult,
   DraftSummary,
   GoldenDraft,
+  PdfEvidenceDocument,
   RequestOptions
 } from "./types.js";
 
@@ -50,6 +52,18 @@ export interface GoldenStudioClient {
     draft: GoldenDraft,
     options?: RequestOptions
   ): Promise<GoldenDraft>;
+  /** 按语料相对路径读取 PDF 证据投影。 */
+  readEvidence(
+    filePath: string,
+    options?: RequestOptions
+  ): Promise<PdfEvidenceDocument>;
+  /** 构造受控 PDF 字节流 URL，供内嵌预览使用。 */
+  evidenceContentUrl(filePath: string): string;
+  /** 保存后校验整个批次，并返回服务端结构化报告。 */
+  validateBatch(
+    batch: string,
+    options?: RequestOptions
+  ): Promise<DraftBatchValidationResult>;
 }
 
 /**
@@ -135,7 +149,28 @@ export function createGoldenStudioClient(baseUrl: string = "/"): GoldenStudioCli
           body: JSON.stringify({ draft }),
           ...options
         }
-      )
+      ),
+    readEvidence: (filePath, options) =>
+      request<PdfEvidenceDocument>(
+        `api/evidence?path=${encodeURIComponent(filePath)}`,
+        { method: "GET", ...options }
+      ),
+    evidenceContentUrl: (filePath) =>
+      new URL(
+        `api/evidence/content?path=${encodeURIComponent(filePath)}`,
+        base
+      ).toString(),
+    validateBatch: (batch, options) =>
+      request<DraftBatchValidationResult>("api/actions/validate", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          confirm: true,
+          scope: "batch",
+          batch
+        }),
+        ...options
+      })
   };
 }
 

@@ -62,6 +62,65 @@ test("mineCandidates 从精确来源生成可读回的健康草稿", async () =>
   );
 });
 
+test("mineCandidates 同三元组无选择器时跳过并列出候选 file_path", async () => {
+  const config = makeWorkflowConfig();
+  const aPath = "raw/cn/600011.SH/annual-2024-a.pdf";
+  const hPath = "raw/cn/600011.SH/annual-2024-h.pdf";
+  writeManifest(config, [
+    manifestRecord("600011.SH", "annual", "2024", aPath),
+    manifestRecord("600011.SH", "annual", "2024", hPath)
+  ]);
+  writePdf(config, aPath, "Revenue 100. ".repeat(30));
+  writePdf(config, hPath, "Revenue 200. ".repeat(30));
+
+  const report = await mineCandidates(config, {
+    batch: "batch-ambiguous",
+    candidates: [
+      {
+        ticker: "600011.SH",
+        report_type: "annual",
+        period: "2024",
+        type: "numeric_fact"
+      }
+    ]
+  });
+
+  assert.equal(report.ok, false);
+  assert.equal(report.skippedCount, 1);
+  assert.equal(report.skipped[0].reason, "evidence_source_ambiguous");
+  assert.match(report.skipped[0].message, new RegExp(aPath));
+  assert.match(report.skipped[0].message, new RegExp(hPath));
+  assert.equal(existsSync(join(config.draftRoot, "batch-ambiguous")), false);
+});
+
+test("mineCandidates document_file_path 选择同三元组 A/H 并传播到草稿 evidence", async () => {
+  const config = makeWorkflowConfig();
+  const aPath = "raw/cn/600011.SH/annual-2024-a.pdf";
+  const hPath = "raw/cn/600011.SH/annual-2024-h.pdf";
+  writeManifest(config, [
+    manifestRecord("600011.SH", "annual", "2024", aPath),
+    manifestRecord("600011.SH", "annual", "2024", hPath)
+  ]);
+  writeAnchoredPdf(config, hPath);
+
+  const report = await mineCandidates(config, {
+    batch: "batch-variant",
+    candidates: [
+      {
+        ticker: "600011.SH",
+        report_type: "annual",
+        period: "2024",
+        document_file_path: hPath,
+        type: "numeric_fact"
+      }
+    ]
+  });
+
+  assert.equal(report.ok, true);
+  assert.equal(report.drafts[0]._draft.file_path, hPath);
+  assert.equal(report.drafts[0].evidence[0].document_file_path, hPath);
+});
+
 test("mineCandidates 缺少精确 evidence 三元组时跳过且不回退同 ticker 文件", async () => {
   const config = makeWorkflowConfig();
   writeManifest(config, [

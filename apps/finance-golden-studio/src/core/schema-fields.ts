@@ -228,6 +228,13 @@ function validateEvidence(
     if (value.page_image_ref !== undefined) {
       validateRequiredString(value.page_image_ref, `${field}.page_image_ref`, errors);
     }
+    if (value.document_file_path !== undefined) {
+      validateRequiredString(
+        value.document_file_path,
+        `${field}.document_file_path`,
+        errors
+      );
+    }
   });
 }
 
@@ -349,6 +356,9 @@ function validateFormStructure(value: unknown, errors: ValidationIssue[]): void 
 function validateLatestBy(value: Record<string, unknown>, errors: ValidationIssue[]): void {
   for (const key of ["field", "scope", "expected_report"]) {
     validateRequiredString(value[key], `resolution.${key}`, errors);
+  }
+  if (value.variant !== undefined) {
+    validateRequiredString(value.variant, "resolution.variant", errors);
   }
   if (value.span !== undefined) {
     if (!isRecord(value.span)) {

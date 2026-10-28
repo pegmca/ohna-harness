@@ -63,6 +63,9 @@ export function buildMineDraft(
         report_type:
           candidate.report_type as GoldenDraft["evidence"][number]["report_type"],
         period: candidate.period,
+        ...(candidate.document_file_path
+          ? { document_file_path: candidate.document_file_path }
+          : {}),
         section: anchor ? `（候选：${anchor.anchor}）` : "（待补：章节）",
         page: anchor?.page ?? 0,
         quote: anchor?.window ?? "",

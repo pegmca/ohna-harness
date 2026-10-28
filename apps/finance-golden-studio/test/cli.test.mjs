@@ -381,7 +381,7 @@ test("doctor 将格式损坏的 manifest 报告为结构化 corpus 失败", asyn
   );
 });
 
-test("doctor 将重复 manifest 三元组报告为结构化 corpus 失败", async () => {
+test("doctor 将重复 manifest file_path 报告为结构化 corpus 失败", async () => {
   const fixture = await makeResolvedWorkspace();
   const record = {
     ticker: "600000.SH",
@@ -413,7 +413,7 @@ test("doctor 将重复 manifest 三元组报告为结构化 corpus 失败", asyn
       errorCode: corpus?.errorCode,
       line: corpus?.line
     },
-    { ok: false, errorCode: "manifest_triple_duplicate", line: 2 }
+    { ok: false, errorCode: "manifest_file_path_duplicate", line: 2 }
   );
 });
 

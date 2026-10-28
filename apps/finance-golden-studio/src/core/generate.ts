@@ -1,9 +1,15 @@
 import { mkdir, readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { GoldenStudioError } from "./errors.js";
+import type { ManifestIndex } from "./evidence-resolution.js";
+import {
+  createManifestIndex,
+  resolveEvidenceRecord,
+  resolveLatestManifestRecord
+} from "./evidence-resolution.js";
 import { writeFileAtomic } from "./fs-atomic.js";
 import type { ManifestRecord } from "./manifest.js";
-import { manifestTripleKey, readManifest } from "./manifest.js";
+import { readManifest } from "./manifest.js";
 import type { ValidationReport } from "./schema.js";
 import { validateGolden } from "./validate.js";
 import type {
@@ -73,8 +79,8 @@ export interface GenerateReport {
  * 将人工作者集映射为可被 finance-api eval loader 消费的数据集。
  *
  * 生成前先完整校验作者集；任何 ERROR 都直接返回失败报告且不写产物。
- * 非负例按 evidence 的精确三元组读取 PDF 原始字节；仅声明的 latest_by
- * 规则允许显式重算来源，绝不静默回退到同 ticker 的其他报告期。
+ * 非负例按 evidence 的稳定 `file_path` 身份读取 PDF 原始字节；仅声明的
+ * latest_by 规则允许显式重算来源，绝不静默回退到同 ticker 的其他报告期。
  *
  * @param config 当前工作区配置。
  * @returns 生成统计、校验结果与数据集本身。
@@ -98,17 +104,14 @@ export async function generateEvalDataset(
       errors: [...validation.errors, ...manifest.errors]
     });
   }
-  const byTriple = new Map(
-    manifest.records.map((record) => [manifestTripleKey(record), record])
-  );
-  const recordsByTicker = groupManifestByTicker(manifest.records);
+  const manifestIndex = createManifestIndex(manifest.records);
   const cases: GeneratedEvalCase[] = [];
   try {
     for (const goldenCase of golden) {
       cases.push(
         goldenCase.is_negative
           ? mapNegativeCase(goldenCase)
-          : await mapRagCase(config, goldenCase, byTriple, recordsByTicker)
+          : await mapRagCase(config, goldenCase, manifestIndex)
       );
     }
   } catch (error) {
@@ -144,25 +147,22 @@ export async function generateEvalDataset(
  *
  * @param config 当前工作区配置。
  * @param goldenCase 作者集记录。
- * @param byTriple manifest 精确索引。
- * @param recordsByTicker latest_by 的显式规则索引。
+ * @param manifestIndex manifest 文件身份与语义索引。
  * @returns 评测 case。
  */
 async function mapRagCase(
   config: WorkspaceConfig,
   goldenCase: GoldenCase,
-  byTriple: ReadonlyMap<string, ManifestRecord>,
-  recordsByTicker: ReadonlyMap<string, readonly ManifestRecord[]>
+  manifestIndex: ManifestIndex
 ): Promise<GeneratedEvalCase> {
   const sources = new Map<string, GeneratedDocument>();
   for (const evidence of goldenCase.evidence) {
     const resolved = resolveEvidence(
       evidence,
       goldenCase.resolution,
-      byTriple,
-      recordsByTicker
+      manifestIndex
     );
-    const source = `${resolved.ticker}/${resolved.report_type}/${resolved.period}`;
+    const source = resolved.file_path;
     if (sources.has(source)) continue;
     const absolutePath = resolve(config.corpusRoot, resolved.file_path);
     assertContainedPath(config.corpusRoot, absolutePath);
@@ -179,7 +179,7 @@ async function mapRagCase(
     }
     sources.set(source, {
       source,
-      fileName: `${source}.pdf`,
+      fileName: resolved.file_path,
       content: {
         contentEncoding: "base64",
         contentBase64: bytes.toString("base64")
@@ -214,20 +214,18 @@ async function mapRagCase(
  *
  * @param evidence 作者集证据。
  * @param resolution 可选的显式时间解析规则。
- * @param byTriple 精确 manifest 索引。
- * @param recordsByTicker latest_by 索引。
+ * @param manifestIndex manifest 文件身份与语义索引。
  * @returns 明确的 manifest 记录。
  */
 function resolveEvidence(
   evidence: GoldenCase["evidence"][number],
   resolution: GoldenResolution | undefined,
-  byTriple: ReadonlyMap<string, ManifestRecord>,
-  recordsByTicker: ReadonlyMap<string, readonly ManifestRecord[]>
+  manifestIndex: ManifestIndex
 ): ManifestRecord {
   if (resolution?.type === "latest_by") {
     const expectedReport = `${evidence.report_type}/${evidence.period}`;
     if (expectedReport !== resolution.expected_report) {
-      return exactManifestRecord(evidence, byTriple);
+      return exactManifestRecord(evidence, manifestIndex);
     }
     const ticker = resolutionScopeTicker(resolution.scope);
     if (ticker !== evidence.ticker) {
@@ -235,33 +233,67 @@ function resolveEvidence(
         `latest_by scope ticker ${ticker} does not match evidence ticker ${evidence.ticker}.`
       );
     }
-    const latest = latestManifestRecord(ticker, recordsByTicker.get(ticker) ?? []);
-    if (!latest) {
-      throw new Error(`latest_by cannot resolve any manifest record for ${ticker}.`);
-    }
-    return latest;
+    return latestManifestRecord(manifestIndex, evidence, resolution.variant);
   }
-  return exactManifestRecord(evidence, byTriple);
+  return exactManifestRecord(evidence, manifestIndex);
 }
 
 /**
  * 读取 evidence 的精确 manifest 三元组；绝不按 ticker 回退。
  *
  * @param evidence 作者集证据。
- * @param byTriple 精确 manifest 索引。
+ * @param manifestIndex manifest 文件身份与语义索引。
  * @returns 精确匹配记录。
  */
 function exactManifestRecord(
   evidence: GoldenCase["evidence"][number],
-  byTriple: ReadonlyMap<string, ManifestRecord>
+  manifestIndex: ManifestIndex
 ): ManifestRecord {
-  const exact = byTriple.get(manifestTripleKey(evidence));
-  if (!exact) {
-    throw new Error(
-      `Exact manifest triple not found for ${evidence.ticker}/${evidence.report_type}/${evidence.period}; refusing fallback.`
+  const exact = resolveEvidenceRecord(evidence, manifestIndex);
+  if (exact.kind === "resolved") return exact.record;
+  if (exact.kind === "ambiguous") {
+    throw new GoldenStudioError(
+      "evidence_parse_failed",
+      `Evidence ${evidence.ticker}/${evidence.report_type}/${evidence.period} matches multiple documents: ${exact.candidateFilePaths.join(", ")}. Set document_file_path to select one.`,
+      {
+        reason: "evidence_source_ambiguous",
+        ticker: evidence.ticker,
+        report_type: evidence.report_type,
+        period: evidence.period,
+        candidate_file_paths: exact.candidateFilePaths,
+        disambiguation_field: exact.disambiguationField
+      }
     );
   }
-  return exact;
+  if (exact.kind === "selector_not_found") {
+    throw new GoldenStudioError(
+      "evidence_parse_failed",
+      `Evidence document_file_path is not declared by the manifest: ${exact.filePath}.`,
+      { reason: "selector_not_found", file_path: exact.filePath }
+    );
+  }
+  if (exact.kind === "selector_mismatch") {
+    throw new GoldenStudioError(
+      "evidence_parse_failed",
+      `Evidence document_file_path ${exact.filePath} has semantic fields ${exact.recordSemantic}, expected ${exact.semantic}.`,
+      {
+        reason: "selector_mismatch",
+        file_path: exact.filePath,
+        expected_semantic: exact.semantic,
+        record_semantic: exact.recordSemantic
+      }
+    );
+  }
+  throw new GoldenStudioError(
+    "evidence_parse_failed",
+    `Exact manifest record not found for ${evidence.ticker}/${evidence.report_type}/${evidence.period}; refusing fallback.`,
+    {
+      reason: "evidence_not_in_manifest",
+      ticker: evidence.ticker,
+      report_type: evidence.report_type,
+      period: evidence.period
+    }
+  );
 }
 
 /**
@@ -281,42 +313,74 @@ function resolutionScopeTicker(scope: string): string {
 /**
  * 按披露日期选择最新记录；无法判定时不猜测。
  *
- * @param records 同 ticker manifest 记录。
- * @returns 最新记录或 undefined。
+ * @param manifestIndex manifest 文件身份与语义索引。
+ * @param evidence 期望报告类型/期。
+ * @param variant 可选显式变体类。
+ * @returns 最新记录。
  */
 function latestManifestRecord(
-  ticker: string,
-  records: readonly ManifestRecord[]
-): ManifestRecord | undefined {
-  const dated = records.filter(
-    (record): record is ManifestRecord & { disclosure_date: string } =>
-      typeof record.disclosure_date === "string" &&
-      record.disclosure_date.trim().length > 0
+  manifestIndex: ManifestIndex,
+  evidence: GoldenCase["evidence"][number],
+  variant?: string
+): ManifestRecord {
+  const latest = resolveLatestManifestRecord(
+    manifestIndex,
+    {
+      ticker: evidence.ticker,
+      report_type: evidence.report_type,
+      period: evidence.period
+    },
+    variant
   );
-  if (dated.length === 0) return undefined;
-  const maximumDate = dated.reduce(
-    (maximum, record) =>
-      record.disclosure_date > maximum ? record.disclosure_date : maximum,
-    dated[0].disclosure_date
-  );
-  const newest = dated.filter(
-    (record) => record.disclosure_date === maximumDate
-  );
-  if (newest.length > 1) {
+  if (latest.kind === "resolved") return latest.record;
+  if (latest.kind === "ambiguous") {
     throw new GoldenStudioError(
       "evidence_parse_failed",
-      `latest_by is ambiguous for ${ticker} on ${maximumDate}.`,
+      `latest_by is ambiguous for ${manifestSemanticLabel(evidence)} on ${latest.disclosureDate}: ${latest.candidateFilePaths.join(", ")}. Set resolution.variant to select one.`,
       {
         reason: "latest_by_ambiguous",
-        ticker,
-        disclosure_date: maximumDate,
-        sources: newest.map((record) =>
-          `${record.ticker}/${record.report_type}/${record.period}`
-        )
+        ticker: evidence.ticker,
+        report_type: evidence.report_type,
+        period: evidence.period,
+        disclosure_date: latest.disclosureDate,
+        candidate_file_paths: latest.candidateFilePaths,
+        disambiguation_field: latest.disambiguationField
       }
     );
   }
-  return newest[0];
+  if (latest.kind === "variant_not_found") {
+    throw new GoldenStudioError(
+      "evidence_parse_failed",
+      `latest_by variant ${latest.variant} has no manifest records for ${manifestSemanticLabel(evidence)}.`,
+      {
+        reason: "latest_by_variant_not_found",
+        ticker: latest.scope.ticker,
+        variant: latest.variant
+      }
+    );
+  }
+  throw new GoldenStudioError(
+    "evidence_parse_failed",
+    `latest_by cannot resolve any manifest record for ${manifestSemanticLabel(evidence)}.`,
+    {
+      reason: latest.reason === "no_records" ? "latest_by_no_records" : "latest_by_no_disclosure_date",
+      ticker: latest.scope.ticker,
+      report_type: latest.scope.report_type,
+      period: latest.scope.period
+    }
+  );
+}
+
+/**
+ * 将 evidence 投影为错误消息中的可读语义标签。
+ *
+ * @param evidence 作者证据。
+ * @returns ticker/report_type/period 文本。
+ */
+function manifestSemanticLabel(
+  evidence: GoldenCase["evidence"][number]
+): string {
+  return `${evidence.ticker}/${evidence.report_type}/${evidence.period}`;
 }
 
 /**
@@ -397,31 +461,13 @@ function createDataset(cases: GeneratedEvalCase[]): GeneratedEvalDataset {
       generator: "apps/finance-golden-studio/src/core/generate.ts",
       version: "1.0.0",
       source: "datasets/finance/rag-golden/golden.jsonl",
-      note: "Human-authored expected_keywords and exact evidence triples; latest_by is explicit."
+      note: "Human-authored expected_keywords and explicit file_path/variant source selectors; latest_by is disclosure-date unique without line-order fallback."
     },
     seed: 20261027,
     domain: "finance",
     minCases: 1,
     cases
   };
-}
-
-/**
- * 按 ticker 索引 manifest。
- *
- * @param records manifest 记录。
- * @returns ticker 到记录列表。
- */
-function groupManifestByTicker(
-  records: readonly ManifestRecord[]
-): Map<string, ManifestRecord[]> {
-  const grouped = new Map<string, ManifestRecord[]>();
-  for (const record of records) {
-    const list = grouped.get(record.ticker) ?? [];
-    list.push(record);
-    grouped.set(record.ticker, list);
-  }
-  return grouped;
 }
 
 /**

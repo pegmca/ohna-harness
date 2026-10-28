@@ -57,7 +57,7 @@ test("validateDraft 对完整草稿返回可达关键词结果", async () => {
   ]);
 });
 
-test("manifest 同时含精确三元组与重复三元组时仍拒绝歧义", async () => {
+test("manifest 同三元组多文件且 evidence 无选择器时返回结构化歧义", async () => {
   const { config } = makeWorkspace({
     manifest: [
       manifestRecord("000776.SZ", "q1", "2025Q1", DEFAULT_PDF_PATH),
@@ -69,10 +69,11 @@ test("manifest 同时含精确三元组与重复三元组时仍拒绝歧义", as
   const report = await validateDraft(config, makeDraft());
 
   assert.equal(report.ok, false);
-  assert.deepEqual(
-    report.errors.map((issue) => issue.code),
-    ["manifest_triple_duplicate"]
-  );
+  assert.deepEqual(report.errors.map((issue) => issue.code), [
+    "evidence_source_ambiguous"
+  ]);
+  assert.match(report.errors[0].message, /DEFAULT_PDF_PATH|raw\/cn\/other\.pdf/u);
+  assert.match(report.errors[0].message, /document_file_path/u);
 });
 
 test("非负例题缺少 expected_keywords 时校验失败", async () => {
@@ -651,7 +652,7 @@ test("manifest 坏行不会被静默跳过，且不会继续制造 evidence 缺�
   );
 });
 
-test("manifest 记录字段不完整或三元组重复时 fail-closed", async () => {
+test("manifest 记录字段不完整或 file_path 重复时 fail-closed", async () => {
   const incomplete = makeWorkspace();
   writeFileSync(incomplete.config.manifestPath, '{"ticker":"000776.SZ"}\n', "utf8");
   const incompleteReport = await validateDraft(incomplete.config, makeDraft());
@@ -669,7 +670,22 @@ test("manifest 记录字段不完整或三元组重复时 fail-closed", async ()
   const duplicateReport = await validateDraft(duplicate.config, makeDraft());
   assert.deepEqual(
     duplicateReport.errors.map((issue) => issue.code),
-    ["manifest_triple_duplicate"]
+    ["evidence_source_ambiguous"]
+  );
+
+  const duplicateIdentity = makeWorkspace({
+    manifest: [
+      manifestRecord("000776.SZ", "q1", "2025Q1", DEFAULT_PDF_PATH),
+      manifestRecord("000776.SZ", "q1", "2025Q1", DEFAULT_PDF_PATH)
+    ]
+  });
+  const duplicateIdentityReport = await validateDraft(
+    duplicateIdentity.config,
+    makeDraft()
+  );
+  assert.deepEqual(
+    duplicateIdentityReport.errors.map((issue) => issue.code),
+    ["manifest_file_path_duplicate"]
   );
 });
 

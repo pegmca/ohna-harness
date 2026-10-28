@@ -19,6 +19,7 @@
 ## 二、题型模板库（7 类，各给锚点 + 必填字段）
 
 所有 `query` 用自然问句；`evidence` 必锁 `ticker/report_type/period`，避免串报告期。
+同三元组对应 A/H 等 manifest 变体时，还必须用 `document_file_path` 钉住文件身份。
 
 | type | 锚点（PDF 内章节标题） | 必填答案字段 | 必填/注意 |
 | --- | --- | --- | --- |
@@ -59,7 +60,8 @@
 
 - [ ] `id` 唯一、`fin-XXX` 连续、无空行。
 - [ ] 非 negative 题 `evidence` 非空且每条命中 manifest（ticker/report_type/period 三元组存在）。
-- [ ] 每条 evidence 三元组在 manifest 中唯一且能读取、解析对应 PDF；不得回退到同公司其他报告期。
+- [ ] evidence 能唯一解析到 manifest `file_path`；三元组唯一时兼容无选择器写法，三元组多文件时必须填 `document_file_path`；不得按 manifest 行序猜测，也不得回退到同公司其他报告期。
+- [ ] 解析出的来源 PDF 可读取、可解析；`document_file_path` 的语义三元组必须与 evidence 一致。
 - [ ] `evidence.section` 已填真实章节（无「（待补）」）。
 - [ ] 非 negative 题 `expected_keywords` 至少一个非空值，且全部能在来源 PDF 原文中命中。
 - [ ] negative 题的 ticker 在 manifest 中确实缺席；若已收录，必须改写或删除该反例。
@@ -67,7 +69,7 @@
 - [ ] `table`/`form` 题有结构化答案；稀疏行已在 `note` 说明。
 - [ ] 跨期/跨文档题 `distractors` 已列易混文档，`note` 写坑点。
 - [ ] `unit_trap` 题 `note` 写明单位，`answer_unit` 准确。
-- [ ] `latest_by` 题带 `snapshot_dependent:true` + `resolution`（按当前 manifest 重算，语料变要重抄）。
+- [ ] `latest_by` 题带 `snapshot_dependent:true` + `resolution`；同 ticker/report_type/period 的披露日必须唯一，跨 A/H 变体并列时用 `resolution.variant` 显式消歧，语料变要重抄。
 - [ ] `validate` 0 ERROR（允许 fin-009 式稀疏行 WARN，但须在 `note` 确认省略是有意的）。
 - [ ] `table` 题在 golden 回归中验证 chunk 级整表召回：summary/whole-table 命中后须通过 `tableGroupId` 覆盖全部 gold 行。
 - [ ] 运行 `node test/assert-finance-table-recall.mjs <out.json>`，确认 `tableRowCoverage`、缺行清单与 sibling 展开状态符合当前诊断基线；当前 fin-008 仍缺组合计提坏账行，其余四题应完整覆盖。

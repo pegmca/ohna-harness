@@ -4,8 +4,14 @@ import { parsePdfBlocks } from "@aiagent/parsing";
 import { saveDraft } from "./drafts.js";
 import { GoldenStudioError } from "./errors.js";
 import { assessExtractionHealth } from "./extraction-health.js";
+import type { ManifestIndex } from "./evidence-resolution.js";
+import {
+  createManifestIndex,
+  resolveEvidenceRecord
+} from "./evidence-resolution.js";
 import type { ManifestRecord } from "./manifest.js";
-import { manifestTripleKey, readManifest } from "./manifest.js";
+import { readManifest } from "./manifest.js";
+import type { GoldenReportType } from "./types.js";
 import {
   buildMineDraft,
   buildNegativeDraft,
@@ -35,6 +41,9 @@ export interface MineSkip {
   reason:
     | "batch_exists"
     | "evidence_not_in_manifest"
+    | "evidence_source_ambiguous"
+    | "evidence_document_selector_not_found"
+    | "evidence_document_selector_mismatch"
     | "evidence_not_found"
     | "evidence_parse_failed"
     | "text_too_short"
@@ -58,8 +67,8 @@ export interface MineReport {
 /**
  * 从精确定位的 PDF 生成待人工补全的候选草稿。
  *
- * 候选条目通过现有草稿仓库原子保存。来源三元组缺失、PDF 缺失或抽取文本
- * 过短都作为显式跳过项返回，不借用同 ticker 的其他文件。
+ * 候选条目通过现有草稿仓库原子保存。来源缺失、语义歧义、PDF 缺失或抽取
+ * 文本过短都作为显式跳过项返回，不借用同 ticker 的其他文件，也不按行序猜测。
  *
  * @param config 当前工作区配置。
  * @param input 批次名与候选列表。
@@ -79,9 +88,7 @@ export async function mineCandidates(
       { errors: manifest.errors, manifestPath: config.manifestPath }
     );
   }
-  const byTriple = new Map(
-    manifest.records.map((record) => [manifestTripleKey(record), record])
-  );
+  const manifestIndex = createManifestIndex(manifest.records);
   const tickers = new Set(manifest.records.map((record) => record.ticker));
   const drafts: GoldenDraft[] = [];
   const skipped: MineSkip[] = [];
@@ -128,19 +135,24 @@ export async function mineCandidates(
       continue;
     }
 
-    const record = byTriple.get(manifestTripleKey(candidate));
-    if (!record) {
+    const resolution = resolveCandidateRecord(candidate, manifestIndex);
+    if (resolution.kind !== "resolved") {
       skipped.push({
         candidate,
         id,
-        reason: "evidence_not_in_manifest",
-        message: `Exact manifest triple not found: ${manifestTripleKey(candidate)}.`
+        reason: candidateResolutionReason(resolution.kind),
+        message: candidateResolutionMessage(candidate, resolution)
       });
       continue;
     }
 
     try {
-      const result = await buildCandidateDraft(config, candidate, record, id);
+      const result = await buildCandidateDraft(
+        config,
+        candidate,
+        resolution.record,
+        id
+      );
       if ("reason" in result) {
         skipped.push({ candidate, id, ...result });
         continue;
@@ -178,6 +190,76 @@ export async function mineCandidates(
     drafts: savedDrafts,
     skipped
   };
+}
+
+/**
+ * 解析候选来源记录；同三元组多文件必须由 document_file_path 消歧。
+ *
+ * @param candidate mine 候选。
+ * @param index manifest 文件身份与语义索引。
+ * @returns 唯一记录或结构化失败。
+ */
+function resolveCandidateRecord(
+  candidate: MineCandidate,
+  index: ManifestIndex
+): ReturnType<typeof resolveEvidenceRecord> {
+  return resolveEvidenceRecord(
+    {
+      ticker: candidate.ticker,
+      report_type: candidate.report_type as GoldenReportType,
+      period: candidate.period,
+      ...(candidate.document_file_path
+        ? { document_file_path: candidate.document_file_path }
+        : {})
+    },
+    index
+  );
+}
+
+/**
+ * 将结构化来源解析结果映射为稳定的 mine 跳过原因。
+ *
+ * @param kind 来源解析失败类型。
+ * @returns MineSkip reason。
+ */
+function candidateResolutionReason(
+  kind: ReturnType<typeof resolveEvidenceRecord>["kind"]
+): MineSkip["reason"] {
+  switch (kind) {
+    case "ambiguous":
+      return "evidence_source_ambiguous";
+    case "selector_not_found":
+      return "evidence_document_selector_not_found";
+    case "selector_mismatch":
+      return "evidence_document_selector_mismatch";
+    case "not_found":
+      return "evidence_not_in_manifest";
+    case "resolved":
+      return "invalid_candidate";
+  }
+}
+
+/**
+ * 生成候选来源解析失败的可读诊断，歧义时列出全部 file_path。
+ *
+ * @param candidate mine 候选。
+ * @param resolution 来源解析结果。
+ * @returns 诊断文本。
+ */
+function candidateResolutionMessage(
+  candidate: MineCandidate,
+  resolution: ReturnType<typeof resolveEvidenceRecord>
+): string {
+  if (resolution.kind === "ambiguous") {
+    return `Candidate ${candidate.ticker}/${candidate.report_type}/${candidate.period} matches multiple documents: ${resolution.candidateFilePaths.join(", ")}. Set document_file_path to select one.`;
+  }
+  if (resolution.kind === "selector_not_found") {
+    return `Candidate document_file_path is not declared by the manifest: ${resolution.filePath}.`;
+  }
+  if (resolution.kind === "selector_mismatch") {
+    return `Candidate document_file_path ${resolution.filePath} has semantic fields ${resolution.recordSemantic}, expected ${resolution.semantic}.`;
+  }
+  return `Exact manifest record not found: ${candidate.ticker}/${candidate.report_type}/${candidate.period}.`;
 }
 
 /**

@@ -12,7 +12,7 @@
 4. **跨期 / 跨报告陷阱**：用 `distractors` 显式列出易混淆的同源文档（如不同年度年报），并在 `note` 里写明坑点。
 5. **报告期锁定**：`evidence` 必须明确 `ticker / report_type / period`，避免模型串报告期。
 6. **评测关键词**：所有非 negative 题必须手填 `expected_keywords: string[]`，至少一个非空值；每个关键词必须能在本题 `evidence` 指向的真实解析 PDF 中命中。不得从 `gold_answer` 自动反推，也不得用不存在的词凑数。
-7. **来源引用可校验**：`evidence` 的 `ticker / report_type / period` 三元组必须与 `manifest.jsonl` 中一条记录精确匹配，不允许回退到同公司其他报告期；evidence 非空且每条来源 PDF 必须可读取、可解析。
+7. **来源引用可校验**：`evidence` 的 `ticker / report_type / period` 三元组必须与 `manifest.jsonl` 中至少一条记录精确匹配，不允许回退到同公司其他报告期；evidence 非空且每条来源 PDF 必须可读取、可解析。`file_path` 是 manifest 的唯一文档身份，同一语义三元组可以对应 A/H 等不同变体；此时无选择器的 evidence 必须报结构化歧义，作者需填写 `document_file_path`。
 8. **作者集完整性**：`evidence.section` 不得残留 `（待补：…）` / `（候选：…）` 标记；`golden.jsonl` 每行一个对象、ID 唯一、文件至少一条记录。任何 ERROR 都会阻止 promote / generate。
 
 ## 二、两级评估约定
@@ -54,6 +54,7 @@
 | `ticker` | string | 证券代码，如 `000776.SZ` |
 | `report_type` | enum | `annual` / `interim` / `q1` / `q2` / `q3` / `prospectus` / `announcement` / `esg` |
 | `period` | string | 报告期，如 `2025Q1` / `2025` / `2025H1` |
+| `document_file_path` | string | 可选；同三元组存在多个 manifest 文档时必填，精确选择 `file_path` |
 | `section` | string | 已完成定位的真实章节名；草稿阶段可临时写 `（待补：xxx）`，校验 / 入册时必须替换 |
 | `page` | int | 页码，未知填 0 |
 | `quote` | string | 人工从真值转录的原文 / 数值 |
@@ -83,11 +84,11 @@
 
 ## 五、时间解析类题目（“最新 / 最近 / 近年来” 等相对时间词）
 
-- “最新”不是固定时间点，而是**查询时解析**出来的：同一 `ticker` 在语料中 `disclosure_date` 最晚的那条记录。它属于 Query Understanding / 时间路由子系统的职责，作者集不应把它当静态真值写死进 `evidence`。
+- “最新”不是固定时间点，而是**查询时解析**出来的。默认作用域是同一 `ticker + report_type + period` 内 `disclosure_date` 唯一最晚的那条记录；其他报告类型或报告期不参与比较。若 A/H 等变体披露日并列，解析器返回结构化歧义，绝不按 manifest 行序选择。它属于 Query Understanding / 时间路由子系统的职责，作者集不应把它当静态真值写死进 `evidence`。
 - 存放约定：
   - `query` 保持自然语言（含“最新”），不要预解析成具体报告期。
   - 黄金答案数值是**快照值**：以数据集定稿时的语料为准计算；新增顶层字段 `resolution` 记录解析规则与当时解析出的报告期，并在顶层标 `snapshot_dependent: true`。若语料后续新增更晚披露的文件，数值与解析结果必须重算。
-  - `resolution` 结构：`{ type: "latest_by", field: "disclosure_date", scope: "ticker=<ticker>", expected_report: "<report_type>/<period>" }`。
+  - `resolution` 结构：`{ type: "latest_by", field: "disclosure_date", scope: "ticker=<ticker>", expected_report: "<report_type>/<period>", variant?: "<a|h|...>" }`。`variant` 只在同报告期跨 A/H 变体消歧时填写；不得从 `title` 猜测 H 股。
   - `evidence.period` 在此类题里表示“期望解析命中的文档”，是**解析正确性的诊断项**，不是不可变来源；评测应拆出“解析是否正确命中最新文档”与“答案数值是否正确”两个指标。
   - `distractors` 放往期文档（如旧年报），用于检验时间路由而非检索。
 
@@ -108,10 +109,10 @@
 - 作者集（`golden.jsonl`）是人工标注的单一事实来源；**不要把真值直接写成评测器的 `rag-golden-v1.json`**，统一由生成器映射。
 - 生成器：`pnpm golden-studio generate`，产出 `datasets/finance/rag-golden-v1.json`。
 - 映射约定（与 `rag-v1.json` 口径对齐）：
-  - 每条非 negative case 按 `evidence[].ticker+report_type+period` 从 `manifest/manifest.jsonl` 定位真实 PDF，把原始字节以 `{contentEncoding:"base64", contentBase64}` 信封填入 `documents.content`；loader 解码为 `Uint8Array` 后直接进入真实 `ingestDocument`。
-  - `source` 标识稳定为 `<ticker>/<report_type>/<period>`，`.fileName` 保持 `.pdf`。
+  - 每条非 negative case 按 evidence 的 `document_file_path` 或无歧义三元组从 `manifest/manifest.jsonl` 定位真实 PDF，把原始字节以 `{contentEncoding:"base64", contentBase64}` 信封填入 `documents.content`；loader 解码为 `Uint8Array` 后直接进入真实 `ingestDocument`。
+  - `source` 与 `fileName` 使用解析出的稳定 `file_path`，`expectedSources` 同步使用该文件身份；同一三元组可区分 A/H 文件。
   - **不设 `expectedDocumentIds`**（真实 `citation.documentId` 是 ingest 时 UUID）；`minCitations=2`。
-  - `latest_by` 时间解析题：生成器按当前 manifest 取同 ticker 披露日最晚的一条**重算**报告期与 `file_path`，避免引到过时/不存在的 PDF；gold_answer 仍是作者集快照值，语料变更须人工重抄（见 `fin-008` 示例）。
+  - `latest_by` 时间解析题：生成器按当前 manifest 取同 `ticker/report_type/period` 披露日唯一最晚的一条**重算** `file_path`，避免引到过时/不存在的 PDF；披露日跨变体并列时报结构化歧义，可由 `resolution.variant` 显式消歧。gold_answer 仍是作者集快照值，语料变更须人工重抄（见 `fin-008` 示例）。
   - `negative` 题（语料无此 ticker）映射为 `mode="failure"` + `documents:[]` 占位；deterministic 档当前不执行，留 Step 5。
   - `expected_keywords` 原样映射为评测器的 `expectedKeywords`，不得从 gold prose、表格或表单反推。
 - 校验顺序：先 `pnpm golden-studio validate --golden --json` 校验作者集，再 `pnpm golden-studio generate --json` 生成并跑 `pnpm eval:finance-golden`。

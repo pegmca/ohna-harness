@@ -236,7 +236,9 @@ test("当前 14 条作者记录可导入且 13 条正例题都有非空 expected
 });
 
 test("真实 14 条作者集通过统一 validate 路径且生成物传播 same keywords", async () => {
-  const authoring = makeFixtureFromAuthoredGolden();
+  const authoring = makeFixtureFromAuthoredGolden({
+    keywords: ["Fixture evidence source."]
+  });
   const { resolveWorkspaceConfig } = await import("../src/core/workspace.ts");
   const { validateGolden } = await import("../src/core/validate.ts");
   const { generateEvalDataset } = await import("../src/core/generate.ts");
@@ -409,14 +411,14 @@ function readGoldenJsonl(path) {
  *
  * @returns {{workspaceRoot: string, corpusRoot: string}} 工作区根。
  */
-function makeFixtureFromAuthoredGolden() {
+function makeFixtureFromAuthoredGolden({ keywords } = {}) {
   const fixture = makeWorkflowConfig();
   const records = readGoldenJsonl(AUTHORED_GOLDEN);
   const fixtureRecords = records.map((record) => ({
     ...record,
-    ...(record.is_negative
-      ? {}
-      : { expected_keywords: ["Fixture evidence source."] })
+    ...(keywords && !record.is_negative
+      ? { expected_keywords: keywords }
+      : {})
   }));
   const manifest = [];
   const created = new Set();

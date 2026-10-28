@@ -24,7 +24,12 @@ export type ValidationIssueCode =
   | "golden_id_duplicate"
   | "manifest_json_invalid"
   | "manifest_record_invalid"
-  | "manifest_triple_duplicate"
+  | "manifest_file_path_duplicate"
+  | "evidence_source_ambiguous"
+  | "evidence_document_selector_not_found"
+  | "evidence_document_selector_mismatch"
+  | "latest_by_ambiguous"
+  | "latest_by_variant_not_found"
   | "expected_keywords_required"
   | "expected_keyword_empty"
   | "keyword_unreachable"
@@ -184,6 +189,8 @@ export interface MineCandidate {
   period: string;
   type: GoldenDraftType;
   periods?: string[];
+  /** 可选稳定文件身份，用于同三元组 A/H 变体的消歧。 */
+  document_file_path?: string;
 }
 
 /** Golden 草稿的难度枚举。 */
@@ -224,6 +231,8 @@ export interface GoldenEvidence {
   ticker: string;
   report_type: GoldenReportType;
   period: string;
+  /** 可选稳定文件身份；同三元组有多个变体时必须填写。 */
+  document_file_path?: string;
   section: string;
   page: number;
   quote: string;
@@ -245,6 +254,8 @@ export interface GoldenLatestByResolution {
   field: string;
   scope: string;
   expected_report: string;
+  /** 可选 A/H 等显式变体类，只在同 ticker 跨变体消歧时使用。 */
+  variant?: string;
   span?: {
     window: string;
     rule: string;

@@ -1,10 +1,17 @@
 import type { PdfEvidenceDocument } from "./evidence.js";
 import { readPdfEvidence } from "./evidence.js";
 import { GoldenStudioError } from "./errors.js";
+import type { ManifestIndex } from "./evidence-resolution.js";
+import {
+  resolveEvidenceRecord,
+  resolveLatestManifestRecord,
+  type ManifestEvidenceResolution,
+  type ManifestLatestResolution
+} from "./evidence-resolution.js";
 import type { KeywordReachabilityResult } from "./keywords.js";
 import { validateKeywordReachability } from "./keywords.js";
 import type { ManifestRecord } from "./manifest.js";
-import { manifestTripleKey } from "./manifest.js";
+import { manifestFilePathKey } from "./manifest.js";
 import { isRecord, issue } from "./schema.js";
 import type { ValidationIssue } from "./schema.js";
 import { validateDraftSchema } from "./schema-fields.js";
@@ -38,6 +45,12 @@ export interface ValidationPipelineResult {
   records: ValidationPipelineRecord[];
 }
 
+/** 单条记录按 exact/latest_by 规则解析 evidence 的中间结果。 */
+type RecordEvidenceResolution =
+  | { kind: "resolved"; record: ManifestRecord }
+  | { kind: "exact"; result: Exclude<ManifestEvidenceResolution, { kind: "resolved" }> }
+  | { kind: "latest"; result: ManifestLatestResolution };
+
 /**
  * 批量执行作者集逐行校验，并复用已读取的 manifest 与 PDF。
  *
@@ -46,13 +59,13 @@ export interface ValidationPipelineResult {
  *
  * @param config 当前工作区配置。
  * @param records 已解析作者集行。
- * @param byTriple manifest 三元组索引。
+ * @param manifestIndex manifest 文件身份与语义索引。
  * @returns 保持输入顺序的逐行结果。
  */
 export async function runValidationPipeline(
   config: WorkspaceConfig,
   records: readonly ValidationRecord[],
-  byTriple: ReadonlyMap<string, ManifestRecord>
+  manifestIndex: ManifestIndex
 ): Promise<ValidationPipelineResult> {
   const parsed = records.map((item) => ({
     ...item,
@@ -67,12 +80,17 @@ export async function runValidationPipeline(
           (candidate.code === "array_required" && candidate.field === "evidence")
       ) &&
       (evidence.length > 0 || record.is_negative === true) &&
-      evidence.every(({ value }) => byTriple.has(manifestTripleKey(value)))
+      evidence.every(({ value }) => {
+        const resolution = resolveRecordEvidence(record, value, manifestIndex);
+        return resolution.kind === "resolved";
+      })
   );
   const loaded = await readUniqueEvidenceDocuments(
     config,
-    stable.flatMap(({ evidence }) => evidence),
-    byTriple
+    stable.flatMap(({ record, evidence }) =>
+      evidence.map((item) => ({ ...item, record }))
+    ),
+    manifestIndex
   );
 
   return {
@@ -82,7 +100,7 @@ export async function runValidationPipeline(
       const keywordResults = validateRecordReferences(
         record,
         evidence,
-        byTriple,
+        manifestIndex,
         loaded.documents,
         errors,
         loaded.failures
@@ -97,22 +115,22 @@ export async function runValidationPipeline(
  *
  * @param record 作者对象。
  * @param evidence 可安全定位的 evidence。
- * @param byTriple manifest 索引。
+ * @param manifestIndex manifest 文件身份与语义索引。
  * @param documents 已解析来源。
  * @param errors 错误收集器。
- * @param readFailures 三元组到 PDF 读取异常的索引。
+ * @param readFailures file_path 到 PDF 读取异常的索引。
  * @returns 关键词结果。
  */
 export function validateRecordReferences(
   record: Record<string, unknown>,
   evidence: ReadonlyArray<{ value: GoldenEvidence; index: number }>,
-  byTriple: ReadonlyMap<string, ManifestRecord>,
+  manifestIndex: ManifestIndex,
   documents: ReadonlyMap<string, PdfEvidenceDocument>,
   errors: ValidationIssue[],
   readFailures: ReadonlyMap<string, unknown> = new Map()
 ): KeywordReachabilityResult[] {
   if (isRecord(record.resolution) && record.resolution.type === "ticker_absent") {
-    validateNegativeTicker(record.resolution, byTriple, errors);
+    validateNegativeTicker(record.resolution, manifestIndex, errors);
   }
   validateExpectedKeywords(record, errors);
   validateSections(record.evidence, errors);
@@ -126,34 +144,82 @@ export function validateRecordReferences(
       )
     );
   }
-  for (const { value, index } of evidence) {
-    if (!byTriple.has(manifestTripleKey(value))) {
+  for (const { value, index: evidenceIndex } of evidence) {
+    const resolution = resolveRecordEvidence(record, value, manifestIndex);
+    if (resolution.kind === "latest") {
+      addLatestByResolutionErrors(
+        resolution.result,
+        evidenceIndex,
+        errors
+      );
+      continue;
+    }
+    const exact = resolution.kind === "resolved"
+      ? undefined
+      : resolution.result;
+    if (exact?.kind === "not_found") {
       errors.push(
         issue(
           "evidence_not_in_manifest",
-          `evidence[${index}] ${value.ticker}/${value.report_type}/${value.period} is not in manifest.`,
-          `evidence[${index}]`
+          `evidence[${evidenceIndex}] ${value.ticker}/${value.report_type}/${value.period} is not in manifest.`,
+          `evidence[${evidenceIndex}]`
+        )
+      );
+    }
+    if (exact?.kind === "ambiguous") {
+      errors.push(
+        issue(
+          "evidence_source_ambiguous",
+          `evidence[${evidenceIndex}] ${value.ticker}/${value.report_type}/${value.period} matches multiple documents: ${exact.candidateFilePaths.join(", ")}. Set document_file_path to select one.`,
+          `evidence[${evidenceIndex}].document_file_path`
+        )
+      );
+    }
+    if (exact?.kind === "selector_not_found") {
+      errors.push(
+        issue(
+          "evidence_document_selector_not_found",
+          `evidence[${evidenceIndex}].document_file_path is not declared by the manifest: ${exact.filePath}.`,
+          `evidence[${evidenceIndex}].document_file_path`
+        )
+      );
+    }
+    if (exact?.kind === "selector_mismatch") {
+      errors.push(
+        issue(
+          "evidence_document_selector_mismatch",
+          `evidence[${evidenceIndex}].document_file_path ${exact.filePath} has semantic fields ${exact.recordSemantic}, expected ${exact.semantic}.`,
+          `evidence[${evidenceIndex}].document_file_path`
         )
       );
     }
   }
 
   const unavailable = new Set(
-    evidence
-      .map(({ value }) => manifestTripleKey(value))
-      .filter((key) => byTriple.has(key) && !documents.has(key))
+    evidence.flatMap(({ value }) => {
+      const resolution = resolveRecordEvidence(record, value, manifestIndex);
+      if (resolution.kind !== "resolved") return [];
+      const key = manifestFilePathKey(resolution.record.file_path);
+      return documents.has(key) ? [] : [key];
+    })
   );
-  for (const { value, index } of evidence) {
-    const key = manifestTripleKey(value);
+  for (const { value, index: evidenceIndex } of evidence) {
+    const resolution = resolveRecordEvidence(record, value, manifestIndex);
+    if (resolution.kind !== "resolved") continue;
+    const key = manifestFilePathKey(resolution.record.file_path);
     if (unavailable.delete(key)) {
-      errors.push(toEvidenceIssue(readFailures.get(key), index));
+      errors.push(toEvidenceIssue(readFailures.get(key), evidenceIndex));
     }
   }
 
   const recordDocuments = [
     ...new Set(
       evidence.flatMap(({ value }) => {
-        const document = documents.get(manifestTripleKey(value));
+        const resolution = resolveRecordEvidence(record, value, manifestIndex);
+        if (resolution.kind !== "resolved") return [];
+        const document = documents.get(
+          manifestFilePathKey(resolution.record.file_path)
+        );
         return document ? [document] : [];
       })
     )
@@ -291,7 +357,7 @@ function validateSections(value: unknown, errors: ValidationIssue[]): void {
  */
 function validateNegativeTicker(
   resolution: Record<string, unknown>,
-  byTriple: ReadonlyMap<string, ManifestRecord>,
+  index: ManifestIndex,
   errors: ValidationIssue[]
 ): void {
   const target = resolveTickerAbsentTarget(resolution);
@@ -303,10 +369,117 @@ function validateNegativeTicker(
     return;
   }
   const ticker = target.ticker;
-  if ([...byTriple.values()].some((record) => record.ticker === ticker)) {
+  if (index.records.some((record) => record.ticker === ticker)) {
     const found = tickerPresentIssue(target);
     if (found) errors.push(found);
   }
+}
+
+/**
+ * 按记录 resolution 规则解析 evidence 的稳定文件身份。
+ *
+ * latest_by 在 `expected_report` 与 scope 命中当前 evidence 时重算最新文档；
+ * 其余情况仍走精确语义/文件身份解析。latest_by 失败不退回行序选择。
+ *
+ * @param record 作者记录。
+ * @param evidence evidence 引用。
+ * @param index manifest 文件身份与语义索引。
+ * @returns 唯一记录或精确/latest 结构化失败。
+ */
+export function resolveRecordEvidence(
+  record: Record<string, unknown>,
+  evidence: GoldenEvidence,
+  index: ManifestIndex
+): RecordEvidenceResolution {
+  if (isLatestByEvidenceResolution(record.resolution, evidence)) {
+    const resolution = record.resolution as Record<string, unknown>;
+    const variant =
+      typeof resolution.variant === "string" &&
+      resolution.variant.trim().length > 0
+        ? resolution.variant
+        : undefined;
+    const latest = resolveLatestManifestRecord(
+      index,
+      {
+        ticker: evidence.ticker,
+        report_type: evidence.report_type,
+        period: evidence.period
+      },
+      variant
+    );
+    return latest.kind === "resolved"
+      ? { kind: "resolved", record: latest.record }
+      : { kind: "latest", result: latest };
+  }
+
+  const exact = resolveEvidenceRecord(evidence, index);
+  return exact.kind === "resolved"
+    ? { kind: "resolved", record: exact.record }
+    : { kind: "exact", result: exact };
+}
+
+/**
+ * 将 latest_by 结构化失败追加为稳定校验问题。
+ *
+ * @param resolution latest_by 解析结果。
+ * @param evidenceIndex evidence 数组索引。
+ * @param errors 错误收集器。
+ */
+function addLatestByResolutionErrors(
+  resolution: ManifestLatestResolution,
+  evidenceIndex: number,
+  errors: ValidationIssue[]
+): void {
+  if (resolution.kind === "ambiguous") {
+    errors.push(
+      issue(
+        "latest_by_ambiguous",
+        `latest_by for evidence[${evidenceIndex}] is ambiguous on ${resolution.disclosureDate}: ${resolution.candidateFilePaths.join(", ")}. Set resolution.variant to select one.`,
+        "resolution.variant"
+      )
+    );
+    return;
+  }
+  if (resolution.kind === "variant_not_found") {
+    errors.push(
+      issue(
+        "latest_by_variant_not_found",
+        `resolution.variant ${resolution.variant} has no manifest records for ${resolution.scope.ticker}/${resolution.scope.report_type}/${resolution.scope.period}.`,
+        "resolution.variant"
+      )
+    );
+    return;
+  }
+  errors.push(
+    issue(
+      "evidence_not_in_manifest",
+      `latest_by cannot resolve any manifest record for evidence[${evidenceIndex}].`,
+      `evidence[${evidenceIndex}]`
+    )
+  );
+}
+
+/**
+ * 判断当前 evidence 是否应由 latest_by 重算。
+ *
+ * @param resolution 原 resolution 值。
+ * @param evidence evidence 引用。
+ * @returns 命中 latest_by 规则时为 true。
+ */
+function isLatestByEvidenceResolution(
+  resolution: unknown,
+  evidence: GoldenEvidence
+): boolean {
+  if (!isRecord(resolution) || resolution.type !== "latest_by") return false;
+  if (
+    `${evidence.report_type}/${evidence.period}` !== resolution.expected_report
+  ) {
+    return false;
+  }
+  const match = /^ticker=([^,;\s]+)$/u.exec(
+    typeof resolution.scope === "string" ? resolution.scope.trim() : ""
+  );
+  return match?.[1] === evidence.ticker;
 }
 
 /**
@@ -349,6 +522,10 @@ export function selectValidEvidence(
             : {}),
           ...(typeof candidate.page_image_ref === "string"
             ? { page_image_ref: candidate.page_image_ref }
+            : {}),
+          ...(typeof candidate.document_file_path === "string" &&
+          candidate.document_file_path.trim().length > 0
+            ? { document_file_path: candidate.document_file_path }
             : {})
         },
         index
@@ -362,32 +539,47 @@ export function selectValidEvidence(
  *
  * @param config 当前工作区配置。
  * @param evidence 待读取来源。
- * @param byTriple manifest 索引。
- * @returns 三元组到成功证据文档的索引。
+ * @param index manifest 文件身份与语义索引。
+ * @returns file_path 到成功证据文档的索引。
  */
 async function readUniqueEvidenceDocuments(
   config: WorkspaceConfig,
-  evidence: ReadonlyArray<{ value: GoldenEvidence; index: number }>,
-  byTriple: ReadonlyMap<string, ManifestRecord>
+  evidence: ReadonlyArray<{
+    value: GoldenEvidence;
+    index: number;
+    record: Record<string, unknown>;
+  }>,
+  index: ManifestIndex
 ): Promise<{
   documents: Map<string, PdfEvidenceDocument>;
   failures: Map<string, unknown>;
 }> {
   const documents = new Map<string, PdfEvidenceDocument>();
   const failures = new Map<string, unknown>();
-  const keys = new Set(evidence.map(({ value }) => manifestTripleKey(value)));
-  for (const key of keys) {
-    const manifestRecord = byTriple.get(key);
+  const filePaths = new Set(
+    evidence.flatMap(({ record, value }) => {
+      const resolution = resolveRecordEvidence(record, value, index);
+      return resolution.kind === "resolved"
+        ? [resolution.record.file_path]
+        : [];
+    })
+  );
+  for (const filePath of filePaths) {
+    const manifestRecord = index.byFilePath.get(manifestFilePathKey(filePath));
     if (!manifestRecord) continue;
     try {
-      documents.set(key, await readPdfEvidence(config, manifestRecord.file_path));
+      documents.set(
+        manifestFilePathKey(filePath),
+        await readPdfEvidence(config, manifestRecord.file_path)
+      );
     } catch (error) {
-      failures.set(key, error);
+      failures.set(manifestFilePathKey(filePath), error);
     }
   }
   return { documents, failures };
 }
 
+/**
 /**
  * 去掉同字段同代码的重复 schema 诊断。
  *

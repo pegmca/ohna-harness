@@ -1,9 +1,13 @@
 import { readFile } from "node:fs/promises";
 import type { PdfEvidenceDocument } from "./evidence.js";
 import { readPdfEvidence } from "./evidence.js";
+import type { ManifestIndex } from "./evidence-resolution.js";
+import {
+  createManifestIndex,
+  resolveEvidenceRecord
+} from "./evidence-resolution.js";
 import type { KeywordReachabilityResult } from "./keywords.js";
-import type { ManifestRecord } from "./manifest.js";
-import { manifestTripleKey, readManifest } from "./manifest.js";
+import { manifestFilePathKey, readManifest } from "./manifest.js";
 import type {
   ValidationIssue,
   ValidationIssueCode,
@@ -48,10 +52,12 @@ export async function validateDraft(
   if (manifest.errors.length > 0) {
     return createValidationReport({ errors: manifest.errors });
   }
-  const byTriple = new Map(
-    manifest.records.map((record) => [manifestTripleKey(record), record])
+  return validateRecordWithManifest(
+    config,
+    draft,
+    createManifestIndex(manifest.records),
+    true
   );
-  return validateRecordWithManifest(config, draft, byTriple, true);
 }
 
 /**
@@ -99,9 +105,7 @@ export async function validateGolden(config: WorkspaceConfig): Promise<Validatio
   const warnings: ValidationIssue[] = [];
   const keywordResults: KeywordReachabilityResult[] = [];
   const seenIds = new Map<string, number>();
-  const byTriple = new Map(
-    manifest.records.map((record) => [manifestTripleKey(record), record])
-  );
+  const index = createManifestIndex(manifest.records);
   const parsedRecords: Array<{
     record: Record<string, unknown>;
     line: number;
@@ -142,7 +146,7 @@ export async function validateGolden(config: WorkspaceConfig): Promise<Validatio
     parsedRecords.push({ record: parsed, line: lineNumber, ...(id ? { id } : {}) });
   }
 
-  const pipeline = await runValidationPipeline(config, parsedRecords, byTriple);
+  const pipeline = await runValidationPipeline(config, parsedRecords, index);
   for (const result of pipeline.records) {
     errors.push(...withLine(result.errors, result.line, result.id));
     warnings.push(...withLine(result.warnings, result.line, result.id));
@@ -157,14 +161,14 @@ export async function validateGolden(config: WorkspaceConfig): Promise<Validatio
  *
  * @param config 当前工作区配置。
  * @param input 待校验记录。
- * @param byTriple manifest 三元组索引。
+ * @param index manifest 文件身份与语义索引。
  * @param allowDraftId 是否接受 fin-D 草稿编号。
  * @returns 统一校验报告。
  */
 async function validateRecordWithManifest(
   config: WorkspaceConfig,
   input: unknown,
-  byTriple: ReadonlyMap<string, ManifestRecord>,
+  index: ManifestIndex,
   allowDraftId: boolean
 ): Promise<ValidationReport> {
   const schema = validateDraftSchema(input, { allowDraftId });
@@ -173,21 +177,24 @@ async function validateRecordWithManifest(
   }
   const record = input;
   const evidence = selectValidEvidence(record.evidence);
-  const loaded = await readEvidenceDocuments(config, evidence, byTriple);
+  const loaded = await readEvidenceDocuments(config, evidence, index);
   const documents = new Map(
     loaded.successes.map(({ value, document }) => [
-      manifestTripleKey(value),
+      resolvedFilePath(value, index),
       document
-    ])
+    ]).filter(([key]) => key !== undefined) as Array<[string, PdfEvidenceDocument]>
   );
   const errors: ValidationIssue[] = [];
   const readFailures = new Map(
-    loaded.failures.map(({ value, error }) => [manifestTripleKey(value), error])
+    loaded.failures.map(({ value, error }) => [
+      resolvedFilePath(value, index) ?? manifestFilePathKey(value.document_file_path ?? ""),
+      error
+    ])
   );
   const keywordResults = validateRecordReferences(
     record,
     evidence,
-    byTriple,
+    index,
     documents,
     errors,
     readFailures
@@ -205,13 +212,13 @@ async function validateRecordWithManifest(
  *
  * @param config 当前工作区配置。
  * @param evidence 合法 evidence 及其数组索引。
- * @param byTriple manifest 索引。
+ * @param index manifest 文件身份与语义索引。
  * @returns 读取成功的来源文档。
  */
 async function readEvidenceDocuments(
   config: WorkspaceConfig,
   evidence: ReadonlyArray<{ value: GoldenEvidence; index: number }>,
-  byTriple: ReadonlyMap<string, ManifestRecord>
+  index: ManifestIndex
 ): Promise<{
   successes: Array<{ value: GoldenEvidence; document: PdfEvidenceDocument }>;
   failures: Array<{ value: GoldenEvidence; index: number; error: unknown }>;
@@ -219,8 +226,9 @@ async function readEvidenceDocuments(
   const successes: Array<{ value: GoldenEvidence; document: PdfEvidenceDocument }> = [];
   const failures: Array<{ value: GoldenEvidence; index: number; error: unknown }> = [];
   for (const item of evidence) {
-    const manifestRecord = byTriple.get(manifestTripleKey(item.value));
-    if (!manifestRecord) continue;
+    const resolution = resolveEvidenceRecord(item.value, index);
+    if (resolution.kind !== "resolved") continue;
+    const manifestRecord = resolution.record;
     try {
       successes.push({
         value: item.value,
@@ -231,6 +239,23 @@ async function readEvidenceDocuments(
     }
   }
   return { successes, failures };
+}
+
+/**
+ * 获取 evidence 解析后的规范化文件身份。
+ *
+ * @param evidence 作者证据。
+ * @param index manifest 索引。
+ * @returns 规范化路径；无法唯一解析时为 undefined。
+ */
+function resolvedFilePath(
+  evidence: GoldenEvidence,
+  index: ManifestIndex
+): string | undefined {
+  const resolution = resolveEvidenceRecord(evidence, index);
+  return resolution.kind === "resolved"
+    ? manifestFilePathKey(resolution.record.file_path)
+    : undefined;
 }
 
 /**

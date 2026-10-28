@@ -58,10 +58,14 @@ The corpus manifest is intentionally stored outside tracked fixtures. If it is
 absent, commands fail with a structured configuration error instead of falling
 back to a developer-specific absolute path.
 
-The private corpus manifest currently contains a duplicate
-`600011.SH/annual/2024` triple. `doctor` and `validate` intentionally report that
-duplicate; repairing the source manifest changes evidence resolution and must
-not be hidden by fixture-only compatibility logic.
+`manifest.jsonl` uses each record's `file_path` as its stable document identity.
+`ticker`, `report_type`, and `period` remain semantic fields, so one semantic
+triple may legitimately point at separate A-share and H-share disclosures. A
+unique triple remains compatible with evidence that has no document selector;
+when the triple maps to multiple files, validation returns a structured
+ambiguity listing every candidate `file_path`, and the author must set
+`evidence.document_file_path`. No path is chosen by manifest line order, and
+the loader never infers A/H from a title.
 
 ## CLI
 
@@ -104,9 +108,14 @@ The authoring loop is:
    ```bash
    pnpm golden-studio mine --candidates candidates-batch-01.json --batch batch-01
    ```
+   If a candidate triple maps to multiple A/H files, include
+   `document_file_path` in the candidate record; otherwise mining returns an
+   ambiguity skip with the available paths.
 
 2. **Annotate** in the workbench. Select evidence text, complete the answer,
-   and add source-reachable `expected_keywords` for every positive case.
+   and add source-reachable `expected_keywords` for every positive case. For
+   A/H variants sharing a ticker/report type/period, pin the source with
+   `evidence.document_file_path`; for `latest_by`, use `resolution.variant`.
    Replace unresolved `evidence.section` placeholders, then mark the draft
    approved.
 
@@ -141,6 +150,12 @@ The authoring loop is:
 `datasets/finance/rag-golden-v1.json` is a generated, reviewable artifact whose
 positive cases carry `expectedKeywords` copied from `expected_keywords`; it is
 never hand-edited.
+
+The generator embeds the resolved manifest `file_path` as each document's
+`source`, `fileName`, and `expectedSources` entry. `latest_by` defaults to the
+unique latest `disclosure_date` inside the same ticker/report type/period; tied
+variants fail with structured ambiguity unless `resolution.variant` selects one.
+There is no manifest-order fallback.
 
 ## Validation
 

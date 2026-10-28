@@ -126,7 +126,7 @@ export function validateNegative(
       )
     );
   }
-  if (target.kind === "scoped") {
+  if (target.kind === "scoped" || target.kind === "invalid-scoped") {
     const scope =
       typeof draft.resolution.scope === "string"
         ? draft.resolution.scope.trim()

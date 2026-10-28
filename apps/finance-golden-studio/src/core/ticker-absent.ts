@@ -6,17 +6,19 @@ export type TickerAbsentTarget =
   | { kind: "direct"; ticker: string }
   | { kind: "scoped"; ticker: string }
   | { kind: "conflict"; directTicker: string; scopedTicker: string }
-  | { kind: "invalid" };
+  | { kind: "invalid-scoped" }
+  | { kind: "missing" };
 
 /**
  * 判定 ticker_absent 的权威目标。
  *
  * 非空 ticker 才构成直接形态；空字符串不能短路 scope。直接与 scoped 同时提供
  * 时，相同 ticker 可共存，不同 ticker 必须确定性冲突。直接形态保留当前类型契约，
- * 即只要求 ticker；scoped 形态要求合法 scope 与 expected_report="（无）"。
+ * 即只要求 ticker；空缺或空白 ticker 明确选择 scoped 形态，即使 scope 本身
+ * 无法解析，也必须由上层报告 scope / expected_report 的具体问题。
  *
  * @param resolution 待解析的 resolution 对象。
- * @returns 目标形态；没有足够有效信息时为 invalid。
+ * @returns 目标形态；无 ticker 且无 scope 字段时为 missing。
  */
 export function resolveTickerAbsentTarget(
   resolution: Record<string, unknown>
@@ -28,7 +30,13 @@ export function resolveTickerAbsentTarget(
   }
   if (directTicker) return { kind: "direct", ticker: directTicker };
   if (scopedTicker) return { kind: "scoped", ticker: scopedTicker };
-  return { kind: "invalid" };
+  if (
+    resolution.scope !== undefined ||
+    (typeof resolution.ticker === "string" && resolution.ticker.trim() === "")
+  ) {
+    return { kind: "invalid-scoped" };
+  }
+  return { kind: "missing" };
 }
 
 /**
@@ -40,7 +48,13 @@ export function resolveTickerAbsentTarget(
 export function tickerPresentIssue(
   target: TickerAbsentTarget
 ): ValidationIssue | undefined {
-  if (target.kind === "invalid" || target.kind === "conflict") return undefined;
+  if (
+    target.kind === "missing" ||
+    target.kind === "invalid-scoped" ||
+    target.kind === "conflict"
+  ) {
+    return undefined;
+  }
   return issue(
     "negative_ticker_present",
     `Negative resolution ticker ${target.ticker} exists in manifest.`,

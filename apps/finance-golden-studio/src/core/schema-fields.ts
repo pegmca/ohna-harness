@@ -374,7 +374,7 @@ function validateTickerAbsent(value: Record<string, unknown>, errors: Validation
   if (value.ticker !== undefined && typeof value.ticker !== "string") {
     validateRequiredString(value.ticker, "resolution.ticker", errors);
   }
-  if (target.kind === "scoped") {
+  if (target.kind === "scoped" || target.kind === "invalid-scoped") {
     validateRequiredString(value.scope, "resolution.scope", errors);
     validateRequiredString(value.expected_report, "resolution.expected_report", errors);
   }

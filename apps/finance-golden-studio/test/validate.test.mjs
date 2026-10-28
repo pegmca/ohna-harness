@@ -418,6 +418,56 @@ test("ticker_absent 的空 ticker 使用 scope 作为实际缺席检查目标", 
   );
 });
 
+test("ticker_absent 的空 ticker 仍校验非法 scope 与 expected_report", async () => {
+  const { config } = makeWorkspace();
+  const draft = makeNegativeDraft();
+
+  const report = await validateDraft(config, {
+    ...draft,
+    resolution: {
+      type: "ticker_absent",
+      ticker: "",
+      scope: "bogus",
+      expected_report: "annual/2025"
+    }
+  });
+
+  assert.deepEqual(
+    report.errors
+      .filter((issue) => issue.code === "negative_scope_invalid")
+      .map(({ code, field }) => ({ code, field })),
+    [
+      { code: "negative_scope_invalid", field: "resolution.scope" },
+      { code: "negative_scope_invalid", field: "resolution.expected_report" }
+    ]
+  );
+});
+
+test("ticker_absent 的 whitespace-only ticker 仍校验非法 scoped 值", async () => {
+  const { config } = makeWorkspace();
+  const draft = makeNegativeDraft();
+
+  const report = await validateDraft(config, {
+    ...draft,
+    resolution: {
+      type: "ticker_absent",
+      ticker: "   ",
+      scope: "   ",
+      expected_report: "   "
+    }
+  });
+
+  assert.deepEqual(
+    report.errors
+      .filter((issue) => issue.code === "negative_scope_invalid")
+      .map(({ code, field }) => ({ code, field })),
+    [
+      { code: "negative_scope_invalid", field: "resolution.scope" },
+      { code: "negative_scope_invalid", field: "resolution.expected_report" }
+    ]
+  );
+});
+
 test("ticker_absent 的非字符串 ticker 不会被静默忽略", async () => {
   const { config } = makeWorkspace();
   const draft = makeNegativeDraft();

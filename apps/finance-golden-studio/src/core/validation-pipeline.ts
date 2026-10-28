@@ -295,7 +295,13 @@ function validateNegativeTicker(
   errors: ValidationIssue[]
 ): void {
   const target = resolveTickerAbsentTarget(resolution);
-  if (target.kind === "invalid" || target.kind === "conflict") return;
+  if (
+    target.kind === "missing" ||
+    target.kind === "invalid-scoped" ||
+    target.kind === "conflict"
+  ) {
+    return;
+  }
   const ticker = target.ticker;
   if ([...byTriple.values()].some((record) => record.ticker === ticker)) {
     const found = tickerPresentIssue(target);

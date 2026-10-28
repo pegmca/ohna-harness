@@ -149,7 +149,8 @@ Only the task report was written after the code commits.
 
 - `1813b6b` `feat(golden-studio): unify golden validation`
 - `9aaee3e` `fix(golden-studio): harden validation pipeline`
-- `HEAD` `fix(golden-studio): enforce review validation rules`
+- `9e541ff` `fix(golden-studio): enforce review validation rules`
+- `HEAD` `fix(golden-studio): validate malformed scoped ticker forms`
 
 ## Review Fix Round: Ticker Resolution and Multi-Doc Contract
 
@@ -232,3 +233,77 @@ The existing malformed-PDF fixtures still emit the upstream `pdf-parse` invalid-
 - Confirmed `multi_doc` distinguishes exact source triples, not evidence-row count.
 - Confirmed the reverse flag contract rejects `requires_multi_doc:true` with fewer than two sources.
 - No deferred minor was changed.
+
+## Scoped Re-Review Fix: Invalid Scoped Ticker Forms
+
+### Fixed
+
+The scoped re-review correctly identified that empty or whitespace-only `ticker` with an invalid `scope` previously resolved to `invalid`, causing all scoped diagnostics to be skipped. The resolver now distinguishes:
+
+- `scoped`: a valid `scope=ticker=<ticker>` exists.
+- `invalid-scoped`: ticker is empty/whitespace or missing while a `scope` field is present, but no valid scoped ticker can be extracted.
+- `missing`: no usable ticker or scope field exists.
+
+Both `invalid-scoped` and `scoped` run non-empty `scope` and `expected_report` checks in schema and negative validation. Manifest absence checks use only an actually extracted ticker form. Existing deterministic conflict handling and the `multi_doc` fix were left unchanged.
+
+### RED
+
+Exact regressions were added for the reviewer's case:
+
+```text
+resolution: { type:"ticker_absent", ticker:"", scope:"bogus", expected_report:"annual/2025" }
+resolution: { type:"ticker_absent", ticker:"   ", scope:"   ", expected_report:"   " }
+```
+
+Command:
+
+```text
+pnpm --filter @aiagent/finance-golden-studio exec node --import tsx --test --test-name-pattern='空 ticker 仍校验|whitespace-only ticker' test/validate.test.mjs
+```
+
+Result:
+
+```text
+✖ ticker_absent 的空 ticker 仍校验非法 scope 与 expected_report
+  actual: []
+  expected: negative_scope_invalid at resolution.scope and resolution.expected_report
+✖ ticker_absent 的 whitespace-only ticker 仍校验非法 scoped 值
+  actual: []
+  expected: negative_scope_invalid at resolution.scope and resolution.expected_report
+tests 2, pass 0, fail 2
+```
+
+### GREEN
+
+Same command after the resolver/validation change:
+
+```text
+✔ ticker_absent 的空 ticker 仍校验非法 scope 与 expected_report
+✔ ticker_absent 的 whitespace-only ticker 仍校验非法 scoped 值
+tests 2, pass 2, fail 0
+```
+
+### Final verification
+
+```text
+Command: pnpm --filter @aiagent/finance-golden-studio exec node --import tsx --test test/validate.test.mjs
+Result: PASS, 33 tests, 0 failures
+
+Command: pnpm --filter @aiagent/finance-golden-studio typecheck
+Result: PASS (Node, Web, and strict test contracts)
+
+Command: pnpm --filter @aiagent/finance-golden-studio test
+Result: PASS, 76 tests, 0 failures
+```
+
+The existing malformed-PDF fixtures still print the upstream `pdf-parse` invalid-PDF diagnostic; all structured-error assertions pass.
+
+### Scoped re-review files
+
+- `apps/finance-golden-studio/src/core/ticker-absent.ts`
+- `apps/finance-golden-studio/src/core/schema-fields.ts`
+- `apps/finance-golden-studio/src/core/schema-special.ts`
+- `apps/finance-golden-studio/src/core/validation-pipeline.ts`
+- `apps/finance-golden-studio/test/validate.test.mjs`
+
+The `multi_doc` implementation and tests were not changed in this fix round.

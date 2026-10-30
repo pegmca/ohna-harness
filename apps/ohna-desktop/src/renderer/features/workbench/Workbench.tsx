@@ -173,6 +173,7 @@ export function Workbench() {
       result.data as WorkspaceDescriptorDto,
       ...current.filter((workspace) => workspace.workspaceId !== result.data?.workspaceId)
     ]);
+    enterWorkspaceDraft();
     setActiveWorkspaceId(result.data.workspaceId);
     setWorkspaceState("ready");
   }
@@ -184,8 +185,24 @@ export function Workbench() {
    * @returns 无返回值。
    */
   function handleSelectWorkspace(workspaceId: string): void {
+    enterWorkspaceDraft();
     setActiveWorkspaceId(workspaceId);
     setComposerError(undefined);
+  }
+
+  /**
+   * 进入工作区切换后的新会话草稿态。
+   *
+   * 工作区是会话上下文的一部分：切换目录后继续显示上一个目录的历史会误导用户。
+   * 这里复用 New Chat 的完整重置边界，并清空输入，消除 URL 与本地乐观状态残留。
+   *
+   * @returns 无返回值。
+   */
+  function enterWorkspaceDraft(): void {
+    resetToDraft();
+    setInput("");
+    setComposerError(undefined);
+    setIsSidebarOpen(false);
   }
 
   useEffect(() => {

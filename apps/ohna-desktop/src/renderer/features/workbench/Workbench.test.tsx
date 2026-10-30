@@ -275,6 +275,77 @@ describe("Workbench conversation history", () => {
     await waitFor(() => expect(posts).toHaveLength(1));
   });
 
+  it("switching workspace opens a fresh conversation draft instead of keeping the current history", async () => {
+    const client = await import("../../shared/sdk/ohna-client");
+    const workspaceA = stubWorkspace(client);
+    const workspaceB = {
+      workspaceId: "ws-other",
+      displayPath: "/tmp/ohna-other",
+      status: "authorized" as const
+    };
+    vi.mocked(client.listWorkspaces).mockResolvedValue({
+      ok: true,
+      requestId: "workspaces.list",
+      data: [workspaceA, workspaceB]
+    });
+    vi.mocked(client.listConversations).mockResolvedValue({
+      ok: true,
+      requestId: "conversations.list",
+      data: { items: [conversation("c1", "旧工作区会话")], nextCursor: null }
+    });
+    vi.mocked(client.listConversationMessages).mockResolvedValue({
+      ok: true,
+      requestId: "messages.list",
+      data: { items: [userMessage("m1", "c1", "旧工作区记录")], nextCursor: null }
+    });
+
+    render(<MemoryRouter initialEntries={["/?conversation=c1"]}><Workbench /></MemoryRouter>);
+    await screen.findByText("旧工作区记录");
+
+    fireEvent.click(screen.getByRole("button", { name: `当前工作区 ${workspaceA.displayPath}` }));
+    fireEvent.click(await screen.findByRole("button", { name: /ohna-other/ }));
+
+    expect(await screen.findByRole("heading", { name: "新会话" })).toBeTruthy();
+    expect(screen.queryByText("旧工作区记录")).toBeNull();
+    expect(window.location.search).toBe("");
+    expect((screen.getByRole("textbox") as HTMLTextAreaElement).value).toBe("");
+  });
+
+  it("adding a workspace also opens a fresh conversation draft", async () => {
+    const client = await import("../../shared/sdk/ohna-client");
+    const workspaceA = stubWorkspace(client);
+    const workspaceB = {
+      workspaceId: "ws-added",
+      displayPath: "/tmp/ohna-added",
+      status: "authorized" as const
+    };
+    vi.mocked(client.listConversations).mockResolvedValue({
+      ok: true,
+      requestId: "conversations.list",
+      data: { items: [conversation("c1", "添加前会话")], nextCursor: null }
+    });
+    vi.mocked(client.listConversationMessages).mockResolvedValue({
+      ok: true,
+      requestId: "messages.list",
+      data: { items: [userMessage("m1", "c1", "添加工作区前的记录")], nextCursor: null }
+    });
+    vi.mocked(client.pickWorkspace).mockResolvedValue({
+      ok: true,
+      requestId: "workspaces.pick",
+      data: workspaceB
+    });
+
+    render(<MemoryRouter initialEntries={["/?conversation=c1"]}><Workbench /></MemoryRouter>);
+    await screen.findByText("添加工作区前的记录");
+    fireEvent.click(screen.getByRole("button", { name: `当前工作区 ${workspaceA.displayPath}` }));
+    fireEvent.click(await screen.findByRole("button", { name: /选择其他目录/ }));
+
+    await waitFor(() => expect(client.pickWorkspace).toHaveBeenCalledTimes(1));
+    expect(await screen.findByRole("heading", { name: "新会话" })).toBeTruthy();
+    expect(screen.queryByText("添加工作区前的记录")).toBeNull();
+    expect(window.location.search).toBe("");
+  });
+
   it("requests a semantic title after the first message on a lazily-created conversation", async () => {
     const { createAndStreamRun } = await import("../../shared/sdk/ohna-client");
     vi.mocked(createAndStreamRun).mockResolvedValue({

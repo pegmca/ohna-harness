@@ -7,8 +7,14 @@ import {
   type RuntimeResponseEnvelope,
   type RunStreamEventDtoV2,
 } from "@aiagent/types";
-import { createOhnaRuntime, toRuntimeError, type OhnaRuntime } from "@aiagent/ohna-runtime";
-import { resolveActiveModelFromEnv } from "@aiagent/ai";
+import {
+  createOhnaRuntime,
+  buildModelCatalogFromSettings,
+  readSettings,
+  resolveModelFromSettings,
+  toRuntimeError,
+  type OhnaRuntime
+} from "@aiagent/ohna-runtime";
 import { createCodingToolRegistry } from "@aiagent/coding";
 import {
   isSubscribeMethod,
@@ -97,25 +103,44 @@ function servePort(port: Electron.MessagePortMain, runtime: OhnaRuntime): void {
     if (isSubscribeMethod(envelope.method)) {
       try {
         const subscribeOptions = (envelope.payload as { options?: unknown })?.options ?? {};
+        const requestedSubscriptionId =
+          (envelope.payload as { subscriptionId?: unknown })?.subscriptionId;
         const targetId = (envelope.payload as { id?: string; runId?: string }).id ??
           (envelope.payload as { runId?: string }).runId ??
           "";
+        // onEvent 在 runtime.subscribe* 返回前即可能触发 replay；此时还没有 subscriptionId。
+        // 先用可变数组缓冲，拿到 runtime 分配的 id 后再统一以正确信封回送，避免用 targetId
+        // 冒充 subscriptionId 导致 IPC 层按真实 id 过滤时丢弃全部事件（UI 永远 running）。
+        // 主进程会预先登记 subscriptionId，确保 replay 第一批事件也有路由；缺失时回退 runtime id。
+        const assignedSubscriptionId =
+          typeof requestedSubscriptionId === "string" && requestedSubscriptionId
+            ? requestedSubscriptionId
+            : undefined;
+        const pendingEvents: RunStreamEventDtoV2[] = [];
+        const emitEvent = (ev: RunStreamEventDtoV2): void => {
+          if (assignedSubscriptionId) emit(assignedSubscriptionId, ev);
+          else pendingEvents.push(ev);
+        };
         const subscription =
           envelope.method === "events.subscribeRun"
             ? await runtime.subscribeRun(targetId, {
                 ...(subscribeOptions as object),
-                onEvent: (ev: RunStreamEventDtoV2) => emit(targetId, ev)
+                onEvent: emitEvent
               })
             : await runtime.subscribeConversation(targetId, {
                 ...(subscribeOptions as object),
-                onEvent: (ev: RunStreamEventDtoV2) => emit(targetId, ev)
+                onEvent: emitEvent
               });
         upstream.set(subscription.subscriptionId, subscription.unsubscribe);
+        // 订阅建立后切换为直发；先用真实 subscriptionId 回放缓冲，保证顺序不丢。
+        for (const buffered of pendingEvents.splice(0)) {
+          emit(assignedSubscriptionId ?? subscription.subscriptionId, buffered);
+        }
         const response: RuntimeResponseEnvelope = {
           protocolVersion: PROTOCOL_VERSION,
           requestId: envelope.requestId,
           ok: true,
-          data: { subscriptionId: subscription.subscriptionId }
+          data: { subscriptionId: assignedSubscriptionId ?? subscription.subscriptionId }
         };
         port.postMessage({ type: "response", envelope: response } satisfies OutgoingMessage);
       } catch (error) {
@@ -161,15 +186,20 @@ async function listenForConnection(): Promise<void> {
     parentPort.postMessage({ type: "ready" } satisfies ReadyMessage);
 
     const dataDir = process.env.OHNA_DATA_DIR || join(homedir(), ".ohna");
-    // 模型与凭据复用 CLI 组合根下沉的 `resolveActiveModelFromEnv`（spec §7.1）：遍历各
-    // profile 的 AIAGENT_LLM_*_<PROFILE> 环境变量，缺 key 时返回 null。none 不硬崩溃——
-    // health 报 degraded，由桌面 UI 引导配置凭据（spec §10.2）。
-    const active = resolveActiveModelFromEnv();
+    // 用户级配置唯一来源：`<dataDir>/settings.json`（测试可经 OHNA_SETTINGS_PATH 指向临时文件）。
+    const { settings } = await readSettings(dataDir);
+    const active = resolveModelFromSettings(settings);
     const model = active?.model;
     const apiKey = active?.apiKey ?? "";
+    if (settings.httpProxy) {
+      // provider 的代理感知 fetch 读取该变量；settings.json 显式配置优先于 shell。
+      process.env.AIAGENT_HTTP_PROXY = settings.httpProxy;
+    }
     if (!active) {
       console.warn("[ohna-worker] 未检测到模型 API key，runtime 以 degraded 状态启动。");
     }
+    // 多模型目录：形状来自 settings 分组；详细元数据在 runtime 内补齐。
+    const settingsCatalog = buildModelCatalogFromSettings(settings);
     // 工具集绑定到当前主工作区根（首版用 dataDir 占位；per-workspace 工具上下文见 Task 6/13）。
     const tools = createCodingToolRegistry(dataDir);
     try {
@@ -178,6 +208,27 @@ async function listenForConnection(): Promise<void> {
         model: model as never,
         apiKey,
         tools,
+        ...(settingsCatalog
+          ? {
+              modelCatalog: {
+                defaultModelId: settingsCatalog.defaultModelId,
+                models: settingsCatalog.models.map((model) => ({
+                  id: model.id,
+                  label: model.id,
+                  provider: (active?.profile === "deepseek" || active?.profile === "openrouter"
+                    ? active.profile
+                    : "bridge_ai") as "deepseek" | "openrouter" | "bridge_ai",
+                  description: model.group ? `${model.group} · ${model.id}` : model.id,
+                  isDefault: model.isDefault,
+                  capabilities: { structuredOutput: true, toolCalling: true },
+                  contextWindow: 128_000,
+                  maxTokens: 8_192,
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  ...(model.group ? { group: model.group } : {})
+                }))
+              }
+            }
+          : {}),
         team: process.env.OHNA_TEAM === "true",
         autoApprove: process.env.OHNA_AUTO_APPROVE === "true",
         onLog: (entry) => console.log(`[ohna-runtime:${entry.level}] ${entry.message}`)

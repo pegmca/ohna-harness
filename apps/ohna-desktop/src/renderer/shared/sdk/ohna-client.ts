@@ -20,7 +20,8 @@ import type {
   RunMetaDtoV2,
   RunSnapshotDtoV2,
   RunStatusDtoV2,
-  RunStreamEventDtoV2
+  RunStreamEventDtoV2,
+  WorkspaceDescriptorDto
 } from "@aiagent/types";
 import type { OhnaSdk, StartRunInputDto } from "../../../preload/contract";
 
@@ -112,13 +113,121 @@ export async function listConversations(
 
 /** @param input 创建输入（仅 title + workspaceId）。 @returns 新会话。 */
 export async function createConversation(
-  input: { title: string; workspaceId?: string }
+  input: { title: string; workspaceId: string }
 ): Promise<ApiResult<ConversationSummaryDto>> {
   try {
-    const created = await getSdk().conversations.create({ title: input.title, workspaceId: input.workspaceId ?? "default" });
+    const created = await getSdk().conversations.create({ title: input.title, workspaceId: input.workspaceId });
     return { ok: true, requestId: "conversations.create", data: created };
   } catch (error) {
     return toFailureFromUnknown<ConversationSummaryDto>(error);
+  }
+}
+
+/**
+ * 列出已授权工作区。
+ *
+ * @returns 工作区描述符列表。
+ */
+export async function listWorkspaces(): Promise<ApiResult<WorkspaceDescriptorDto[]>> {
+  try {
+    const workspaces = await getSdk().workspaces.list();
+    return { ok: true, requestId: "workspaces.list", data: Array.isArray(workspaces) ? workspaces : [] };
+  } catch (error) {
+    return toFailureFromUnknown<WorkspaceDescriptorDto[]>(error);
+  }
+}
+
+/**
+ * 弹出原生目录选择器并授权工作区；用户取消时返回 null。
+ *
+ * @returns 已授权工作区或取消结果。
+ */
+export async function pickWorkspace(): Promise<ApiResult<WorkspaceDescriptorDto | null>> {
+  try {
+    const workspace = await getSdk().workspaces.pick();
+    return { ok: true, requestId: "workspaces.pick", data: workspace };
+  } catch (error) {
+    return toFailureFromUnknown<WorkspaceDescriptorDto | null>(error);
+  }
+}
+
+/**
+ * 读取工作区当前 Git 分支。
+ *
+ * @param workspaceId 已授权工作区 ID。
+ * @returns 分支名；非 Git 目录返回 null。
+ */
+export async function readWorkspaceGitBranch(workspaceId: string): Promise<ApiResult<string | null>> {
+  try {
+    const branch = await getSdk().workspaces.gitBranch(workspaceId);
+    return { ok: true, requestId: "workspaces.gitBranch", data: branch };
+  } catch (error) {
+    return toFailureFromUnknown<string | null>(error);
+  }
+}
+
+/** 用户级 settings（与 `~/.ohna/settings.json` 对齐的最小子集）。 */
+export interface UserSettings {
+  defaultProfile: string;
+  providers: Record<string, {
+    baseUrl: string;
+    model: string;
+    models?: string[];
+    /**
+     * 模型分组（对齐 Codex）：每组多个模型，组内首个为该组默认模型。
+     * 有 groups 时 UI 以分组为准，models 仅作为拉取结果缓存。
+     */
+    groups?: Array<{ name: string; models: string[] }>;
+    apiKey: string;
+  }>;
+  httpProxy?: string;
+}
+
+/**
+ * 读取用户级 settings。
+ *
+ * @returns settings 或结构化错误。
+ */
+export async function loadUserSettings(): Promise<ApiResult<UserSettings>> {
+  try {
+    const settings = await getSdk().settings.get();
+    return { ok: true, requestId: "settings.get", data: settings as UserSettings };
+  } catch (error) {
+    return toFailureFromUnknown<UserSettings>(error);
+  }
+}
+
+/**
+ * 保存用户级 settings（main 原子写入，权限 0600）。
+ *
+ * @param settings 待保存配置。
+ * @returns 写入路径。
+ */
+export async function saveUserSettings(settings: UserSettings): Promise<ApiResult<{ path: string }>> {
+  try {
+    const saved = await getSdk().settings.save(settings);
+    return { ok: true, requestId: "settings.save", data: saved };
+  } catch (error) {
+    return toFailureFromUnknown<{ path: string }>(error);
+  }
+}
+
+/**
+ * 拉取 provider 的模型列表。
+ *
+ * @param input baseUrl、API key 与可选代理。
+ * @returns 模型 id 列表。
+ */
+export async function fetchProviderModels(input: {
+  baseUrl: string;
+  apiKey: string;
+  httpProxy?: string;
+}): Promise<ApiResult<string[]>> {
+  try {
+    const models = await getSdk().settings.fetchModels(input);
+    return { ok: true, requestId: "settings.fetchModels", data: Array.isArray(models) ? models : [] };
+  } catch (error) {
+    return toFailureFromUnknown<string[]>(error);
   }
 }
 
@@ -298,7 +407,8 @@ export async function createAndStreamRun(
       message: request.message,
       mode: request.mode,
       source: request.source,
-      workspaceId: request.workspaceId
+      workspaceId: request.workspaceId,
+      ...(request.modelId ? { modelId: request.modelId } : {})
     };
     const started = await getSdk().runs.start(input);
     const { accepted, initialEvents } = started;

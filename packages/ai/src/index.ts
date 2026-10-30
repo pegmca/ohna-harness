@@ -32,3 +32,4 @@ export {
 } from "./providers/env-runtime.js";
 export { resolveActiveModelFromEnv, listAvailableModelProfiles, type ActiveModel } from "./model-selection.js";
 export { calculateUsageCost } from "./utils/cost.js";
+export { createProxyAwareFetch, resolveProxyUrl } from "./api/openai-completions/proxy-fetch.js";

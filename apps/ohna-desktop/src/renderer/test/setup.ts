@@ -43,6 +43,19 @@ if (typeof window.matchMedia !== "function") {
   });
 }
 
+// Radix Popover 依赖 ResizeObserver；jsdom 不实现，补一个空壳避免组件测试崩溃。
+if (typeof globalThis.ResizeObserver !== "function") {
+  class ResizeObserverStub {
+    observe(): void {}
+    unobserve(): void {}
+    disconnect(): void {}
+  }
+  Object.defineProperty(globalThis, "ResizeObserver", {
+    configurable: true,
+    value: ResizeObserverStub
+  });
+}
+
 // 用例之间重置本地偏好与根节点样式，避免主题/字号串味。
 afterEach(() => {
   globalThis.localStorage?.clear();

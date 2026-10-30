@@ -307,7 +307,22 @@ async function runLoop(
 
       if (message.stopReason === "error" || message.stopReason === "aborted") {
         await emit({ type: "turn_end", agentId: identity.agentId, turnIndex, message, toolResults: [] });
-        await emit({ type: "agent_end", agentId: identity.agentId, messages: newMessages });
+        // provider / transport 失败必须进入 agent_end.error：runtime 只按该字段判 failed；
+        // 仅靠 assistant.stopReason 会被误判为 completed（UI 出现空回答且标记成功）。
+        // aborted 不写入 error，由上层按 AbortSignal 映射为 cancelled。
+        await emit({
+          type: "agent_end",
+          agentId: identity.agentId,
+          messages: newMessages,
+          ...(message.stopReason === "error"
+            ? {
+                error: {
+                  code: "model_error",
+                  message: message.errorMessage || "模型调用失败。"
+                }
+              }
+            : {})
+        });
         return;
       }
 

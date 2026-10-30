@@ -42,6 +42,12 @@ export interface UpdateSessionInput {
   status?: LocalSessionStatus;
 }
 
+/** 重新绑定会话工作区（仅授权工作区变更时由 runtime 调用）。 */
+export interface RebindWorkspaceInput {
+  workspaceId: string;
+  workspaceRoot: string;
+}
+
 /** JSONL 行形状。 */
 interface SessionLine extends SessionMeta {
   type: "session";
@@ -186,6 +192,29 @@ export class LocalSessionStore {
       status,
       updatedAt: now,
       archivedAt: status === "archived" ? (existing.archivedAt ?? now) : undefined
+    };
+    await this.append(meta);
+    return meta;
+  }
+
+  /**
+   * 把会话重新绑定到已授权工作区。
+   *
+   * 仅供 runtime 在启动恢复 / 工作区迁移时调用；workspaceId 与 workspaceRoot 必须来自
+   * `WorkspaceRegistry` 的授权项，不能由渲染端直接指定。
+   *
+   * @param id 会话 id。
+   * @param input 已授权的 workspaceId 与 canonical 根。
+   * @returns 更新后的元数据；会话不存在返回 null。
+   */
+  async rebindWorkspace(id: string, input: RebindWorkspaceInput): Promise<SessionMeta | null> {
+    const existing = await this.get(id);
+    if (!existing) return null;
+    const meta: SessionMeta = {
+      ...existing,
+      workspaceId: input.workspaceId,
+      workspaceRoot: input.workspaceRoot,
+      updatedAt: nowIso()
     };
     await this.append(meta);
     return meta;

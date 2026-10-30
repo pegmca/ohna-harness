@@ -18,7 +18,10 @@ export default defineConfig({
     }
   },
   preload: {
+    // sandbox preload 只能 require("electron") 等内置模块；关闭 externalizeDeps
+    // 把 `@aiagent/types` 等运行时依赖内联，避免 "module not found" 导致 SDK 未注入。
     build: {
+      externalizeDeps: false,
       outDir: resolve(outputRoot, "preload"),
       rollupOptions: {
         output: {

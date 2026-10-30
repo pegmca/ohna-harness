@@ -254,7 +254,7 @@ test("preload SDK 暴露面只包含语义方法，无 ipcRenderer/invoke/Node",
     return { ok: true, data: { subscriptionId: "s1" } };
   });
   const keys = Object.keys(sdk).sort();
-  assert.deepEqual(keys, ["app", "conversations", "events", "models", "runs", "workspaces"]);
+  assert.deepEqual(keys, ["app", "conversations", "events", "models", "runs", "settings", "workspaces"]);
   for (const ns of Object.values(sdk)) {
     for (const fn of Object.values(ns)) {
       assert.equal(typeof fn, "function");
@@ -275,4 +275,38 @@ test("preload SDK 校验失败时不会触达 invoke（不把畸形 payload 送�
   });
   await assert.rejects(() => sdk.runs.start({ conversationId: "", message: "hi" }), /conversationId/);
   assert.equal(sent.length, 0, "校验失败不应发送任何 IPC 请求");
+});
+
+test("订阅先注册事件监听，并把预登记 subscriptionId 传给 IPC", async () => {
+  const { createOhnaSdk } = await import("../dist/preload/sdk.js");
+  const sent = [];
+  let listenerRegisteredBeforeRequest = false;
+  let requestSeen = false;
+  let eventListener;
+  const sdk = createOhnaSdk(
+    async (_ch, env) => {
+      requestSeen = true;
+      sent.push(env);
+      return { ok: true, data: { subscriptionId: env.payload.subscriptionId } };
+    },
+    (channel, listener) => {
+      assert.equal(channel, "ohna:event");
+      listenerRegisteredBeforeRequest = !requestSeen;
+      eventListener = listener;
+      return () => undefined;
+    }
+  );
+
+  const received = [];
+  const handle = await sdk.events.subscribeRun("run-1", (event) => received.push(event.type));
+  assert.equal(listenerRegisteredBeforeRequest, true);
+  assert.equal(sent[0].payload.id, "run-1");
+  assert.match(sent[0].payload.subscriptionId, /^[0-9a-f-]{36}$/);
+  // 模拟 replay：监听已注册，且信封带同一预登记 id。
+  eventListener({}, {
+    subscriptionId: sent[0].payload.subscriptionId,
+    event: { type: "run_status" }
+  });
+  assert.deepEqual(received, ["run_status"]);
+  assert.equal(typeof handle, "function");
 });

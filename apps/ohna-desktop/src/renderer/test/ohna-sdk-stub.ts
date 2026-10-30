@@ -22,8 +22,9 @@ import { vi } from "vitest";
 /** 可编程 SDK 桩：每个方法都是 vi.fn，测试可自由配置实现。 */
 export interface OhnaStub {
   workspaces: {
-    pick: () => Promise<WorkspaceDescriptorDto>;
+    pick: () => Promise<WorkspaceDescriptorDto | null>;
     list: () => Promise<WorkspaceDescriptorDto[]>;
+    gitBranch: (workspaceId: string) => Promise<string | null>;
   };
   conversations: {
     list: (query?: { workspaceId?: string }) => Promise<ConversationSummaryDto[]>;
@@ -49,12 +50,21 @@ export interface OhnaStub {
   app: {
     getHealth: () => Promise<unknown>;
   };
+  settings: {
+    get: () => Promise<unknown>;
+    save: (settings: unknown) => Promise<{ path: string }>;
+    fetchModels: (input: { baseUrl: string; apiKey: string; httpProxy?: string }) => Promise<string[]>;
+  };
 }
 
 /** @returns 全新的空 SDK 桩（所有方法返回 undefined 的 vi.fn）。 */
 export function createOhnaStub(): OhnaStub {
   return {
-    workspaces: { pick: vi.fn(), list: vi.fn() },
+    workspaces: {
+      pick: vi.fn(),
+      list: vi.fn(async () => []),
+      gitBranch: vi.fn(async () => null)
+    },
     conversations: {
       list: vi.fn(),
       create: vi.fn(),
@@ -74,7 +84,8 @@ export function createOhnaStub(): OhnaStub {
       subscribeConversation: vi.fn()
     },
     models: { list: vi.fn() },
-    app: { getHealth: vi.fn() }
+    app: { getHealth: vi.fn() },
+    settings: { get: vi.fn(), save: vi.fn(), fetchModels: vi.fn() }
   };
 }
 

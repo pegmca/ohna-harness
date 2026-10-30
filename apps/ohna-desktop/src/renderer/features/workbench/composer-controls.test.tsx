@@ -5,7 +5,7 @@
  * 灵感与模型选择器禁用，并展示只读 banner，而不是让用户发送后 404（BUG-005 止血）。
  * 可交互实例（observeOnly=false / undefined）下 textarea 与发送按钮可用。
  */
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { ComponentProps } from "react";
 import { afterEach, describe, expect, it } from "vitest";
 import { ComposerControls } from "./composer-controls";
@@ -52,6 +52,23 @@ function interactiveProps(): ComponentProps<typeof ComposerControls> {
 }
 
 describe("ComposerControls 只读态", () => {
+  it("模型选择按分组展示", () => {
+    const props = baseProps();
+    render(
+      <ComposerControls
+        {...props}
+        models={[
+          { ...props.models[0], id: "hy3-x", label: "hy3-x", group: "主力模型" },
+          { ...props.models[0], id: "glm-5.3", label: "glm-5.3", group: "推理模型" }
+        ]}
+        selectedModelId="hy3-x"
+      />
+    );
+    fireEvent.click(screen.getByRole("button", { name: "hy3-x" }));
+    expect(screen.getByText("主力模型")).toBeTruthy();
+    expect(screen.getByText("推理模型")).toBeTruthy();
+  });
+
   it("observeOnly=true 时 textarea 禁用且只读 banner 可见", () => {
     render(<ComposerControls {...baseProps()} observeOnly={true} />);
 

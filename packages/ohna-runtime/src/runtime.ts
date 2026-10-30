@@ -37,6 +37,7 @@ import {
 import { WorkspaceRegistry, WorkspaceMcpRegistry, WorkspaceContextCache } from "./workspace/index.js";
 import { LocalMessageStore, LocalRunStore, LocalSessionStore, acquireDataDirLock, reconcileOnStart } from "./store/index.js";
 import { RunManager } from "./run-manager.js";
+import { RuntimeError } from "./errors.js";
 import { createConversationScheduler } from "./scheduler/conversation.js";
 import { createRunConfigResolver } from "./model/config.js";
 import { createServeTeamSession } from "./run/team-session.js";
@@ -89,6 +90,8 @@ export interface StartRunInput {
   deadlineMs?: number;
   maxCost?: number;
   workspaceId?: string;
+  /** 用户本次选择的模型 id；缺省使用 settings 默认模型。 */
+  modelId?: string;
 }
 
 /** 组合根：健康检查 / 模型目录 / 生命周期 / run 与确认入口。 */
@@ -317,6 +320,17 @@ export async function createOhnaRuntime(options: OhnaRuntimeOptions): Promise<Oh
       const descriptor = await workspaceRegistry.register(workspaceId, workspaceRoot);
       await workspaceContextCache.get(descriptor.displayPath);
       await workspaceMcpRegistry.get(workspaceId);
+      // 历史数据修复：旧桌面端曾把未授权目录写成 "default"，导致会话/replay 全部 forbidden。
+      // 只在新工作区首次授权时重绑这些坏会话；其它 workspaceId 保持原归属。
+      const sessions = await sessionStore.list({ includeArchived: true });
+      for (const session of sessions) {
+        if (session.workspaceId !== "default") continue;
+        await sessionStore.rebindWorkspace(session.id, {
+          workspaceId: descriptor.workspaceId,
+          workspaceRoot: descriptor.displayPath
+        });
+        workspaceRegistry.bindConversation(session.id, descriptor.workspaceId);
+      }
       return descriptor;
     },
     async listWorkspaces() {
@@ -390,12 +404,22 @@ export async function createOhnaRuntime(options: OhnaRuntimeOptions): Promise<Oh
     },
 
     async createConversation(input) {
-      // 必须显式携带已授权 workspaceId：fail-closed，未注册的工作区一律拒绝（由 registerWorkspace 保证）。
+      // 必须显式携带已授权 workspaceId：fail-closed，未注册的工作区一律拒绝。
+      // 授权校验放在写会话之前，避免把非法 workspaceId 落进 sessions/index.jsonl。
+      const workspace = await workspaceRegistry.resolveAuthorizedWorkspace(input.workspaceId);
+      if (!workspace) {
+        throw new RuntimeError(
+          "workspace_unavailable",
+          `工作区 ${input.workspaceId} 未授权，无法创建会话。`
+        );
+      }
       const meta = await sessionStore.create({
         title: input.title?.trim() ? input.title : "新会话",
-        workspaceRoot: input.workspaceId,
-        workspaceId: input.workspaceId
+        workspaceRoot: workspace.workspaceRoot,
+        workspaceId: workspace.workspaceId
       });
+      // 创建即绑定：后续 update / listMessages / run 无需等到首个 run 才能反查工作区。
+      workspaceRegistry.bindConversation(meta.id, workspace.workspaceId);
       await messageStore.ensureConversation(meta.id, meta.title);
       return toConversationSummary(meta);
     },

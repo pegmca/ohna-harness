@@ -13,6 +13,8 @@ import { resolveCompactionSettings } from "@aiagent/agent";
 interface RunConfigInput {
   conversationId: string;
   workspaceId?: string;
+  /** 本次 run 选择的模型 id（来自 composer）；缺省沿用实例基模型。 */
+  modelId?: string;
   maxTurns?: number;
   deadlineMs?: number;
   maxCost?: number;
@@ -81,6 +83,10 @@ export function createRunConfigResolver(
    * @returns 固定本次 run 的配置快照。
    */
   return async (conversationId, input) => {
+    // 模型覆盖必须在本 run 创建时固定，避免运行期切换 composer 影响在途 run。
+    const model = input.modelId
+      ? { ...dependencies.model, id: input.modelId, name: input.modelId }
+      : dependencies.model;
     let workspace = dependencies.fallback;
     try {
       const resolved =
@@ -104,7 +110,7 @@ export function createRunConfigResolver(
     }
 
     return {
-      model: dependencies.model,
+      model,
       apiKey: dependencies.apiKey,
       autoApprove: dependencies.autoApprove,
       team: dependencies.team,
@@ -112,9 +118,9 @@ export function createRunConfigResolver(
       ...(input.deadlineMs !== undefined ? { deadlineMs: input.deadlineMs } : {}),
       ...(input.maxCost !== undefined ? { maxCost: input.maxCost } : {}),
       compaction: {
-        contextWindow: dependencies.model.contextWindow,
-        maxTokens: dependencies.model.maxTokens,
-        reserveTokens: resolveCompactionSettings(dependencies.model.contextWindow).reserveTokens
+        contextWindow: model.contextWindow,
+        maxTokens: model.maxTokens,
+        reserveTokens: resolveCompactionSettings(model.contextWindow).reserveTokens
       },
       workspace
     };

@@ -36,6 +36,18 @@ export const EVENT_CHANNEL = "ohna:event";
 /** 原生目录选择通道：渲染端请求 main 弹出系统对话框并授权工作区。 */
 export const PICK_WORKSPACE_CHANNEL = "ohna:pick-workspace";
 
+/** 只读 Git 分支查询通道：入参为已授权 workspaceId，出参为分支名或 null。 */
+export const READ_GIT_BRANCH_CHANNEL = "ohna:read-git-branch";
+
+/** 用户 settings 读取通道（main 读 `~/.ohna/settings.json`）。 */
+export const READ_SETTINGS_CHANNEL = "ohna:read-settings";
+
+/** 用户 settings 保存通道（main 原子写入并保持 0600）。 */
+export const SAVE_SETTINGS_CHANNEL = "ohna:save-settings";
+
+/** 拉取 provider `/v1/models` 并返回模型 id 列表通道。 */
+export const FETCH_PROVIDER_MODELS_CHANNEL = "ohna:fetch-provider-models";
+
 /** 一次 run 启动入参（渲染端最小子集，与 runtime `StartRunInput` 对齐）。 */
 export interface StartRunInputDto {
   requestId?: string;
@@ -47,6 +59,8 @@ export interface StartRunInputDto {
   deadlineMs?: number;
   maxCost?: number;
   workspaceId?: string;
+  /** 本次 run 选择的模型 id。 */
+  modelId?: string;
 }
 
 /** 取消订阅所需的上下文（由 subscribe 返回，主进程据此释放上游订阅）。 */
@@ -72,9 +86,11 @@ export interface DeliveredEvent {
 export interface OhnaSdk {
   workspaces: {
     /** 弹出原生目录对话框并完成授权，返回已注册工作区描述符。 */
-    pick(): Promise<WorkspaceDescriptorDto>;
+    pick(): Promise<WorkspaceDescriptorDto | null>;
     /** 列出所有已授权工作区。 */
     list(): Promise<WorkspaceDescriptorDto[]>;
+    /** 读取工作区当前 Git 分支（非 Git / 无分支返回 null）。 */
+    gitBranch(workspaceId: string): Promise<string | null>;
   };
   conversations: {
     /** 列出会话（可选按 workspaceId 过滤）。 */
@@ -113,6 +129,14 @@ export interface OhnaSdk {
   app: {
     /** 获取 runtime 健康状态。 */
     getHealth(): Promise<RuntimeHealthDto>;
+  };
+  settings: {
+    /** 读取用户级 settings.json。 */
+    get(): Promise<unknown>;
+    /** 保存用户级 settings.json；成功后返回写入路径。 */
+    save(settings: unknown): Promise<{ path: string }>;
+    /** 拉取 provider 的 /v1/models；返回模型 id 列表。 */
+    fetchModels(input: { baseUrl: string; apiKey: string; httpProxy?: string }): Promise<string[]>;
   };
 }
 

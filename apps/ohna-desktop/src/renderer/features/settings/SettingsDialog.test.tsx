@@ -73,6 +73,23 @@ function renderDialog(options: { isInitiallyOpen?: boolean } = {}) {
       }]
     }
   });
+  mocked.loadUserSettings.mockResolvedValue({
+    ok: true,
+    requestId: "settings",
+    data: {
+      defaultProfile: "bridge_ai",
+      providers: {
+        bridge_ai: {
+          baseUrl: "http://192.168.5.8:8787/v1",
+          model: "hy3-x",
+          models: ["hy3", "hy3-x"],
+          apiKey: "secret"
+        }
+      },
+      httpProxy: "http://127.0.0.1:1082"
+    }
+  });
+  mocked.saveUserSettings.mockResolvedValue({ ok: true, requestId: "save", data: { path: "/tmp/settings.json" } });
   const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
     const url = String(input);
     if (url.startsWith("/api/health")) return healthResponse();
@@ -104,7 +121,7 @@ describe("SettingsDialog（L3 / FR-001）", () => {
     expect([...links].map((link) => link.textContent)).toEqual([
       "连接状态本地服务地址与工作区",
       "外观主题与界面字号",
-      "模型当前进程的模型目录",
+      "模型用户配置与模型",
       "权限模式只读与自动批准语义",
       "关于版本与项目链接"
     ]);
@@ -123,9 +140,9 @@ describe("SettingsDialog（L3 / FR-001）", () => {
     expect(await screen.findByText("已连接")).toBeTruthy();
     expect(screen.getByText("/work/ws-a")).toBeTruthy();
     expect(screen.getByText("/tmp/ohna")).toBeTruthy();
-    // 模型分区渲染只读目录。
-    expect(await screen.findByText("Mock Agent")).toBeTruthy();
-    expect(screen.getByText("tool calling")).toBeTruthy();
+    // 模型分区读取用户 settings，并渲染可编辑表单。
+    expect(await screen.findByDisplayValue("http://192.168.5.8:8787/v1")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "保存配置" })).toBeTruthy();
     expect(screen.getByText("版本与运行环境信息。")).toBeTruthy();
   });
 
@@ -237,10 +254,10 @@ describe("SettingsDialog 外观与只读边界（L3）", () => {
     expect(screen.getAllByRole("radio", { name: /^标准/ })).toHaveLength(1);
   });
 
-  it("TC-L3-03: 只读边界——只发 GET /api/health 与 GET /api/models，无任何写请求", async () => {
+  it("TC-L3-03: 外观偏好只写 localStorage；HTTP 仅 health 探针，配置经 preload 保存", async () => {
     const { fetchMock } = renderDialog();
     await waitFor(() => expect(screen.getByText("/work/ws-a")).toBeTruthy());
-    await screen.findByText("Mock Agent");
+    await screen.findByDisplayValue("http://192.168.5.8:8787/v1");
 
     // 只读边界：设置弹窗只发 `/api/health` 探针（经 HTTP）；模型目录走 preload SDK，不再发 HTTP。
     const calls = fetchMock.mock.calls.map(([input, init]) => ({
@@ -255,9 +272,11 @@ describe("SettingsDialog 外观与只读边界（L3）", () => {
     fireEvent.click(screen.getByRole("radio", { name: /深色/ }));
     fireEvent.click(screen.getByRole("radio", { name: /^大/ }));
     expect(fetchMock.mock.calls.length).toBe(before);
-    // 弹窗里没有可用于提交服务端配置的输入控件。
-    expect(screen.queryAllByRole("textbox")).toHaveLength(0);
-    expect(screen.getByRole("dialog").querySelectorAll("form")).toHaveLength(0);
+    // 模型配置保存在 ~/.ohna/settings.json：表单存在，但保存不走 HTTP。
+    const beforeSaveHttp = fetchMock.mock.calls.length;
+    fireEvent.click(screen.getByRole("button", { name: "保存配置" }));
+    await waitFor(() => expect(mocked.saveUserSettings).toHaveBeenCalledTimes(1));
+    expect(fetchMock.mock.calls.length).toBe(beforeSaveHttp);
   });
 
   it("本地服务不可用时各分区降级为可读提示", async () => {

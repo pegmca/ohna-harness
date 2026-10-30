@@ -1,7 +1,8 @@
 import type {
   ApiResult,
   ConversationSummaryDto,
-  RunStreamEventDtoV2
+  RunStreamEventDtoV2,
+  WorkspaceDescriptorDto
 } from "@aiagent/types";
 import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
@@ -27,6 +28,8 @@ import {
   generateConversationTitle,
   listConversationMessages,
   listConversations,
+  listWorkspaces,
+  pickWorkspace,
   updateConversation as updateConversationApi
 } from "../../shared/sdk/ohna-client";
 import { ChatComposer, ChatHeader, ChatTimeline } from "./chat";
@@ -43,6 +46,7 @@ import {
 } from "./format";
 import { projectLiveRun, projectRunUserMessages } from "./live-run-projection";
 import { ConversationSidebar } from "./sidebar";
+import { WorkspaceBar } from "./workspace-bar";
 import type { RetryRunContext, UiMessage } from "./types";
 import { useComposerState } from "./use-composer-state";
 
@@ -79,6 +83,10 @@ export function Workbench() {
   // 设置弹窗（FR-001）：就地弹窗、不读 URL；关闭即卸载内容，健康探针随之中止。
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [localMode, setLocalMode] = useState<LocalModeInfo | null>(null);
+  const [workspaces, setWorkspaces] = useState<WorkspaceDescriptorDto[]>([]);
+  const [activeWorkspaceId, setActiveWorkspaceId] = useState("");
+  const [workspaceState, setWorkspaceState] = useState<"loading" | "ready" | "error">("loading");
+  const [isPickingWorkspace, setIsPickingWorkspace] = useState(false);
   const [_activeRunId, setActiveRunId] = useState<string>();
   // 确认卡片：事件流（实时 + replay）→ 推导卡片；交互状态按 toolCallId 记录。
   const [confirmationEvents, setConfirmationEvents] = useState<RunStreamEventDtoV2[]>([]);
@@ -98,6 +106,10 @@ export function Workbench() {
   const activeConversation = useMemo(
     () => conversations.find((conversation) => conversation.conversationId === activeConversationId),
     [activeConversationId, conversations]
+  );
+  const activeWorkspace = useMemo(
+    () => workspaces.find((workspace) => workspace.workspaceId === activeWorkspaceId) ?? workspaces[0],
+    [activeWorkspaceId, workspaces]
   );
   const latestRunStatus = [...messages].reverse().find((message) => message.runStatus)?.runStatus;
   const confirmationCards = deriveConfirmationCards(confirmationEvents);
@@ -121,8 +133,60 @@ export function Workbench() {
     const controller = new AbortController();
     void loadConversationPage(undefined, false, controller.signal);
     void fetchLocalMode(controller.signal).then((mode) => setLocalMode(mode));
+    void loadWorkspaces();
     return () => controller.abort();
   }, []);
+
+  /**
+   * 加载已授权工作区；空列表时自动弹原生目录选择器，避免用户落到未授权的默认会话。
+   *
+   * @returns 无返回值。
+   */
+  async function loadWorkspaces(): Promise<void> {
+    setWorkspaceState("loading");
+    const result = await Promise.resolve(listWorkspaces());
+    if (!result?.ok) {
+      setWorkspaceState("error");
+      return;
+    }
+    const items = Array.isArray(result.data) ? result.data : [];
+    setWorkspaces(items);
+    setActiveWorkspaceId((current) => current || items[0]?.workspaceId || "");
+    setWorkspaceState("ready");
+  }
+
+  /**
+   * 弹出原生目录选择器并授权，成功后切换为当前工作区。
+   *
+   * @returns 无返回值。
+   */
+  async function handlePickWorkspace(): Promise<void> {
+    setIsPickingWorkspace(true);
+    const result = await pickWorkspace();
+    setIsPickingWorkspace(false);
+    if (!result.ok) {
+      setComposerError(formatApiError(result.error));
+      return;
+    }
+    if (!result.data) return;
+    setWorkspaces((current) => [
+      result.data as WorkspaceDescriptorDto,
+      ...current.filter((workspace) => workspace.workspaceId !== result.data?.workspaceId)
+    ]);
+    setActiveWorkspaceId(result.data.workspaceId);
+    setWorkspaceState("ready");
+  }
+
+  /**
+   * 切换工作区；已存在的会话保持原工作区，下一轮新建会话使用当前选择。
+   *
+   * @param workspaceId 已授权工作区 ID。
+   * @returns 无返回值。
+   */
+  function handleSelectWorkspace(workspaceId: string): void {
+    setActiveWorkspaceId(workspaceId);
+    setComposerError(undefined);
+  }
 
   useEffect(() => {
     if (!activeConversationId) {
@@ -543,7 +607,14 @@ export function Workbench() {
     // 本次提交是否懒创建了新会话：只有这种情况才算「首条消息」，需要触发一次语义标题升级。
     let isNewConversation = false;
     if (!conversation) {
-      const created = await createConversation({ title: createConversationTitle(trimmed) });
+      if (!activeWorkspace) {
+        setComposerError("请先选择一个工作区目录。");
+        return;
+      }
+      const created = await createConversation({
+        title: createConversationTitle(trimmed),
+        workspaceId: activeWorkspace.workspaceId
+      });
       if (!created.ok) {
         setComposerError(formatApiError(created.error));
         return;
@@ -615,6 +686,7 @@ export function Workbench() {
         submittedConversationId,
         clientMessageId,
         submittedModelId,
+        conversation.workspaceId || activeWorkspace?.workspaceId,
         (event) => {
           liveEvents.push(event);
           setMessages((current) => {
@@ -798,10 +870,12 @@ export function Workbench() {
         activeConversationId={activeConversation?.conversationId}
         error={conversationError}
         hasMore={Boolean(conversationCursor)}
+        isAddingWorkspace={isPickingWorkspace}
         isLoading={conversationState === "loading"}
         conversations={conversations}
         isOpen={isSidebarOpen}
         onArchiveConversation={(conversationId) => void handleArchiveConversation(conversationId)}
+        onAddWorkspace={() => void handlePickWorkspace()}
         onClose={() => setIsSidebarOpen(false)}
         onLoadMore={() => void loadConversationPage(conversationCursor, true)}
         onNewConversation={handleNewConversation}
@@ -845,22 +919,32 @@ export function Workbench() {
           />
         )}
         composer={(
-          <ChatComposer
-            error={composerError}
-            formId={COMPOSER_FORM_ID}
-            input={input}
-            isSubmitting={isSubmitting}
-            models={composer.models}
-            modelCatalogStatus={composer.modelCatalogStatus}
-            modelCatalogError={composer.modelCatalogError}
-            onInputChange={setInput}
-            onRetryModels={composer.retryModels}
-            onSelectModel={composer.selectModel}
-            onStop={() => void handleStop()}
-            onSubmit={handleSubmit}
-            onUsePrompt={setInput}
-            selectedModelId={composer.selectedModelId}
-          />
+          <>
+            <WorkspaceBar
+              active={activeWorkspace}
+              isLoading={workspaceState === "loading"}
+              isPicking={isPickingWorkspace}
+              onPick={() => void handlePickWorkspace()}
+              onSelect={handleSelectWorkspace}
+              workspaces={workspaces}
+            />
+            <ChatComposer
+              error={composerError}
+              formId={COMPOSER_FORM_ID}
+              input={input}
+              isSubmitting={isSubmitting}
+              models={composer.models}
+              modelCatalogStatus={composer.modelCatalogStatus}
+              modelCatalogError={composer.modelCatalogError}
+              onInputChange={setInput}
+              onRetryModels={composer.retryModels}
+              onSelectModel={composer.selectModel}
+              onStop={() => void handleStop()}
+              onSubmit={handleSubmit}
+              onUsePrompt={setInput}
+              selectedModelId={composer.selectedModelId}
+            />
+          </>
         )}
         composerFormId={COMPOSER_FORM_ID}
       />
@@ -893,6 +977,7 @@ async function runAgent(
   conversationId: string,
   clientMessageId: string,
   modelId: string,
+  workspaceId: string | undefined,
   onEvent?: (event: RunStreamEventDtoV2) => void,
   onAccepted?: (runId: string) => void | Promise<void>,
   signal?: AbortSignal
@@ -902,6 +987,7 @@ async function runAgent(
     conversationId,
     clientMessageId,
     modelId,
+    workspaceId,
     mode: "auto",
     source: "composer"
   }, { onEvent, onAccepted: (accepted) => onAccepted?.(accepted.runId), signal });

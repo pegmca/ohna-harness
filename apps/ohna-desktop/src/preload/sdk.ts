@@ -11,8 +11,12 @@
  */
 import {
   EVENT_CHANNEL,
+  FETCH_PROVIDER_MODELS_CHANNEL,
   PICK_WORKSPACE_CHANNEL,
+  READ_GIT_BRANCH_CHANNEL,
+  READ_SETTINGS_CHANNEL,
   REQUEST_CHANNEL,
+  SAVE_SETTINGS_CHANNEL,
   PROTOCOL_VERSION,
   validateRequest,
   type OhnaSdk,
@@ -65,19 +69,24 @@ export function createOhnaSdk(invoke: InvokeFn, subscribe?: SubscribeFn): OhnaSd
     onEvent: (event: RunStreamEventDtoV2) => void
   ): Promise<UnsubscribeHandle> => {
     const useSubscribe = subscribe ?? defaultSubscribe;
-    return request(method, { id }).then((data) => {
-      const subscriptionId = (data as { subscriptionId: string }).subscriptionId;
-      const listener = (_event: unknown, payload: unknown) => {
-        const delivered = payload as { subscriptionId: string; event: unknown };
-        if (delivered.subscriptionId === subscriptionId) {
-          onEvent(delivered.event as RunStreamEventDtoV2);
-        }
-      };
-      const off = useSubscribe(EVENT_CHANNEL, listener);
+    // 必须先生成 subscriptionId、先挂监听，再发订阅请求：replay 事件会在请求返回前到达，
+    // 若等响应后再 on(EVENT_CHANNEL)，首批事件（含终态）会永久丢失，UI 卡在 running。
+    const subscriptionId = crypto.randomUUID();
+    const listener = (_event: unknown, payload: unknown) => {
+      const delivered = payload as { subscriptionId: string; event: unknown };
+      if (delivered.subscriptionId === subscriptionId) {
+        onEvent(delivered.event as RunStreamEventDtoV2);
+      }
+    };
+    const off = useSubscribe(EVENT_CHANNEL, listener);
+    return request(method, { id, subscriptionId }).then(() => {
       return () => {
         off();
         void request("events.unsubscribe", { subscriptionId });
       };
+    }, (error) => {
+      off();
+      throw error;
     });
   };
 
@@ -88,6 +97,9 @@ export function createOhnaSdk(invoke: InvokeFn, subscribe?: SubscribeFn): OhnaSd
       },
       async list() {
         return (await request("workspaces.list", {})) as never;
+      },
+      async gitBranch(workspaceId) {
+        return (await invoke(READ_GIT_BRANCH_CHANNEL, { workspaceId })) as never;
       }
     },
     conversations: {
@@ -144,6 +156,17 @@ export function createOhnaSdk(invoke: InvokeFn, subscribe?: SubscribeFn): OhnaSd
     app: {
       async getHealth() {
         return (await request("app.getHealth", {})) as never;
+      }
+    },
+    settings: {
+      async get() {
+        return await invoke(READ_SETTINGS_CHANNEL, undefined);
+      },
+      async save(settings) {
+        return (await invoke(SAVE_SETTINGS_CHANNEL, settings)) as never;
+      },
+      async fetchModels(input) {
+        return (await invoke(FETCH_PROVIDER_MODELS_CHANNEL, input)) as never;
       }
     }
   };

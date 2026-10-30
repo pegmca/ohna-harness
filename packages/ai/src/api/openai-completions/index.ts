@@ -23,6 +23,7 @@ import { AssistantMessageEventStream } from "../../utils/event-stream.js";
 import { retryProviderRequest } from "../../utils/retry.js";
 import { buildBaseOptions, clampReasoning } from "../simple-options.js";
 import { buildParams, resolveCompat } from "./request.js";
+import { createProxyAwareFetch } from "./proxy-fetch.js";
 import { iterateSseChunks } from "./sse.js";
 import { StreamingAssembler, stripStreamingScratch } from "./streaming-state.js";
 
@@ -158,7 +159,7 @@ async function postChatCompletions(
 	params: Record<string, unknown>,
 	options?: OpenAICompletionsOptions,
 ): Promise<{ response: Response; cleanup: () => void }> {
-	const fetchFn = options?.fetch ?? globalThis.fetch;
+	const fetchFn = options?.fetch ?? createProxyAwareFetch();
 	const apiKey = resolveApiKey(model.provider, options?.apiKey, options?.headers);
 	// 超时信号与调用方中断信号合并：任一触发即中断请求。
 	const { signal, cleanup } = combineAbortSignals([

@@ -1,5 +1,5 @@
 import type { ConversationSummaryDto } from "@aiagent/types";
-import { Archive, ChevronDown, Plus, Settings, X } from "lucide-react";
+import { Archive, ChevronDown, FolderPlus, Plus, Settings, X } from "lucide-react";
 import { useMemo, useState } from "react";
 import { formatRelativeTime } from "./format";
 
@@ -11,6 +11,10 @@ interface ConversationSidebarProps {
   isLoading: boolean;
   isOpen: boolean;
   onArchiveConversation: (conversationId: string) => void;
+  /** 通过原生目录对话框添加并授权一个新工作区。 */
+  onAddWorkspace: () => void;
+  /** 是否正在等待目录选择（禁用入口避免重复弹窗）。 */
+  isAddingWorkspace?: boolean;
   onClose: () => void;
   onLoadMore: () => void;
   onNewConversation: () => void;
@@ -109,6 +113,15 @@ export function ConversationSidebar(props: ConversationSidebarProps) {
         <button className="new-chat-button" onClick={props.onNewConversation} type="button">
           <Plus className="icon-size" />
           <span>New Chat</span>
+        </button>
+        <button
+          className="sidebar-add-workspace"
+          disabled={props.isAddingWorkspace}
+          onClick={props.onAddWorkspace}
+          type="button"
+        >
+          <FolderPlus className="icon-size" />
+          <span>{props.isAddingWorkspace ? "选择目录中…" : "添加工作目录"}</span>
         </button>
 
         <div className="conversation-list">

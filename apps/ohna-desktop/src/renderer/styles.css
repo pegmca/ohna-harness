@@ -571,8 +571,12 @@ textarea:disabled {
   top: 0;
   display: flex;
   height: 100vh;
+  width: 100%;
+  max-width: 100%;
   min-width: 0;
   flex-direction: column;
+  /* 固定宽度轨道内的子项允许收缩，否则长 workspaceId 会把侧栏内容推出可视区。 */
+  overflow: hidden;
   /* G2 玻璃浮层：侧栏切到 glass 别名 + blur + 内高光，弱化为 hairline 细边（07 §4.3）。 */
   border-right: 1px solid var(--md-hairline);
   background: var(--md-glass-sidebar);
@@ -659,12 +663,44 @@ textarea:disabled {
 
 .conversation-list {
   display: flex;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
   min-height: 0;
   flex: 1;
   flex-direction: column;
   gap: var(--md-space-2);
   margin-top: var(--md-space-5);
+  /* 会话列表只纵向滚动：长 workspaceId / 标题不得撑出横向滚动条。 */
+  overflow-x: hidden;
   overflow-y: auto;
+}
+
+/* 侧栏次级操作：添加工作目录（与 New Chat 视觉同族但降一级）。 */
+.sidebar-add-workspace {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  align-items: center;
+  justify-content: center;
+  gap: var(--md-space-2);
+  margin-top: var(--md-space-2);
+  border: 1px solid var(--md-color-border-subtle);
+  border-radius: var(--md-radius-lg);
+  background: transparent;
+  color: var(--md-color-text-secondary);
+  padding: 8px var(--md-space-3);
+  font-size: var(--md-text-body-sm-size);
+}
+
+.sidebar-add-workspace:hover:not(:disabled) {
+  border-color: var(--md-color-border);
+  background: var(--md-color-muted);
+  color: var(--md-color-text-primary);
+}
+
+.sidebar-add-workspace:disabled {
+  opacity: 0.6;
 }
 
 .workspace-nav {
@@ -707,6 +743,8 @@ textarea:disabled {
 
 .conversation-item {
   display: grid;
+  min-width: 0;
+  max-width: 100%;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: var(--md-space-2);
@@ -725,6 +763,9 @@ textarea:disabled {
 /* 工作区分组：组头展示目录 basename + 数量，点击折叠组内会话（D1）。 */
 .conversation-group {
   display: grid;
+  min-width: 0;
+  width: 100%;
+  max-width: 100%;
   gap: 2px;
 }
 
@@ -733,6 +774,8 @@ textarea:disabled {
   align-items: center;
   gap: var(--md-space-2);
   width: 100%;
+  min-width: 0;
+  max-width: 100%;
   margin-top: var(--md-space-3);
   padding: var(--md-space-1) var(--md-space-2);
   border: 0;
@@ -775,6 +818,7 @@ textarea:disabled {
 
 .conversation-select {
   display: grid;
+  width: 100%;
   min-width: 0;
   gap: var(--md-space-1);
   border: 0;
@@ -829,6 +873,11 @@ textarea:disabled {
 }
 
 .conversation-title {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--md-color-text-primary);
   font-size: var(--md-text-body-sm-size);
   font-weight: 650;
@@ -836,6 +885,11 @@ textarea:disabled {
 }
 
 .conversation-preview {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--md-color-text-muted);
   font-size: 0.75rem;
   line-height: 1.45;
@@ -1434,6 +1488,198 @@ textarea:disabled {
   margin-inline: auto;
 }
 
+/* 工作区栏：与 composer 同宽左对齐，展示目录、分支与完整路径。 */
+.workspace-bar {
+  display: flex;
+  width: min(100%, 860px);
+  min-width: 0;
+  align-items: center;
+  gap: var(--md-space-3);
+  margin-inline: auto;
+}
+
+.workspace-trigger {
+  display: inline-flex;
+  min-height: 30px;
+  max-width: 100%;
+  align-items: center;
+  gap: var(--md-space-2);
+  border: 1px solid var(--md-color-border-subtle);
+  border-radius: var(--md-radius-full);
+  background: var(--md-color-muted);
+  color: var(--md-color-text-secondary);
+  padding: 0 var(--md-space-3);
+  font-size: var(--md-text-body-sm-size);
+}
+
+.workspace-trigger:hover {
+  border-color: var(--md-color-border-strong);
+  color: var(--md-color-text-primary);
+}
+
+.workspace-trigger-name {
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.workspace-branch {
+  display: inline-flex;
+  max-width: 180px;
+  align-items: center;
+  gap: 4px;
+  overflow: hidden;
+  color: var(--md-color-text-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-branch .icon-size {
+  width: 12px;
+  height: 12px;
+}
+
+.workspace-trigger-chevron {
+  color: var(--md-color-text-muted);
+}
+
+.workspace-path {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--md-color-text-muted);
+  font-family: var(--md-font-mono);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-popover {
+  width: min(460px, calc(100vw - 32px));
+}
+
+.workspace-option {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--md-space-3);
+  border: 0;
+  border-radius: var(--md-radius-md);
+  background: transparent;
+  color: var(--md-color-text-primary);
+  padding: var(--md-space-3);
+  text-align: left;
+}
+
+.workspace-option:hover {
+  background: var(--md-color-muted);
+}
+
+.workspace-option > span {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.workspace-option strong {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: var(--md-space-2);
+  overflow: hidden;
+  font-size: var(--md-text-body-sm-size);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-option small {
+  overflow: hidden;
+  color: var(--md-color-text-muted);
+  font-family: var(--md-font-mono);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-pick {
+  border-top: 1px solid var(--md-color-border-subtle);
+  border-radius: 0 0 var(--md-radius-md) var(--md-radius-md);
+}
+
+/* 设置表单：模型/provider 配置写入 ~/.ohna/settings.json。 */
+.settings-form {
+  display: grid;
+  gap: var(--md-space-3);
+  max-width: 560px;
+}
+
+.settings-field {
+  display: grid;
+  gap: 6px;
+}
+
+.settings-field > span {
+  color: var(--md-color-text-secondary);
+  font-size: var(--md-text-body-sm-size);
+  font-weight: 600;
+}
+
+.settings-field input,
+.settings-field select {
+  width: 100%;
+  min-height: 36px;
+  border: 1px solid var(--md-color-border-subtle);
+  border-radius: var(--md-radius-md);
+  background: var(--md-color-surface);
+  color: var(--md-color-text-primary);
+  padding: 0 var(--md-space-3);
+  font: inherit;
+}
+
+.settings-field input:focus,
+.settings-field select:focus {
+  border-color: var(--md-color-primary);
+  outline: 2px solid color-mix(in srgb, var(--md-color-primary) 30%, transparent);
+  outline-offset: 0;
+}
+
+.model-group-editor {
+  display: grid;
+  gap: var(--md-space-2);
+}
+
+.model-group-card {
+  display: grid;
+  gap: var(--md-space-2);
+  border: 1px solid var(--md-color-border-subtle);
+  border-radius: var(--md-radius-md);
+  padding: var(--md-space-2);
+}
+
+.model-chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.model-chip {
+  border: 1px solid var(--md-color-border-subtle);
+  border-radius: var(--md-radius-full);
+  background: var(--md-color-muted);
+  color: var(--md-color-text-secondary);
+  padding: 3px 9px;
+  font-family: var(--md-font-mono);
+  font-size: 11px;
+}
+
+.model-chip.is-default {
+  border-color: var(--md-color-primary);
+  color: var(--md-color-primary);
+}
+
 .composer-box {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
@@ -1540,6 +1786,20 @@ textarea:disabled {
 
 .model-option {
   justify-content: space-between;
+}
+
+.model-group {
+  display: grid;
+  gap: 2px;
+}
+
+.model-group-label {
+  margin: var(--md-space-2) var(--md-space-3) 2px;
+  color: var(--md-color-text-muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
 }
 
 .model-option > span {

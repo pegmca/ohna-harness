@@ -233,17 +233,33 @@ export class RuntimeHost {
     state.draining = true;
     setImmediate(() => {
       const current = this.subscribers.get(subscriptionId);
-      if (!current) return;
-      const event = current.buffer.shift();
-      current.draining = current.buffer.length > 0;
-      if (event) {
-        try {
-          current.onEvent(event);
-        } catch {
-          // 渲染端回调异常不应污染宿主事件循环。
-        }
+      if (!current) {
+        // 订阅在排空回调执行前被移除：必须复位 draining，否则旧 state 永久卡死；
+        // 若同 id 之后重新登记，新的排空调度会被 `draining` 拦截，事件不再投递。
+        state.draining = false;
+        return;
       }
-      if (current.draining) this.scheduleDrain(subscriptionId, current);
+      try {
+        // 一轮内把当前缓冲全部投递：逐事件 setImmediate 会在订阅/窗口重建时留下
+        // draining=true 的悬挂状态，导致后续事件永久不再排空（UI 卡 running）。
+        while (current.buffer.length > 0) {
+          const event = current.buffer.shift();
+          if (!event) break;
+          try {
+            current.onEvent(event);
+          } catch {
+            // 渲染端回调异常不应污染宿主事件循环。
+          }
+        }
+      } finally {
+        // 以当前登记表为准复位；期间新增事件会重新触发 handleEvent -> scheduleDrain。
+        const latest = this.subscribers.get(subscriptionId);
+        if (latest === current) current.draining = false;
+        else state.draining = false;
+      }
+      // 排空期间若又有新事件进入，重新调度一次。
+      const latest = this.subscribers.get(subscriptionId);
+      if (latest && latest.buffer.length > 0) this.scheduleDrain(subscriptionId, latest);
     });
   }
 

@@ -19,6 +19,7 @@ export * from "./validation.js";
  * `createOhnaRuntime` 是桌面形态下唯一对外装配入口；`RunManager` 保留导出供后续任务改造其内部。
  */
 export * from "./runtime.js";
+export * from "./config/settings-store.js";
 export { RunManager } from "./run-manager.js";
 export type { Subscription, SubscribeOptions } from "./events/subscription.js";
 export * from "./model/config.js";

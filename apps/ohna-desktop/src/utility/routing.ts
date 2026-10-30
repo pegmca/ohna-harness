@@ -18,6 +18,17 @@ import {
 } from "@aiagent/types";
 import { toRuntimeError } from "@aiagent/ohna-runtime";
 
+/** IPC 边界校验失败：携带结构化错误码，由 `toRuntimeError` 归一。 */
+class RoutingError extends Error {
+  constructor(
+    readonly code: "bad_request",
+    message: string
+  ) {
+    super(message);
+    this.name = "RoutingError";
+  }
+}
+
 /** worker 内持有的 runtime 能力子集（订阅由 worker 单独管理）。 */
 export interface RuntimeRouter {
   getHealth(): Promise<unknown>;
@@ -77,6 +88,37 @@ function failure(requestId: string, error: unknown): RuntimeResponseEnvelope {
 /** 方法名 → runtime 调用器；payload 在调用器内做最小字段提取。 */
 type Handler = (runtime: RuntimeRouter, payload: unknown) => Promise<unknown>;
 
+/**
+ * 从对象 payload 中读取必填字符串字段。
+ *
+ * preload 发送的是 `{ conversationId }` / `{ runId }` 包装对象；若直接把 payload 当 ID，
+ * runtime 会收到 `[object Object]` 并把它当作会话名，导致授权反查永远失败。
+ *
+ * @param payload IPC payload。
+ * @param field 字段名。
+ * @param method 方法名（用于错误文案）。
+ * @returns 非空字符串字段值。
+ * @throws `bad_request`：字段缺失或非字符串。
+ */
+function requireString(payload: unknown, field: string, method: string): string {
+  const value = (payload as Record<string, unknown> | null | undefined)?.[field];
+  if (typeof value !== "string" || value.trim() === "") {
+    throw new RoutingError("bad_request", `${method} 需要非空字符串 ${field}`);
+  }
+  return value;
+}
+
+/**
+ * 读取可选的查询对象，缺省返回 undefined。
+ *
+ * @param payload IPC payload。
+ * @returns 查询对象或 undefined。
+ */
+function optionalQuery(payload: unknown): unknown {
+  const query = (payload as { query?: unknown } | null | undefined)?.query;
+  return query === null ? undefined : query;
+}
+
 const HANDLERS: Record<string, Handler> = {
   "runtime.getHealth": (r) => r.getHealth(),
   "runtime.getModelCatalog": (r) => r.getModelCatalog(),
@@ -97,7 +139,7 @@ const HANDLERS: Record<string, Handler> = {
     if (typeof workspaceId !== "string") throw new Error("workspaces.release 需要字符串 workspaceId");
     return r.releaseWorkspace(workspaceId);
   },
-  "conversations.list": (r, p) => r.listConversations((p as { query?: unknown })?.query),
+  "conversations.list": (r, p) => r.listConversations(optionalQuery(p)),
   "conversations.create": (r, p) => r.createConversation((p as { input?: unknown })?.input),
   "conversations.update": (r, p) => {
     const { id, input } = (p ?? {}) as { id?: unknown; input?: unknown };
@@ -117,9 +159,10 @@ const HANDLERS: Record<string, Handler> = {
     return r.generateConversationTitle(id, text);
   },
   "runs.start": (r, p) => r.startRun((p as { input?: unknown })?.input),
-  "runs.snapshot": (r, p) => r.getRunSnapshot(p as string),
-  "runs.list": (r, p) => r.listRunsByConversation(p as string),
-  "runs.cancel": (r, p) => r.cancelRun(p as string),
+  "runs.snapshot": (r, p) => r.getRunSnapshot(requireString(p, "runId", "runs.snapshot")),
+  "runs.list": (r, p) =>
+    r.listRunsByConversation(requireString(p, "conversationId", "runs.list")),
+  "runs.cancel": (r, p) => r.cancelRun(requireString(p, "runId", "runs.cancel")),
   "runs.resolveConfirmation": (r, p) => {
     const { runId, toolCallId, decision } = (p ?? {}) as {
       runId?: unknown;

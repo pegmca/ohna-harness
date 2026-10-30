@@ -6,8 +6,12 @@
  * `displayPath`，不得凭 ID 反推授权凭据。同一 canonical 路径在 dataDir 生命周期内 id 稳定。
  */
 import { createHash } from "node:crypto";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { dialog, type BrowserWindow } from "electron";
 import type { WorkspaceDescriptorDto } from "@aiagent/types";
+
+const execFileAsync = promisify(execFile);
 
 /**
  * 把绝对根目录归一为一个稳定、无冲突的 workspaceId。
@@ -56,4 +60,27 @@ export async function pickWorkspace(
   const workspaceId = deriveWorkspaceId(workspaceRoot);
   // 登记主路径：runtime 内部再 realpath 校验目录仍存在（spec §6.2）。
   return register(workspaceId, workspaceRoot);
+}
+
+/**
+ * 读取工作区当前 Git 分支。
+ *
+ * 只执行固定的只读命令 `git rev-parse --abbrev-ref HEAD`，不拼接用户输入；非 Git
+ * 目录、git 缺失或 detached HEAD 无法给出分支名时返回 null，由 UI 隐藏该信息。
+ *
+ * @param workspaceRoot 已授权的 canonical 工作区根。
+ * @returns 分支名，非 Git / 读取失败返回 null。
+ */
+export async function readGitBranch(workspaceRoot: string): Promise<string | null> {
+  try {
+    const { stdout } = await execFileAsync(
+      "git",
+      ["-C", workspaceRoot, "rev-parse", "--abbrev-ref", "HEAD"],
+      { timeout: 2_000 }
+    );
+    const branch = stdout.trim();
+    return branch && branch !== "HEAD" ? branch : null;
+  } catch {
+    return null;
+  }
 }

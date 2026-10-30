@@ -320,13 +320,20 @@ test("unknown tool and invalid arguments become isError results, loop keeps goin
 });
 
 test("stream error stops the loop with agent_end", async () => {
-  const { streamFn, calls } = createMockStreamFn([textMessage("boom", "error")]);
+  const failed = { ...textMessage("boom", "error"), errorMessage: "provider unreachable" };
+  const { streamFn, calls } = createMockStreamFn([failed]);
   const context = { systemPrompt: "sys", messages: [], tools: [] };
   const stream = agentLoop([userMessage("go")], context, createConfig(), undefined, streamFn);
+  const events = [];
+  for await (const event of stream) events.push(event);
   const newMessages = await stream.result();
 
   assert.equal(calls.length, 1);
   assert.equal(newMessages[newMessages.length - 1].stopReason, "error");
+  const end = events.find((event) => event.type === "agent_end");
+  assert.ok(end);
+  assert.ok(end.error, "assistant error 必须提升为 agent_end.error，runtime 才能标 failed");
+  assert.match(end.error.message, /provider unreachable/);
 });
 
 test("tool that throws becomes an isError ToolResultMessage", async () => {

@@ -9,6 +9,11 @@ export interface ModelOptionDto {
   id: string;
   label: string;
   provider: "deepseek" | "openrouter" | "bridge_ai" | "mock";
+  /**
+   * 模型分组名（对齐 Codex 的 provider 分组）。
+   * 缺省表示未分组；同一 provider 下可有多组，每组多模型。
+   */
+  group?: string;
   description: string;
   isDefault: boolean;
   capabilities: {

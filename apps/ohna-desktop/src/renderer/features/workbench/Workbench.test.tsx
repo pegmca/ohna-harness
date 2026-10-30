@@ -5,6 +5,26 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Workbench } from "./Workbench";
 
 vi.mock("../../shared/sdk/ohna-client");
+
+/**
+ * 配置一个已授权工作区：桌面端创建会话必须绑定真实工作区。
+ *
+ * @param client 已 mock 的渲染端 SDK 封装。
+ * @returns 工作区描述符。
+ */
+function stubWorkspace(client: typeof import("../../shared/sdk/ohna-client")) {
+  const workspace = {
+    workspaceId: "ws-test",
+    displayPath: "/tmp/ohna-test",
+    status: "authorized" as const
+  };
+  vi.mocked(client.listWorkspaces).mockResolvedValue({
+    ok: true,
+    requestId: "workspaces.list",
+    data: [workspace]
+  });
+  return workspace;
+}
 // 默认模型目录：绝大多数用例只依赖「目录已就绪」。在 beforeEach 重挂，覆盖前序用例残留的
 // 覆盖（如 catalog 重试用例的 mockRejectedValueOnce），保证每个用例起始都有可用目录；
 // 需要模拟目录失败的用例用 mockRejectedValueOnce 在自身内叠加即可。
@@ -230,6 +250,7 @@ describe("Workbench conversation history", () => {
     });
     const posts: string[] = [];
     const client = await import("../../shared/sdk/ohna-client");
+    stubWorkspace(client);
     vi.mocked(client.listConversations).mockResolvedValue({ ok: true, requestId: "c", data: { items: [conversation("c1", "已有会话")], nextCursor: null } });
     vi.mocked(client.listConversationMessages).mockResolvedValue({ ok: true, requestId: "m", data: { items: [], nextCursor: null } });
     vi.mocked(client.createConversation).mockImplementation(async ({ title }) => {
@@ -263,6 +284,7 @@ describe("Workbench conversation history", () => {
     });
     const titleCalls: Array<{ id: string; text: string }> = [];
     const client = await import("../../shared/sdk/ohna-client");
+    stubWorkspace(client);
     vi.mocked(client.listConversations).mockResolvedValue({ ok: true, requestId: "c", data: { items: [], nextCursor: null } });
     vi.mocked(client.listConversationMessages).mockResolvedValue({ ok: true, requestId: "m", data: { items: [], nextCursor: null } });
     vi.mocked(client.createConversation).mockResolvedValue({ ok: true, requestId: "create", data: conversation("created", "截断标题") });
@@ -295,6 +317,7 @@ describe("Workbench conversation history", () => {
     const generateTitlePosts: string[] = [];
     const titlePatches: string[] = [];
     const client = await import("../../shared/sdk/ohna-client");
+    stubWorkspace(client);
     vi.mocked(client.listConversations).mockResolvedValue({ ok: true, requestId: "c", data: { items: [], nextCursor: null } });
     vi.mocked(client.listConversationMessages).mockResolvedValue({ ok: true, requestId: "m", data: { items: [], nextCursor: null } });
     vi.mocked(client.createConversation).mockResolvedValue({ ok: true, requestId: "create", data: conversation("created", "修复类型错误") });
@@ -335,6 +358,7 @@ describe("Workbench conversation history", () => {
       error: { code: "internal_error", message: "network failed", requestId: "run_failed" }
     });
     const client = await import("../../shared/sdk/ohna-client");
+    stubWorkspace(client);
     vi.mocked(client.listConversations).mockResolvedValue({ ok: true, requestId: "c", data: { items: [], nextCursor: null } });
     vi.mocked(client.createConversation).mockResolvedValue({ ok: true, requestId: "create", data: conversation("created", "首次问题") });
     // 本用例只验证「跳过已知空历史」，不验证标题升级；让语义标题调用安全返回，避免 fire-and-forget 抛未处理 rejection。

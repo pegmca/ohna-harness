@@ -84,14 +84,20 @@ PostgreSQL 的本地连接、身份、Conversation/Message、Run/RunEvent、migr
 ### ohna L0 快速启动（本地服务）
 
 ```bash
+pnpm --filter @aiagent/ohna-desktop dev
+# 或构建后启动
 pnpm --filter @aiagent/ohna-desktop build
 pnpm --filter @aiagent/ohna-desktop start
 ```
 
 桌面端在 utilityProcess 中经 `packages/ohna-runtime` 的 `createOhnaRuntime` 跑执行（不再有终端 serve / HTTP/SSE），
 渲染层经 preload SDK（`window.ohna`）订阅同一 run 事件流；首次启动前需先配置一个可用
-provider（`AIAGENT_LLM_API_KEY_*` + `AIAGENT_LLM_MODEL_*`，如 DeepSeek / OpenRouter / Bridge AI）；
-未配置时 runtime 不可用，UI 显式报错而非静默失败。数据默认落 `~/.ohna/`（桌面设置可改 dataDir）。
+provider（`AIAGENT_LLM_API_KEY_*` + `AIAGENT_LLM_MODEL_*`，如 DeepSeek / OpenRouter / Bridge AI）。
+桌面运行配置的唯一来源是用户级 `~/.ohna/settings.json`（明文密钥，写入权限 0600）：provider、模型、API key 与 HTTP 代理都在设置弹窗中编辑并保存；仓库 `.env` 不再参与桌面运行配置。
+未配置时 runtime 以 degraded 状态启动，UI 显式报错而非静默失败。数据默认落 `~/.ohna/`。
+
+工作区在 composer 上方展示（目录名 + Git 分支 + canonical 路径），可切换已授权目录或经原生对话框授权新目录。
+`dev` 默认把仓库根作为 `OHNA_WORKSPACE_ROOT` 自动授权；也可显式设置该变量选择其它目录。
 
 # 发一条消息（省略 conversationId 时自动建会话），随后订阅返回的 eventsUrl
 curl -X POST http://127.0.0.1:4173/api/runs \

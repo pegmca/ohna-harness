@@ -53,7 +53,7 @@ export function createUtilityTransport(
         // 退出码/信号显式标注，避免隐式 any。
         const onceExit = (child as unknown as {
           once: (event: string, cb: (code: number | null, signal: string | null) => void) => void;
-        }).once;
+        }).once.bind(child);
         onceExit("exit", (code, signal) => {
           clearTimeout(timer);
           crashCb?.({ code, signal: signal ?? null });

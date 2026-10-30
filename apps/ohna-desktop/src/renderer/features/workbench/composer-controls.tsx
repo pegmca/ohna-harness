@@ -41,6 +41,23 @@ interface ComposerControlsProps {
 }
 
 /**
+ * 按分组收敛模型目录，保持首次出现顺序。
+ *
+ * @param models 扁平模型列表。
+ * @returns 分组后的模型；无 group 的归入「其他」。
+ */
+function groupModels(models: ModelOptionDto[]): Array<{ name: string; models: ModelOptionDto[] }> {
+  const groups = new Map<string, ModelOptionDto[]>();
+  for (const model of models) {
+    const name = model.group?.trim() || "其他";
+    const list = groups.get(name);
+    if (list) list.push(model);
+    else groups.set(name, [model]);
+  }
+  return [...groups].map(([name, list]) => ({ name, models: list }));
+}
+
+/**
  * Kimi 式 Composer 控制面：本地版仅保留灵感、模型与发送，无附件 / Report Mode。
  *
  * 只读实例（observeOnly）下 composer 整体禁用：写入/取消 run 的路由未注册，发送必失败，
@@ -54,6 +71,8 @@ export function ComposerControls(props: ComposerControlsProps) {
   const [ideaOpen, setIdeaOpen] = useState(false);
   const [modelOpen, setModelOpen] = useState(false);
   const selectedModel = props.models.find((model) => model.id === props.selectedModelId);
+  // 按 group 分组展示（对齐 Codex）；无 group 的模型落在「其他」。
+  const modelGroups = groupModels(props.models);
   // 只读实例下直接禁发：绕过「输入非空 + 模型就绪」的常规可发判定。
   const canSend = !props.observeOnly
     && props.input.trim().length > 0
@@ -156,19 +175,24 @@ export function ComposerControls(props: ComposerControlsProps) {
                       </button>
                     </div>
                   ) : null}
-                  {props.models.map((model) => (
-                    <button
-                      className="model-option"
-                      key={model.id}
-                      onClick={() => {
-                        props.onSelectModel(model.id);
-                        setModelOpen(false);
-                      }}
-                      type="button"
-                    >
-                      <span><strong>{model.label}</strong><small>{model.description}</small></span>
-                      {model.id === props.selectedModelId ? <Check className="icon-size" /> : null}
-                    </button>
+                  {modelGroups.map((group) => (
+                    <div className="model-group" key={group.name}>
+                      <p className="model-group-label">{group.name}</p>
+                      {group.models.map((model) => (
+                        <button
+                          className="model-option"
+                          key={model.id}
+                          onClick={() => {
+                            props.onSelectModel(model.id);
+                            setModelOpen(false);
+                          }}
+                          type="button"
+                        >
+                          <span><strong>{model.label}</strong><small>{model.description}</small></span>
+                          {model.id === props.selectedModelId ? <Check className="icon-size" /> : null}
+                        </button>
+                      ))}
+                    </div>
                   ))}
                   <Popover.Arrow className="popover-arrow" />
                 </Popover.Content>

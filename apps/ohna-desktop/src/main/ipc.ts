@@ -8,6 +8,7 @@
  * （`events.unsubscribe`）反向释放。所有 fail-closed 校验集中在 `validateEnvelope`。
  */
 import { ipcMain } from "electron";
+import { randomUUID } from "node:crypto";
 import {
   PROTOCOL_VERSION,
   type RuntimeErrorDto,
@@ -121,23 +122,33 @@ export function registerIpc(deps: IpcDeps): () => void {
         );
     }
 
-    // 订阅：先让 worker 建立 runtime 订阅（返回 subscriptionId），再在 host 侧登记转发器。
+    // 订阅：先由 IPC 生成并登记 subscriptionId，再把同一 id 交给 worker。
+    // runtime 的 replay 事件会在订阅方法返回前同步发出；若等响应回来才登记转发器，
+    // 这些事件会全部被丢弃（UI 永久 running）。
     const isSubscribe =
       typed.method === "events.subscribeRun" || typed.method === "events.subscribeConversation";
     if (isSubscribe) {
+      const proposed = (typed.payload as { subscriptionId?: unknown } | undefined)?.subscriptionId;
+      const subscriptionId = typeof proposed === "string" && proposed ? proposed : randomUUID();
+      const unsub = host.subscribe(
+        subscriptionId,
+        makeForwarder(event.sender, subscriptionId)
+      );
+      subscriptionUnsubMap.set(subscriptionId, unsub);
+      ensure(event.sender.id).unsubscribers.add(unsub);
       const response = await host
-        .request({ requestId: typed.requestId, method: typed.method, payload: typed.payload })
+        .request({
+          requestId: typed.requestId,
+          method: typed.method,
+          payload: { ...(typed.payload as object), subscriptionId }
+        })
         .catch((err) =>
           reject(typed.requestId, "internal_error", err instanceof Error ? err.message : "未知错误")
         );
-      if (!response.ok) return response;
-      const subscriptionId = (response.data as { subscriptionId?: string } | undefined)?.subscriptionId;
-      if (typeof subscriptionId !== "string") {
-        return reject(typed.requestId, "internal_error", "订阅未返回 subscriptionId");
+      if (!response.ok) {
+        doUnsubscribe(subscriptionId);
+        return response;
       }
-      const unsub = host.subscribe(subscriptionId, makeForwarder(event.sender, subscriptionId));
-      subscriptionUnsubMap.set(subscriptionId, unsub);
-      ensure(event.sender.id).unsubscribers.add(unsub);
       return response;
     }
 

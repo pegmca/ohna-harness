@@ -77,8 +77,11 @@ const PRELOAD = join(import.meta.dirname, "../preload/index.cjs");
  */
 export function createSecureWindow(options: { width?: number; height?: number; show?: boolean } = {}): BrowserWindow {
   const window = new BrowserWindow({
-    width: options.width ?? 1100,
-    height: options.height ?? 720,
+    // 默认窗口按常见 13/14 寸屏幕给足对话与 Trace 空间；最小尺寸防止侧栏被挤到不可用。
+    width: options.width ?? 1440,
+    height: options.height ?? 900,
+    minWidth: 960,
+    minHeight: 640,
     show: options.show ?? false,
     webPreferences: {
       preload: PRELOAD,
@@ -108,6 +111,9 @@ export function loadSecureWindow(window: BrowserWindow): Promise<void> {
       window.show();
       resolve();
     });
-    void window.loadFile(RENDERER_HTML);
+    // electron-vite dev 会注入 ELECTRON_RENDERER_URL；开发期必须加载 dev server，
+    // 否则 window 读的是旧 dist 产物，源码热更新与新增 UI 都不会出现在窗口里。
+    const devUrl = process.env.ELECTRON_RENDERER_URL;
+    void (devUrl ? window.loadURL(devUrl) : window.loadFile(RENDERER_HTML));
   });
 }

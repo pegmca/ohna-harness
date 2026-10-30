@@ -13,7 +13,7 @@ export type SettingsSectionId = "connection" | "appearance" | "models" | "permis
 export const SETTINGS_SECTIONS: ReadonlyArray<{ id: SettingsSectionId; label: string; hint: string }> = [
   { id: "connection", label: "连接状态", hint: "本地服务地址与工作区" },
   { id: "appearance", label: "外观", hint: "主题与界面字号" },
-  { id: "models", label: "模型", hint: "当前进程的模型目录" },
+  { id: "models", label: "模型", hint: "用户配置与模型" },
   { id: "permission", label: "权限模式", hint: "只读与自动批准语义" },
   { id: "about", label: "关于", hint: "版本与项目链接" }
 ];

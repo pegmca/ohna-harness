@@ -13,6 +13,7 @@ import type { CrashInfo, RuntimeHostTransport } from "./runtime-host.js";
 /** 握手/控制消息形状（仅用于 parentPort，不进业务信封）。 */
 type ControlMessage =
   | { type: "ready" }
+  | { type: "shutdown" }
   | { type: "response"; envelope: RuntimeResponseEnvelope }
   | { type: "event"; envelope: RuntimeEventEnvelope };
 
@@ -33,6 +34,20 @@ export function createUtilityTransport(
   let eventCb: ((envelope: RuntimeEventEnvelope) => void) | undefined;
   let crashCb: ((info: CrashInfo) => void) | undefined;
   let handshakeResolve: (() => void) | undefined;
+  const stopWithTimeout = async (childToStop: Electron.UtilityProcess): Promise<void> => {
+    await new Promise<void>((resolve) => {
+      let settled = false;
+      const finish = (): void => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve();
+      };
+      const timer = setTimeout(finish, 2_000);
+      childToStop.once("exit", finish);
+      childToStop.postMessage({ type: "shutdown" } satisfies ControlMessage);
+    });
+  };
 
   return {
     async start() {
@@ -93,9 +108,13 @@ export function createUtilityTransport(
     },
     async stop() {
       handshakeResolve = undefined;
+      // 先请求 utilityProcess 执行 runtime.shutdown()（释放 dataDir 写者锁），
+      // 再关闭端口并终止进程；直接 kill 会让 before-quit 的下一次启动命中残留锁。
+      const childToStop = child;
+      if (childToStop) await stopWithTimeout(childToStop);
       port?.close();
       port = undefined;
-      child?.kill();
+      childToStop?.kill();
       child = undefined;
     }
   };

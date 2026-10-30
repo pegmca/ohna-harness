@@ -206,11 +206,17 @@ export class RunCostTracker {
   /** runId → 在飞期间的聚合器与起算时间（终态发完事件即删除，避免长进程内存泄漏）。 */
   private readonly runs = new Map<
     string,
-    { accumulator: RunCostAccumulator; startedAt: number; conversationId?: string; teamBaseline?: TeamUsageBaseline }
+    {
+      accumulator: RunCostAccumulator;
+      startedAt: number;
+      modelId: string;
+      conversationId?: string;
+      teamBaseline?: TeamUsageBaseline;
+    }
   >();
 
   /**
-   * @param modelId cost_summary 的 byModel 键（单模型装配下即本 run 使用的模型 id）。
+   * @param modelId 未指定 run 模型时的默认 byModel 键（兼容直接构造的单模型场景）。
    * @param getTeamStateFor 按 conversationId 解析团队状态读取器（spec §7.4：每个会话独立
    *   持有 controller，成本投影必须回到「本 run 所属会话」的当前成员用量，不取全局 last-active）。
    *   未注入时 team 段整体省略。
@@ -230,14 +236,16 @@ export class RunCostTracker {
    *
    * @param runId run id。
    * @param conversationId 本 run 所属会话（team 段投影时按它取 controller，跨会话不串流）。
+   * @param modelId 本 run 实际模型 id；缺省回退构造时的默认模型。
    */
-  begin(runId: string, conversationId?: string): void {
+  begin(runId: string, conversationId?: string, modelId?: string): void {
     // team 用量基线必须在此刻（任何派发之前）打快照：controller 是会话级实例，
     // 不收基线就只能在收尾时看到「历史 run + 本 run」的累计值（跨 run 重复计费）。
     const teamBaseline = snapshotTeamBaseline(this.resolveTeamState(conversationId));
     this.runs.set(runId, {
       accumulator: new RunCostAccumulator(),
       startedAt: Date.now(),
+      modelId: modelId ?? this.modelId,
       ...(conversationId !== undefined ? { conversationId } : {}),
       ...(teamBaseline ? { teamBaseline } : {})
     });
@@ -267,7 +275,7 @@ export class RunCostTracker {
     const entry = this.runs.get(runId);
     if (!entry) return;
     if (event.type === "turn_end") {
-      if (event.message.role === "assistant") entry.accumulator.addTurn(this.modelId, event.message.usage);
+      if (event.message.role === "assistant") entry.accumulator.addTurn(entry.modelId, event.message.usage);
     } else if (event.type === "tool_execution_end") {
       entry.accumulator.addToolExecution(event.toolName);
     }

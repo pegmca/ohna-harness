@@ -161,7 +161,7 @@ export function toUiMessages(items: LinearMessageDto[]): UiMessage[] {
         content: textOfBlocks(blocks),
         blocks,
         createdAt: item.createdAt,
-        status: "complete",
+        status: item.stopReason === "error" ? "failed" : "complete",
         ok: item.stopReason !== "error",
         runId: item.runId,
         modelId: item.modelId

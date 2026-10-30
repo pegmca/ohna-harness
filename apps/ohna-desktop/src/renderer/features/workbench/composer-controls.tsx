@@ -175,25 +175,33 @@ export function ComposerControls(props: ComposerControlsProps) {
                       </button>
                     </div>
                   ) : null}
-                  {modelGroups.map((group) => (
-                    <div className="model-group" key={group.name}>
-                      <p className="model-group-label">{group.name}</p>
-                      {group.models.map((model) => (
-                        <button
-                          className="model-option"
-                          key={model.id}
-                          onClick={() => {
-                            props.onSelectModel(model.id);
-                            setModelOpen(false);
-                          }}
-                          type="button"
-                        >
-                          <span><strong>{model.label}</strong><small>{model.description}</small></span>
-                          {model.id === props.selectedModelId ? <Check className="icon-size" /> : null}
-                        </button>
-                      ))}
-                    </div>
-                  ))}
+                  <div aria-label="模型列表" className="model-list" role="listbox">
+                    {modelGroups.map((group) => (
+                      <div className="model-group" key={group.name}>
+                        <p className="model-group-label">{group.name}</p>
+                        {group.models.map((model) => {
+                          const isSelected = model.id === props.selectedModelId;
+                          return (
+                            <button
+                              aria-label={`选择模型 ${model.label}`}
+                              aria-selected={isSelected}
+                              className="model-option"
+                              key={model.id}
+                              onClick={() => {
+                                props.onSelectModel(model.id);
+                                setModelOpen(false);
+                              }}
+                              role="option"
+                              type="button"
+                            >
+                              <span className="model-option-name">{model.label}</span>
+                              {isSelected ? <Check className="icon-size" /> : null}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    ))}
+                  </div>
                   <Popover.Arrow className="popover-arrow" />
                 </Popover.Content>
               </Popover.Portal>

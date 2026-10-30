@@ -101,12 +101,6 @@ export class RunManager {
    * 独立成对象以把「成本产线」与 run 状态机解耦（run-manager 已接近单文件行数上限）。
    */
   private readonly costTracker: RunCostTracker;
-  /**
-   * 本实例的采集窗口参数（docs/v2.0/04 §1.5）：`reserveTokens` 的唯一算法是
-   * `resolveCompactionSettings(contextWindow).reserveTokens`，与 run 前压缩共用同一函数。
-   * 构造期算一次即可（模型窗口在实例生命周期内不变），随每次 llm_call 落盘。
-   */
-  private readonly runWindow: LlmWindowDto;
   /** Team 开关的 run 级装配（关时零开销：begin 直接返回 undefined）。 */
   private readonly teamBinding: TeamRunBinding;
   /** 工作区授权注册表（spec §6）；缺省 undefined 时资源操作不反查授权（测试 / 无工作区模式）。 */
@@ -124,16 +118,15 @@ export class RunManager {
    */
   constructor(private readonly options: RunManagerOptions) {
     this.model = options.model;
-    this.runWindow = {
-      contextWindow: options.model.contextWindow,
-      maxTokens: options.model.maxTokens,
-      reserveTokens: resolveCompactionSettings(options.model.contextWindow).reserveTokens
-    };
     this.teamBinding = new TeamRunBinding({
       ...(options.team ? { team: true } : {}),
       ...(options.teamSession ? { session: options.teamSession } : {}),
       base: options.streamFn ?? streamSimple,
-      window: this.runWindow
+      window: {
+        contextWindow: options.model.contextWindow,
+        maxTokens: options.model.maxTokens,
+        reserveTokens: resolveCompactionSettings(options.model.contextWindow).reserveTokens
+      }
     });
     // serve 侧 controller 是团队状态的**首选**来源；组合根注入的 getTeamState 保留为
     // fallback（03 已接通的参数链不回退，docs/v2.0/04 §2.2）。
@@ -289,11 +282,6 @@ export class RunManager {
     const model = config?.model ?? this.model;
     const apiKey = config?.apiKey ?? this.options.apiKey;
 
-    // 窗口参数不在此重算：`this.runWindow`（构造期一次算出，见字段注释）就是本 run 注入
-    // tracedStreamFn 的 `window`，而 compactHistoryForRun 内部用同一个
-    // `resolveCompactionSettings(contextWindow)` 决定压缩阈值——两侧因此同源恒等。
-    // 将来若模型窗口可在会话中途切换，必须同时改这两处（而不是在这里再取一次）。
-
     // 先取历史再追加本轮 prompt：agentLoop 会自行追加 prompt，避免重复。
     const storedHistory = await this.options.messageStore.list(input.conversationId);
     const mapped = storedHistory
@@ -389,7 +377,7 @@ export class RunManager {
     // execute 尚未启动（run 前压缩、workspace 解析期间）就调 finishStatus；若把 begin 放在
     // execute 入口，这些 run 会静默缺失 cost_summary，被下游误读为「零成本」。
     // 工具表此时还未知（execute 会按会话 workspace 重新解析），故先在 execute 内补种 byTool。
-    this.costTracker.begin(runId, input.conversationId);
+    this.costTracker.begin(runId, input.conversationId, model.id);
 
     // 会话级订阅（--web 共享事件流）：新 run 必须先接到其会话的订阅者上，
     // 再广播 user_message（否则订阅者会漏掉 sequence 最早的 user_message 帧）。
@@ -1009,7 +997,17 @@ export class RunManager {
           void this.emitLlmCall(run, record).catch(() => undefined);
         },
         // v2.0（docs/v2.0/04 §1.1 / §3.2）：window 在构造 wrapper 时注入，与 run 前压缩同源。
-        this.runWindow
+        run.config?.compaction
+          ? {
+              contextWindow: run.config.compaction.contextWindow,
+              maxTokens: run.config.compaction.maxTokens,
+              reserveTokens: run.config.compaction.reserveTokens
+            }
+          : {
+              contextWindow: this.model.contextWindow,
+              maxTokens: this.model.maxTokens,
+              reserveTokens: resolveCompactionSettings(this.model.contextWindow).reserveTokens
+            }
       );
 
     try {
@@ -1204,6 +1202,18 @@ export class RunManager {
       const payload: Record<string, unknown> = { status };
       if (error) payload.error = error;
       await this.emitFrame(run, "run_status", payload);
+      if (status === "failed" && error) {
+        // provider / loop 失败也要留下可恢复的用户可见终态；否则刷新后只剩孤立 user 消息，
+        // 真实错误只存在 run JSONL 的 Trace 中，会话时间线会误以为该轮从未产生回答。
+        await this.options.messageStore.append(run.snapshot.conversationId, {
+          role: "assistant",
+          content: [{ type: "text", text: `${error.code}: ${error.message}` }],
+          modelId: run.snapshot.modelId,
+          stopReason: "error",
+          runId: run.snapshot.runId
+        });
+        await this.options.sessionStore.touch(run.snapshot.conversationId);
+      }
       run.snapshot = terminalSnapshot(run.snapshot, status, error);
       run.terminal = true;
       run.resolveTerminalDone();

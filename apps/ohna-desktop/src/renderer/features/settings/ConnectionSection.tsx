@@ -1,8 +1,4 @@
-/**
- * 「连接状态」分区（03 L3-1）：展示当前 ohna 进程的连接事实——全部只读。
- *
- * 数据来自 `GET /api/health`（不含任何写端点）。
- */
+/** 「连接状态」分区：展示当前 utilityProcess runtime 的连接事实，全部只读。 */
 import { SettingsBadge, SettingsFacts, SettingsSection } from "./settings-primitives";
 import type { SettingsHealthState } from "./settings-health";
 
@@ -16,13 +12,13 @@ export function ConnectionSection(props: { health: SettingsHealthState }) {
   const { state, health } = props.health;
   return (
     <SettingsSection
-      description="本地服务与工作区事实，由启动 ohna 的进程决定，只读。"
+      description="当前 utilityProcess runtime 的事实，由启动 ohna 的进程决定，只读。"
       id="connection"
       title="连接状态"
     >
-      {state === "loading" ? <p className="muted-row">正在读取本地服务信息…</p> : null}
+      {state === "loading" ? <p className="muted-row">正在读取 runtime 信息…</p> : null}
       {state === "unavailable" ? (
-        <p className="error-block">未检测到本地 ohna 服务，请确认 ohna 进程仍在运行。</p>
+        <p className="error-block">runtime 不可用，请确认 ohna 进程仍在运行。</p>
       ) : null}
       {state === "ready" && health ? (
         <SettingsFacts
@@ -31,19 +27,9 @@ export function ConnectionSection(props: { health: SettingsHealthState }) {
               label: "连接状态",
               value: <SettingsBadge tone="success">已连接</SettingsBadge>
             },
-            { label: "服务地址", value: <code>{health.url}</code> },
-            { label: "端口", value: <code>{health.port}</code> },
-            { label: "workspaceRoot", value: <code>{health.workspaceRoot}</code> },
-            {
-              label: "dataDir",
-              value: health.dataDir
-                ? <code>{health.dataDir}</code>
-                : <span className="settings-helper">未上报（使用进程默认目录）</span>
-            },
-            {
-              label: "进程 PID",
-              value: health.pid === undefined ? <span className="settings-helper">—</span> : <code>{health.pid}</code>
-            }
+            { label: "协议版本", value: <code>{health.protocolVersion}</code> },
+            { label: "模型数", value: <code>{health.modelCount}</code> },
+            { label: "已授权工作区", value: <code>{health.workspaceCount}</code> }
           ]}
         />
       ) : null}

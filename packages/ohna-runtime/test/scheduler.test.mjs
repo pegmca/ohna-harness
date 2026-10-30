@@ -230,3 +230,148 @@ test("并发重复 requestId 只创建一个 run（在途幂等）", async () =>
   });
 });
 
+test("run 选择的模型贯穿请求、快照、成本归因与上下文窗口", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "ohna-selected-model-"));
+  let requestedModel;
+  const events = [];
+  let resolveTerminal;
+  const terminal = new Promise((resolve) => {
+    resolveTerminal = resolve;
+  });
+  const runtime = await createOhnaRuntime({
+    dataDir: dir,
+    model: { ...makeModel(), id: "default-model", name: "Default Model" },
+    apiKey: "test-key",
+    autoApprove: true,
+    modelCatalog: {
+      defaultModelId: "default-model",
+      models: [
+        {
+          id: "default-model",
+          label: "Default Model",
+          provider: "mock",
+          description: "default",
+          isDefault: true,
+          capabilities: { structuredOutput: true, toolCalling: true },
+          contextWindow: 8192,
+          maxTokens: 2048,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
+        },
+        {
+          id: "selected-model",
+          label: "Selected Model",
+          provider: "mock",
+          description: "selected",
+          isDefault: false,
+          capabilities: { structuredOutput: true, toolCalling: true },
+          contextWindow: 200_000,
+          maxTokens: 8_192,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
+        }
+      ]
+    },
+    streamFn: (model) => {
+      requestedModel = model;
+      const stream = createAssistantMessageEventStream();
+      stream.push({
+        type: "done",
+        reason: "stop",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "ok" }],
+          api: "openai-completions",
+          provider: "mock",
+          model: model.id,
+          usage: {
+            input: 10,
+            output: 2,
+            totalTokens: 12,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }
+          },
+          stopReason: "stop",
+          timestamp: Date.now()
+        }
+      });
+      stream.end();
+      return stream;
+    }
+  });
+
+  try {
+    await runtime.registerWorkspace("workspace-selected-model", dir);
+    const conversationId = "conversation-selected-model";
+    const conversation = await runtime.createConversation({
+      title: "selected model",
+      workspaceId: "workspace-selected-model"
+    });
+    const started = await runtime.startRun({
+      conversationId,
+      workspaceId: "workspace-selected-model",
+      requestId: "request-selected-model",
+      message: "use the selected model",
+      modelId: "selected-model"
+    });
+    events.push(...started.initialEvents);
+    assert.equal(started.snapshot.modelId, "selected-model");
+    await runtime.subscribeRun(started.accepted.runId, {
+      onEvent: (event) => {
+        events.push(event);
+        if (event.type === "run_status") resolveTerminal();
+      }
+    });
+    await terminal;
+
+    assert.equal(requestedModel?.id, "selected-model");
+    assert.equal(requestedModel?.contextWindow, 200_000);
+    const costSummary = events.find((event) => event.type === "cost_summary");
+    assert.deepEqual(Object.keys(costSummary?.payload.byModel ?? {}), ["selected-model"]);
+    const llmCall = events.find((event) => event.type === "llm_call");
+    assert.equal(llmCall?.payload.window.contextWindow, 200_000);
+  } finally {
+    await runtime.shutdown();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("provider 失败在刷新后仍以失败 assistant 消息可恢复", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "ohna-failure-history-"));
+  const runtime = await createOhnaRuntime({
+    dataDir: dir,
+    model: makeModel(),
+    apiKey: "test-key",
+    autoApprove: true,
+    streamFn: () => {
+      throw new Error("provider unreachable");
+    }
+  });
+
+  try {
+    await runtime.registerWorkspace("workspace-failure-history", dir);
+    const conversation = await runtime.createConversation({
+      title: "failure history",
+      workspaceId: "workspace-failure-history"
+    });
+    const started = await runtime.startRun({
+      conversationId: conversation.conversationId,
+      workspaceId: "workspace-failure-history",
+      requestId: "request-failure-history",
+      message: "force provider failure"
+    });
+    const events = [...started.initialEvents];
+    await runtime.subscribeRun(started.accepted.runId, {
+      onEvent: (event) => events.push(event)
+    });
+    await waitFor(() => events.some((event) => event.type === "run_status"));
+
+    const history = await runtime.listMessages(conversation.conversationId);
+    const failedAssistant = history?.items.find((message) => message.role === "assistant");
+    assert.ok(failedAssistant, "失败 run 必须持久化 assistant 失败占位");
+    assert.equal(failedAssistant.stopReason, "error");
+    assert.equal(failedAssistant.runId, started.accepted.runId);
+    assert.match(JSON.stringify(failedAssistant.content), /provider unreachable/);
+  } finally {
+    await runtime.shutdown();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+

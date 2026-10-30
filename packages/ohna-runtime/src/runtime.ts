@@ -247,6 +247,7 @@ export async function createOhnaRuntime(options: OhnaRuntimeOptions): Promise<Oh
   const resolveRunConfig = createRunConfigResolver({
     model,
     apiKey,
+    ...(modelCatalog ? { modelCatalog } : {}),
     autoApprove: autoApprove ?? false,
     team: team ?? false,
     workspaceRegistry,

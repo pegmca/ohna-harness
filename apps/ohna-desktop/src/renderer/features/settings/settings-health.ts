@@ -1,35 +1,12 @@
-/**
- * 设置页数据探针：`GET /api/health` 的完整扁平形状（比 `shared/mode.ts` 多出 pid 等诊断字段）。
- *
- * 为什么单独一份而不是给 `LocalModeInfo` 加字段：chat 头部只关心工作目录，设置页需要
- * 「连接状态」的诊断信息；两者用途不同，避免把设置页字段泄漏到会话页。
- * 只读：这里不发任何写请求。
- */
+/** 设置页数据探针：直接读取 utilityProcess 内 runtime 的健康事实，不再假设存在 HTTP 服务。 */
 import { useEffect, useState } from "react";
+import { getRuntimeHealth } from "../../shared/sdk/ohna-client";
 
-/** `/api/health` 的本地连接事实。 */
+/** runtime 的本地连接事实。 */
 export interface SettingsHealth {
-  /** serve 端口（浏览器 `location.port`；本地服务即当前页面来源）。 */
-  port: string;
-  /** 当前页面来源（serve URL）。 */
-  url: string;
-  workspaceRoot: string;
-  dataDir: string | undefined;
-  modelId: string | undefined;
-  modelProvider: string | undefined;
-  pid: number | undefined;
-  /** 是否只读观测实例（docs/v1.4/06 D-A7）：true 时浏览器不能发起或取消 run。 */
-  observeOnly: boolean;
-}
-
-/** health 原始 payload（packages/serve/src/routes/health.ts）。 */
-interface RawHealth {
-  mode?: string;
-  workspaceRoot?: string;
-  model?: { id?: string; provider?: string };
-  pid?: number;
-  dataDir?: string;
-  observeOnly?: boolean;
+  protocolVersion: number;
+  modelCount: number;
+  workspaceCount: number;
 }
 
 /** 探针状态：loading → ready / unavailable。 */
@@ -45,24 +22,16 @@ export interface SettingsHealthState {
  * @returns 设置页需要的连接事实；非 local / 失败返回 unavailable。
  */
 export async function fetchSettingsHealth(signal?: AbortSignal): Promise<SettingsHealthState> {
+  void signal;
   try {
-    const response = await fetch("/api/health", { signal });
-    if (!response.ok) return { state: "unavailable", health: undefined };
-    const payload = (await response.json()) as RawHealth;
-    if (payload.mode !== "local" || typeof payload.workspaceRoot !== "string") {
-      return { state: "unavailable", health: undefined };
-    }
+    const result = await getRuntimeHealth();
+    if (!result.ok) return { state: "unavailable", health: undefined };
     return {
       state: "ready",
       health: {
-        port: window.location.port || "80",
-        url: window.location.origin,
-        workspaceRoot: payload.workspaceRoot,
-        dataDir: typeof payload.dataDir === "string" ? payload.dataDir : undefined,
-        modelId: payload.model?.id,
-        modelProvider: payload.model?.provider,
-        pid: typeof payload.pid === "number" ? payload.pid : undefined,
-        observeOnly: payload.observeOnly === true
+        protocolVersion: result.data.protocolVersion,
+        modelCount: result.data.modelCount,
+        workspaceCount: result.data.workspaceCount
       }
     };
   } catch {

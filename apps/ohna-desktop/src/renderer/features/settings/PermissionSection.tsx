@@ -11,12 +11,11 @@ import type { SettingsHealthState } from "./settings-health";
 /**
  * 渲染权限模式分区。
  *
- * @param props.health 健康信息（端口的 observeOnly / autoApprove 由宿主决定，health 只暴露 model）.
+ * @param props.health runtime 健康状态。
  * @returns 权限模式分区。
  */
 export function PermissionSection(props: { health: SettingsHealthState }) {
   const ready = props.health.state === "ready" && props.health.health !== undefined;
-  const observeOnly = props.health.health?.observeOnly === true;
   return (
     <SettingsSection
       description="权限模式与执行形态由启动 ohna 时的参数与宿主决定，Web 只读展示。"
@@ -30,13 +29,11 @@ export function PermissionSection(props: { health: SettingsHealthState }) {
               label: "执行形态",
               value: (
                 <span className="settings-inline">
-                  <SettingsBadge tone={observeOnly ? "info" : "success"}>
-                    {observeOnly ? "只读观测" : "可交互"}
+                  <SettingsBadge tone="success">
+                    可交互
                   </SettingsBadge>
                   <span className="settings-helper">
-                    {observeOnly
-                      ? "服务端不注册 run 创建/取消与确认写路由——浏览器不能发起或取消 run（composer 已禁用）。"
-                      : "服务端可执行 run：浏览器 composer 可发起对话，变更类工具调用经确认卡片放行。"}
+                    桌面 runtime 可执行 run：composer 可发起对话，变更类工具调用经确认卡片放行。
                   </span>
                 </span>
               )
@@ -53,15 +50,13 @@ export function PermissionSection(props: { health: SettingsHealthState }) {
               )
             },
             {
-              label: "当前模型",
-              value: props.health.health?.modelId
-                ? <code>{props.health.health.modelId}</code>
-                : <span className="settings-helper">—</span>
+              label: "已授权工作区",
+              value: <code>{props.health.health?.workspaceCount ?? 0}</code>
             }
           ]}
         />
       ) : (
-        <p className="muted-row">本地服务不可用，无法读取当前权限模式。</p>
+        <p className="muted-row">runtime 不可用，无法读取当前权限模式。</p>
       )}
     </SettingsSection>
   );

@@ -34,6 +34,11 @@ interface RequestMessage {
   envelope: RuntimeRequestEnvelope;
 }
 
+/** 主进程要求 worker 优雅退出（释放 dataDir 锁后再关闭进程）。 */
+interface ShutdownMessage {
+  type: "shutdown";
+}
+
 /** 业务消息（MessagePort 回送用）。 */
 type OutgoingMessage =
   | { type: "response"; envelope: RuntimeResponseEnvelope }
@@ -232,6 +237,15 @@ async function listenForConnection(): Promise<void> {
         team: process.env.OHNA_TEAM === "true",
         autoApprove: process.env.OHNA_AUTO_APPROVE === "true",
         onLog: (entry) => console.log(`[ohna-runtime:${entry.level}] ${entry.message}`)
+      });
+      parentPort.on("message", async (event) => {
+        const message = event.data as ShutdownMessage | undefined;
+        if (message?.type !== "shutdown") return;
+        try {
+          await runtime.shutdown();
+        } finally {
+          process.exit(0);
+        }
       });
       servePort(port, runtime);
     } catch (error) {

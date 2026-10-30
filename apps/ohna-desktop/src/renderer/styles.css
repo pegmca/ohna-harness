@@ -1785,7 +1785,17 @@ textarea:disabled {
 }
 
 .model-option {
+  min-height: 34px;
   justify-content: space-between;
+  padding-block: 7px;
+}
+
+.model-list {
+  display: grid;
+  max-height: min(420px, calc(100vh - 180px));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
 }
 
 .model-group {
@@ -1803,12 +1813,15 @@ textarea:disabled {
 }
 
 .model-option > span {
-  display: grid;
-  gap: 2px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.model-option small {
-  color: var(--md-color-text-muted);
+.model-option-name {
+  font-size: var(--md-text-body-size);
+  font-weight: 600;
 }
 
 .model-selector,

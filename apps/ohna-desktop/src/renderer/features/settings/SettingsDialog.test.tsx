@@ -19,18 +19,21 @@ vi.mock("../../shared/sdk/ohna-client");
 const mocked = vi.mocked(client);
 
 /**
- * 构造 health 响应。
+ * 安装 preload SDK 的 health 返回值。
  *
- * @returns Response。
+ * @returns health mock。
  */
-function healthResponse(): Response {
-  return new Response(JSON.stringify({
-    mode: "local",
-    workspaceRoot: "/work/ws-a",
-    model: { id: "mock", provider: "mock" },
-    pid: 4242,
-    dataDir: "/tmp/ohna"
-  }), { status: 200, headers: { "content-type": "application/json" } });
+function healthResult() {
+  return {
+    ok: true as const,
+    requestId: "health",
+    data: {
+      status: "ok" as const,
+      protocolVersion: 1,
+      modelCount: 19,
+      workspaceCount: 2
+    }
+  };
 }
 
 /**
@@ -58,6 +61,7 @@ function SettingsHarness(props: { isInitiallyOpen?: boolean }) {
  * @returns 渲染结果与 fetch mock。
  */
 function renderDialog(options: { isInitiallyOpen?: boolean } = {}) {
+  mocked.getRuntimeHealth.mockResolvedValue(healthResult());
   mocked.listModels.mockResolvedValue({
     ok: true,
     requestId: "models",
@@ -90,10 +94,8 @@ function renderDialog(options: { isInitiallyOpen?: boolean } = {}) {
     }
   });
   mocked.saveUserSettings.mockResolvedValue({ ok: true, requestId: "save", data: { path: "/tmp/settings.json" } });
-  const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
-    const url = String(input);
-    if (url.startsWith("/api/health")) return healthResponse();
-    throw new Error(`Unexpected fetch: ${url}`);
+  const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+    throw new Error(`Unexpected fetch: ${String(input)}`);
   });
   vi.stubGlobal("fetch", fetchMock);
   const result = render(
@@ -119,7 +121,7 @@ describe("SettingsDialog（L3 / FR-001）", () => {
     const nav = screen.getByRole("navigation", { name: "设置分区" });
     const links = nav.querySelectorAll("a");
     expect([...links].map((link) => link.textContent)).toEqual([
-      "连接状态本地服务地址与工作区",
+      "连接状态runtime 与工作区",
       "外观主题与界面字号",
       "模型用户配置与模型",
       "权限模式只读与自动批准语义",
@@ -138,11 +140,12 @@ describe("SettingsDialog（L3 / FR-001）", () => {
     }
     // 连接状态分区承载 health 事实。
     expect(await screen.findByText("已连接")).toBeTruthy();
-    expect(screen.getByText("/work/ws-a")).toBeTruthy();
-    expect(screen.getByText("/tmp/ohna")).toBeTruthy();
+    expect(screen.getByText("19")).toBeTruthy();
+    expect(screen.getAllByText("2").length).toBeGreaterThan(0);
     // 模型分区读取用户 settings，并渲染可编辑表单。
     expect(await screen.findByDisplayValue("http://192.168.5.8:8787/v1")).toBeTruthy();
     expect(screen.getByRole("button", { name: "保存配置" })).toBeTruthy();
+    expect(screen.getByText("应用版本")).toBeTruthy();
     expect(screen.getByText("版本与运行环境信息。")).toBeTruthy();
   });
 
@@ -170,7 +173,8 @@ describe("SettingsDialog（L3 / FR-001）", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
     // 关闭后弹窗内容卸载，不会继续渲染结果。
     expect(screen.queryByText("已连接")).toBeNull();
-    expect(fetchMock).toHaveBeenCalled();
+    expect(mocked.getRuntimeHealth).toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("TC-FR-001: ESC 与点击遮罩都能关闭弹窗", () => {
@@ -187,18 +191,17 @@ describe("SettingsDialog（L3 / FR-001）", () => {
   });
 
   it("TC-FR-001: 关闭时卸载内容，健康探针随之中止，再次打开重新请求", async () => {
-    const { fetchMock } = renderDialog();
+    renderDialog();
     await screen.findByText("已连接");
-    const healthCallsAfterOpen = fetchMock.mock.calls.filter(([input]) => String(input).startsWith("/api/health")).length;
-    expect(healthCallsAfterOpen).toBe(1);
+    expect(mocked.getRuntimeHealth).toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole("button", { name: "关闭设置" }));
     expect(screen.queryByText("已连接")).toBeNull();
 
+    const callsBeforeReopen = mocked.getRuntimeHealth.mock.calls.length;
     fireEvent.click(screen.getByRole("button", { name: "设置" }));
-    await waitFor(() => expect(
-      fetchMock.mock.calls.filter(([input]) => String(input).startsWith("/api/health")).length
-    ).toBe(2));
+    await screen.findByText("已连接");
+    expect(mocked.getRuntimeHealth.mock.calls.length).toBeGreaterThan(callsBeforeReopen);
   });
 
   it("TC-FR-001: 打开时焦点进入对话框，关闭后归还给入口按钮", () => {
@@ -254,19 +257,18 @@ describe("SettingsDialog 外观与只读边界（L3）", () => {
     expect(screen.getAllByRole("radio", { name: /^标准/ })).toHaveLength(1);
   });
 
-  it("TC-L3-03: 外观偏好只写 localStorage；HTTP 仅 health 探针，配置经 preload 保存", async () => {
+  it("TC-L3-03: 外观偏好只写 localStorage，设置全程经 preload 读写", async () => {
     const { fetchMock } = renderDialog();
-    await waitFor(() => expect(screen.getByText("/work/ws-a")).toBeTruthy());
+    await waitFor(() => expect(mocked.getRuntimeHealth).toHaveBeenCalled());
     await screen.findByDisplayValue("http://192.168.5.8:8787/v1");
 
-    // 只读边界：设置弹窗只发 `/api/health` 探针（经 HTTP）；模型目录走 preload SDK，不再发 HTTP。
+    // 桌面包边界：健康、模型、配置均经 preload SDK，不假设存在 HTTP 服务。
     const calls = fetchMock.mock.calls.map(([input, init]) => ({
       url: String(input),
       method: init?.method ?? "GET"
     }));
-    expect(calls.length).toBeGreaterThan(0);
-    expect(calls.every((call) => call.method === "GET")).toBe(true);
-    expect(calls.every((call) => call.url.startsWith("/api/health"))).toBe(true);
+    expect(calls).toEqual([]);
+    expect(fetchMock).not.toHaveBeenCalled();
     // 点击主题/字号不产生网络请求。
     const before = fetchMock.mock.calls.length;
     fireEvent.click(screen.getByRole("radio", { name: /深色/ }));
@@ -279,10 +281,10 @@ describe("SettingsDialog 外观与只读边界（L3）", () => {
     expect(fetchMock.mock.calls.length).toBe(beforeSaveHttp);
   });
 
-  it("本地服务不可用时各分区降级为可读提示", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => new Response("", { status: 502 })));
+  it("runtime 不可用时各分区降级为可读提示", async () => {
+    mocked.getRuntimeHealth.mockRejectedValue(new Error("runtime unavailable"));
     render(<ThemeProvider><SettingsHarness /></ThemeProvider>);
-    expect(await screen.findByText(/未检测到本地 ohna 服务/)).toBeTruthy();
-    expect(screen.getByText("本地服务不可用，无法读取当前权限模式。")).toBeTruthy();
+    expect(await screen.findByText(/runtime 不可用/)).toBeTruthy();
+    expect(screen.getByText("runtime 不可用，无法读取当前权限模式。")).toBeTruthy();
   });
 });

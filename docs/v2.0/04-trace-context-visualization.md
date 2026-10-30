@@ -321,9 +321,12 @@ export function buildContextEvents(events: readonly RunStreamEventDtoV2[]): Cont
 
 三面板共享固定估算口径脚注（§1.4 系数表的一句话版本），复用 `.trace-` 类 + glass 令牌（`--md-glass-inspector` / `--md-glass-sunken`），强调色 `#89D7B7` 用于 live/active。
 
-### 5.6 模型目录透出窗口与费率（仅设置 UI 通道）
+### 5.6 模型目录透出窗口与费率（run 配置与设置 UI 共用）
 
-`ModelOptionDto` 由「产品能力摘要」扩展为「含成本计量字段」（`packages/types/src/models.ts`；serve 侧 `createSingleModelCatalog` 投影 `model.contextWindow / maxTokens / cost`，数据就在 `RouteDeps["model"]`，零新增来源）：
+`ModelOptionDto` 由「产品能力摘要」扩展为「含成本计量字段」（`packages/types/src/models.ts`）。
+用户从分组目录切换模型时，`ohna-runtime` 的 run 配置快照按该条目恢复完整 `Model` 元数据；
+`llm_call.window`、run 前 compaction 与 `cost_summary.byModel` 因而同源于本次 run 实际选择的模型，
+而不是实例启动时的默认模型。设置弹窗与 composer 只消费同一目录，不另建窗口/费率口径：
 
 ```ts
 export interface ModelOptionDto {
@@ -340,7 +343,8 @@ export interface ModelOptionDto {
 }
 ```
 
-注意：mock/bridge 模型费率可能全 0 或部分缺失，设置 UI 按「缺失显示 —」处理（Trace 不消费此通道，无连带影响）。
+注意：mock/bridge 模型费率可能全 0 或部分缺失，设置 UI 按「缺失显示 —」处理；
+Trace 仍只消费落盘的 `llm_call` 快照，不反向读取模型目录。
 
 ---
 

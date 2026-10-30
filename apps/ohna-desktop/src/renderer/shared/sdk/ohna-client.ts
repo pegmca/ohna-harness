@@ -21,6 +21,7 @@ import type {
   RunSnapshotDtoV2,
   RunStatusDtoV2,
   RunStreamEventDtoV2,
+  RuntimeHealthDto,
   WorkspaceDescriptorDto
 } from "@aiagent/types";
 import type { OhnaSdk, StartRunInputDto } from "../../../preload/contract";
@@ -163,6 +164,20 @@ export async function readWorkspaceGitBranch(workspaceId: string): Promise<ApiRe
     return { ok: true, requestId: "workspaces.gitBranch", data: branch };
   } catch (error) {
     return toFailureFromUnknown<string | null>(error);
+  }
+}
+
+/**
+ * 读取 utilityProcess 内 runtime 的健康状态。
+ *
+ * @returns runtime 健康事实或结构化失败。
+ */
+export async function getRuntimeHealth(): Promise<ApiResult<RuntimeHealthDto>> {
+  try {
+    const health = await getSdk().app.getHealth();
+    return { ok: true, requestId: "app.getHealth", data: health };
+  } catch (error) {
+    return toFailureFromUnknown<RuntimeHealthDto>(error);
   }
 }
 

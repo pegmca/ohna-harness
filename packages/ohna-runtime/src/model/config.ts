@@ -7,6 +7,7 @@
  */
 import type { Model } from "@aiagent/ai";
 import type { AgentTool } from "@aiagent/tools";
+import type { ModelCatalogDto } from "@aiagent/types";
 import { resolveCompactionSettings } from "@aiagent/agent";
 
 /** 配置快照解析所需的最小启动输入（与 runtime 协议形状一致）。 */
@@ -46,6 +47,8 @@ export interface RunConfigSnapshot {
 export interface RunConfigResolverDependencies {
   model: Model<"openai-completions">;
   apiKey: string;
+  /** 用户级模型目录；选中模型必须按这里恢复真实窗口 / 输出预算 / 费率。 */
+  modelCatalog?: ModelCatalogDto;
   autoApprove: boolean;
   team: boolean;
   workspaceRegistry: {
@@ -60,6 +63,36 @@ export interface RunConfigResolverDependencies {
     workspaceRoot: string;
     systemPrompt: string;
     tools: AgentTool[];
+  };
+}
+
+/**
+ * 把模型目录条目叠加到实例基模型上。
+ *
+ * 目录是用户可见的模型元数据来源，切换模型不能只替换 id：contextWindow / maxTokens /
+ * cost 会直接决定 compaction、请求输出预算与成本归因。目录缺失时回退基模型元数据。
+ *
+ * @param baseModel 实例启动时的基模型。
+ * @param modelId 本次 run 选择的模型 id。
+ * @param catalog 用户级模型目录。
+ * @returns 本次 run 的完整模型快照。
+ */
+function resolveSelectedModel(
+  baseModel: Model<"openai-completions">,
+  modelId: string | undefined,
+  catalog: ModelCatalogDto | undefined
+): Model<"openai-completions"> {
+  const id = modelId?.trim();
+  if (!id) return baseModel;
+  const option = catalog?.models.find((model) => model.id === id);
+  if (!option) return { ...baseModel, id, name: id };
+  return {
+    ...baseModel,
+    id: option.id,
+    name: option.label || option.id,
+    cost: option.cost,
+    contextWindow: option.contextWindow,
+    maxTokens: option.maxTokens
   };
 }
 
@@ -84,9 +117,11 @@ export function createRunConfigResolver(
    */
   return async (conversationId, input) => {
     // 模型覆盖必须在本 run 创建时固定，避免运行期切换 composer 影响在途 run。
-    const model = input.modelId
-      ? { ...dependencies.model, id: input.modelId, name: input.modelId }
-      : dependencies.model;
+    const model = resolveSelectedModel(
+      dependencies.model,
+      input.modelId,
+      dependencies.modelCatalog
+    );
     let workspace = dependencies.fallback;
     try {
       const resolved =

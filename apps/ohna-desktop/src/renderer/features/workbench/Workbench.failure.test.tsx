@@ -179,4 +179,47 @@ describe("Workbench run 失败信息落点（BUG-001）", () => {
     expect(screen.queryByText(LEGACY_HINT)).toBeNull();
     expect(container.querySelector(".error-block")?.textContent).toContain("request_cancelled");
   });
+
+  it("刷新恢复 provider 失败时仍展示 failed 与真实错误正文", async () => {
+    const { listConversations, listConversationMessages, listModels, replayRunEvents } =
+      await import("../../shared/sdk/ohna-client");
+    vi.mocked(listModels).mockResolvedValue(MODELS);
+    vi.mocked(listConversations).mockResolvedValue(listConversationsResult());
+    vi.mocked(listConversationMessages).mockResolvedValue({
+      ok: true,
+      requestId: "history",
+      data: {
+        items: [
+          {
+            messageId: "user-failed",
+            conversationId: "c1",
+            role: "user",
+            content: "请只回复 FAILURE-UC005",
+            messageType: "normal",
+            sequence: 1,
+            runId: "run-failed",
+            createdAt: "2026-10-20T00:00:01.000Z"
+          },
+          {
+            messageId: "assistant-failed",
+            conversationId: "c1",
+            role: "assistant",
+            content: [{ type: "text", text: "model_error: fetch failed" }],
+            messageType: "normal",
+            sequence: 2,
+            runId: "run-failed",
+            modelId: "mock",
+            stopReason: "error",
+            createdAt: "2026-10-20T00:00:02.000Z"
+          }
+        ]
+      }
+    });
+    vi.mocked(replayRunEvents).mockResolvedValue(undefined);
+
+    render(<MemoryRouter><Workbench /></MemoryRouter>);
+
+    expect(await screen.findByText("model_error: fetch failed")).toBeTruthy();
+    expect(screen.getByText("failed")).toBeTruthy();
+  });
 });

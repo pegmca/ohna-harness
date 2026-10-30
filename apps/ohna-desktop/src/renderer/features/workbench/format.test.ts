@@ -127,6 +127,25 @@ describe("toUiMessages（BUG-006：单条用户消息对应单条助手消息）
     expect(assistants).toHaveLength(1);
     expect(assistants[0].ok).toBe(false);
   });
+
+  it("刷新恢复的失败 assistant 保留 failed 状态与错误正文", () => {
+    const items: LinearMessageDto[] = [
+      line({ messageId: "u1", role: "user", content: "provider unavailable", runId: "r1" }),
+      line({
+        messageId: "a1",
+        role: "assistant",
+        content: [{ type: "text", text: "internal_error: fetch failed" }],
+        runId: "r1",
+        stopReason: "error"
+      })
+    ];
+
+    const assistants = toUiMessages(items).filter((message) => message.role === "assistant");
+    expect(assistants).toHaveLength(1);
+    expect(assistants[0].status).toBe("failed");
+    expect(assistants[0].ok).toBe(false);
+    expect(assistants[0].content).toBe("internal_error: fetch failed");
+  });
 });
 
 /** 取合并后助手消息的 runId（测试辅助，避免重复解构）。 */

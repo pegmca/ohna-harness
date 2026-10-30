@@ -69,6 +69,45 @@ describe("ComposerControls 只读态", () => {
     expect(screen.getByText("推理模型")).toBeTruthy();
   });
 
+  it("模型菜单不重复组名描述，并提供独立的纵向滚动区", () => {
+    const props = baseProps();
+    const selectedIds: string[] = [];
+    render(
+      <ComposerControls
+        {...props}
+        models={[
+          {
+            ...props.models[0],
+            id: "deepseek-v4-pro",
+            label: "Selected model",
+            description: "推理模型 · deepseek-v4-pro",
+            group: "推理模型"
+          },
+          {
+            ...props.models[0],
+            id: "kimi-k3.1-pro",
+            label: "Another model",
+            description: "推理模型 · kimi-k3.1-pro",
+            group: "推理模型"
+          }
+        ]}
+        onSelectModel={(modelId) => selectedIds.push(modelId)}
+        selectedModelId="deepseek-v4-pro"
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Selected model" }));
+    expect(screen.queryByText("推理模型 · deepseek-v4-pro")).toBeNull();
+    expect(screen.getByRole("listbox", { name: "模型列表" })).toBeTruthy();
+    const options = screen.getByRole("listbox", { name: "模型列表" })
+      .querySelectorAll(".model-option");
+    expect(options[1].textContent?.match(/kimi-k3\.1-pro/gi)).toBeNull();
+    expect(options[1].getAttribute("aria-label")).toBeTruthy();
+    fireEvent.click(screen.getByRole("option", { name: "选择模型 Another model" }));
+    expect(selectedIds).toEqual(["kimi-k3.1-pro"]);
+    expect(screen.queryByRole("listbox", { name: "模型列表" })).toBeNull();
+  });
+
   it("observeOnly=true 时 textarea 禁用且只读 banner 可见", () => {
     render(<ComposerControls {...baseProps()} observeOnly={true} />);
 

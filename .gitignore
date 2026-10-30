@@ -39,6 +39,9 @@ datasets/finance/rag-golden/_drafts/
 datasets/finance/rag-golden/_publications.json
 datasets/finance/rag-golden/_publications.pending.json
 
+# finance-golden-studio 从来源 PDF 派生的语料 manifest（运行时生成，非源码）
+datasets/finance/manifest/manifest.jsonl
+
 # ohna-cli eval 运行产物（由 pnpm eval:ohna 生成，非源码；baseline 由 --update-baseline 重建）
 apps/ohna-cli/eval/report.json
 apps/ohna-cli/eval/report.md

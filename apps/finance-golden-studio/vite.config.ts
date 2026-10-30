@@ -10,6 +10,8 @@ export default defineConfig({
     emptyOutDir: true
   },
   server: {
+    port: 5181,
+    strictPort: true,
     proxy: {
       "/api": {
         target: DEV_API_URL,

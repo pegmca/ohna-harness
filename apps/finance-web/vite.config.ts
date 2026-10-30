@@ -5,6 +5,8 @@ import { defineConfig } from "vite";
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   server: {
+    port: 5180,
+    strictPort: true,
     proxy: {
       "/api": {
         target: "http://localhost:3001",
@@ -15,6 +17,8 @@ export default defineConfig({
     }
   },
   preview: {
+    port: 5180,
+    strictPort: true,
     host: "0.0.0.0",
     proxy: {
       "/api": "http://localhost:3001",

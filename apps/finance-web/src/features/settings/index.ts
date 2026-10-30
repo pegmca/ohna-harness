@@ -1,1 +1,1 @@
-export { SettingsPage } from "./SettingsPage";
+export { SettingsDialog } from "./SettingsDialog.js";

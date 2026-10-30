@@ -13,6 +13,8 @@ import {
   Wrench
 } from "lucide-react";
 import { type FormEvent, useEffect, useRef, useState } from "react";
+import emptyCanvasAnimation from "../../assets/lottie/infinity-collision.json";
+import { LottiePlayer } from "../animation/index.js";
 import { formatRunStatus, formatTime } from "./format";
 import { projectLiveRun } from "./live-run-projection";
 import { JsonDetails, RunDetails, StatusBadge } from "./run-details";
@@ -63,6 +65,8 @@ export function ChatHeader(props: ChatHeaderProps) {
 }
 
 interface ChatTimelineProps {
+  /** 空态只保留品牌动画；金融能力由 composer 快捷入口承载，避免首屏教程化。 */
+  compactEmpty?: boolean;
   conversationId: string | undefined;
   error: string | undefined;
   hasMore: boolean;
@@ -76,7 +80,7 @@ interface ChatTimelineProps {
 }
 
 /**
- * 渲染中央对话时间线；空状态只显示紧凑 starter prompts。
+ * 渲染中央对话时间线；空状态显示 Lottie 品牌动画，普通模式补充 starter prompts。
  *
  * @param props 组件属性。
  * @returns 对话消息列表。
@@ -137,10 +141,19 @@ export function ChatTimeline(props: ChatTimelineProps) {
     return (
       <section className="chat-timeline empty-timeline" aria-label="消息列表">
         <div className="empty-state">
-          <span className="empty-brand-logo" aria-hidden="true"><span className="brand-mark empty-brand-mark" /></span>
-          <h2>从一个金融研究问题开始</h2>
-          <p>回答会保留真实工具调用与运行事件，可在 assistant 消息内展开查看。</p>
-          <StarterPrompts disabled={props.isSubmitting} onUsePrompt={props.onUsePrompt} />
+          <span className="empty-brand-logo" aria-hidden="true">
+            <LottiePlayer
+              animationData={emptyCanvasAnimation}
+              fallback={<img className="empty-brand-svg" src="/infinity-icon.svg" alt="" />}
+              loop={false}
+              size={144}
+            />
+          </span>
+          {!props.compactEmpty ? <h2>从一个金融研究问题开始</h2> : null}
+          {!props.compactEmpty
+            ? <p>回答会保留真实工具调用与运行事件，可在 assistant 消息内展开查看。</p>
+            : null}
+          {!props.compactEmpty ? <StarterPrompts disabled={props.isSubmitting} onUsePrompt={props.onUsePrompt} /> : null}
         </div>
       </section>
     );

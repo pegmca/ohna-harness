@@ -124,7 +124,7 @@ export function ComposerControls(props: ComposerControlsProps) {
           disabled={props.isSubmitting}
           onChange={(event) => props.onInputChange(event.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder="输入金融研究问题..."
+          placeholder="许下你的愿望..."
           ref={textareaRef}
           rows={1}
           value={props.input}

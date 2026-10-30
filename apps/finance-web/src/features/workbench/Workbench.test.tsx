@@ -2,6 +2,8 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import type { RunSnapshotDtoV2, RunStreamEventDtoV2 } from "@aiagent/types";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { IdentityProvider } from "../../app/identity";
+import { ThemeProvider } from "../../app/theme";
 import { Workbench } from "./Workbench";
 
 vi.mock("../../shared/api/run-stream-client", () => ({
@@ -40,6 +42,53 @@ afterEach(() => {
 });
 
 describe("Workbench conversation history", () => {
+  it("starts with an empty composer so the wish placeholder is visible", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith("/api/conversations?")) return ok({ items: [] });
+      throw new Error(`Unexpected fetch: ${url}`);
+    }));
+
+    render(<MemoryRouter><Workbench /></MemoryRouter>);
+    const textbox = await screen.findByRole("textbox");
+    expect((textbox as HTMLTextAreaElement).value).toBe("");
+    expect(textbox.getAttribute("placeholder")).toBe("许下你的愿望...");
+  });
+
+  it("opens Settings from the profile menu without removing the other workspace routes", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith("/api/conversations?")) return ok({ items: [] });
+      if (url.startsWith("/api/identity/me")) {
+        return ok({
+          userId: "user_sidebar_test",
+          createdAt: "2026-10-30T00:00:00.000Z",
+          qqBot: { enabled: false, status: "disabled" }
+        });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    }));
+
+    render(
+      <ThemeProvider>
+        <IdentityProvider>
+          <MemoryRouter><Workbench /></MemoryRouter>
+        </IdentityProvider>
+      </ThemeProvider>
+    );
+    await screen.findByText("暂无历史会话，创建一个开始研究。");
+    expect(screen.getByRole("navigation", { name: "工作区导航" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Immersive" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "定时任务" })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: /捡垃圾的小帅|不化妆的小美/ }));
+    expect(screen.getByRole("menuitem", { name: "Data Sources" })).toBeTruthy();
+    expect(screen.getByRole("menuitem", { name: "Architecture" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("menuitem", { name: "Settings" }));
+    expect(screen.getByRole("region", { name: "Agent Chat 主区域" })).toBeTruthy();
+    expect(screen.getByText("适用于当前金融研究工作台")).toBeTruthy();
+  });
+
   it("shows a retry action when the model catalog cannot be loaded", async () => {
     const { listModels } = await import("../../shared/api/composer-client");
     vi.mocked(listModels)
@@ -208,7 +257,7 @@ describe("Workbench conversation history", () => {
     expect(await screen.findByText(/暂时失败/)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "重试" }));
     expect(await screen.findByRole("heading", { name: "首个会话" })).toBeTruthy();
-    expect(await screen.findByText("从一个金融研究问题开始")).toBeTruthy();
+    expect(await screen.findByRole("region", { name: "消息列表" })).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "加载更多" }));
     expect(await screen.findByText("更多会话")).toBeTruthy();
   });

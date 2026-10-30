@@ -38,7 +38,7 @@ Immersive 是面向股票研究、公告分析、财务指标查询和研报生�
 
 当前页面已经从“开发调试台”重构为 Agent Chat 基础形态：左侧持久化会话列表，中间简洁对话流，底部 composer，运行状态、工具调用和 trace 作为 assistant 消息内的可展开派生信息。会话选择写入稳定 URL state，刷新后可恢复；live Run 仍是消息派生状态，不作为历史第二事实源。
 
-身份入口采用无用户名模式：首次进入由浏览器指纹恢复或创建稳定 `userId`，设置页展示当前 userId、统一 QQ Bot 状态和一次性绑定码。身份初始化失败时阻断工作台并提供重试，避免在未确认 userId 时产生无法归属的运行数据。
+身份入口采用无用户名模式：首次进入由浏览器指纹恢复或创建稳定 `userId`，从侧栏头像菜单打开设置弹窗后可查看当前 userId、统一 QQ Bot 状态和一次性绑定码。已有会话的刷新不阻塞工作台：上次身份快照只用于首屏占位，服务端 session 在后台校验；校验失败时才显示可重试错误门，避免在未确认 userId 时继续产生无法归属的运行数据。
 
 优先级：
 
@@ -85,7 +85,7 @@ apps/finance-web/src/components/ui
 ```text
 左侧会话栏：新建会话、历史会话、本地运行状态
 中央对话区：消息流、assistant 回答、消息内 run details、底部输入框
-输入框派生区：Report Mode、提交状态、错误提示、starter prompts
+输入框派生区：附件与 Report Mode、研究灵感、提交状态、错误提示
 ```
 
 推荐结构：
@@ -99,7 +99,7 @@ App Shell:
 
   Chat Main:
     Header:
-      产品名 / 当前会话标题 / Report Mode / 最新运行状态
+      产品名 / 当前会话标题 / 最新运行状态
 
     Message Timeline:
       用户消息
@@ -107,7 +107,7 @@ App Shell:
       assistant 消息内 RunDetails / ToolCalls / TraceTimeline
 
     Composer Dock:
-      多行研究问题输入 / 示例问题 / 提交按钮 / 错误提示 / 请求进度
+      多行研究问题输入 / 附件与 Report Mode / 研究灵感 / 模型 / 提交按钮 / 错误提示 / 提交进度
 ```
 
 后续进入 Report Workflow 后，仍优先保持会话型体验：
@@ -118,14 +118,15 @@ App Shell:
 消息内或抽屉：工具调用、trace、JSON details
 ```
 
-只有当用户显式打开“调试详情”或“证据抽屉”时，才临时展示辅助面板；默认首屏不放独立右侧调试栏。
+只有当用户显式打开“运行详情”或“证据抽屉”时，才临时展示辅助面板；默认首屏不放独立右侧调试栏。
 
 桌面端：
 
 - 左侧会话栏宽度保持稳定，建议 `260px` 到 `300px`。
 - 中央对话区最大阅读宽度建议 `760px` 到 `900px`。
 - 页面不再使用独立右侧 Run State / Tools / Trace 面板。
-- 重要状态在对话 header、composer 和 assistant 消息内可见：Report Mode、请求状态、当前 intent、工具调用数量。
+- 重要状态在对话 header、composer 和 assistant 消息内可见：请求状态、Report Mode、当前 intent、工具调用数量。
+- 左下角头像保留完整工作区二级菜单；其中 Settings 打开玻璃弹窗，其余入口继续切换各自产品视图。主题与字号属于浏览器本地偏好。
 - 主对话区需要足够宽度承载长文本、表格、引用和折叠 run details。
 
 移动端：
@@ -172,7 +173,7 @@ Assistant 消息按“用户可读过程 → 回答正文 → 回答操作”组
 后续页面改版时，优先按以下模块组合，而不是从空白页面自由发挥：
 
 - **Conversation Sidebar**：展示新建会话、本地会话列表、最后消息摘要和最新运行状态。
-- **Chat Header**：展示产品名、当前会话标题、Report Mode 和最新请求状态。
+- **Chat Header**：展示产品名、当前会话标题和最新请求状态。
 - **Chat Timeline**：展示用户消息、assistant 回答、消息级运行详情和错误状态。
 - **Chat Composer**：展示多行输入、提交按钮、Report Mode 快捷控制、请求进度和错误提示。
 - **Run Details**：作为 assistant 消息的派生内容，展示 intent、status、steps、tool calls、trace events 和 requestId。
@@ -190,10 +191,10 @@ Assistant 消息按“用户可读过程 → 回答正文 → 回答操作”组
 
 1. 把页面改成左侧会话列表 + 中央对话流 + 底部 composer。
 2. 删除右侧 `Run State` / `Tools` / `Trace Timeline` 独立面板。
-3. 把 demo prompt chip 改为空状态 starter prompts 或 composer 上方的紧凑建议。
+3. 空状态与 ohna-desktop 使用同一 Lottie 入场动画：`144px` 固定动画画布，落地品牌图形保持克制尺寸；研究示例收进 composer 的「研究灵感」入口，避免首屏教程化。
 4. 把 `activeRun` 从全局右侧状态改成 assistant message 的 `run` 派生数据。
 5. 新增消息内 `RunDetails`：默认 badge 摘要，展开后显示 steps、tools、trace、JSON details。
-6. 移动端把会话列表收起为 drawer，run details 仍在消息内折叠展示。
+6. 移动端把会话列表收起为 drawer，设置使用全屏玻璃弹窗，run details 作为全屏右侧抽屉覆盖展示。
 
 ## 响应式验收
 

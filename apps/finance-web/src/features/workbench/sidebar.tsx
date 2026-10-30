@@ -28,6 +28,7 @@ interface ConversationSidebarProps {
   onClose: () => void;
   onLoadMore: () => void;
   onNewConversation: () => void;
+  onOpenSettings: () => void;
   onRetry: () => void;
   onSelectConversation: (conversationId: string) => void;
   onSelectView: (view: WorkspaceView) => void;
@@ -119,6 +120,7 @@ export function ConversationSidebar(props: ConversationSidebarProps) {
         </div>
 
         <SidebarProfileFooter
+          onOpenSettings={props.onOpenSettings}
           onSelectView={props.onSelectView}
           workspaceView={props.workspaceView}
         />
@@ -127,7 +129,7 @@ export function ConversationSidebar(props: ConversationSidebarProps) {
   );
 }
 
-/** 二级入口中的工作区视图；点击一级头像入口后从上方弹出。 */
+/** 头像二级入口中的工作区视图；Settings 走弹窗，其余保持原路由。 */
 const PROFILE_MENU_VIEWS: ReadonlyArray<{ view: WorkspaceView; label: string; icon: ReactNode }> = [
   { view: "data-sources", label: "Data Sources", icon: <Database className="icon-size" /> },
   { view: "workflow", label: "Report Workflow", icon: <Activity className="icon-size" /> },
@@ -149,7 +151,6 @@ const NICKNAME_POOL = ["捡垃圾的小帅", "不化妆的小美"] as const;
  */
 function useNickname(): string {
   const [nickname] = useState(() => {
-    // 部分测试环境（Node 内置 localStorage 未启用时）没有 Web Storage，这里退化为每次随机。
     const storage = typeof window.localStorage === "undefined" ? undefined : window.localStorage;
     const existing = storage?.getItem(NICKNAME_STORAGE_KEY);
     if (existing) return existing;
@@ -161,12 +162,17 @@ function useNickname(): string {
 }
 
 /**
- * 侧栏底部一级入口：头像 + 昵称；点击后向上弹出二级入口菜单。
+ * 侧栏底部一级入口：头像 + 昵称；点击后向上弹出完整二级入口菜单。
+ * Settings 只改变打开方式，不删除菜单中的其他产品入口。
  *
- * @param props 当前视图与视图切换回调。
+ * @param props 当前视图、路由切换与设置弹窗回调。
  * @returns 底部用户信息区。
  */
-function SidebarProfileFooter(props: { onSelectView: (view: WorkspaceView) => void; workspaceView: WorkspaceView }) {
+function SidebarProfileFooter(props: {
+  onOpenSettings: () => void;
+  onSelectView: (view: WorkspaceView) => void;
+  workspaceView: WorkspaceView;
+}) {
   const nickname = useNickname();
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const isMenuViewActive = PROFILE_MENU_VIEWS.some((item) => item.view === props.workspaceView);
@@ -196,7 +202,8 @@ function SidebarProfileFooter(props: { onSelectView: (view: WorkspaceView) => vo
                 key={item.view}
                 onClick={() => {
                   setIsMenuOpen(false);
-                  props.onSelectView(item.view);
+                  if (item.view === "settings") props.onOpenSettings();
+                  else props.onSelectView(item.view);
                 }}
                 role="menuitem"
                 type="button"

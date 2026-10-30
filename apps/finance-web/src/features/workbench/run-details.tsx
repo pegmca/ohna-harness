@@ -3,10 +3,11 @@ import {
   Activity,
   AlertTriangle,
   Braces,
+  ChevronDown,
   Wrench,
   X
 } from "lucide-react";
-import type { ReactNode } from "react";
+import { type ReactNode, useEffect, useRef } from "react";
 import { findMarketSeries, MarketCandlestickChart } from "../market-data";
 import { formatApiError } from "./format";
 import type { RunDetailSection, SelectedRunDetail, UiToolCallBlock } from "./types";
@@ -24,6 +25,34 @@ export function RunDetailPanel(props: {
   detail?: SelectedRunDetail;
   onClose: () => void;
 }) {
+  const panelRef = useRef<HTMLElement>(null);
+  const closeRef = useRef(props.onClose);
+  closeRef.current = props.onClose;
+
+  useEffect(() => {
+    if (!props.detail) return;
+    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : undefined;
+    panelRef.current?.focus();
+
+    /**
+     * 支持 ESC 关闭详情，并把焦点归还给打开抽屉的触发按钮。
+     *
+     * @param event 键盘事件。
+     * @returns void。
+     */
+    function handleKeyDown(event: KeyboardEvent): void {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      closeRef.current();
+    }
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+      previous?.focus();
+    };
+  }, [props.detail]);
+
   if (!props.detail) return null;
   const message = props.detail.message;
   const event = props.detail.event;
@@ -33,7 +62,14 @@ export function RunDetailPanel(props: {
   );
   const marketSeries = findMarketSeries(message?.blocks ?? event);
   return (
-    <aside aria-label="运行详情" className="run-detail-panel is-open">
+    <aside
+      aria-label="运行详情"
+      aria-modal="true"
+      className="run-detail-panel is-open"
+      ref={panelRef}
+      role="dialog"
+      tabIndex={-1}
+    >
       <header className="run-detail-header">
         <div><p className="md-label">Agent activity</p><h2>{detailSectionTitle(section)}</h2></div>
         <button className="icon-button" onClick={props.onClose} type="button" aria-label="关闭运行详情"><X className="icon-size" /></button>
@@ -48,7 +84,10 @@ export function RunDetailPanel(props: {
                 <RunActivityOverview message={message} toolCount={toolBlocks.length} />
                 {message.error ? <ErrorBlock error={message.error} /> : null}
                 <details className="developer-details">
-                  <summary>开发者详情</summary>
+                  <summary className="developer-detail-trigger">
+                    <span>开发者详情</span>
+                    <ChevronDown className="details-chevron" />
+                  </summary>
                   <div className="run-identifiers">
                     <span>runId: {message.runId ?? "unknown"}</span>
                     <span>modelId: {message.modelId ?? "unknown"}</span>

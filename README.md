@@ -103,13 +103,13 @@ curl -X POST http://127.0.0.1:4173/api/runs \
 
 Immersive Playground 已演进为带实时执行过程的研究 Workbench：
 
-- 页面采用 Agent Chat 布局：左侧持久化会话列表，中间历史时间线与 live Run，底部 composer，顶部提供 Report Mode 开关和生成研报按钮。当前会话写入 `?conversation=<id>`，刷新后恢复选择。
+- 页面采用 Agent Chat 布局：左侧持久化会话列表，中间历史时间线与 live Run，底部 composer；设置与运行详情均为按需打开的玻璃浮层，不形成常驻调试栏。刷新时工作台立即渲染，身份 session 在后台校验，不显示全屏身份加载门。当前会话写入 `?conversation=<id>`，刷新后恢复选择。
 - 会话 API 提供创建、稳定游标分页、终态消息读取、改标题与归档。所有 route 从 HttpOnly session 取得 `userId`，不存在与越权统一返回 `not_found`。
 - 每次提交先调用 `POST /api/runs` 获得 `runId`，请求字段为 `message`、`conversationId`、稳定的 `clientMessageId`、`mode: auto | report` 和 `source: composer | report_button`；Report Mode 开关/研报按钮额外带 `metadata: { hint: "report" }`（只做 system prompt 约束，不落库），研报由模型自主调用 `generate_report` 工具完成；网络重试复用同一个 client ID，再订阅 `GET /api/runs/:runId/events`。
 - `GET /api/runs/:runId` 提供 PostgreSQL 可恢复快照，`DELETE /api/runs/:runId` 取消尚未结束的运行。SSE 支持 `Last-Event-ID` 或 `afterSequence` 持久回放；最终回答作为终态事件一次提交。
 - run state、工具调用和 trace 以“分类过程入口 → 最终答案”的顺序归属于对应 assistant 消息；Summary、Steps、Tools、Trace 与 Report 分别打开右侧对应类型，不混排全部详情。历史消息通过 `runId` 恢复 PostgreSQL Run 快照，刷新后仍可查看。桌面端压缩主区，移动端覆盖显示，不设置常驻调试侧栏。
 - 行情工具返回稳定的 60 根 mock OHLCV，详情面板使用 A 股红涨绿跌 K 线；图表按 lightweight-charts 要求保留 TradingView attribution。
-- `/`、`/data-sources`、`/workflow`、`/citations`、`/eval`、`/architecture`、`/settings` 均为可刷新路由；设置页支持浅色、深色和跟随系统。
+- 左下角头像保留 Data Sources、Report Workflow、Citation Checker、Eval Report、Architecture 与 Settings 的完整二级入口；Settings 就地打开弹窗，支持浅色、深色、跟随系统与四档界面字号。主题与字号只写浏览器本地偏好，不产生服务端配置写入。空态使用与 ohna-desktop 相同的 Lottie 品牌入场动画（`144px` 画布）；composer 默认空输入，显示“许下你的愿望...”。
 
 本地 API 验证：
 
@@ -170,7 +170,7 @@ pnpm db:migrate
 pnpm dev
 ```
 
-首次进入时 Web 使用 FingerprintJS 识别或创建 `userId`，API 签发 HttpOnly session。设置页可展示统一 QQ Bot 二维码并生成六位绑定码；QQ 私聊发送 `/bind 123456` 后即可通过同一 `userId` 调用 Agent。配置真实 QQ Bot 需要设置 `QQBOT_ENABLED=true`、`QQBOT_APP_ID`、`QQBOT_APP_SECRET` 和 `QQBOT_PUBLIC_QR_URL`。
+首次进入时 Web 使用 FingerprintJS 识别或创建 `userId`，API 签发 HttpOnly session。已有浏览器刷新时复用仅用于首屏展示的身份快照，服务端 session 仍在后台校验；设置弹窗可展示统一 QQ Bot 二维码并生成六位绑定码，QQ 私聊发送 `/bind 123456` 后即可通过同一 `userId` 调用 Agent。配置真实 QQ Bot 需要设置 `QQBOT_ENABLED=true`、`QQBOT_APP_ID`、`QQBOT_APP_SECRET` 和 `QQBOT_PUBLIC_QR_URL`。
 
 验证 Web/API 探针和核心流程：
 

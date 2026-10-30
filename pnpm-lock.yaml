@@ -175,6 +175,9 @@ importers:
       lightweight-charts:
         specifier: ^5.2.0
         version: 5.2.0
+      lottie-web:
+        specifier: ^5.12.2
+        version: 5.13.0
       lucide-react:
         specifier: ^1.21.0
         version: 1.21.0(react@19.2.7)

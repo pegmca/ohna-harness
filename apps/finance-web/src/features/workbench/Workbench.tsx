@@ -6,7 +6,7 @@ import type {
 } from "@aiagent/types";
 import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { SettingsPage } from "../settings";
+import { SettingsDialog } from "../settings";
 import { cancelRun, createAndStreamRun, type RunTerminalDto } from "../../shared/api/run-stream-client";
 import {
   createConversation,
@@ -14,7 +14,7 @@ import {
   listConversations,
   updateConversation as updateConversationApi
 } from "../../shared/api/conversation-client";
-import { ChatComposer, ChatHeader, ChatTimeline, demoPrompts } from "./chat";
+import { ChatComposer, ChatHeader, ChatTimeline } from "./chat";
 import {
   createConversationTitle,
   createUiId,
@@ -52,14 +52,15 @@ export function Workbench() {
   const [messageState, setMessageState] = useState<"idle" | "loading" | "ready" | "error">("idle");
   const [conversationError, setConversationError] = useState<string>();
   const [messageError, setMessageError] = useState<string>();
-  const [input, setInput] = useState(demoPrompts[1]);
+  const [input, setInput] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [composerError, setComposerError] = useState<string | undefined>();
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const workspaceView = getWorkspaceView(location.pathname);
   const [selectedRunDetail, setSelectedRunDetail] = useState<SelectedRunDetail>();
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [reportMode, setReportMode] = useState(false);
-  const [_activeRunId, setActiveRunId] = useState<string>();
+  const [, setActiveRunId] = useState<string>();
   const composer = useComposerState(setComposerError, ensureConversationId);
   const retrySubmission = useRef<{ message: string; clientMessageId: string } | undefined>(undefined);
   const activeRunController = useRef<AbortController | undefined>(undefined);
@@ -632,6 +633,7 @@ export function Workbench() {
         onNewConversation={() => void handleNewConversation()}
         onRetry={() => void loadConversationPage()}
         onSelectConversation={handleSelectConversation}
+        onOpenSettings={() => setIsSettingsOpen(true)}
         onSelectView={(view) => {
           navigate(getWorkspacePath(view));
           setIsSidebarOpen(false);
@@ -650,6 +652,7 @@ export function Workbench() {
 
           <ChatTimeline
             conversationId={activeConversationId}
+            compactEmpty
             isSubmitting={isSubmitting}
             error={messageError}
             hasMore={Boolean(messageCursor)}
@@ -691,7 +694,14 @@ export function Workbench() {
       ) : workspaceView === "scheduled-tasks" ? (
         <ScheduledTasksWorkspace onMenuClick={() => setIsSidebarOpen(true)} />
       ) : workspaceView === "settings" ? (
-        <SettingsPage onMenuClick={() => setIsSidebarOpen(true)} />
+        <section className="chat-main" aria-label="Agent Chat 主区域">
+          <ChatHeader
+            conversationTitle={activeConversation?.title ?? "新会话"}
+            isSubmitting={isSubmitting}
+            latestRunStatus={latestRunStatus}
+            onMenuClick={() => setIsSidebarOpen(true)}
+          />
+        </section>
       ) : (
         <ProductWorkspace onMenuClick={() => setIsSidebarOpen(true)} view={workspaceView} />
       )}
@@ -699,6 +709,7 @@ export function Workbench() {
         detail={selectedRunDetail}
         onClose={() => setSelectedRunDetail(undefined)}
       />
+      <SettingsDialog isOpen={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} />
     </main>
   );
 }

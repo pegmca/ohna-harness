@@ -20,7 +20,7 @@ describe("DraftPage", () => {
     selectElementText(block);
     fireEvent.mouseUp(block);
 
-    expect(screen.getByLabelText("Quote for evidence 1")).toHaveValue(
+    expect(screen.getByLabelText("证据 1 原文")).toHaveValue(
       "Revenue 12,384,638,268.11"
     );
     expect(client.readEvidence).toHaveBeenCalledWith(
@@ -32,50 +32,50 @@ describe("DraftPage", () => {
   test("filters evidence and moves the PDF page controls independently", async () => {
     renderDraftPage(makeClient());
 
-    expect(await screen.findByText("Page 2 of 3")).toBeInTheDocument();
-    expect(screen.getByTitle("PDF page 2")).toHaveAttribute(
+    expect(await screen.findByText("第 2 / 3 页")).toBeInTheDocument();
+    expect(screen.getByTitle("PDF 第 2 页")).toHaveAttribute(
       "src",
       expect.stringContaining("#page=2")
     );
-    fireEvent.click(screen.getByRole("button", { name: "Next page" }));
-    expect(screen.getByText("Page 3 of 3")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "下一页" }));
+    expect(screen.getByText("第 3 / 3 页")).toBeInTheDocument();
     expect(screen.getByText("董事会秘书 张利荣")).toBeInTheDocument();
 
-    fireEvent.change(screen.getByLabelText("Filter evidence"), {
+    fireEvent.change(screen.getByLabelText("筛选证据"), {
       target: { value: "董事会" }
     });
     expect(
-      within(screen.getByLabelText("Evidence blocks")).queryByText(
+      within(screen.getByLabelText("证据区块")).queryByText(
         "Revenue 12,384,638,268.11"
       )
     ).not.toBeInTheDocument();
     expect(screen.getByText("董事会秘书 张利荣")).toBeInTheDocument();
 
-    expect(screen.getByRole("button", { name: "Next page" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "下一页" })).toBeDisabled();
   });
 
   test("adds and removes keywords with immediate source reachability", async () => {
     renderDraftPage(makeClient());
 
-    const keywordInput = await screen.findByLabelText("New expected keyword");
+    const keywordInput = await screen.findByLabelText("新增预期关键词");
     fireEvent.change(keywordInput, { target: { value: "张利荣" } });
-    fireEvent.click(screen.getByRole("button", { name: "Add keyword" }));
+    fireEvent.click(screen.getByRole("button", { name: "添加关键词" }));
     const reachableRow = screen
       .getByText("张利荣", { selector: ".keyword-text" })
       .closest(".keyword-row");
     expect(reachableRow).not.toBeNull();
-    expect(within(reachableRow as HTMLElement).getByText("Reachable in 1 source")).toBeInTheDocument();
+    expect(within(reachableRow as HTMLElement).getByText("在 1 个来源中可达")).toBeInTheDocument();
     expect(screen.getByText("张利荣", { selector: ".keyword-text" })).toBeInTheDocument();
 
     fireEvent.change(keywordInput, { target: { value: "商誉" } });
-    fireEvent.click(screen.getByRole("button", { name: "Add keyword" }));
+    fireEvent.click(screen.getByRole("button", { name: "添加关键词" }));
     expect(
-      within(screen.getByLabelText("Expected keyword list")).getByText(
-        "Not found in evidence"
+      within(screen.getByLabelText("预期关键词列表")).getByText(
+        "证据中未找到"
       )
     ).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Remove keyword 商誉" }));
+    fireEvent.click(screen.getByRole("button", { name: "删除关键词 商誉" }));
     expect(screen.queryByText("商誉", { selector: ".keyword-text" })).not.toBeInTheDocument();
   });
 
@@ -96,20 +96,20 @@ describe("DraftPage", () => {
     const client = makeClient(invalidReport);
     renderDraftPage(client);
 
-    fireEvent.click(await screen.findByRole("button", { name: "Save and validate" }));
+    fireEvent.click(await screen.findByRole("button", { name: "保存并校验" }));
 
-    await screen.findByRole("button", { name: "Save and validate" });
+    await screen.findByRole("button", { name: "保存并校验" });
     expect(
-      await within(screen.getByRole("list", { name: "errors" })).findByText(
+      await within(screen.getByRole("list", { name: "错误" })).findByText(
         "query must not be empty."
       )
     ).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Approve draft" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "审核通过" })).toBeDisabled();
     expect(
       client.saveDraft.mock.calls.every(([, , draft]) => draft._draft.approved !== true)
     ).toBe(true);
     fireEvent.click(
-      within(screen.getByRole("list", { name: "errors" })).getByRole(
+      within(screen.getByRole("list", { name: "错误" })).getByRole(
         "button",
         { name: /query must not be empty/ }
       )
@@ -123,9 +123,9 @@ describe("DraftPage", () => {
     renderDraftPage(client);
 
     fireEvent.click(
-      await screen.findByRole("button", { name: "Save and validate" })
+      await screen.findByRole("button", { name: "保存并校验" })
     );
-    await screen.findByText("Draft saved and validated.");
+    await screen.findByText("草稿已保存并通过校验。");
     await waitFor(() =>
       expect(
         client.saveDraft.mock.calls.some(
@@ -141,7 +141,7 @@ describe("DraftPage", () => {
     const client = makeClient();
     renderDraftPage(client);
 
-    fireEvent.click(await screen.findByRole("button", { name: "Approve draft" }));
+    fireEvent.click(await screen.findByRole("button", { name: "审核通过" }));
 
     await waitFor(() => expect(client.validateDraft).toHaveBeenCalledTimes(1));
     await waitFor(() =>
@@ -159,13 +159,13 @@ describe("DraftPage", () => {
     const client = makeClient();
     renderDraftPage(client);
 
-    fireEvent.change(await screen.findByLabelText("Query"), {
+    fireEvent.change(await screen.findByLabelText("问句"), {
       target: { value: "Updated question?" }
     });
-    const approve = screen.getByRole("button", { name: "Approve draft" });
+    const approve = screen.getByRole("button", { name: "审核通过" });
 
     expect(approve).toBeDisabled();
-    expect(screen.getByText("Save changes before approving.")).toBeInTheDocument();
+    expect(screen.getByText("请先保存更改再审核通过。")).toBeInTheDocument();
     fireEvent.click(approve);
     await waitFor(() => expect(client.saveDraft).not.toHaveBeenCalled());
     expect(client.validateDraft).not.toHaveBeenCalled();
@@ -176,10 +176,10 @@ describe("DraftPage", () => {
     renderDraftPage(client);
 
     fireEvent.click(
-      await screen.findByRole("button", { name: "Save and validate" })
+      await screen.findByRole("button", { name: "保存并校验" })
     );
 
-    await screen.findByText("Draft saved and validated.");
+    await screen.findByText("草稿已保存并通过校验。");
     expect(client.validateDraft).toHaveBeenCalledWith("batch-01", "fin-D001");
     expect(client.validateBatch).not.toHaveBeenCalled();
   });
@@ -187,15 +187,15 @@ describe("DraftPage", () => {
   test("edits table rows and keeps long cell values available without clipping", async () => {
     renderDraftPage(makeClient());
 
-    fireEvent.click(await screen.findByRole("button", { name: "Add row" }));
-    fireEvent.change(screen.getByLabelText("Row 2, Metric"), {
+    fireEvent.click(await screen.findByRole("button", { name: "添加行" }));
+    fireEvent.change(screen.getByLabelText("第 2 行，Metric"), {
       target: { value: "A very long financial metric cell that must remain fully editable" }
     });
-    fireEvent.change(screen.getByLabelText("Row 2, 2025"), {
+    fireEvent.change(screen.getByLabelText("第 2 行，2025"), {
       target: { value: "12,384,638,268.11" }
     });
 
-    expect(screen.getByLabelText("Row 2, Metric")).toHaveValue(
+    expect(screen.getByLabelText("第 2 行，Metric")).toHaveValue(
       "A very long financial metric cell that must remain fully editable"
     );
     expect(document.querySelector(".table-scroll")).toHaveAttribute("tabindex", "0");
@@ -204,42 +204,42 @@ describe("DraftPage", () => {
   test("edits form groups and items when the answer type changes to form", async () => {
     renderDraftPage(makeClient(validReport(), { answer_type: "form" }));
 
-    fireEvent.click(await screen.findByRole("button", { name: "Add group" }));
-    fireEvent.change(screen.getByLabelText("Group 1"), {
+    fireEvent.click(await screen.findByRole("button", { name: "添加分组" }));
+    fireEvent.change(screen.getByLabelText("分组 1"), {
       target: { value: "Governance" }
     });
-    fireEvent.click(screen.getByRole("button", { name: "Add form item" }));
-    fireEvent.change(screen.getByLabelText("Item 1 key"), {
+    fireEvent.click(screen.getByRole("button", { name: "添加表单项" }));
+    fireEvent.change(screen.getByLabelText("条目 1 键"), {
       target: { value: "Board secretary" }
     });
-    fireEvent.change(screen.getByLabelText("Item 1 value"), {
+    fireEvent.change(screen.getByLabelText("条目 1 值"), {
       target: { value: "Zhang Lirong" }
     });
 
-    expect(screen.getByLabelText("Group 1")).toHaveValue("Governance");
-    expect(screen.getByLabelText("Item 1 key")).toHaveValue("Board secretary");
-    expect(screen.getByLabelText("Item 1 value")).toHaveValue("Zhang Lirong");
+    expect(screen.getByLabelText("分组 1")).toHaveValue("Governance");
+    expect(screen.getByLabelText("条目 1 键")).toHaveValue("Board secretary");
+    expect(screen.getByLabelText("条目 1 值")).toHaveValue("Zhang Lirong");
   });
 
   test("adds distractors and edits evidence source fields", async () => {
     renderDraftPage(makeClient());
 
-    fireEvent.change(await screen.findByLabelText("Evidence 1 section"), {
+    fireEvent.change(await screen.findByLabelText("证据 1 章节"), {
       target: { value: "Key accounting data" }
     });
-    fireEvent.click(screen.getByRole("button", { name: "Add distractor" }));
-    fireEvent.change(screen.getByLabelText("Distractor 1 ticker"), {
+    fireEvent.click(screen.getByRole("button", { name: "添加干扰项" }));
+    fireEvent.change(screen.getByLabelText("干扰项 1 代码"), {
       target: { value: "000001.SZ" }
     });
-    fireEvent.change(screen.getByLabelText("Distractor 1 report type"), {
+    fireEvent.change(screen.getByLabelText("干扰项 1 报告类型"), {
       target: { value: "interim" }
     });
 
-    expect(screen.getByLabelText("Evidence 1 section")).toHaveValue(
+    expect(screen.getByLabelText("证据 1 章节")).toHaveValue(
       "Key accounting data"
     );
-    expect(screen.getByLabelText("Distractor 1 ticker")).toHaveValue("000001.SZ");
-    expect(screen.getByLabelText("Distractor 1 report type")).toHaveValue(
+    expect(screen.getByLabelText("干扰项 1 代码")).toHaveValue("000001.SZ");
+    expect(screen.getByLabelText("干扰项 1 报告类型")).toHaveValue(
       "interim"
     );
   });

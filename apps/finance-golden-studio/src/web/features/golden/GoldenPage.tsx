@@ -66,34 +66,34 @@ export function GoldenPage({ client: injected }: GoldenPageProps = {}) {
     <section className="workspace workspace-wide">
       <header className="page-header">
         <div>
-          <p className="eyebrow">Datasets</p>
-          <h1 className="page-title">Golden</h1>
+          <p className="eyebrow">数据集</p>
+          <h1 className="page-title">作者集</h1>
           <p className="page-subtitle">
-            Authored cases remain the source of truth; generated eval data is a separate artifact.
+            作者集用例是唯一事实源；生成的评测数据是独立产物。
           </p>
         </div>
         <button
-          aria-label="Refresh golden status"
+          aria-label="刷新作者集状态"
           className="button button-secondary"
           onClick={refresh}
           type="button"
         >
           <RefreshCw aria-hidden="true" size={15} />
-          Refresh
+          刷新
         </button>
       </header>
 
       {state.status === "loading" ? (
         <p aria-live="polite" className="empty-state">
-          Loading golden status
+          正在加载作者集状态
         </p>
       ) : null}
       {state.status === "error" ? (
         <div className="error-state" role="alert">
-          <p className="error-title">Golden status could not be loaded</p>
+          <p className="error-title">无法加载作者集状态</p>
           <p className="error-message">{state.message}</p>
           <button className="button button-secondary" onClick={refresh} type="button">
-            Try again
+            重试
           </button>
         </div>
       ) : null}
@@ -102,7 +102,7 @@ export function GoldenPage({ client: injected }: GoldenPageProps = {}) {
           <ActionBar
             actions={goldenActions(state.data)}
             client={client}
-            label="Golden actions"
+            label="作者集操作"
             onCompleted={completed}
           />
           <div className="dataset-grid">
@@ -136,8 +136,8 @@ function useInjectedClient(injected: GoldenStudioClient | undefined): GoldenStud
  */
 function goldenActions(status: GoldenStatus): GoldenStudioAction[] {
   return [
-    { action: "validate", label: "Validate authors", payload: { scope: "golden" } },
-    { action: "generate", label: "Generate eval set" }
+    { action: "validate", label: "校验作者集", payload: { scope: "golden" } },
+    { action: "generate", label: "生成评测集" }
   ];
 }
 
@@ -150,11 +150,11 @@ function goldenActions(status: GoldenStatus): GoldenStudioAction[] {
 function AuthoredPanel({ status }: { status: GoldenStatus }) {
   const authored = status.authored;
   return (
-    <section aria-label="Authored golden" className="dataset-panel">
+    <section aria-label="作者集" className="dataset-panel">
       <div className="dataset-panel-header">
         <div>
-          <p className="eyebrow">Source of truth</p>
-          <h2>Authored golden</h2>
+          <p className="eyebrow">事实源</p>
+          <h2>作者集</h2>
         </div>
         <span className="badge badge-neutral">JSONL</span>
       </div>
@@ -162,21 +162,21 @@ function AuthoredPanel({ status }: { status: GoldenStatus }) {
       <p className="dataset-path">{authored.path}</p>
       <dl className="metric-row">
         <div>
-          <dt>Cases</dt>
-          <dd>{authored.caseCount} cases</dd>
+          <dt>用例</dt>
+          <dd>{authored.caseCount} 条</dd>
         </div>
         <div>
-          <dt>Validation</dt>
+          <dt>校验</dt>
           <dd>
             {authored.validation.ok ? (
               <span className="status-line status-line-success">
                 <CheckCircle2 aria-hidden="true" size={13} />
-                Passed
+                通过
               </span>
             ) : (
               <span className="status-line status-line-danger">
                 <AlertTriangle aria-hidden="true" size={13} />
-                Validation failed
+                校验失败
               </span>
             )}
           </dd>
@@ -185,7 +185,7 @@ function AuthoredPanel({ status }: { status: GoldenStatus }) {
       <KeywordDiagnostics report={authored.validation} />
       {authored.validation.errors.length > 0 ? (
         <div className="issue-summary">
-          <h3>Validation issues</h3>
+          <h3>校验问题</h3>
           <ul>
             {authored.validation.errors.slice(0, 5).map((issue, index) => (
               <li key={`${issue.code}:${issue.id ?? "record"}:${index}`}>
@@ -196,7 +196,7 @@ function AuthoredPanel({ status }: { status: GoldenStatus }) {
           </ul>
         </div>
       ) : (
-        <p className="muted-text">No validation issues reported.</p>
+        <p className="muted-text">未报告校验问题。</p>
       )}
     </section>
   );
@@ -213,12 +213,12 @@ function GeneratedPanel({ status }: { status: GoldenStatus }) {
   const freshness = generated.exists ? generated.freshness : "missing";
   const freshnessLabel =
     freshness === "fresh"
-      ? "Fresh"
+      ? "最新"
       : freshness === "stale"
-        ? "Stale"
+        ? "已过期"
         : freshness === "blocked"
-          ? "Blocked"
-          : "Missing";
+          ? "已阻断"
+          : "缺失";
   const freshnessClass =
     freshness === "fresh"
       ? "badge-success"
@@ -226,11 +226,11 @@ function GeneratedPanel({ status }: { status: GoldenStatus }) {
         ? "badge-warning"
         : "badge-warning";
   return (
-    <section aria-label="Generated eval artifact" className="dataset-panel">
+    <section aria-label="生成的评测产物" className="dataset-panel">
       <div className="dataset-panel-header">
         <div>
-          <p className="eyebrow">Derived artifact</p>
-          <h2>Generated eval artifact</h2>
+          <p className="eyebrow">派生产物</p>
+          <h2>生成的评测产物</h2>
         </div>
         <span
           className={`badge ${freshnessClass}`}
@@ -245,24 +245,24 @@ function GeneratedPanel({ status }: { status: GoldenStatus }) {
           {freshness === "blocked" ? (
             <p className="empty-asset">
               {generated.blockedReason ??
-                "Authored validation must pass before this artifact is usable."}
+                "作者集校验通过后，此产物才可用。"}
             </p>
           ) : freshness === "stale" ? (
             <p className="empty-asset">
-              Authored data changed after generation. Regenerate the eval set.
+              作者数据在生成之后发生了变更，请重新生成评测集。
             </p>
           ) : null}
           <dl className="metric-row">
             <div>
-              <dt>Cases</dt>
-              <dd>{generated.caseCount} cases</dd>
+              <dt>用例</dt>
+              <dd>{generated.caseCount} 条</dd>
             </div>
             <div>
-              <dt>Dataset version</dt>
+              <dt>数据集版本</dt>
               <dd>{generated.datasetVersion}</dd>
             </div>
             <div>
-              <dt>Modified</dt>
+              <dt>修改时间</dt>
               <dd>{formatTimestamp(generated.modifiedAt)}</dd>
             </div>
           </dl>
@@ -271,13 +271,13 @@ function GeneratedPanel({ status }: { status: GoldenStatus }) {
           ) : null}
           {generated.generator ? (
             <p className="artifact-provenance">
-              Generator: <code>{generated.generator}</code>
+              生成器：<code>{generated.generator}</code>
             </p>
           ) : null}
         </>
       ) : (
         <p className="empty-asset">
-          Generate the eval set after authored validation passes.
+          作者集校验通过后生成评测集。
         </p>
       )}
     </section>
@@ -293,7 +293,7 @@ function GeneratedPanel({ status }: { status: GoldenStatus }) {
 function formatTimestamp(value: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
-  return new Intl.DateTimeFormat(undefined, {
+  return new Intl.DateTimeFormat("zh-CN", {
     dateStyle: "medium",
     timeStyle: "short"
   }).format(date);
@@ -306,5 +306,5 @@ function formatTimestamp(value: string): string {
  * @returns 错误文本。
  */
 function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : "Unknown request failure.";
+  return error instanceof Error ? error.message : "未知请求错误。";
 }

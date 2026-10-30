@@ -29,6 +29,33 @@ const ANSWER_TYPE_OPTIONS: readonly GoldenAnswerType[] = [
   "text"
 ];
 
+/** 草稿题型的中文展示文案。 */
+const TYPE_LABELS: Record<GoldenDraftType, string> = {
+  numeric_fact: "数值事实",
+  definitional: "定义类",
+  comparison: "对比类",
+  multi_doc: "多文档",
+  table: "表格",
+  unit_trap: "单位陷阱",
+  negative: "负例题"
+};
+
+/** 难度的中文展示文案。 */
+const DIFFICULTY_LABELS: Record<GoldenDifficulty, string> = {
+  easy: "简单",
+  medium: "中等",
+  hard: "困难"
+};
+
+/** 答案形态的中文展示文案。 */
+const ANSWER_TYPE_LABELS: Record<GoldenAnswerType, string> = {
+  number: "数值",
+  list: "列表",
+  table: "表格",
+  form: "表单",
+  text: "文本"
+};
+
 /** 基础字段编辑组件属性。 */
 interface BasicFieldsProps {
   draft: GoldenDraft;
@@ -51,13 +78,13 @@ export function BasicFields({ draft, errors, onChange }: BasicFieldsProps) {
   return (
     <section aria-labelledby="basic-fields-heading" className="editor-section">
       <div className="section-heading">
-        <h2 id="basic-fields-heading">Question</h2>
+        <h2 id="basic-fields-heading">问题</h2>
         <span className="section-meta">{draft.id}</span>
       </div>
       <div className="field-stack">
         <FieldError errors={errors} field="query" />
         <label className="field-label" htmlFor="draft-query">
-          Query
+          问句
         </label>
         <textarea
           aria-describedby={hasField(errors, "query") ? "draft-query-error" : undefined}
@@ -69,7 +96,7 @@ export function BasicFields({ draft, errors, onChange }: BasicFieldsProps) {
         />
 
         <label className="field-label" htmlFor="draft-gold-answer">
-          Gold answer
+          标准答案
         </label>
         <textarea
           className={hasField(errors, "gold_answer") ? "field-control field-control-error" : "field-control"}
@@ -82,7 +109,7 @@ export function BasicFields({ draft, errors, onChange }: BasicFieldsProps) {
 
         <div className="field-grid">
           <label className="field">
-            <span className="field-label">Type</span>
+            <span className="field-label">题型</span>
             <select
               className="field-control"
               onChange={(event) =>
@@ -92,13 +119,13 @@ export function BasicFields({ draft, errors, onChange }: BasicFieldsProps) {
             >
               {TYPE_OPTIONS.map((option) => (
                 <option key={option} value={option}>
-                  {option}
+                  {TYPE_LABELS[option]}
                 </option>
               ))}
             </select>
           </label>
           <label className="field">
-            <span className="field-label">Difficulty</span>
+            <span className="field-label">难度</span>
             <select
               className="field-control"
               onChange={(event) =>
@@ -108,13 +135,13 @@ export function BasicFields({ draft, errors, onChange }: BasicFieldsProps) {
             >
               {DIFFICULTY_OPTIONS.map((option) => (
                 <option key={option} value={option}>
-                  {option}
+                  {DIFFICULTY_LABELS[option]}
                 </option>
               ))}
             </select>
           </label>
           <label className="field">
-            <span className="field-label">Answer form</span>
+            <span className="field-label">答案形态</span>
             <select
               className="field-control"
               onChange={(event) =>
@@ -124,13 +151,13 @@ export function BasicFields({ draft, errors, onChange }: BasicFieldsProps) {
             >
               {ANSWER_TYPE_OPTIONS.map((option) => (
                 <option key={option} value={option}>
-                  {option}
+                  {ANSWER_TYPE_LABELS[option]}
                 </option>
               ))}
             </select>
           </label>
           <label className="field">
-            <span className="field-label">Unit</span>
+            <span className="field-label">单位</span>
             <input
               className="field-control"
               onChange={(event) => update("answer_unit", event.target.value)}
@@ -140,7 +167,7 @@ export function BasicFields({ draft, errors, onChange }: BasicFieldsProps) {
         </div>
 
         <label className="field-label" htmlFor="draft-note">
-          Annotation note
+          标注备注
         </label>
         <textarea
           className="field-control"
@@ -159,7 +186,7 @@ export function BasicFields({ draft, errors, onChange }: BasicFieldsProps) {
               }
               type="checkbox"
             />
-            Requires multiple documents
+            需要多份文档
           </label>
           <label className="check-label">
             <input
@@ -167,7 +194,7 @@ export function BasicFields({ draft, errors, onChange }: BasicFieldsProps) {
               onChange={(event) => update("is_negative", event.target.checked)}
               type="checkbox"
             />
-            Negative case
+            负例题
           </label>
         </div>
       </div>

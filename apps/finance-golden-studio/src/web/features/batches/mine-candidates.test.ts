@@ -21,11 +21,11 @@ describe("parseCandidateFile", () => {
   test("rejects invalid JSON and non-object arrays", () => {
     expect(parseCandidateFile("{")).toEqual({
       ok: false,
-      message: "Candidates file must contain valid JSON."
+      message: "候选文件必须包含合法的 JSON。"
     });
     expect(parseCandidateFile('["600000.SH"]')).toEqual({
       ok: false,
-      message: "Candidates file must contain an array of objects."
+      message: "候选文件必须包含对象数组。"
     });
   });
 });

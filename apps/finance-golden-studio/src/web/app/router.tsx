@@ -18,7 +18,7 @@ export function GoldenStudioRoutes() {
       <Route element={<DraftPage />} path="/draft/:batch/:id" />
       <Route element={<GoldenPage />} path="/golden" />
       <Route element={<SettingsPage />} path="/settings" />
-      <Route element={<PlaceholderPage label="Not found" />} path="*" />
+      <Route element={<PlaceholderPage label="未找到页面" />} path="*" />
     </Routes>
   );
 }
@@ -33,7 +33,7 @@ function PlaceholderPage({ label }: { label: string }) {
   return (
     <section className="workspace">
       <h2 className="page-title">{label}</h2>
-      <p className="empty-state">This workspace is not wired yet.</p>
+      <p className="empty-state">此工作区尚未接入。</p>
     </section>
   );
 }

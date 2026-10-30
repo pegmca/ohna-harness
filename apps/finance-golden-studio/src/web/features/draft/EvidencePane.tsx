@@ -156,19 +156,19 @@ export function EvidencePane({
     <section aria-labelledby="evidence-heading" className="evidence-section">
       <div className="section-heading evidence-heading">
         <div>
-          <h2 id="evidence-heading">Evidence</h2>
+          <h2 id="evidence-heading">证据</h2>
           <span className="section-meta">
-            {activeDocument?.filePath ?? "No source PDF"}
+            {activeDocument?.filePath ?? "无来源 PDF"}
           </span>
         </div>
         {effectiveSourcePath && activeDocument ? (
           <a
-            aria-label="Open PDF"
+            aria-label="打开 PDF"
             className="icon-button"
             href={evidenceContentUrl(effectiveSourcePath)}
             rel="noreferrer"
             target="_blank"
-            title="Open PDF"
+            title="打开 PDF"
           >
             <ExternalLink aria-hidden="true" size={16} />
           </a>
@@ -177,7 +177,7 @@ export function EvidencePane({
 
       {sources.length > 1 ? (
         <label className="field evidence-source-select">
-          <span className="field-label">Source document</span>
+          <span className="field-label">来源文档</span>
           <select
             className="field-control"
             onChange={(event) => setActiveSourcePath(event.target.value)}
@@ -195,20 +195,20 @@ export function EvidencePane({
       <div className="pdf-panel">
         {effectiveSourcePath && activeDocument ? (
           <iframe
-            aria-label="PDF page preview"
+            aria-label="PDF 页面预览"
             className="pdf-preview"
             src={`${evidenceContentUrl(effectiveSourcePath)}#page=${pageNumber ?? 1}`}
-            title={`PDF page ${pageNumber ?? 1}`}
+            title={`PDF 第 ${pageNumber ?? 1} 页`}
           />
         ) : (
           <div className="empty-pane">
             <FileSearch aria-hidden="true" size={18} />
-            <p>{draft.is_negative ? "No source PDF for this negative case." : "Select an evidence source."}</p>
+            <p>{draft.is_negative ? "此负例题没有来源 PDF。" : "请选择证据来源。"}</p>
           </div>
         )}
-        <div className="pdf-controls" aria-label="PDF page controls">
+        <div className="pdf-controls" aria-label="PDF 翻页控制">
           <button
-            aria-label="Previous page"
+            aria-label="上一页"
             className="icon-button"
             disabled={pageIndex <= 0}
             onClick={() => setPageIndex((current) => Math.max(0, current - 1))}
@@ -217,10 +217,10 @@ export function EvidencePane({
             <ChevronLeft aria-hidden="true" size={16} />
           </button>
           <span className="pdf-page-label">
-            Page {pageNumber ?? 0} of {pages.at(-1) ?? 0}
+            第 {pageNumber ?? 0} / {pages.at(-1) ?? 0} 页
           </span>
           <button
-            aria-label="Next page"
+            aria-label="下一页"
             className="icon-button"
             disabled={pageIndex >= pages.length - 1}
             onClick={() =>
@@ -236,16 +236,16 @@ export function EvidencePane({
       <div className="evidence-tools">
         <label className="filter-control" htmlFor="evidence-filter">
           <Filter aria-hidden="true" size={14} />
-          <span className="sr-only">Filter evidence</span>
+          <span className="sr-only">筛选证据</span>
           <input
             className="field-control"
             id="evidence-filter"
             onChange={(event) => setQuery(event.target.value)}
-            placeholder="Filter blocks"
+            placeholder="筛选区块"
             value={query}
           />
         </label>
-        <div aria-label="Evidence type" className="segmented-control" role="group">
+        <div aria-label="证据类型" className="segmented-control" role="group">
           {(["all", "text", "tables"] as const).map((option) => (
             <button
               aria-pressed={filter === option}
@@ -254,15 +254,15 @@ export function EvidencePane({
               onClick={() => setFilter(option)}
               type="button"
             >
-              {option === "all" ? "All" : option === "text" ? "Text" : "Tables"}
+              {option === "all" ? "全部" : option === "text" ? "文本" : "表格"}
             </button>
           ))}
         </div>
       </div>
 
-      <div className="block-list" aria-label="Evidence blocks">
+      <div className="block-list" aria-label="证据区块">
         {blocks.length === 0 ? (
-          <p className="empty-pane">No matching blocks on this page.</p>
+          <p className="empty-pane">本页没有匹配的区块。</p>
         ) : (
           blocks.map((block, index) => (
             <EvidenceBlock
@@ -277,14 +277,14 @@ export function EvidencePane({
 
       <div className="evidence-records">
         <div className="section-heading section-heading-small">
-          <h3>Source records</h3>
+          <h3>来源记录</h3>
           <button
             className="button button-ghost"
             onClick={addEvidence}
             type="button"
           >
             <Plus aria-hidden="true" size={14} />
-            Add source
+            添加来源
           </button>
         </div>
         {draft.evidence.map((evidence, index) => (
@@ -302,26 +302,26 @@ export function EvidencePane({
           />
         ))}
         {draft.evidence.length === 0 ? (
-          <p className="muted-text">No evidence records.</p>
+          <p className="muted-text">暂无证据记录。</p>
         ) : null}
       </div>
 
       <div className="distractor-editor">
         <div className="section-heading section-heading-small">
-          <h3>Distractors</h3>
+          <h3>干扰项</h3>
           <button
             className="button button-ghost"
             onClick={addDistractor}
             type="button"
           >
             <Plus aria-hidden="true" size={14} />
-            Add distractor
+            添加干扰项
           </button>
         </div>
         {draft.distractors.map((distractor, index) => (
           <div className="distractor-row" key={index}>
             <label className="sr-only" htmlFor={`distractor-ticker-${index}`}>
-              Distractor {index + 1} ticker
+              干扰项 {index + 1} 代码
             </label>
             <input
               className="field-control"
@@ -332,11 +332,11 @@ export function EvidencePane({
                   ticker: event.target.value
                 })
               }
-              placeholder="Ticker"
+              placeholder="代码"
               value={distractor.ticker}
             />
             <label className="sr-only" htmlFor={`distractor-period-${index}`}>
-              Distractor {index + 1} period
+              干扰项 {index + 1} 期间
             </label>
             <input
               className="field-control"
@@ -347,11 +347,11 @@ export function EvidencePane({
                   period: event.target.value
                 })
               }
-              placeholder="Period"
+              placeholder="期间"
               value={distractor.period}
             />
             <label className="sr-only" htmlFor={`distractor-report-${index}`}>
-              Distractor {index + 1} report type
+              干扰项 {index + 1} 报告类型
             </label>
             <select
               className="field-control"
@@ -373,7 +373,7 @@ export function EvidencePane({
               )}
             </select>
             <button
-              aria-label={`Remove distractor ${index + 1}`}
+              aria-label={`删除干扰项 ${index + 1}`}
               className="icon-button"
               onClick={() =>
                 onDraftChange({

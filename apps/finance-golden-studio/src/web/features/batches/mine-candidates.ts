@@ -16,12 +16,12 @@ export function parseCandidateFile(text: string): CandidateFileResult {
   try {
     value = JSON.parse(text);
   } catch {
-    return { ok: false, message: "Candidates file must contain valid JSON." };
+    return { ok: false, message: "候选文件必须包含合法的 JSON。" };
   }
   if (!Array.isArray(value) || !value.every(isRecord)) {
     return {
       ok: false,
-      message: "Candidates file must contain an array of objects."
+      message: "候选文件必须包含对象数组。"
     };
   }
   return { ok: true, candidates: value as unknown as MineCandidate[] };

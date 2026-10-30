@@ -2,12 +2,27 @@ import { useEffect, useState } from "react";
 import { FolderCog, Palette, Type } from "lucide-react";
 import { useOptionalApiClient } from "../../app/context.tsx";
 import { useOptionalTheme } from "../../app/theme.tsx";
+import type { ThemePreference } from "../../app/theme.tsx";
 import type { FontSizePreference } from "../../app/font-size.ts";
 import { readFontSizePreference } from "../../app/font-size.ts";
 import type { GoldenStudioClient } from "../../shared/api/client.ts";
 import type { WorkspaceSettings } from "../../shared/api/types.ts";
 
 export type { FontSizePreference } from "../../app/font-size.ts";
+
+/** 主题枚举的中文展示文案。 */
+const THEME_LABELS: Record<ThemePreference, string> = {
+  system: "跟随系统",
+  light: "浅色",
+  dark: "深色"
+};
+
+/** 字号枚举的中文展示文案。 */
+const FONT_SIZE_LABELS: Record<FontSizePreference, string> = {
+  compact: "紧凑",
+  comfortable: "舒适",
+  large: "大"
+};
 
 /** 设置页加载状态。 */
 type LoadState =
@@ -47,21 +62,21 @@ export function SettingsPage({ client: injected }: SettingsPageProps = {}) {
     <section className="workspace workspace-wide settings-page">
       <header className="page-header">
         <div>
-          <p className="eyebrow">Workspace</p>
-          <h1 className="page-title">Settings</h1>
+          <p className="eyebrow">工作区</p>
+          <h1 className="page-title">设置</h1>
           <p className="page-subtitle">
-            Server configuration is read-only. Appearance preferences stay in this browser.
+            服务端配置为只读，外观偏好保存在当前浏览器。
           </p>
         </div>
       </header>
       {state.status === "loading" ? (
         <p aria-live="polite" className="empty-state">
-          Loading workspace settings
+          正在加载工作区设置
         </p>
       ) : null}
       {state.status === "error" ? (
         <div className="error-state" role="alert">
-          <p className="error-title">Workspace settings could not be loaded</p>
+          <p className="error-title">无法加载工作区设置</p>
           <p className="error-message">{state.message}</p>
         </div>
       ) : null}
@@ -100,17 +115,17 @@ function WorkspaceSection({ settings }: { settings: WorkspaceSettings }) {
       <div className="settings-heading">
         <FolderCog aria-hidden="true" size={18} />
         <div>
-          <h2 id="settings-workspace">Workspace and corpus</h2>
-          <p>Resolved by the local server process.</p>
+          <h2 id="settings-workspace">工作区与语料</h2>
+          <p>由本地服务端进程解析。</p>
         </div>
-        <span className="badge badge-neutral">Read-only</span>
+        <span className="badge badge-neutral">只读</span>
       </div>
       <dl className="settings-list">
-        <SettingPath label="Workspace root" value={settings.workspaceRoot} />
-        <SettingPath label="Corpus root" value={settings.corpusRoot} />
-        <SettingPath label="Manifest" value={settings.manifestPath} />
-        <SettingPath label="Authored golden" value={settings.goldenPath} />
-        <SettingPath label="Generated eval" value={settings.generatedPath} />
+        <SettingPath label="工作区根目录" value={settings.workspaceRoot} />
+        <SettingPath label="语料根目录" value={settings.corpusRoot} />
+        <SettingPath label="清单" value={settings.manifestPath} />
+        <SettingPath label="作者集" value={settings.goldenPath} />
+        <SettingPath label="生成的评测集" value={settings.generatedPath} />
       </dl>
     </section>
   );
@@ -164,16 +179,16 @@ function AppearanceSection() {
       <div className="settings-heading">
         <Palette aria-hidden="true" size={18} />
         <div>
-          <h2 id="settings-appearance">Appearance</h2>
-          <p>Saved locally for this browser.</p>
+          <h2 id="settings-appearance">外观</h2>
+          <p>仅保存在当前浏览器。</p>
         </div>
       </div>
       <div className="settings-control-row">
         <div>
           <Palette aria-hidden="true" size={15} />
-          <span>Theme</span>
+          <span>主题</span>
         </div>
-        <div aria-label="Theme" className="segmented-control" role="radiogroup">
+        <div aria-label="主题" className="segmented-control" role="radiogroup">
           {(["system", "light", "dark"] as const).map((option) => (
             <button
               aria-checked={preference === option}
@@ -183,7 +198,7 @@ function AppearanceSection() {
               role="radio"
               type="button"
             >
-              {titleCase(option)}
+              {THEME_LABELS[option]}
             </button>
           ))}
         </div>
@@ -191,9 +206,9 @@ function AppearanceSection() {
       <div className="settings-control-row">
         <div>
           <Type aria-hidden="true" size={15} />
-          <span>Font size</span>
+          <span>字号</span>
         </div>
-        <div aria-label="Font size" className="segmented-control" role="radiogroup">
+        <div aria-label="字号" className="segmented-control" role="radiogroup">
           {(["compact", "comfortable", "large"] as const).map((option) => (
             <button
               aria-checked={fontSize === option}
@@ -203,7 +218,7 @@ function AppearanceSection() {
               role="radio"
               type="button"
             >
-              {titleCase(option)}
+              {FONT_SIZE_LABELS[option]}
             </button>
           ))}
         </div>
@@ -213,22 +228,12 @@ function AppearanceSection() {
 }
 
 /**
- * 将小写枚举转为标题式文案。
- *
- * @param value 枚举文本。
- * @returns 首字母大写文本。
- */
-function titleCase(value: string): string {
-  return value.charAt(0).toUpperCase() + value.slice(1);
-}
-
-/**
  * 提取可展示错误。
  *
  * @param error 捕获值。
  * @returns 错误文本。
  */
 function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : "Unknown request failure.";
+  return error instanceof Error ? error.message : "未知请求错误。";
 }
 import { ThemeProvider, useTheme } from "../../app/theme.tsx";

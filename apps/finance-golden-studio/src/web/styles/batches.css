@@ -179,6 +179,15 @@
   min-width: 150px;
 }
 
+/* 原生文件控件的按钮文案由伪元素渲染，按界面语言本地化。 */
+input[type="file"].field-control::file-selector-button {
+  margin-right: 8px;
+}
+
+input[type="file"].field-control::file-selector-button {
+  content: "选择文件";
+}
+
 .mine-feedback {
   margin-top: 10px;
 }

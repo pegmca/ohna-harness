@@ -119,7 +119,7 @@ export function DraftPage() {
   if (loadState.status === "loading") {
     return (
       <section className="draft-page">
-        <p className="empty-state">Loading draft</p>
+        <p className="empty-state">正在加载草稿</p>
       </section>
     );
   }
@@ -128,10 +128,10 @@ export function DraftPage() {
       <section className="draft-page">
         <Link className="back-link" to={`/batch/${encodeURIComponent(batch)}`}>
           <ChevronLeft aria-hidden="true" size={15} />
-          Back to drafts
+          返回草稿列表
         </Link>
         <div className="error-state" role="alert">
-          <p className="error-title">Draft could not be loaded</p>
+          <p className="error-title">无法加载草稿</p>
           <p className="error-message">{loadState.message}</p>
         </div>
       </section>
@@ -151,7 +151,7 @@ export function DraftPage() {
     action: Exclude<PendingAction, undefined>
   ): Promise<GoldenDraft | undefined> => {
     if (!client.saveDraft) {
-      setActionError("The injected client cannot save drafts.");
+      setActionError("注入的客户端无法保存草稿。");
       return undefined;
     }
     setPending(action);
@@ -178,7 +178,7 @@ export function DraftPage() {
       const nextReport = asReport(result);
       setReport(nextReport);
       setStatusMessage(
-        nextReport.ok ? "Validation passed." : "Validation needs attention."
+        nextReport.ok ? "校验通过。" : "校验需要关注。"
       );
       return nextReport;
     } catch (error) {
@@ -191,7 +191,7 @@ export function DraftPage() {
 
   const save = async (): Promise<void> => {
     const saved = await persist(draft, "save");
-    if (saved) setStatusMessage("Draft saved.");
+    if (saved) setStatusMessage("草稿已保存。");
   };
 
   const saveAndValidate = async (): Promise<void> => {
@@ -210,8 +210,8 @@ export function DraftPage() {
       if (persisted) {
         setStatusMessage(
           nextReport.ok
-            ? "Draft saved and validated."
-            : "Validation needs attention."
+            ? "草稿已保存并通过校验。"
+            : "校验需要关注。"
         );
       }
     }
@@ -219,7 +219,7 @@ export function DraftPage() {
 
   const approve = async (): Promise<void> => {
     if (dirty) {
-      setActionError("Save changes before approving.");
+      setActionError("请先保存更改再审核通过。");
       return;
     }
     const saved = await persist(draft, "validate");
@@ -237,7 +237,7 @@ export function DraftPage() {
       },
       "approve"
     );
-    if (approved) setStatusMessage("Draft approved.");
+    if (approved) setStatusMessage("草稿已审核通过。");
   };
 
   const selectIssue = (issue: ValidationIssue): void => {
@@ -267,14 +267,14 @@ export function DraftPage() {
             <h1>{draft.id}</h1>
             <p className="section-meta">
               {draft._draft.extraction_health
-                ? `Extraction ${String(draft._draft.extraction_health)}`
-                : "Draft"}
-              {dirty ? " · Unsaved changes" : ""}
-              {draft._draft.approved ? " · Approved" : ""}
+                ? `提取状态 ${extractionLabel(draft._draft.extraction_health)}`
+                : "草稿"}
+              {dirty ? " · 有未保存更改" : ""}
+              {draft._draft.approved ? " · 已审核" : ""}
             </p>
           </div>
         </div>
-        <div className="draft-actions" aria-label="Draft actions">
+        <div className="draft-actions" aria-label="草稿操作">
           <button
             className="button button-secondary"
             disabled={pending !== undefined}
@@ -282,7 +282,7 @@ export function DraftPage() {
             type="button"
           >
             <Save aria-hidden="true" size={15} />
-            {pending === "save" ? "Saving" : "Save"}
+            {pending === "save" ? "正在保存" : "保存"}
           </button>
           <button
             className="button button-secondary"
@@ -291,7 +291,7 @@ export function DraftPage() {
             type="button"
           >
             <ShieldCheck aria-hidden="true" size={15} />
-            {pending === "validate" ? "Validating" : "Save and validate"}
+            {pending === "validate" ? "正在校验" : "保存并校验"}
           </button>
           <button
             className="button button-primary"
@@ -299,13 +299,13 @@ export function DraftPage() {
             onClick={approve}
             title={
               approvalBlocked && !dirty && !report
-                ? "Validate the draft before approval."
+                ? "审核通过前请先校验草稿。"
                 : undefined
             }
             type="button"
           >
             <Check aria-hidden="true" size={15} />
-            {pending === "approve" ? "Approving" : "Approve draft"}
+            {pending === "approve" ? "正在审核" : "审核通过"}
           </button>
         </div>
       </header>
@@ -316,7 +316,7 @@ export function DraftPage() {
         </div>
       ) : null}
       {dirty && !pending ? (
-        <p className="muted-text">Save changes before approving.</p>
+        <p className="muted-text">请先保存更改再审核通过。</p>
       ) : null}
       {statusMessage ? (
         <p aria-live="polite" className="status-banner">
@@ -346,7 +346,7 @@ export function DraftPage() {
             }
             sources={sources}
           />
-          {evidenceLoading ? <p className="muted-text">Loading evidence</p> : null}
+          {evidenceLoading ? <p className="muted-text">正在加载证据</p> : null}
           {evidenceError ? (
             <p className="field-error" role="alert">
               {evidenceError}
@@ -354,7 +354,7 @@ export function DraftPage() {
           ) : null}
           {!resolveDraftSourcePath(draft) ? (
             <p className="muted-text">
-              No PDF source is available for this draft.
+              此草稿没有可用的 PDF 来源。
             </p>
           ) : null}
         </aside>
@@ -459,5 +459,18 @@ function fromSnapshot(
  */
 function errorMessage(error: unknown): string {
   if (error instanceof ApiError) return error.message;
-  return error instanceof Error ? error.message : "Unknown request failure.";
+  return error instanceof Error ? error.message : "未知请求错误。";
+}
+
+/**
+ * 把提取健康度枚举投影为中文标签。
+ *
+ * @param value 服务端提取健康度。
+ * @returns 中文状态文本；未知值原样返回。
+ */
+function extractionLabel(value: unknown): string {
+  if (value === "ok") return "正常";
+  if (value === "degraded") return "降级";
+  if (value === "failed") return "失败";
+  return String(value);
 }

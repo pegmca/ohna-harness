@@ -11,25 +11,25 @@ export function KeywordDiagnostics({ report }: { report: ValidationReport }) {
   if (!summary || summary.total === 0) return null;
   const failures = report.keywordResults.filter((result) => !result.reachable);
   return (
-    <section aria-label="Keyword diagnostics" className="keyword-diagnostics">
+    <section aria-label="关键词诊断" className="keyword-diagnostics">
       <dl className="keyword-summary">
         <div>
-          <dt>Keywords</dt>
+          <dt>关键词</dt>
           <dd>{summary.total}</dd>
         </div>
         <div>
-          <dt>Reachable</dt>
+          <dt>可达</dt>
           <dd>{summary.reachable}</dd>
         </div>
         <div>
-          <dt>Unreachable</dt>
+          <dt>不可达</dt>
           <dd>{summary.unreachable}</dd>
         </div>
       </dl>
       {failures.length > 0 ? (
         <div className="issue-summary">
           <h3>
-            {failures.length} unreachable keyword{failures.length === 1 ? "" : "s"}
+            {failures.length} 个不可达关键词
           </h3>
           <ul>
             {failures.map((keyword) => (
@@ -44,8 +44,8 @@ export function KeywordDiagnostics({ report }: { report: ValidationReport }) {
                     {keyword.evidence
                       .map(
                         (evidence) =>
-                          `${evidence.documentFilePath ?? "unresolved document"} · ${
-                            evidence.reachable ? "matched" : "no match"
+                          `${evidence.documentFilePath ?? "未解析文档"} · ${
+                            evidence.reachable ? "已匹配" : "未匹配"
                           }`
                       )
                       .join("\n")}

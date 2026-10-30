@@ -30,7 +30,7 @@ export function BatchListPage() {
         if (controller.signal.aborted) return;
         setState({
           status: "error",
-          message: error instanceof Error ? error.message : "Unknown request failure."
+          message: error instanceof Error ? error.message : "未知请求错误。"
         });
       });
     return () => controller.abort();
@@ -38,8 +38,8 @@ export function BatchListPage() {
 
   return (
     <section className="workspace">
-      <h2 className="page-title">Batches</h2>
-      <AsyncStateView emptyLabel="No batches yet" loadingLabel="Loading batches" state={state}>
+      <h2 className="page-title">批次</h2>
+      <AsyncStateView emptyLabel="暂无批次" loadingLabel="正在加载批次" state={state}>
         {(batches) => (
           <ul className="row-list">
             {batches.map((batch) => (
@@ -50,7 +50,7 @@ export function BatchListPage() {
                 >
                   {batch.name}
                 </Link>
-                <span className="row-meta">{batch.draftCount} drafts</span>
+                <span className="row-meta">{batch.draftCount} 份草稿</span>
               </li>
             ))}
           </ul>
@@ -81,7 +81,7 @@ export function BatchDraftsPage() {
         if (controller.signal.aborted) return;
         setState({
           status: "error",
-          message: error instanceof Error ? error.message : "Unknown request failure."
+          message: error instanceof Error ? error.message : "未知请求错误。"
         });
       });
     return () => controller.abort();
@@ -90,7 +90,7 @@ export function BatchDraftsPage() {
   return (
     <section className="workspace">
       <h2 className="page-title">{batch}</h2>
-      <AsyncStateView emptyLabel="No drafts yet" loadingLabel="Loading drafts" state={state}>
+      <AsyncStateView emptyLabel="暂无草稿" loadingLabel="正在加载草稿" state={state}>
         {(drafts) => (
           <ul className="row-list">
             {drafts.map((draft) => (
@@ -129,7 +129,7 @@ function AsyncStateView<TData>(props: {
   if (state.status === "error") {
     return (
       <div className="error-state" role="alert">
-        <p className="error-title">Request failed</p>
+        <p className="error-title">请求失败</p>
         <p className="error-message">{state.message}</p>
       </div>
     );

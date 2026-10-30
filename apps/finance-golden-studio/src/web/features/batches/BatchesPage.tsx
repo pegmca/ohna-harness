@@ -80,40 +80,40 @@ export function BatchesPage({ client: injected, onChanged }: BatchesPageProps = 
     <section className="workspace workspace-wide">
       <header className="page-header">
         <div>
-          <p className="eyebrow">Authoring</p>
-          <h1 className="page-title">Batches</h1>
+          <p className="eyebrow">作者工作区</p>
+          <h1 className="page-title">批次</h1>
           <p className="page-subtitle">
-            Review draft progress, resolve corrupt rows, and publish approved work.
+            审核草稿进度、处理损坏记录，并发布已审核通过的内容。
           </p>
         </div>
         <button
-          aria-label="Refresh batches"
+          aria-label="刷新批次"
           className="button button-secondary"
           onClick={refresh}
           type="button"
         >
           <RefreshCw aria-hidden="true" size={15} />
-          Refresh
+          刷新
         </button>
       </header>
 
       {state.status === "loading" ? (
         <p aria-live="polite" className="empty-state">
-          Loading batches
+          正在加载批次
         </p>
       ) : null}
       {state.status === "empty" ? (
         <div className="empty-state">
-          <p>No draft batches yet.</p>
-          <p className="muted-text">Mine candidates to create the first batch.</p>
+          <p>暂无草稿批次。</p>
+          <p className="muted-text">挖掘候选以创建第一个批次。</p>
         </div>
       ) : null}
       {state.status === "error" ? (
         <div className="error-state" role="alert">
-          <p className="error-title">Batches could not be loaded</p>
+          <p className="error-title">无法加载批次</p>
           <p className="error-message">{state.message}</p>
           <button className="button button-secondary" onClick={refresh} type="button">
-            Try again
+            重试
           </button>
         </div>
       ) : null}
@@ -123,15 +123,15 @@ export function BatchesPage({ client: injected, onChanged }: BatchesPageProps = 
       {state.status === "ready" ? (
         <div className="table-shell">
           <table className="data-table batch-table">
-            <caption className="sr-only">Draft batches and promotion status</caption>
+            <caption className="sr-only">草稿批次与发布状态</caption>
             <thead>
               <tr>
-                <th scope="col">Batch</th>
-                <th scope="col">Approved</th>
-                <th scope="col">Progress</th>
-                <th scope="col">Attention</th>
+                <th scope="col">批次</th>
+                <th scope="col">已审核</th>
+                <th scope="col">进度</th>
+                <th scope="col">需关注</th>
                 <th className="batch-actions-heading" scope="col">
-                  <span className="sr-only">Actions</span>
+                  <span className="sr-only">操作</span>
                 </th>
               </tr>
             </thead>
@@ -190,28 +190,28 @@ function BatchRow({
     ? [
         {
           action: "promote" as const,
-          label: "Promote approved",
+          label: "发布已审核草稿",
           payload: { batch: batch.name }
         }
       ]
     : [];
   return (
     <tr>
-      <td data-label="Batch">
+      <td data-label="批次">
         <Link className="table-link" to={`/batch/${encodeURIComponent(batch.name)}`}>
           {batch.name}
         </Link>
-        <span className="table-subline">{batch.draftCount} drafts</span>
+        <span className="table-subline">{batch.draftCount} 份草稿</span>
       </td>
-      <td data-label="Approved">
+      <td data-label="已审核">
         <span className="table-number">
           {batch.approvedCount} / {batch.draftCount}
         </span>
         <span className="table-subline">{approved}%</span>
       </td>
-      <td data-label="Progress">
+      <td data-label="进度">
         <div
-          aria-label={`${approved}% approved`}
+          aria-label={`已审核 ${approved}%`}
           aria-valuemax={100}
           aria-valuemin={0}
           aria-valuenow={approved}
@@ -221,33 +221,33 @@ function BatchRow({
           <span className="progress-value" style={{ width: `${approved}%` }} />
         </div>
         <span className="table-subline">
-          {batch.pendingCount} pending
+          {batch.pendingCount} 待处理
         </span>
       </td>
-      <td data-label="Attention">
+      <td data-label="需关注">
         {batch.corruptCount > 0 ? (
           <span className="status-line status-line-danger">
             <AlertTriangle aria-hidden="true" size={13} />
-            {batch.corruptCount} corrupt
+            {batch.corruptCount} 条损坏
           </span>
         ) : batch.pendingCount > 0 ? (
           <span className="status-line status-line-warning">
-            {batch.pendingCount} awaiting review
+            {batch.pendingCount} 条待审核
           </span>
         ) : (
-          <span className="status-line status-line-success">Complete</span>
+          <span className="status-line status-line-success">已完成</span>
         )}
       </td>
       <td className="table-actions">
         <Link className="button button-ghost" to={`/batch/${encodeURIComponent(batch.name)}`}>
-          Review drafts
+          查看草稿
           <ArrowRight aria-hidden="true" size={14} />
         </Link>
         {action.length > 0 ? (
           <ActionBar
             actions={action}
             client={client}
-            label={`Actions for ${batch.name}`}
+            label={`${batch.name} 的操作`}
             onCompleted={onCompleted}
           />
         ) : null}
@@ -275,5 +275,5 @@ function ratio(count: number, total: number): number {
  * @returns 错误文本。
  */
 function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : "Unknown request failure.";
+  return error instanceof Error ? error.message : "未知请求错误。";
 }

@@ -50,7 +50,7 @@ export function ActionBar({
   actions,
   client,
   onCompleted,
-  label = "Actions"
+  label = "操作"
 }: ActionBarProps) {
   const [requested, setRequested] = useState<GoldenStudioAction>();
   const [state, setState] = useState<ActionState>({ status: "idle" });
@@ -163,11 +163,11 @@ export function ActionBar({
           >
             <div className="confirm-dialog-heading">
               <div>
-                <p className="eyebrow">Confirm action</p>
+                <p className="eyebrow">确认操作</p>
                 <h2 id="action-confirm-title">{confirmation.title}</h2>
               </div>
               <button
-                aria-label="Close confirmation"
+                aria-label="关闭确认框"
                 className="icon-button"
                 onClick={closeConfirmation}
                 type="button"
@@ -182,7 +182,7 @@ export function ActionBar({
                 onClick={closeConfirmation}
                 type="button"
               >
-                Cancel
+                取消
               </button>
               <button
                 className="button button-primary"

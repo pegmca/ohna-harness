@@ -62,7 +62,7 @@ export function MinePanel({
     } catch {
       setCandidateState({
         status: "error",
-        message: "Candidates file could not be read."
+        message: "无法读取候选文件。"
       });
       return;
     }
@@ -104,7 +104,7 @@ export function MinePanel({
     } catch (error) {
       setMineState({
         status: "error",
-        message: error instanceof Error ? error.message : "Unknown mining failure."
+        message: error instanceof Error ? error.message : "未知的挖掘错误。"
       });
     }
   };
@@ -114,13 +114,13 @@ export function MinePanel({
       <div className="mine-heading">
         <FileUp aria-hidden="true" size={18} />
         <div>
-          <h2 id="mine-heading">Mine candidate drafts</h2>
-          <p>Load the same JSON candidate array used by the CLI.</p>
+          <h2 id="mine-heading">挖掘候选草稿</h2>
+          <p>加载与 CLI 相同的 JSON 候选数组。</p>
         </div>
       </div>
       <div className="mine-form">
         <label className="field">
-          <span className="field-label">Batch name</span>
+          <span className="field-label">批次名称</span>
           <input
             className="field-control"
             disabled={running}
@@ -130,7 +130,7 @@ export function MinePanel({
           />
         </label>
         <label className="field">
-          <span className="field-label">Candidates JSON file</span>
+          <span className="field-label">候选 JSON 文件</span>
           <input
             accept=".json,.jsonl,application/json"
             className="field-control"
@@ -150,15 +150,13 @@ export function MinePanel({
           type="button"
         >
           {running ? <LoaderCircle aria-hidden="true" className="spin" size={15} /> : null}
-          {running ? "Mining candidates" : "Mine candidates"}
+          {running ? "正在挖掘候选" : "挖掘候选"}
         </button>
       </div>
       <div aria-live="polite" className="mine-feedback">
         {candidateState.status === "ready" ? (
           <p className="muted-text">
-            {candidateState.candidates.length}{" "}
-            {candidateState.candidates.length === 1 ? "candidate" : "candidates"} ready
-            {" from "}
+            {candidateState.candidates.length} 个候选已就绪，来自{" "}
             <code>{candidateState.fileName}</code>
           </p>
         ) : null}
@@ -182,12 +180,12 @@ export function MinePanel({
           >
             <div className="confirm-dialog-heading">
               <div>
-                <p className="eyebrow">Confirm action</p>
-                <h2 id="mine-confirm-title">Mine candidates?</h2>
+                <p className="eyebrow">确认操作</p>
+                <h2 id="mine-confirm-title">挖掘候选？</h2>
               </div>
             </div>
             <p className="muted-text">
-              The server will create a new draft batch from the selected candidates.
+              服务端将根据所选候选创建一个新的草稿批次。
             </p>
             <div className="confirm-dialog-actions">
               <button
@@ -195,14 +193,14 @@ export function MinePanel({
                 onClick={() => setMineState({ status: "idle" })}
                 type="button"
               >
-                Cancel
+                取消
               </button>
               <button
                 className="button button-primary"
                 onClick={() => void executeMine()}
                 type="button"
               >
-                Mine candidates
+                挖掘候选
               </button>
             </div>
           </div>
@@ -226,16 +224,14 @@ function MineSuccess({
   return (
     <div className="mine-result">
       <p className="action-message action-message-success">
-        Mined {state.draftedCount} {state.draftedCount === 1 ? "draft" : "drafts"};
-        skipped {state.skippedCount}
-        {plural(state.skippedCount, "candidate")}
+        已挖掘 {state.draftedCount} 份草稿，跳过 {state.skippedCount} 个候选。
       </p>
       {state.skipped.length > 0 ? (
         <ul>
           {state.skipped.map((skip, index) => (
             <li key={`${skip.id ?? "candidate"}:${index}`}>
               <code>{skip.id ?? "candidate"}</code>
-              <span>{skip.reason ?? "skipped"}</span>
+              <span>{skip.reason ?? "已跳过"}</span>
               {skip.message ? <span>{skip.message}</span> : null}
             </li>
           ))}
@@ -255,17 +251,6 @@ function count(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) && value >= 0
     ? Math.trunc(value)
     : 0;
-}
-
-/**
- * 生成正确单复数，并把标点交给调用方以保持整句可读。
- *
- * @param value 计数。
- * @param singular 单数名词。
- * @returns 名词片段。
- */
-function plural(value: number, singular: string): string {
-  return value === 1 ? ` ${singular}.` : ` ${singular}s.`;
 }
 
 /**

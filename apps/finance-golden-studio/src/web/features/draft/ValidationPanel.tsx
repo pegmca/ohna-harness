@@ -26,7 +26,7 @@ export function ValidationPanel({
   return (
     <section aria-labelledby="validation-heading" className="editor-section">
       <div className="section-heading">
-        <h2 id="validation-heading">Validation</h2>
+        <h2 id="validation-heading">校验</h2>
         <StatusBadge report={report} dirty={dirty} />
       </div>
       {validationError ? (
@@ -35,12 +35,12 @@ export function ValidationPanel({
         </p>
       ) : null}
       {!report ? (
-        <p className="muted-text">Not validated.</p>
+        <p className="muted-text">尚未校验。</p>
       ) : (
         <>
           {report.errors.length === 0 ? (
             <p className="status-text status-text-ok">
-              No blocking issues found.
+              未发现阻断性问题。
             </p>
           ) : (
             <IssueList
@@ -58,7 +58,7 @@ export function ValidationPanel({
           ) : null}
           {report.keywordResults.length > 0 ? (
             <div className="validation-keywords">
-              <h3>Keyword scan</h3>
+              <h3>关键词扫描</h3>
               <ul>
                 {report.keywordResults.map((keyword) => (
                   <li key={keyword.keyword}>
@@ -71,10 +71,8 @@ export function ValidationPanel({
                       }
                     >
                       {keyword.reachable
-                        ? `Reachable in ${keyword.evidenceIndexes.length} source${
-                            keyword.evidenceIndexes.length === 1 ? "" : "s"
-                          }`
-                        : "Not found in evidence"}
+                        ? `在 ${keyword.evidenceIndexes.length} 个来源中可达`
+                        : "证据中未找到"}
                     </span>
                   </li>
                 ))}
@@ -104,7 +102,7 @@ function IssueList({
 }) {
   return (
     <ul
-      aria-label={`${kind}s`}
+      aria-label={kind === "error" ? "错误" : "警告"}
       className={`issue-list issue-list-${kind}`}
       role="list"
     >
@@ -116,7 +114,7 @@ function IssueList({
             type="button"
           >
             <span className="issue-label">
-              {kind === "error" ? "Error" : "Warning"} · {issue.code}
+              {kind === "error" ? "错误" : "警告"} · {issue.code}
             </span>
             <span>{issue.message}</span>
             {issue.field ? <code>{issue.field}</code> : null}
@@ -141,12 +139,12 @@ function StatusBadge({
   dirty: boolean;
 }) {
   const label = !report
-    ? "Unvalidated"
+    ? "未校验"
     : dirty
-      ? "Needs revalidation"
+      ? "需要重新校验"
       : report.ok
-        ? "Validated"
-        : "Needs fixes";
+        ? "已校验"
+        : "需要修复";
   const className = !report
     ? "badge badge-neutral"
     : dirty

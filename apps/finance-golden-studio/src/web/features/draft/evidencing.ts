@@ -207,7 +207,7 @@ export function appendTableRow(table: GoldenAnswerTable): GoldenAnswerTable {
 export function appendTableColumn(table: GoldenAnswerTable): GoldenAnswerTable {
   return {
     ...table,
-    columns: [...table.columns, `Column ${table.columns.length + 1}`],
+    columns: [...table.columns, `列 ${table.columns.length + 1}`],
     rows: table.rows.map((row) => [...row, ""])
   };
 }

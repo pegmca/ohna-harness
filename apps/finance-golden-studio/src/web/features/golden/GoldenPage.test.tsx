@@ -96,17 +96,17 @@ describe("GoldenPage", () => {
     const client = makeClient();
     render(<GoldenPage client={client} />);
 
-    const authored = await screen.findByRole("region", { name: "Authored golden" });
-    expect(within(authored).getByText("14 cases")).toBeInTheDocument();
-    expect(within(authored).getByText("Validation failed")).toBeInTheDocument();
+    const authored = await screen.findByRole("region", { name: "作者集" });
+    expect(within(authored).getByText("14 条")).toBeInTheDocument();
+    expect(within(authored).getByText("校验失败")).toBeInTheDocument();
     expect(within(authored).getByText("fin-009")).toBeInTheDocument();
-    expect(within(authored).getByText(/1 unreachable keyword/)).toBeInTheDocument();
+    expect(within(authored).getByText(/1 个不可达关键词/)).toBeInTheDocument();
     expect(within(authored).getByText(/HUMAN-KEYWORD/)).toBeInTheDocument();
 
-    const generated = screen.getByRole("region", { name: "Generated eval artifact" });
-    expect(within(generated).getByText("12 cases")).toBeInTheDocument();
+    const generated = screen.getByRole("region", { name: "生成的评测产物" });
+    expect(within(generated).getByText("12 条")).toBeInTheDocument();
     expect(within(generated).getByText("finance-rag-golden-v1.0.0")).toBeInTheDocument();
-    expect(within(generated).getByText("Blocked")).toBeInTheDocument();
+    expect(within(generated).getByText("已阻断")).toBeInTheDocument();
     expect(within(generated).getByText(/validation must pass/i)).toBeInTheDocument();
     expect(within(generated).getByText(/2026/)).toBeInTheDocument();
   });
@@ -115,11 +115,11 @@ describe("GoldenPage", () => {
     const client = makeClient();
     render(<GoldenPage client={client} />);
 
-    await screen.findByRole("region", { name: "Generated eval artifact" });
-    fireEvent.click(screen.getByRole("button", { name: "Generate eval set" }));
-    fireEvent.click(screen.getByRole("button", { name: "Confirm generation" }));
+    await screen.findByRole("region", { name: "生成的评测产物" });
+    fireEvent.click(screen.getByRole("button", { name: "生成评测集" }));
+    fireEvent.click(screen.getByRole("button", { name: "确认生成" }));
 
-    expect(await screen.findByText("Generated 14 evaluation cases.")).toBeInTheDocument();
+    expect(await screen.findByText("已生成 14 条评测用例。")).toBeInTheDocument();
     expect(client.runAction).toHaveBeenCalledWith("generate", undefined);
     await waitFor(() => expect(client.readGoldenStatus).toHaveBeenCalledTimes(2));
   });
@@ -141,9 +141,9 @@ describe("GoldenPage", () => {
     render(<GoldenPage client={client} />);
 
     const generated = await screen.findByRole("region", {
-      name: "Generated eval artifact"
+      name: "生成的评测产物"
     });
-    expect(within(generated).getByText("Missing")).toBeInTheDocument();
+    expect(within(generated).getByText("缺失")).toBeInTheDocument();
     expect(within(generated).queryByText(/cases/)).not.toBeInTheDocument();
   });
 
@@ -151,11 +151,11 @@ describe("GoldenPage", () => {
     const client = makeClient();
     render(<GoldenPage client={client} />);
 
-    await screen.findByRole("region", { name: "Generated eval artifact" });
-    fireEvent.click(screen.getByRole("button", { name: "Generate eval set" }));
-    fireEvent.click(screen.getByRole("button", { name: "Confirm generation" }));
+    await screen.findByRole("region", { name: "生成的评测产物" });
+    fireEvent.click(screen.getByRole("button", { name: "生成评测集" }));
+    fireEvent.click(screen.getByRole("button", { name: "确认生成" }));
 
-    expect(await screen.findByText("Generated 14 evaluation cases.")).toBeInTheDocument();
+    expect(await screen.findByText("已生成 14 条评测用例。")).toBeInTheDocument();
   });
 
   test("shows stale generated data when the authored source is newer", async () => {
@@ -179,10 +179,10 @@ describe("GoldenPage", () => {
     render(<GoldenPage client={client} />);
 
     const generated = await screen.findByRole("region", {
-      name: "Generated eval artifact"
+      name: "生成的评测产物"
     });
-    expect(within(generated).getByText("Stale")).toBeInTheDocument();
-    expect(within(generated).getByText(/regenerate/i)).toBeInTheDocument();
+    expect(within(generated).getByText("已过期")).toBeInTheDocument();
+    expect(within(generated).getByText(/重新生成/)).toBeInTheDocument();
   });
 });
 

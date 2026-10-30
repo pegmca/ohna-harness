@@ -25,13 +25,13 @@ export function TableEditor({ table, onChange }: TableEditorProps) {
   return (
     <section aria-labelledby="table-editor-heading" className="editor-section">
       <div className="section-heading">
-        <h2 id="table-editor-heading">Answer table</h2>
+        <h2 id="table-editor-heading">表格答案</h2>
         <span className="section-meta">
           {value.rows.length} × {value.columns.length}
         </span>
       </div>
       <div
-        aria-label="Answer table"
+        aria-label="表格答案"
         className="table-scroll"
         role="region"
         tabIndex={0}
@@ -43,14 +43,14 @@ export function TableEditor({ table, onChange }: TableEditorProps) {
           <table className="answer-table">
             <thead>
               <tr>
-                <th aria-label="Row number" className="row-index">
+                <th aria-label="行号" className="row-index">
                   #
                 </th>
                 {value.columns.map((column, columnIndex) => (
                   <th key={`${column}-${columnIndex}`}>
                     <div className="table-column-head">
                       <label className="sr-only" htmlFor={`column-${columnIndex}`}>
-                        Column {columnIndex + 1}
+                        列 {columnIndex + 1}
                       </label>
                       <input
                         className="table-input table-column-name"
@@ -63,10 +63,10 @@ export function TableEditor({ table, onChange }: TableEditorProps) {
                         value={column}
                       />
                       <label className="sr-only" htmlFor={`unit-${columnIndex}`}>
-                        Unit for column {columnIndex + 1}
+                        第 {columnIndex + 1} 列单位
                       </label>
                       <input
-                        aria-label={`Unit for column ${columnIndex + 1}`}
+                        aria-label={`第 ${columnIndex + 1} 列单位`}
                         className="table-input table-unit"
                         onChange={(event) =>
                           onChange({
@@ -77,11 +77,11 @@ export function TableEditor({ table, onChange }: TableEditorProps) {
                             }
                           })
                         }
-                        placeholder="Unit"
+                        placeholder="单位"
                         value={value.units?.[column] ?? ""}
                       />
                       <button
-                        aria-label={`Remove column ${columnIndex + 1}`}
+                        aria-label={`删除第 ${columnIndex + 1} 列`}
                         className="icon-button table-action"
                         onClick={() =>
                           onChange(removeTableColumn(value, columnIndex))
@@ -99,7 +99,7 @@ export function TableEditor({ table, onChange }: TableEditorProps) {
                     onClick={() => onChange(appendTableColumn(value))}
                     type="button"
                   >
-                    + Column
+                    + 列
                   </button>
                 </th>
               </tr>
@@ -111,7 +111,7 @@ export function TableEditor({ table, onChange }: TableEditorProps) {
                   {value.columns.map((column, columnIndex) => (
                     <td key={`${column}-${columnIndex}`}>
                       <label className="sr-only" htmlFor={`cell-${rowIndex}-${columnIndex}`}>
-                        Row {rowIndex + 1}, {column}
+                        第 {rowIndex + 1} 行，{column}
                       </label>
                       <textarea
                         className="table-input table-cell"
@@ -133,7 +133,7 @@ export function TableEditor({ table, onChange }: TableEditorProps) {
                   ))}
                   <td className="row-actions">
                     <button
-                      aria-label={`Remove row ${rowIndex + 1}`}
+                      aria-label={`删除第 ${rowIndex + 1} 行`}
                       className="icon-button"
                       onClick={() => onChange(removeTableRow(value, rowIndex))}
                       type="button"
@@ -146,7 +146,7 @@ export function TableEditor({ table, onChange }: TableEditorProps) {
               {value.rows.length === 0 ? (
                 <tr>
                   <td className="table-empty" colSpan={value.columns.length + 2}>
-                    Add a row to enter table values.
+                    添加一行以录入表格数值。
                   </td>
                 </tr>
               ) : null}
@@ -160,7 +160,7 @@ export function TableEditor({ table, onChange }: TableEditorProps) {
           onClick={() => onChange(appendTableRow(value))}
           type="button"
         >
-          Add row
+          添加行
         </button>
       </div>
     </section>
@@ -174,5 +174,5 @@ export function TableEditor({ table, onChange }: TableEditorProps) {
  * @returns 合法表格。
  */
 function normalizeTable(table: GoldenAnswerTable | undefined): GoldenAnswerTable {
-  return table ?? { columns: ["Column 1"], units: {}, rows: [] };
+  return table ?? { columns: ["列 1"], units: {}, rows: [] };
 }

@@ -51,11 +51,11 @@ export function EvidenceRecord({
     <details className="evidence-record" open={index === 0}>
       <summary>
         <span>
-          Source {index + 1} · {evidence.ticker || "No ticker"} ·{" "}
-          {evidence.period || "No period"}
+          来源 {index + 1} · {evidence.ticker || "无代码"} ·{" "}
+          {evidence.period || "无期间"}
         </span>
         <button
-          aria-label={`Remove evidence ${index + 1}`}
+          aria-label={`删除证据 ${index + 1}`}
           className="icon-button"
           onClick={(event) => {
             event.preventDefault();
@@ -69,7 +69,7 @@ export function EvidenceRecord({
       <div className="evidence-record-fields">
         <div className="field-grid field-grid-compact">
           <label className="field">
-            <span className="field-label">Ticker</span>
+            <span className="field-label">代码</span>
             <input
               className="field-control"
               onChange={(event) => update("ticker", event.target.value)}
@@ -77,7 +77,7 @@ export function EvidenceRecord({
             />
           </label>
           <label className="field">
-            <span className="field-label">Report</span>
+            <span className="field-label">报告</span>
             <select
               className="field-control"
               onChange={(event) =>
@@ -93,7 +93,7 @@ export function EvidenceRecord({
             </select>
           </label>
           <label className="field">
-            <span className="field-label">Period</span>
+            <span className="field-label">期间</span>
             <input
               className="field-control"
               onChange={(event) => update("period", event.target.value)}
@@ -101,9 +101,9 @@ export function EvidenceRecord({
             />
           </label>
           <label className="field">
-            <span className="field-label">Page</span>
+            <span className="field-label">页码</span>
             <input
-              aria-label={`Evidence ${index + 1} page`}
+              aria-label={`证据 ${index + 1} 页码`}
               className="field-control"
               min={0}
               onChange={(event) =>
@@ -116,18 +116,18 @@ export function EvidenceRecord({
           </label>
         </div>
         <label className="field">
-          <span className="field-label">Section</span>
+          <span className="field-label">章节</span>
           <input
-            aria-label={`Evidence ${index + 1} section`}
+            aria-label={`证据 ${index + 1} 章节`}
             className="field-control"
             onChange={(event) => update("section", event.target.value)}
             value={evidence.section}
           />
         </label>
         <label className="field">
-          <span className="field-label">Quote</span>
+          <span className="field-label">原文</span>
           <textarea
-            aria-label={`Quote for evidence ${index + 1}`}
+            aria-label={`证据 ${index + 1} 原文`}
             className="field-control"
             onChange={(event) => update("quote", event.target.value)}
             rows={4}
@@ -135,7 +135,7 @@ export function EvidenceRecord({
           />
         </label>
         <label className="field">
-          <span className="field-label">Source kind</span>
+          <span className="field-label">来源类型</span>
           <select
             className="field-control"
             onChange={(event) =>

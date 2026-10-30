@@ -28,20 +28,20 @@ function Shell({ client }: { client: GoldenStudioClient }) {
         <aside className="sidebar">
           <div className="sidebar-identity">
             <span className="product-name">Golden Studio</span>
-            <span className="product-subtitle">Finance data workbench</span>
+            <span className="product-subtitle">金融数据工作台</span>
           </div>
-          <nav aria-label="Primary" className="sidebar-nav">
+          <nav aria-label="主导航" className="sidebar-nav">
             <NavLink className="nav-item" to="/">
               <Layers aria-hidden="true" size={16} />
-              Batches
+              批次
             </NavLink>
             <NavLink className="nav-item" to="/golden">
               <Award aria-hidden="true" size={16} />
-              Golden
+              作者集
             </NavLink>
             <NavLink className="nav-item" to="/settings">
               <Settings aria-hidden="true" size={16} />
-              Settings
+              设置
             </NavLink>
           </nav>
         </aside>

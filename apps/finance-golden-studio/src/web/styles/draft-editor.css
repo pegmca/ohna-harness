@@ -273,6 +273,11 @@ textarea.field-control {
   gap: 8px;
 }
 
+.keyword-add .button {
+  flex: none;
+  white-space: nowrap;
+}
+
 .keyword-list {
   list-style: none;
   margin: 10px 0 0;

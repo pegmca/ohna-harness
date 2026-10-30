@@ -21,12 +21,12 @@ export function FormEditor({ form, onChange }: FormEditorProps) {
   return (
     <section aria-labelledby="form-editor-heading" className="editor-section">
       <div className="section-heading">
-        <h2 id="form-editor-heading">Answer form</h2>
-        <span className="section-meta">{value.items.length} items</span>
+        <h2 id="form-editor-heading">表单答案</h2>
+        <span className="section-meta">{value.items.length} 项</span>
       </div>
       <div className="form-group">
         <div className="section-heading section-heading-small">
-          <h3>Groups</h3>
+          <h3>分组</h3>
           <button
             className="button button-ghost"
             onClick={() =>
@@ -37,13 +37,13 @@ export function FormEditor({ form, onChange }: FormEditorProps) {
             }
             type="button"
           >
-            Add group
+            添加分组
           </button>
         </div>
         {(value.groups ?? []).map((group, index) => (
           <div className="form-row" key={index}>
             <label className="sr-only" htmlFor={`form-group-${index}`}>
-              Group {index + 1}
+              分组 {index + 1}
             </label>
             <input
               className="field-control"
@@ -56,11 +56,11 @@ export function FormEditor({ form, onChange }: FormEditorProps) {
                   )
                 })
               }
-              placeholder="Group"
+              placeholder="分组"
               value={group}
             />
             <button
-              aria-label={`Remove group ${index + 1}`}
+              aria-label={`删除分组 ${index + 1}`}
               className="icon-button"
               onClick={() =>
                 onChange({
@@ -79,7 +79,7 @@ export function FormEditor({ form, onChange }: FormEditorProps) {
       </div>
       <div className="form-group">
         <div className="section-heading section-heading-small">
-          <h3>Items</h3>
+          <h3>条目</h3>
           <button
             className="button button-ghost"
             onClick={() =>
@@ -90,13 +90,13 @@ export function FormEditor({ form, onChange }: FormEditorProps) {
             }
             type="button"
           >
-            Add form item
+            添加表单项
           </button>
         </div>
         {value.items.map((item, index) => (
           <div className="form-row form-item-row" key={index}>
             <label className="sr-only" htmlFor={`form-key-${index}`}>
-              Item {index + 1} key
+              条目 {index + 1} 键
             </label>
             <input
               className="field-control"
@@ -111,11 +111,11 @@ export function FormEditor({ form, onChange }: FormEditorProps) {
                   )
                 })
               }
-              placeholder="Key"
+              placeholder="键"
               value={item.key}
             />
             <label className="sr-only" htmlFor={`form-value-${index}`}>
-              Item {index + 1} value
+              条目 {index + 1} 值
             </label>
             <input
               className="field-control"
@@ -130,11 +130,11 @@ export function FormEditor({ form, onChange }: FormEditorProps) {
                   )
                 })
               }
-              placeholder="Value"
+              placeholder="值"
               value={item.value}
             />
             <button
-              aria-label={`Remove form item ${index + 1}`}
+              aria-label={`删除表单项 ${index + 1}`}
               className="icon-button"
               onClick={() =>
                 onChange({
@@ -151,7 +151,7 @@ export function FormEditor({ form, onChange }: FormEditorProps) {
           </div>
         ))}
         {value.items.length === 0 ? (
-          <p className="muted-text">No form items yet.</p>
+          <p className="muted-text">暂无表单项。</p>
         ) : null}
       </div>
     </section>

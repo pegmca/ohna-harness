@@ -123,11 +123,11 @@ export function createGoldenStudioClient(
         throw new ApiError(
           "request_timeout",
           0,
-          `Request for ${path} timed out after ${requestTimeoutMs}ms.`,
+          `请求 ${path} 在 ${requestTimeoutMs}ms 后超时。`,
           { requestTimeoutMs }
         );
       }
-      const message = error instanceof Error ? error.message : "Network request failed.";
+      const message = error instanceof Error ? error.message : "网络请求失败。";
       throw new ApiError("network_error", 0, message, {});
     }
 
@@ -138,7 +138,7 @@ export function createGoldenStudioClient(
       throw new ApiError(
         "unexpected_response",
         response.status,
-        `Response for ${path} is not valid JSON.`,
+        `${path} 的响应不是合法的 JSON。`,
         {}
       );
     }
@@ -156,7 +156,7 @@ export function createGoldenStudioClient(
       throw new ApiError(
         "unexpected_response",
         response.status,
-        `Response for ${path} is not a Golden Studio envelope.`,
+        `${path} 的响应不是 Golden Studio 信封格式。`,
         {}
       );
     }
@@ -250,7 +250,7 @@ function unwrapActionResult<TResult>(
     throw new ApiError(
       "unexpected_response",
       200,
-      `Expected ${expected} action, received ${response.action}.`,
+      `预期动作 ${expected}，实际收到 ${response.action}。`,
       { expected, received: response.action }
     );
   }

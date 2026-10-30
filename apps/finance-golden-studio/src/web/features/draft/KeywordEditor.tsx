@@ -33,12 +33,12 @@ export function KeywordEditor({
   return (
     <section aria-labelledby="keyword-heading" className="editor-section">
       <div className="section-heading">
-        <h2 id="keyword-heading">Expected keywords</h2>
+        <h2 id="keyword-heading">预期关键词</h2>
         <span className="section-meta">{keywords.length}</span>
       </div>
       <div className="keyword-add">
         <label className="sr-only" htmlFor="new-keyword">
-          New expected keyword
+          新增预期关键词
         </label>
         <input
           className="field-control"
@@ -50,17 +50,17 @@ export function KeywordEditor({
               addKeyword();
             }
           }}
-          placeholder="Add keyword"
+          placeholder="添加关键词"
           value={draftKeyword}
         />
         <button className="button button-secondary" onClick={addKeyword} type="button">
-          Add keyword
+          添加关键词
         </button>
       </div>
       {keywords.length === 0 ? (
-        <p className="muted-text">No expected keywords yet.</p>
+        <p className="muted-text">暂无预期关键词。</p>
       ) : (
-        <ul className="keyword-list" aria-label="Expected keyword list">
+        <ul className="keyword-list" aria-label="预期关键词列表">
           {keywords.map((keyword, index) => {
             const status = reachability[index];
             return (
@@ -75,14 +75,12 @@ export function KeywordEditor({
                     }
                   >
                     {status?.reachable
-                      ? `Reachable in ${status.evidenceIndexes.length} source${
-                          status.evidenceIndexes.length === 1 ? "" : "s"
-                        }`
-                      : "Not found in evidence"}
+                      ? `在 ${status.evidenceIndexes.length} 个来源中可达`
+                      : "证据中未找到"}
                   </span>
                 </div>
                 <button
-                  aria-label={`Remove keyword ${keyword}`}
+                  aria-label={`删除关键词 ${keyword}`}
                   className="icon-button"
                   onClick={() =>
                     onChange(keywords.filter((_, current) => current !== index))

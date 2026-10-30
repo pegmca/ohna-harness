@@ -60,11 +60,11 @@ describe("BatchesPage", () => {
     const approvedRow = await screen.findByRole("row", { name: /batch-approved/i });
     expect(within(approvedRow).getByText("3 / 4")).toBeInTheDocument();
     expect(within(approvedRow).getByText("75%")).toBeInTheDocument();
-    expect(within(approvedRow).getByText("1 pending")).toBeInTheDocument();
+    expect(within(approvedRow).getByText("1 待处理")).toBeInTheDocument();
 
     const corruptRow = screen.getByRole("row", { name: /batch-corrupt/i });
-    expect(within(corruptRow).getByText("1 corrupt")).toBeInTheDocument();
-    expect(within(corruptRow).getByRole("link", { name: "Review drafts" })).toHaveAttribute(
+    expect(within(corruptRow).getByText("1 条损坏")).toBeInTheDocument();
+    expect(within(corruptRow).getByRole("link", { name: "查看草稿" })).toHaveAttribute(
       "href",
       "/batch/batch-corrupt"
     );
@@ -80,16 +80,16 @@ describe("BatchesPage", () => {
     );
 
     fireEvent.click(
-      await screen.findByRole("button", { name: "Promote approved" })
+      await screen.findByRole("button", { name: "发布已审核草稿" })
     );
     expect(
-      screen.getByRole("dialog", { name: "Promote approved?" })
+      screen.getByRole("dialog", { name: "发布已审核草稿？" })
     ).toBeInTheDocument();
     expect(client.runAction).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole("button", { name: "Confirm promotion" }));
+    fireEvent.click(screen.getByRole("button", { name: "确认发布" }));
 
-    expect(await screen.findByText("Promoted 3 drafts.")).toBeInTheDocument();
+    expect(await screen.findByText("已发布 3 份草稿。")).toBeInTheDocument();
     expect(client.runAction).toHaveBeenCalledWith("promote", {
       batch: "batch-approved"
     });
@@ -123,11 +123,11 @@ describe("BatchesPage", () => {
     );
 
     fireEvent.click(
-      await screen.findByRole("button", { name: "Promote approved" })
+      await screen.findByRole("button", { name: "发布已审核草稿" })
     );
-    fireEvent.click(screen.getByRole("button", { name: "Confirm promotion" }));
+    fireEvent.click(screen.getByRole("button", { name: "确认发布" }));
 
-    expect(await screen.findByText("Promoted 3 drafts.")).toBeInTheDocument();
+    expect(await screen.findByText("已发布 3 份草稿。")).toBeInTheDocument();
   });
 
   test("mines a selected candidates file after confirmation and shows real results", async () => {
@@ -137,12 +137,12 @@ describe("BatchesPage", () => {
         <BatchesPage client={client} />
       </MemoryRouter>
     );
-    await screen.findByRole("button", { name: "Mine candidates" });
+    await screen.findByRole("button", { name: "挖掘候选" });
 
-    fireEvent.change(screen.getByLabelText("Batch name"), {
+    fireEvent.change(screen.getByLabelText("批次名称"), {
       target: { value: "mined-batch" }
     });
-    fireEvent.change(screen.getByLabelText("Candidates JSON file"), {
+    fireEvent.change(screen.getByLabelText("候选 JSON 文件"), {
       target: {
         files: [
           new File(
@@ -165,15 +165,15 @@ describe("BatchesPage", () => {
     expect(
       await screen.findByText((_content, element) =>
         element?.tagName === "P" &&
-        element.textContent?.includes("1 candidate ready from candidates.json") === true
+        element.textContent?.includes("1 个候选已就绪，来自 candidates.json") === true
       )
     ).toBeInTheDocument();
 
-    const mineTrigger = screen.getByRole("button", { name: "Mine candidates" });
+    const mineTrigger = screen.getByRole("button", { name: "挖掘候选" });
     await waitFor(() => expect(mineTrigger).toBeEnabled());
     fireEvent.click(mineTrigger);
     expect(
-      await screen.findByRole("dialog", { name: "Mine candidates?" })
+      await screen.findByRole("dialog", { name: "挖掘候选？" })
     ).toBeInTheDocument();
     expect(client.runAction).not.toHaveBeenCalled();
 
@@ -189,13 +189,13 @@ describe("BatchesPage", () => {
         skipped: [{ id: "fin-D003", reason: "text_too_short" }]
       }
     });
-    const confirmation = screen.getByRole("dialog", { name: "Mine candidates?" });
+    const confirmation = screen.getByRole("dialog", { name: "挖掘候选？" });
     fireEvent.click(
-      within(confirmation).getByRole("button", { name: "Mine candidates" })
+      within(confirmation).getByRole("button", { name: "挖掘候选" })
     );
 
     expect(
-      await screen.findByText("Mined 2 drafts; skipped 1 candidate.")
+      await screen.findByText("已挖掘 2 份草稿，跳过 1 个候选。")
     ).toBeInTheDocument();
     expect(client.runAction).toHaveBeenCalledWith("mine", {
       batch: "mined-batch",

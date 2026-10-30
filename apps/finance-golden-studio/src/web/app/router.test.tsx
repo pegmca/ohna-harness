@@ -31,20 +31,20 @@ describe("App shell routing", () => {
     };
     render(<App client={client as never} initialEntries={["/"]} />);
 
-    expect(await screen.findByRole("heading", { name: "Batches" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "批次" })).toBeInTheDocument();
     expect(screen.getByText("batch-01")).toBeInTheDocument();
-    expect(screen.getByText("2 drafts")).toBeInTheDocument();
+    expect(screen.getByText("2 份草稿")).toBeInTheDocument();
   });
 
   test("surfaces loading, empty, and error states in the main area", async () => {
     const loadingClient = { listBatches: vi.fn(() => new Promise<never[]>(() => undefined)) };
     const first = render(<App client={loadingClient as never} initialEntries={["/"]} />);
-    expect(await screen.findByText("Loading batches")).toBeInTheDocument();
+    expect(await screen.findByText("正在加载批次")).toBeInTheDocument();
     first.unmount();
 
     const emptyClient = { listBatches: vi.fn(async () => []) };
     const second = render(<App client={emptyClient as never} initialEntries={["/"]} />);
-    expect(await screen.findByText("No draft batches yet.")).toBeInTheDocument();
+    expect(await screen.findByText("暂无草稿批次。")).toBeInTheDocument();
     second.unmount();
 
     const errorClient = {
@@ -71,7 +71,7 @@ describe("App shell routing", () => {
     expect(
       await screen.findByRole("heading", { name: "batch-long-name" })
     ).toBeInTheDocument();
-    expect(await screen.findByText("No drafts yet")).toBeInTheDocument();
+    expect(await screen.findByText("暂无草稿")).toBeInTheDocument();
     expect(client.listDrafts).toHaveBeenCalledWith("batch-long-name", expect.anything());
   });
 
@@ -111,7 +111,7 @@ describe("App shell routing", () => {
       expect.anything()
     );
     expect(
-      await within(screen.getByLabelText("Evidence blocks")).findByText(
+      await within(screen.getByLabelText("证据区块")).findByText(
         "Revenue 100"
       )
     ).toBeInTheDocument();
@@ -138,11 +138,11 @@ describe("App shell routing", () => {
       await screen.findByRole("heading", { name: "fin-D001" })
     ).toBeInTheDocument();
     expect(
-      await within(screen.getByLabelText("Evidence blocks")).findByText(
+      await within(screen.getByLabelText("证据区块")).findByText(
         "Revenue 100"
       )
     ).toBeInTheDocument();
-    expect(screen.queryByText("This workspace is not wired yet.")).not.toBeInTheDocument();
+    expect(screen.queryByText("此工作区尚未接入。")).not.toBeInTheDocument();
   });
 
   test("routes Golden and Settings to their real workbench pages", async () => {
@@ -182,15 +182,15 @@ describe("App shell routing", () => {
       <App client={client as never} initialEntries={["/golden"]} />
     );
     expect(
-      await screen.findByRole("region", { name: "Authored golden" })
+      await screen.findByRole("region", { name: "作者集" })
     ).toBeInTheDocument();
     golden.unmount();
 
     render(<App client={client as never} initialEntries={["/settings"]} />);
     expect(
-      await screen.findByRole("heading", { name: "Workspace and corpus" })
+      await screen.findByRole("heading", { name: "工作区与语料" })
     ).toBeInTheDocument();
-    expect(screen.queryByText("This workspace is not wired yet.")).not.toBeInTheDocument();
+    expect(screen.queryByText("此工作区尚未接入。")).not.toBeInTheDocument();
   });
 });
 
@@ -317,7 +317,7 @@ describe("ThemeProvider", () => {
     };
     render(<App client={client as never} initialEntries={["/"]} />);
 
-    await screen.findByRole("heading", { name: "Batches" });
+    await screen.findByRole("heading", { name: "批次" });
     expect(document.documentElement).toHaveAttribute("data-font-size", "large");
   });
 });

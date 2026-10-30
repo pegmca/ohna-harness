@@ -32,6 +32,17 @@ pnpm golden-studio serve
 `serve` hosts the built SPA and `/api` on `127.0.0.1:4318`, then shuts down
 cleanly on `SIGINT` or `SIGTERM`.
 
+## Web UI
+
+The workbench UI is Chinese-first (`<html lang="zh-CN">`): navigation, page
+headings, table and column labels, form fields, buttons, empty/error states,
+confirm dialogs, validation status labels, and appearance settings all render
+in Chinese. Enum values are edited by their stable English keys but displayed
+with Chinese labels. Dates are formatted with the `zh-CN` locale, and the
+native file picker is localized through `::file-selector-button`. Server
+messages (validation issues, action errors) are shown as returned, so Chinese
+authoring content and any server-side copy appear verbatim.
+
 ## Configuration
 
 The default workspace is the repository root, and the default corpus is

@@ -240,6 +240,6 @@ describe("createGoldenStudioClient", () => {
     assert.equal(error.name, "ApiError");
     assert.equal((error as { code?: string }).code, "request_timeout");
     assert.equal((error as { status?: number }).status, 0);
-    assert.match(error.message, /timed out/i);
+    assert.match(error.message, /超时/);
   });
 });

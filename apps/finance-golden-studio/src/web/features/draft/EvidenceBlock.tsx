@@ -34,11 +34,11 @@ export function EvidenceBlock({
     >
       <div className="block-meta">
         <span>
-          Page {block.pageNumber} · L{block.lineStart}–{block.lineEnd}
+          第 {block.pageNumber} 页 · 行 {block.lineStart}–{block.lineEnd}
         </span>
         {block.metadata.isTableRow ? (
           <span className="badge badge-neutral">
-            Table · {String(block.metadata.tableColumnCount ?? "?")} columns
+            表格 · {String(block.metadata.tableColumnCount ?? "?")} 列
           </span>
         ) : null}
         {entryMetadata(block).sourceLayer ? (

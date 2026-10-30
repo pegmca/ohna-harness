@@ -46,16 +46,16 @@ describe("ActionBar", () => {
     const runAction = vi.fn(async () => actionResult("generate"));
     render(
       <ActionBar
-        actions={[{ action: "generate", label: "Generate eval set" }]}
+        actions={[{ action: "generate", label: "生成评测集" }]}
         client={{ runAction }}
       />
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Generate eval set" }));
+    fireEvent.click(screen.getByRole("button", { name: "生成评测集" }));
 
-    expect(screen.getByRole("dialog", { name: "Generate eval set?" })).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "生成评测集？" })).toBeInTheDocument();
     expect(runAction).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    fireEvent.click(screen.getByRole("button", { name: "取消" }));
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(runAction).not.toHaveBeenCalled();
   });
@@ -70,20 +70,20 @@ describe("ActionBar", () => {
     );
     render(
       <ActionBar
-        actions={[{ action: "validate", label: "Validate authors" }]}
+        actions={[{ action: "validate", label: "校验作者集" }]}
         client={{ runAction }}
       />
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Validate authors" }));
-    fireEvent.click(screen.getByRole("button", { name: "Run validation" }));
+    fireEvent.click(screen.getByRole("button", { name: "校验作者集" }));
+    fireEvent.click(screen.getByRole("button", { name: "开始校验" }));
 
-    expect(await screen.findByText("Running validation")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Running validation" })).toBeDisabled();
-    expect(screen.getAllByRole("button", { name: "Running validation" })).toHaveLength(1);
+    expect(await screen.findByText("正在校验")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "正在校验" })).toBeDisabled();
+    expect(screen.getAllByRole("button", { name: "正在校验" })).toHaveLength(1);
 
     resolveAction?.(actionResult("validate"));
-    expect(await screen.findByText("Validation passed.")).toBeInTheDocument();
+    expect(await screen.findByText("校验通过。")).toBeInTheDocument();
     expect(runAction).toHaveBeenCalledWith("validate", undefined);
   });
 
@@ -93,18 +93,18 @@ describe("ActionBar", () => {
     });
     render(
       <ActionBar
-        actions={[{ action: "promote", label: "Promote approved" }]}
+        actions={[{ action: "promote", label: "发布已审核草稿" }]}
         client={{ runAction }}
       />
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Promote approved" }));
-    fireEvent.click(screen.getByRole("button", { name: "Confirm promotion" }));
+    fireEvent.click(screen.getByRole("button", { name: "发布已审核草稿" }));
+    fireEvent.click(screen.getByRole("button", { name: "确认发布" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "promotion_failed: approved draft is invalid"
     );
-    expect(screen.getByRole("button", { name: "Promote approved" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "发布已审核草稿" })).toBeEnabled();
     await waitFor(() => expect(runAction).toHaveBeenCalledTimes(1));
   });
 });

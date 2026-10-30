@@ -31,7 +31,7 @@ describe("SettingsPage", () => {
     expect(await screen.findByText("/workspace/finance")).toBeInTheDocument();
     expect(screen.getByText("/corpus/finance")).toBeInTheDocument();
     expect(screen.getByText("/corpus/finance/manifest/manifest.jsonl")).toBeInTheDocument();
-    expect(screen.getByText("Read-only")).toBeInTheDocument();
+    expect(screen.getByText("只读")).toBeInTheDocument();
   });
 
   test("persists theme and font size as local preferences", async () => {
@@ -43,8 +43,8 @@ describe("SettingsPage", () => {
     );
     await screen.findByText("/workspace/finance");
 
-    fireEvent.click(screen.getByRole("radio", { name: "Dark" }));
-    fireEvent.click(screen.getByRole("radio", { name: "Large" }));
+    fireEvent.click(screen.getByRole("radio", { name: "深色" }));
+    fireEvent.click(screen.getByRole("radio", { name: "大" }));
 
     expect(window.localStorage.getItem("golden-studio-theme")).toBe("dark");
     expect(window.localStorage.getItem("golden-studio-font-size")).toBe("large");

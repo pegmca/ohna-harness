@@ -12,10 +12,10 @@ export interface ActionConfirmationCopy {
 
 /** 动作运行中的固定标签，保证按钮宽度不随文案变化。 */
 export const ACTION_RUNNING_LABELS: Record<GoldenStudioAction["action"], string> = {
-  validate: "Running validation",
-  promote: "Promoting drafts",
-  generate: "Generating eval set",
-  mine: "Mining candidates"
+  validate: "正在校验",
+  promote: "正在发布草稿",
+  generate: "正在生成评测集",
+  mine: "正在挖掘候选"
 };
 
 /**
@@ -30,30 +30,30 @@ export function actionConfirmation(
   switch (action.action) {
     case "validate":
       return {
-        title: `${action.label}?`,
-        description: "The server will validate current authored data.",
-        confirmLabel: "Run validation"
+        title: `${action.label}？`,
+        description: "服务端将校验当前的作者数据。",
+        confirmLabel: "开始校验"
       };
     case "promote":
       return {
-        title: `${action.label}?`,
+        title: `${action.label}？`,
         description:
-          "Approved drafts will be appended to the authored golden set. A snapshot is taken before writing.",
-        confirmLabel: "Confirm promotion"
+          "已审核的草稿将追加到作者集。写入前会创建快照。",
+        confirmLabel: "确认发布"
       };
     case "generate":
       return {
-        title: `${action.label}?`,
+        title: `${action.label}？`,
         description:
-          "The generated evaluation artifact will be replaced using the current authored golden set.",
-        confirmLabel: "Confirm generation"
+          "将使用当前作者集替换已生成的评测产物。",
+        confirmLabel: "确认生成"
       };
     case "mine":
       return {
-        title: `${action.label}?`,
+        title: `${action.label}？`,
         description:
-          "The server will create candidate drafts from the supplied corpus references.",
-        confirmLabel: "Mine candidates"
+          "服务端将根据提供的语料引用创建候选草稿。",
+        confirmLabel: "挖掘候选"
       };
   }
 }
@@ -72,20 +72,20 @@ export function actionSuccessMessage(
   const data = result.result;
   if (name === "validate") {
     const validation = asRecord(data.validation) ?? data;
-    if (validation.ok === false) return "Validation completed with errors.";
-    return "Validation passed.";
+    if (validation.ok === false) return "校验完成，但存在错误。";
+    return "校验通过。";
   }
   if (name === "promote") {
-    if (data.ok === false) return "Promotion stopped before changing the authored set.";
-    return `Promoted ${numberValue(data.promotedCount)} drafts.`;
+    if (data.ok === false) return "发布在修改作者集前中止。";
+    return `已发布 ${numberValue(data.promotedCount)} 份草稿。`;
   }
   if (name === "generate") {
-    if (data.ok === false) return "Generation stopped before writing the eval artifact.";
+    if (data.ok === false) return "生成在写入评测产物前中止。";
     const count = numberValue(data.caseCount);
-    return `Generated ${count} evaluation ${count === 1 ? "case" : "cases"}.`;
+    return `已生成 ${count} 条评测用例。`;
   }
-  if (data.ok === false) return "Mining completed with skipped candidates.";
-  return `Mined ${numberValue(data.draftedCount)} candidate drafts.`;
+  if (data.ok === false) return "挖掘完成，但跳过了部分候选。";
+  return `已挖掘 ${numberValue(data.draftedCount)} 份候选草稿。`;
 }
 
 /**
@@ -95,7 +95,7 @@ export function actionSuccessMessage(
  * @returns 可展示错误。
  */
 export function actionErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : "Unknown server action failure.";
+  return error instanceof Error ? error.message : "未知的服务端动作错误。";
 }
 
 /**

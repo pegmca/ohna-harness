@@ -217,3 +217,24 @@
 5. 最后补 UX-107 至 UX-110：密集侧栏、错误空态、设置影响范围与权限确认。
 
 每个用例落地时同时提交：DOM/交互回归测试、真实窗口操作记录、必要的几何断言与截图路径。
+
+## 2026-10-31 验证状态
+
+| 用例 | 状态 | 自动证据 | 真实窗口 / 剩余缺口 |
+| --- | --- | --- | --- |
+| UX-101 | 通过 | `Workbench.test.tsx`：迟到响应 + 工作区切换；会话切换竞态 | URL、标题、消息均保持新草稿 |
+| UX-102 | 通过 | `Workbench.test.tsx`：未发送草稿取消/确认两条路径 | 实测取消确认，输入、URL、工作区保留 |
+| UX-103 | 通过 | `composer-controls.test.tsx`：方向键、Enter、Escape、焦点归还 | 实测方向键切换模型、Enter 选中、Escape 关闭 |
+| UX-104 | 自动状态机通过 | `scroll-follow.test.ts` + `chat.tsx` 接线 | 长对话流式滚动需后续真实 provider 长回答复测；不伪造 jsdom 布局 |
+| UX-105 | 通过 | `Workbench.test.tsx` 停止/失败/重试 + 迟到 token；`scheduler.test.mjs` 失败恢复 | 真实 provider 失败此前已验证失败正文与刷新恢复 |
+| UX-106 | 通过（分层证据） | URL 恢复、`reconcile.test.mjs` interrupted 收敛、正常 Quit 锁释放 | 真实刷新会话恢复与 Trace 已在此前用例验证 |
+| UX-107 | 通过 | `verify-ohna-sidebar-dense.mjs` 真实 1440/960 几何；`sidebar-overflow.test.mjs` | 10 个长标题、10 个归档按钮、零横向溢出 |
+| UX-108 | 通过 | 模型失败重试、工作区失败隔离、会话错误态、设置 runtime 不可用 | 各失败态不共享错误文案 |
+| UX-109 | 通过 | `settings-store.test.mjs` 0600；`scheduler.test.mjs` 配置快照 + 成本归因 | 设置保存后重启生效此前已在真实窗口验证 |
+| UX-110 | 通过 | 确认卡键盘焦点/触发、deny 后 run 收敛、replay 恢复、`confirm-gate.test.mjs` timeout | 允许/拒绝真实工具副作用此前已验证 |
+
+**未完成项说明**
+
+- UX-104 的“真实 provider 长回答中向上滚动”暂不标记为完整人工通过；当前自动测试锁定滚动状态机，
+  但流式 DOM 几何仍需在长回答环境下复测。
+- UX-103 的 Shift+Enter 换行已由 composer 现有行为覆盖 Enter/Shift 分支；后续可补浏览器级输入法组合测试。

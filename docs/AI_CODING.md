@@ -9,6 +9,8 @@
 ## Change Rules
 
 - Work on one bounded context or Web feature at a time.
+- For UI experience work, use `$ui-usecase-verification` from `.agents/skills` to
+  convert the report into observable signals and preserve the verification evidence.
 - Keep runtime rules out of `apps/finance-web` and Fastify handlers.
 - Validate every external input and return structured boundary errors.
 - Do not introduce `any`, `@ts-ignore`, deep cross-package imports, hidden fallbacks, or unlabelled demo data.

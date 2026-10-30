@@ -161,6 +161,7 @@ export function Workbench() {
    * @returns 无返回值。
    */
   async function handlePickWorkspace(): Promise<void> {
+    if (!confirmDraftDiscard()) return;
     setIsPickingWorkspace(true);
     const result = await pickWorkspace();
     setIsPickingWorkspace(false);
@@ -185,6 +186,7 @@ export function Workbench() {
    * @returns 无返回值。
    */
   function handleSelectWorkspace(workspaceId: string): void {
+    if (!confirmDraftDiscard()) return;
     enterWorkspaceDraft();
     setActiveWorkspaceId(workspaceId);
     setComposerError(undefined);
@@ -203,6 +205,18 @@ export function Workbench() {
     setInput("");
     setComposerError(undefined);
     setIsSidebarOpen(false);
+  }
+
+  /**
+   * 离开当前草稿前询问是否丢弃未发送输入。
+   *
+   * 工作区切换会开启新会话语义；静默清空用户输入风险高于一次确认成本。
+   *
+   * @returns 无草稿或用户确认丢弃时返回 true。
+   */
+  function confirmDraftDiscard(): boolean {
+    return input.trim().length === 0
+      || window.confirm("当前会话有未发送的输入，切换工作区将丢弃这段内容。继续吗？");
   }
 
   useEffect(() => {

@@ -11,6 +11,7 @@ import {
 import {
   type FormEvent,
   type KeyboardEvent,
+  useId,
   useEffect,
   useRef,
   useState
@@ -68,11 +69,16 @@ function groupModels(models: ModelOptionDto[]): Array<{ name: string; models: Mo
  */
 export function ComposerControls(props: ComposerControlsProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const modelTriggerRef = useRef<HTMLButtonElement>(null);
+  const modelOptionRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const modelListId = useId();
   const [ideaOpen, setIdeaOpen] = useState(false);
   const [modelOpen, setModelOpen] = useState(false);
+  const [activeModelIndex, setActiveModelIndex] = useState(0);
   const selectedModel = props.models.find((model) => model.id === props.selectedModelId);
   // 按 group 分组展示（对齐 Codex）；无 group 的模型落在「其他」。
   const modelGroups = groupModels(props.models);
+  const orderedModels = modelGroups.flatMap((group) => group.models);
   // 只读实例下直接禁发：绕过「输入非空 + 模型就绪」的常规可发判定。
   const canSend = !props.observeOnly
     && props.input.trim().length > 0
@@ -86,6 +92,14 @@ export function ComposerControls(props: ComposerControlsProps) {
     textarea.style.height = `${Math.min(textarea.scrollHeight, 144)}px`;
   }, [props.input]);
 
+  useEffect(() => {
+    if (!modelOpen) return;
+    const selectedIndex = orderedModels.findIndex((model) => model.id === props.selectedModelId);
+    const nextIndex = selectedIndex >= 0 ? selectedIndex : 0;
+    setActiveModelIndex(nextIndex);
+    requestAnimationFrame(() => modelOptionRefs.current[nextIndex]?.focus());
+  }, [modelOpen, props.models, props.selectedModelId]);
+
   /** @param event 键盘事件。 @returns 无返回值。 */
   function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>): void {
     if (
@@ -97,6 +111,35 @@ export function ComposerControls(props: ComposerControlsProps) {
     ) return;
     event.preventDefault();
     event.currentTarget.form?.requestSubmit();
+  }
+
+  /**
+   * 模型列表键盘导航：方向键移动活动项，Enter 选择，Escape 关闭并归还焦点。
+   *
+   * @param event 模型列表键盘事件。
+   * @returns 无返回值。
+   */
+  function handleModelListKeyDown(event: KeyboardEvent<HTMLDivElement>): void {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      setModelOpen(false);
+      requestAnimationFrame(() => modelTriggerRef.current?.focus());
+      return;
+    }
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      const direction = event.key === "ArrowDown" ? 1 : -1;
+      const next = (activeModelIndex + direction + orderedModels.length) % orderedModels.length;
+      setActiveModelIndex(next);
+      modelOptionRefs.current[next]?.focus();
+      return;
+    }
+    if (event.key === "Enter" && orderedModels[activeModelIndex]) {
+      event.preventDefault();
+      props.onSelectModel(orderedModels[activeModelIndex].id);
+      setModelOpen(false);
+      requestAnimationFrame(() => modelTriggerRef.current?.focus());
+    }
   }
 
   return (
@@ -157,7 +200,12 @@ export function ComposerControls(props: ComposerControlsProps) {
           <div className="composer-toolbar-group">
             <Popover.Root onOpenChange={setModelOpen} open={modelOpen}>
               <Popover.Trigger asChild>
-                <button className="model-selector" disabled={props.isSubmitting || props.observeOnly === true} type="button">
+                <button
+                  className="model-selector"
+                  disabled={props.isSubmitting || props.observeOnly === true}
+                  ref={modelTriggerRef}
+                  type="button"
+                >
                   <span>{selectedModel?.label ?? "选择模型"}</span>
                 </button>
               </Popover.Trigger>
@@ -175,21 +223,33 @@ export function ComposerControls(props: ComposerControlsProps) {
                       </button>
                     </div>
                   ) : null}
-                  <div aria-label="模型列表" className="model-list" role="listbox">
+                  <div
+                    aria-activedescendant={orderedModels[activeModelIndex] ? `${modelListId}-${orderedModels[activeModelIndex].id}` : undefined}
+                    aria-label="模型列表"
+                    className="model-list"
+                    onKeyDown={handleModelListKeyDown}
+                    role="listbox"
+                  >
                     {modelGroups.map((group) => (
                       <div className="model-group" key={group.name}>
                         <p className="model-group-label">{group.name}</p>
                         {group.models.map((model) => {
                           const isSelected = model.id === props.selectedModelId;
+                          const modelIndex = orderedModels.findIndex((item) => item.id === model.id);
                           return (
                             <button
                               aria-label={`选择模型 ${model.label}`}
                               aria-selected={isSelected}
                               className="model-option"
+                              id={`${modelListId}-${model.id}`}
                               key={model.id}
                               onClick={() => {
                                 props.onSelectModel(model.id);
                                 setModelOpen(false);
+                                requestAnimationFrame(() => modelTriggerRef.current?.focus());
+                              }}
+                              ref={(element) => {
+                                modelOptionRefs.current[modelIndex] = element;
                               }}
                               role="option"
                               type="button"

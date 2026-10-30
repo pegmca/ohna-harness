@@ -20,6 +20,7 @@ import { formatApiError, formatRunStatus, formatTime } from "./format";
 import { projectLiveRun } from "./live-run-projection";
 import { JsonDetails, RunDetails, StatusBadge } from "./run-details";
 import { ComposerControls } from "./composer-controls";
+import { isPinnedToBottom, shouldFollowTail } from "./scroll-follow";
 import type { LocalModeInfo } from "../../shared/mode";
 import type { UiContentBlock, UiMessage, UiToolCallBlock } from "./types";
 
@@ -108,9 +109,8 @@ export function ChatTimeline(props: ChatTimelineProps) {
   function handleScroll(): void {
     const el = scrollRef.current;
     if (!el) return;
-    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
     // 容差 80px：流式增量较小时也能保持跟随，又不会把轻微上滑误判为「在底部」。
-    pinnedRef.current = distanceFromBottom < 80;
+    pinnedRef.current = isPinnedToBottom(el);
   }
 
   useEffect(() => {
@@ -130,10 +130,10 @@ export function ChatTimeline(props: ChatTimelineProps) {
       ? `${lastMessage.id}#${lastMessage.liveEvents?.length ?? 0}#${lastMessage.content.length}`
       : "";
     // 仅顶部「加载更多」导致消息变化时末条签名不变，此时不滚动，保留用户当前位置。
-    if (tailSig === prevTailSigRef.current) return;
+    const shouldFollow = shouldFollowTail(pinnedRef.current, prevTailSigRef.current, tailSig);
     prevTailSigRef.current = tailSig;
     // 用户在底部才跟随流式输出，避免回看历史时被强行拽到底部。
-    if (pinnedRef.current) {
+    if (shouldFollow) {
       el.scrollTop = el.scrollHeight;
     }
   }, [props.messages, props.conversationId]);

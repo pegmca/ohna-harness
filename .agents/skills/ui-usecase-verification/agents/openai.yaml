@@ -1,0 +1,4 @@
+interface:
+  display_name: "UI Usecase Verification"
+  short_description: "Collect, execute, and fix UI experience use cases"
+  default_prompt: "Use $ui-usecase-verification to validate this UI experience and fix any observed defects."

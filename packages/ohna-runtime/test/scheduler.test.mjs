@@ -375,3 +375,76 @@ test("provider 失败在刷新后仍以失败 assistant 消息可恢复", async 
   }
 });
 
+test("run 配置快照不受后续 settings 选择变化影响", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "ohna-settings-snapshot-"));
+  const requestedModels = [];
+  const runtime = await createOhnaRuntime({
+    dataDir: dir,
+    model: {
+      ...makeModel(),
+      id: "model-before",
+      name: "Model Before",
+      contextWindow: 8192,
+      maxTokens: 2048
+    },
+    apiKey: "test-key",
+    autoApprove: true,
+    streamFn: (model) => {
+      requestedModels.push(model.id);
+      const stream = createAssistantMessageEventStream();
+      stream.push({
+        type: "done",
+        reason: "stop",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "ok" }],
+          api: "openai-completions",
+          provider: "mock",
+          model: model.id,
+          usage: {
+            input: 1,
+            output: 1,
+            totalTokens: 2,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }
+          },
+          stopReason: "stop",
+          timestamp: Date.now()
+        }
+      });
+      stream.end();
+      return stream;
+    }
+  });
+
+  try {
+    await runtime.registerWorkspace("workspace-settings-snapshot", dir);
+    const conversation = await runtime.createConversation({
+      title: "settings snapshot",
+      workspaceId: "workspace-settings-snapshot"
+    });
+    const started = await runtime.startRun({
+      conversationId: conversation.conversationId,
+      workspaceId: "workspace-settings-snapshot",
+      requestId: "request-settings-snapshot",
+      message: "use immutable settings",
+      modelId: "model-before"
+    });
+    const events = [...started.initialEvents];
+    await runtime.subscribeRun(started.accepted.runId, {
+      onEvent: (event) => events.push(event)
+    });
+    await waitFor(() => events.some((event) => event.type === "run_status"));
+
+    assert.equal(started.snapshot.modelId, "model-before");
+    assert.deepEqual(requestedModels, ["model-before"]);
+    const llmCall = events.find((event) => event.type === "llm_call");
+    assert.equal(llmCall?.payload.request.modelId, "model-before");
+    assert.equal(llmCall?.payload.window.contextWindow, 8192);
+    const costSummary = events.find((event) => event.type === "cost_summary");
+    assert.deepEqual(Object.keys(costSummary?.payload.byModel ?? {}), ["model-before"]);
+  } finally {
+    await runtime.shutdown();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+

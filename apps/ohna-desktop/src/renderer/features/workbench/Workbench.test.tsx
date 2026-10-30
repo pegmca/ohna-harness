@@ -91,6 +91,26 @@ describe("Workbench conversation history", () => {
     expect(listModels).toHaveBeenCalledTimes(2);
   });
 
+  it("keeps model loading error scoped when workspace discovery fails", async () => {
+    const client = await import("../../shared/sdk/ohna-client");
+    vi.mocked(client.listWorkspaces).mockResolvedValue({
+      ok: false,
+      requestId: "workspaces.failed",
+      error: { code: "internal_error", message: "workspace registry unavailable", requestId: "workspaces.failed" }
+    });
+    vi.mocked(client.listConversations).mockResolvedValue({
+      ok: true,
+      requestId: "conversations.ok",
+      data: { items: [], nextCursor: null }
+    });
+
+    render(<MemoryRouter><Workbench /></MemoryRouter>);
+    await screen.findByText("暂无历史会话，创建一个开始编码。");
+    // The model catalog still loads independently; workspace failure must not turn into a fake model error.
+    await waitFor(() => expect(screen.queryByText("模型目录不可用。")).toBeNull());
+    expect(screen.getByRole("textbox")).toBeTruthy();
+  });
+
   it("keeps loaded history when the active conversation is selected again", async () => {
     let historyRequests = 0;
     const client = await import("../../shared/sdk/ohna-client");
@@ -241,6 +261,48 @@ describe("Workbench conversation history", () => {
     expect(screen.queryByText("迟到分页消息")).toBeNull();
   });
 
+  it("ignores a delayed conversation response after switching workspaces", async () => {
+    const pendingHistory = deferred<Response>();
+    const client = await import("../../shared/sdk/ohna-client");
+    const workspaceA = stubWorkspace(client);
+    const workspaceB = {
+      workspaceId: "ws-race",
+      displayPath: "/tmp/ohna-race",
+      status: "authorized" as const
+    };
+    vi.mocked(client.listWorkspaces).mockResolvedValue({
+      ok: true,
+      requestId: "workspaces.list",
+      data: [workspaceA, workspaceB]
+    });
+    vi.mocked(client.listConversations).mockResolvedValue({
+      ok: true,
+      requestId: "conversations.list",
+      data: { items: [conversation("c-race", "竞态会话")], nextCursor: null }
+    });
+    vi.mocked(client.listConversationMessages).mockImplementation(async (_id, _cursor, signal) => {
+      signal?.addEventListener("abort", () => pendingHistory.reject(new DOMException("Aborted", "AbortError")));
+      return pendingHistory.promise;
+    });
+
+    render(<MemoryRouter initialEntries={["/?conversation=c-race"]}><Workbench /></MemoryRouter>);
+    await screen.findByRole("heading", { name: "竞态会话" });
+    fireEvent.click(screen.getByRole("button", { name: `当前工作区 ${workspaceA.displayPath}` }));
+    fireEvent.click(await screen.findByRole("button", { name: /ohna-race/ }));
+    expect(await screen.findByRole("heading", { name: "新会话" })).toBeTruthy();
+
+    await act(async () => {
+      pendingHistory.resolve({
+        ok: true,
+        requestId: "messages.late",
+        data: { items: [userMessage("late-workspace", "c-race", "不应串入新工作区")], nextCursor: null }
+      });
+    });
+    expect(screen.queryByText("不应串入新工作区")).toBeNull();
+    expect(window.location.search).toBe("");
+    expect(screen.queryByText("running")).toBeNull();
+  });
+
   it("does not create a conversation when New Chat is clicked; creates it on first message send", async () => {
     const { createAndStreamRun } = await import("../../shared/sdk/ohna-client");
     vi.mocked(createAndStreamRun).mockResolvedValue({
@@ -344,6 +406,78 @@ describe("Workbench conversation history", () => {
     expect(await screen.findByRole("heading", { name: "新会话" })).toBeTruthy();
     expect(screen.queryByText("添加工作区前的记录")).toBeNull();
     expect(window.location.search).toBe("");
+  });
+
+  it("preserves an unsent draft when workspace switching is cancelled", async () => {
+    const client = await import("../../shared/sdk/ohna-client");
+    const workspaceA = stubWorkspace(client);
+    const workspaceB = {
+      workspaceId: "ws-other",
+      displayPath: "/tmp/ohna-other",
+      status: "authorized" as const
+    };
+    vi.mocked(client.listWorkspaces).mockResolvedValue({
+      ok: true,
+      requestId: "workspaces.list",
+      data: [workspaceA, workspaceB]
+    });
+    vi.mocked(client.listConversations).mockResolvedValue({
+      ok: true,
+      requestId: "conversations.list",
+      data: { items: [], nextCursor: null }
+    });
+    vi.mocked(client.listConversationMessages).mockResolvedValue({
+      ok: true,
+      requestId: "messages.list",
+      data: { items: [], nextCursor: null }
+    });
+    vi.spyOn(window, "confirm").mockReturnValueOnce(false);
+
+    render(<MemoryRouter><Workbench /></MemoryRouter>);
+    const textbox = await screen.findByRole("textbox") as HTMLTextAreaElement;
+    fireEvent.change(textbox, { target: { value: "尚未发送的工作区草稿" } });
+    fireEvent.click(screen.getByRole("button", { name: `当前工作区 ${workspaceA.displayPath}` }));
+    fireEvent.click(await screen.findByRole("button", { name: /ohna-other/ }));
+
+    expect(window.confirm).toHaveBeenCalled();
+    expect(textbox.value).toBe("尚未发送的工作区草稿");
+    expect(screen.getByRole("button", { name: `当前工作区 ${workspaceA.displayPath}` })).toBeTruthy();
+  });
+
+  it("discards the unsent draft only after workspace switching is confirmed", async () => {
+    const client = await import("../../shared/sdk/ohna-client");
+    const workspaceA = stubWorkspace(client);
+    const workspaceB = {
+      workspaceId: "ws-other",
+      displayPath: "/tmp/ohna-other",
+      status: "authorized" as const
+    };
+    vi.mocked(client.listWorkspaces).mockResolvedValue({
+      ok: true,
+      requestId: "workspaces.list",
+      data: [workspaceA, workspaceB]
+    });
+    vi.mocked(client.listConversations).mockResolvedValue({
+      ok: true,
+      requestId: "conversations.list",
+      data: { items: [], nextCursor: null }
+    });
+    vi.mocked(client.listConversationMessages).mockResolvedValue({
+      ok: true,
+      requestId: "messages.list",
+      data: { items: [], nextCursor: null }
+    });
+    vi.spyOn(window, "confirm").mockReturnValueOnce(true);
+
+    render(<MemoryRouter><Workbench /></MemoryRouter>);
+    const textbox = await screen.findByRole("textbox") as HTMLTextAreaElement;
+    fireEvent.change(textbox, { target: { value: "将被丢弃的草稿" } });
+    fireEvent.click(screen.getByRole("button", { name: `当前工作区 ${workspaceA.displayPath}` }));
+    fireEvent.click(await screen.findByRole("button", { name: /ohna-other/ }));
+
+    expect(window.confirm).toHaveBeenCalled();
+    expect(textbox.value).toBe("");
+    expect(screen.getByRole("button", { name: `当前工作区 ${workspaceB.displayPath}` })).toBeTruthy();
   });
 
   it("requests a semantic title after the first message on a lazily-created conversation", async () => {
@@ -508,6 +642,41 @@ describe("Workbench conversation history", () => {
     await waitFor(() => expect(textbox.disabled).toBe(false));
     expect(textbox.value).toBe("尚未接受的问题");
     expect(screen.getByText("已停止服务端任务，输入已保留。")).toBeTruthy();
+  });
+
+  it("does not append tokens delivered after the user stops a run", async () => {
+    const { cancelRun, createAndStreamRun } = await import("../../shared/sdk/ohna-client");
+    let emit: ((event: RunStreamEventDtoV2) => void) | undefined;
+    vi.mocked(cancelRun).mockResolvedValue({
+      ok: true,
+      requestId: "cancel-stopped",
+      data: snapshot("run-stopped", "cancelled")
+    });
+    vi.mocked(createAndStreamRun).mockImplementation(async (_request, options) => {
+      await options?.onAccepted?.(accepted("run-stopped"));
+      emit = options?.onEvent;
+      options?.onEvent?.(textEvent(1, "停止前"));
+      return new Promise((_resolve, reject) => {
+        options?.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")));
+      });
+    });
+    const client = await import("../../shared/sdk/ohna-client");
+    vi.mocked(client.listConversations).mockResolvedValue({ ok: true, requestId: "c", data: { items: [conversation("c1", "已有会话")], nextCursor: null } });
+    vi.mocked(client.listConversationMessages).mockResolvedValue({ ok: true, requestId: "m", data: { items: [], nextCursor: null } });
+
+    render(<MemoryRouter><Workbench /></MemoryRouter>);
+    await screen.findByRole("heading", { name: "已有会话" });
+    const textbox = screen.getByRole("textbox");
+    fireEvent.change(textbox, { target: { value: "停止后不要追加" } });
+    fireEvent.submit(textbox.closest("form")!);
+    expect(await screen.findByText("停止前")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "停止生成" }));
+    await waitFor(() => expect(cancelRun).toHaveBeenCalledWith("run-stopped"));
+
+    await act(async () => {
+      emit?.(textEvent(2, "停止后迟到内容"));
+    });
+    expect(screen.queryByText("停止后迟到内容")).toBeNull();
   });
 
   it("clears the submitted draft and completes the Run when pre-accepted cancellation fails", async () => {
@@ -835,6 +1004,41 @@ describe("Workbench confirmation cards (W-4)", () => {
     });
     expect(await screen.findByText("已允许")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "允许" })).toBeNull();
+  });
+
+  it("supports keyboard focus and Enter on confirmation decisions", async () => {
+    const { createAndStreamRun } = await import("../../shared/sdk/ohna-client");
+    vi.mocked(createAndStreamRun).mockImplementation(async (_request, options) => {
+      options?.onEvent?.(streamEvent(1, "confirmation_requested", {
+        toolCallId: "call-keyboard",
+        toolName: "write",
+        args: { path: "keyboard.md" },
+        summary: "写文件 keyboard.md"
+      }));
+      return new Promise(() => undefined);
+    });
+    const decisions: string[] = [];
+    const client = await import("../../shared/sdk/ohna-client");
+    vi.mocked(client.listConversations).mockResolvedValue({ ok: true, requestId: "c", data: { items: [conversation("c1", "已有会话")], nextCursor: null } });
+    vi.mocked(client.listConversationMessages).mockResolvedValue({ ok: true, requestId: "m", data: { items: [], nextCursor: null } });
+    vi.mocked(client.submitConfirmation).mockImplementation(async (_runId, _toolCallId, decision) => {
+      decisions.push(decision);
+      return { ok: true, requestId: "conf", data: { decision, toolCallId: "call-keyboard" } };
+    });
+
+    render(<MemoryRouter><Workbench /></MemoryRouter>);
+    await screen.findByRole("heading", { name: "已有会话" });
+    const textbox = screen.getByRole("textbox");
+    fireEvent.change(textbox, { target: { value: "键盘确认" } });
+    fireEvent.submit(textbox.closest("form")!);
+    const allow = await screen.findByRole("button", { name: "允许" });
+    const deny = screen.getByRole("button", { name: "拒绝" });
+    expect(allow.tabIndex).toBe(0);
+    expect(deny.tabIndex).toBe(0);
+    allow.focus();
+    expect(document.activeElement).toBe(allow);
+    fireEvent.click(allow);
+    await waitFor(() => expect(decisions).toEqual(["allow"]));
   });
 });
 

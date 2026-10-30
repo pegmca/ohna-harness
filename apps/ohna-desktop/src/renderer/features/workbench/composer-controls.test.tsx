@@ -5,9 +5,9 @@
  * 灵感与模型选择器禁用，并展示只读 banner，而不是让用户发送后 404（BUG-005 止血）。
  * 可交互实例（observeOnly=false / undefined）下 textarea 与发送按钮可用。
  */
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ComponentProps } from "react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ComposerControls } from "./composer-controls";
 import type { ModelOptionDto } from "@aiagent/types";
 
@@ -143,5 +143,55 @@ describe("ComposerControls 只读态", () => {
     render(<ComposerControls {...baseProps()} observeOnly={true} />);
     // 模型选择器按钮展示已选模型标签（baseProps 选中的是 "Mock Agent"），禁用态不可点击。
     expect(screen.getByRole("button", { name: "Mock Agent" })).toBeDisabled();
+  });
+
+  it("模型菜单可用方向键选择，Escape 关闭且不发送", async () => {
+    const props = interactiveProps();
+    const selected: string[] = [];
+    const onSubmit = vi.fn((event: { preventDefault(): void }) => event.preventDefault());
+    render(
+      <ComposerControls
+        {...props}
+        models={[
+          { ...props.models[0], id: "model-a", label: "Model A", group: "组 A" },
+          { ...props.models[0], id: "model-b", label: "Model B", group: "组 A" }
+        ]}
+        onSelectModel={(modelId) => selected.push(modelId)}
+        onSubmit={onSubmit}
+        selectedModelId="model-a"
+      />
+    );
+
+    const trigger = screen.getByRole("button", { name: "Model A" });
+    trigger.focus();
+    fireEvent.click(trigger);
+    const listbox = await screen.findByRole("listbox", { name: "模型列表" });
+    expect(listbox.getAttribute("aria-activedescendant")).toBeTruthy();
+    fireEvent.keyDown(listbox, { key: "ArrowDown" });
+    fireEvent.keyDown(listbox, { key: "Enter" });
+    expect(selected).toEqual(["model-b"]);
+    expect(screen.queryByRole("listbox", { name: "模型列表" })).toBeNull();
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it("Escape 只关闭模型菜单并把焦点归还触发器", async () => {
+    render(<ComposerControls {...interactiveProps()} />);
+    const trigger = screen.getByRole("button", { name: "Mock Agent" });
+    trigger.focus();
+    fireEvent.click(trigger);
+    const listbox = await screen.findByRole("listbox", { name: "模型列表" });
+    fireEvent.keyDown(listbox, { key: "Escape" });
+    expect(screen.queryByRole("listbox", { name: "模型列表" })).toBeNull();
+    await waitFor(() => expect(document.activeElement).toBe(trigger));
+  });
+
+  it("Shift+Enter inserts a newline without submitting", () => {
+    const onSubmit = vi.fn((event: { preventDefault(): void }) => event.preventDefault());
+    render(<ComposerControls {...interactiveProps()} onSubmit={onSubmit} />);
+    const textbox = screen.getByRole("textbox") as HTMLTextAreaElement;
+    textbox.focus();
+    const allowed = fireEvent.keyDown(textbox, { key: "Enter", shiftKey: true });
+    expect(allowed).toBe(true);
+    expect(onSubmit).not.toHaveBeenCalled();
   });
 });
